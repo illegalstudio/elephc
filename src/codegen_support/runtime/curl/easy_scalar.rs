@@ -79,6 +79,27 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
     );
     emit_forwarder(
         emitter,
+        "__rt_curl_easy_reset",
+        "_elephc_curl_easy_reset_fn",
+        "curl_easy_reset (reset every option on an easy handle)",
+        IntResult::Boolean,
+    );
+    emit_forwarder(
+        emitter,
+        "__rt_curl_easy_upkeep",
+        "_elephc_curl_easy_upkeep_fn",
+        "curl_easy_upkeep (run connection upkeep on an easy handle)",
+        IntResult::Boolean,
+    );
+    emit_forwarder(
+        emitter,
+        "__rt_curl_easy_pause",
+        "_elephc_curl_easy_pause_fn",
+        "curl_easy_pause (apply a CURLPAUSE bitmask)",
+        IntResult::CurlCode,
+    );
+    emit_forwarder(
+        emitter,
         "__rt_curl_easy_errno",
         "_elephc_curl_easy_errno_fn",
         "curl_easy_errno (report the last CURLcode)",

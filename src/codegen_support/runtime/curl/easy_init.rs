@@ -1,7 +1,9 @@
 //! Purpose:
-//! Emits `__rt_curl_easy_init`, the runtime helper behind the internal
-//! `__elephc_curl_easy_init` builtin: allocates a libcurl easy handle and boxes its id as
-//! a resource-kind-6 Mixed cell, or hands back PHP `false`.
+//! Emits the two runtime helpers that MINT a `CurlHandle`: `__rt_curl_easy_init` (behind
+//! the internal `__elephc_curl_easy_init` builtin) and `__rt_curl_easy_copy` (behind
+//! `__elephc_curl_easy_copy`). Each allocates a libcurl easy handle — from scratch, or by
+//! duplicating an existing one — and boxes its id as a resource-kind-6 Mixed cell, or
+//! hands back PHP `false`.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::curl::emit_curl`.
@@ -17,8 +19,13 @@
 //!   `$raw === false` identity check works without any special-casing. This is the
 //!   failure answer PHP's own `curl_init()` gives.
 //! - The bridge already installs its write callback and error buffer inside
-//!   `elephc_curl_easy_init`, so a handle is fully usable the moment this returns; there
-//!   is deliberately no second setup call to forget.
+//!   `elephc_curl_easy_init` (and reinstalls them on the COPY inside
+//!   `elephc_curl_easy_duphandle`, which would otherwise inherit the original handle's),
+//!   so a handle is fully usable the moment either of these returns; there is deliberately
+//!   no second setup call to forget.
+//! - THE TWO HELPERS ARE THE SAME CODE. `__rt_curl_easy_copy` differs only in the slot it
+//!   calls and in taking the source handle id in the first C argument register, which the
+//!   slot probe does not touch — so the shared emitter below passes it straight through.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -28,9 +35,34 @@ use super::slots::{emit_call_entry, emit_load_entry_or_branch};
 /// `__rt_curl_easy_init` — in: nothing. Out: Mixed in `x0`/`rax` (a boxed resource-kind-6
 /// handle, or boxed PHP `false`).
 pub(crate) fn emit_curl_easy_init(emitter: &mut Emitter) {
+    emit_handle_producer(
+        emitter,
+        "__rt_curl_easy_init",
+        "_elephc_curl_easy_init_fn",
+        "curl_easy_init (allocate a libcurl easy handle)",
+    );
+}
+
+/// `__rt_curl_easy_copy` — in: the SOURCE handle id in `x0`/`rdi`. Out: Mixed in
+/// `x0`/`rax` (a boxed resource-kind-6 handle for the copy, or boxed PHP `false`).
+pub(crate) fn emit_curl_easy_copy(emitter: &mut Emitter) {
+    emit_handle_producer(
+        emitter,
+        "__rt_curl_easy_copy",
+        "_elephc_curl_easy_duphandle_fn",
+        "curl_easy_copy (duplicate a libcurl easy handle)",
+    );
+}
+
+/// Emits one handle-producing helper: probe the slot, call it with whatever the caller
+/// left in the C argument registers, box the returned `i64` id as a resource-kind-6 Mixed
+/// cell, and answer boxed PHP `false` for id `0`.
+fn emit_handle_producer(emitter: &mut Emitter, label: &str, slot: &str, description: &str) {
+    let false_label = format!("{label}_false");
+    let false_label_x86 = format!("{label}_false_x86");
     emitter.blank();
-    emitter.comment("--- runtime: curl_easy_init (allocate a libcurl easy handle) ---");
-    emitter.label_global("__rt_curl_easy_init");
+    emitter.comment(&format!("--- runtime: {description} ---"));
+    emitter.label_global(label);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction("sub sp, sp, #16");                             // frame to preserve the link register across calls
@@ -39,14 +71,10 @@ pub(crate) fn emit_curl_easy_init(emitter: &mut Emitter) {
 
             emitter.instruction("mov x29, sp");                                 // set the frame pointer
 
-            emit_load_entry_or_branch(
-                emitter,
-                "_elephc_curl_easy_init_fn",
-                "__rt_curl_easy_init_false",
-            );
+            emit_load_entry_or_branch(emitter, slot, &false_label);
             emit_call_entry(emitter);                                           // elephc_curl_easy_init(), x0 = handle id (0 on failure)
 
-            emitter.instruction("cbz x0, __rt_curl_easy_init_false");           // id 0 = libcurl could not allocate -> PHP false
+            emitter.instruction(&format!("cbz x0, {false_label}"));             // id 0 = libcurl could not allocate -> PHP false
 
             emitter.instruction("mov x1, x0");                                  // Mixed payload = the bridge handle id
 
@@ -62,7 +90,7 @@ pub(crate) fn emit_curl_easy_init(emitter: &mut Emitter) {
 
             emitter.instruction("ret");                                         // return the boxed CurlHandle payload
 
-            emitter.label("__rt_curl_easy_init_false");
+            emitter.label(&false_label);
             emitter.instruction("mov x1, #0");                                  // boolean payload 0 = PHP false
 
             emitter.instruction("mov x2, #0");                                  // booleans carry no high payload word
@@ -85,16 +113,12 @@ pub(crate) fn emit_curl_easy_init(emitter: &mut Emitter) {
 
             emitter.instruction("sub rsp, 16");                                 // keep nested calls 16-byte aligned
 
-            emit_load_entry_or_branch(
-                emitter,
-                "_elephc_curl_easy_init_fn",
-                "__rt_curl_easy_init_false_x86",
-            );
+            emit_load_entry_or_branch(emitter, slot, &false_label_x86);
             emit_call_entry(emitter);                                           // elephc_curl_easy_init(), rax = handle id (0 on failure)
 
             emitter.instruction("test rax, rax");                               // id 0 = libcurl could not allocate
 
-            emitter.instruction("jz __rt_curl_easy_init_false_x86");            // -> PHP false
+            emitter.instruction(&format!("jz {false_label_x86}"));              // -> PHP false
 
             emitter.instruction("mov rdi, rax");                                // Mixed payload = the bridge handle id
 
@@ -110,7 +134,7 @@ pub(crate) fn emit_curl_easy_init(emitter: &mut Emitter) {
 
             emitter.instruction("ret");                                         // return the boxed CurlHandle payload
 
-            emitter.label("__rt_curl_easy_init_false_x86");
+            emitter.label(&false_label_x86);
             emitter.instruction("xor edi, edi");                                // boolean payload 0 = PHP false
 
             emitter.instruction("xor esi, esi");                                // booleans carry no high payload word

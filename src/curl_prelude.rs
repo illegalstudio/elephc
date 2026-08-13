@@ -68,11 +68,15 @@
 //!   anything else answers `false` — never a fabricated value. The no-`$option` form
 //!   returns PHP's documented associative array, built as JSON by the bridge and decoded
 //!   with the ordinary `json_decode` builtin, the same route `curl_version()` takes.
-//! - TWO SIGNATURES DIVERGE FROM php-src, both forced by checker limitations and both
-//!   documented at their declaration below: `curl_init()` returns a plain `CurlHandle`
-//!   and throws instead of returning `CurlHandle|false`, and `curl_version()` leaves its
-//!   return type undeclared instead of `array|false`. Runtime behaviour is otherwise
-//!   PHP's. `docs/php/curl.md` (Task 14) is where these reach users.
+//! - FIVE SIGNATURES DIVERGE FROM php-src, all forced by the same checker limitation
+//!   (a `T|false` union is accepted nowhere a `T` is expected, and is not narrowed by a
+//!   `=== false` guard) and all documented at their declaration below: `curl_init()` and
+//!   `curl_copy_handle()` return a plain `CurlHandle` and THROW instead of returning
+//!   `CurlHandle|false`; `curl_escape()`/`curl_unescape()` return a plain `string` and
+//!   throw instead of `string|false`; `curl_version()` leaves its return type undeclared
+//!   instead of `array|false`. `curl_strerror()` returns `string` rather than `?string`,
+//!   which is not a limitation but a value that is never null. Runtime behaviour is
+//!   otherwise PHP's. `docs/php/curl.md` (Task 14) is where these reach users.
 
 mod detect;
 
@@ -314,7 +318,11 @@ function curl_exec(CurlHandle $handle): string|bool {
         return false;
     }
     if ($handle->__elephc_return_transfer) {
-        return __elephc_curl_easy_body($raw);
+        // BOUND, NOT RETURNED INLINE: `return <builtin returning a fresh string>;` leaks
+        // that string (measured with `--gc-stats`: one block per call), the same
+        // pre-existing codegen leak `curl_error()`/`curl_strerror()` below route around.
+        $body = __elephc_curl_easy_body($raw);
+        return $body;
     }
     return true;
 }
@@ -324,9 +332,15 @@ function curl_errno(CurlHandle $handle): int {
     return __elephc_curl_easy_errno($raw);
 }
 
+// The message is BOUND TO A LOCAL BEFORE IT IS RETURNED. Returning a builtin's freshly
+// allocated string straight out of a prelude function leaks it — measured with
+// `--gc-stats`: `$m = curl_error($ch)` in a loop grew the heap by one block per call while
+// the same builtin called directly stayed balanced. Same family as the "bind the property
+// to a local" rule this module's header documents.
 function curl_error(CurlHandle $handle): string {
     $raw = $handle->__elephc_handle;
-    return __elephc_curl_easy_error($raw);
+    $message = __elephc_curl_easy_error($raw);
+    return $message;
 }
 
 // KNOWN NOISE, NOT FIXED: `$handle` is unused (the function is a no-op) and the
@@ -444,6 +458,98 @@ function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed {
         return explode("\0", substr($text, 0, strlen($text) - 1));
     }
     return false;
+}
+
+// `curl_reset()` puts the handle back to a fresh handle's OPTIONS while keeping its
+// identity, its live connections and its cookie/DNS caches — libcurl's own
+// `curl_easy_reset` contract, which is what php-src forwards to. The three PHP-layer
+// mirrors this prelude keeps on the object have to be cleared alongside libcurl's own
+// options, or a reset handle would still report the old `CURLOPT_PRIVATE` value and still
+// take `curl_exec()`'s capturing return shape.
+function curl_reset(CurlHandle $handle): void {
+    $raw = $handle->__elephc_handle;
+    __elephc_curl_easy_reset($raw);
+    $handle->__elephc_return_transfer = false;
+    $handle->__elephc_private = false;
+}
+
+// DIVERGENCE FROM PHP, for the same reason `curl_init()` diverges (see its comment):
+// php-src declares `curl_copy_handle(CurlHandle $handle): CurlHandle|false`, but a union
+// return would make `$copy = curl_copy_handle($ch); curl_exec($copy);` a compile error, so
+// this returns a plain `CurlHandle` and THROWS on the allocation failure php-src answers
+// `false` for.
+//
+// THE COPY DUPLICATES BOTH LAYERS. `curl_easy_duphandle` copies libcurl's own options; the
+// bridge copies the capture flag and the captured body it keeps beside them; and this
+// wrapper copies the two object-side mirrors. Missing any one of the three would produce a
+// handle that looks identical and behaves differently — the RETURNTRANSFER mirror in
+// particular decides `curl_exec()`'s RETURN TYPE, so a copy without it would answer `true`
+// where the original answers a string.
+function curl_copy_handle(CurlHandle $handle): CurlHandle {
+    $raw = $handle->__elephc_handle;
+    $copy = __elephc_curl_easy_copy($raw);
+    if ($copy === false) {
+        throw new \RuntimeException("curl_copy_handle(): libcurl could not duplicate the easy handle");
+    }
+    $new = CurlHandle::__elephc_wrap($copy);
+    $new->__elephc_return_transfer = $handle->__elephc_return_transfer;
+    $new->__elephc_private = $handle->__elephc_private;
+    return $new;
+}
+
+// `curl_escape()` / `curl_unescape()` go through `curl_easy_escape`/`curl_easy_unescape`
+// rather than PHP's own `urlencode()`/`rawurldecode()`, because they are not the same
+// function: libcurl percent-encodes every byte outside the unreserved set INCLUDING the
+// space (as `%20`, never `+`), and its decoder is binary-safe. Both take a handle in PHP
+// even though the encoding does not depend on one.
+//
+// DIVERGENCE FROM PHP, the same one `curl_init()` documents: php-src declares
+// `string|false` and answers `false` when libcurl cannot allocate. Declared that way here,
+// the result would be UNUSABLE — elephc's checker rejects a `Union([Str, False])` wherever
+// a `string` is expected and does not narrow it after a `=== false` guard, so even
+// `curl_unescape($ch, curl_escape($ch, $s))` would be a compile error. These return a
+// plain `string` and THROW on the allocation failure instead.
+function curl_escape(CurlHandle $handle, string $string): string {
+    $raw = $handle->__elephc_handle;
+    $escaped = __elephc_curl_easy_str_op($raw, 1, $string, 0);
+    if (!is_string($escaped)) {
+        throw new \RuntimeException("curl_escape(): libcurl could not URL-encode the string");
+    }
+    return $escaped;
+}
+
+function curl_unescape(CurlHandle $handle, string $string): string {
+    $raw = $handle->__elephc_handle;
+    $decoded = __elephc_curl_easy_str_op($raw, 2, $string, 0);
+    if (!is_string($decoded)) {
+        throw new \RuntimeException("curl_unescape(): libcurl could not URL-decode the string");
+    }
+    return $decoded;
+}
+
+// `curl_pause()` returns libcurl's raw `CURLcode`, not a boolean — `0` (`CURLE_OK`) means
+// the pause state was applied. It only does anything to a transfer that is actually
+// running, i.e. from inside a callback (Task 12); on an idle handle libcurl accepts the
+// bitmask and answers `CURLE_OK`, which is also what php-src reports.
+function curl_pause(CurlHandle $handle, int $flags): int {
+    $raw = $handle->__elephc_handle;
+    return __elephc_curl_easy_pause($raw, $flags);
+}
+
+function curl_upkeep(CurlHandle $handle): bool {
+    $raw = $handle->__elephc_handle;
+    return __elephc_curl_easy_upkeep($raw);
+}
+
+// DIVERGENCE FROM PHP: php-src declares `curl_strerror(int $error_code): ?string` and
+// answers `null` only if libcurl hands back a null pointer, which `curl_easy_strerror`
+// never does — it answers `"Unknown error"` for a code it does not recognize. The return
+// type is declared `string` here because the `?string` union buys nothing over a value
+// that is always a string, and elephc's checker treats a nullable return as a value every
+// caller must narrow before using.
+function curl_strerror(int $error_code): string {
+    $message = __elephc_curl_strerror($error_code);
+    return $message;
 }
 
 // DIVERGENCE FROM PHP: php-src declares `curl_version(): array|false`. The RETURN VALUE

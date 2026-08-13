@@ -405,6 +405,12 @@ pub unsafe extern "C" fn elephc_curl_easy_getinfo_double(
     })
 }
 
+/// `elephc_curl_easy_str_op`'s `op`: URL-encode the string argument
+/// (`curl_easy_escape`).
+pub const ELEPHC_CURL_STR_OP_ESCAPE: i32 = 1;
+/// `elephc_curl_easy_str_op`'s `op`: URL-decode the string argument
+/// (`curl_easy_unescape`).
+pub const ELEPHC_CURL_STR_OP_UNESCAPE: i32 = 2;
 /// `elephc_curl_easy_str_op`'s `op`: read a `CURLINFO_STRING` field
 /// (`number` = the `CURLINFO_*` value).
 pub const ELEPHC_CURL_STR_OP_INFO_STRING: i32 = 3;
@@ -461,15 +467,14 @@ pub unsafe extern "C" fn elephc_curl_easy_str_op(
             return 0;
         };
         let produced = match op {
+            ELEPHC_CURL_STR_OP_ESCAPE => unsafe { easy::escape(entry.curl, argument) },
+            ELEPHC_CURL_STR_OP_UNESCAPE => unsafe { easy::unescape(entry.curl, argument) },
             ELEPHC_CURL_STR_OP_INFO_STRING => unsafe { easy::getinfo_str(entry.curl, number) },
             ELEPHC_CURL_STR_OP_INFO_SLIST => unsafe { easy::getinfo_slist(entry.curl, number) }
                 .map(|items| info::frame_items(&items)),
             ELEPHC_CURL_STR_OP_INFO_ALL => Some(unsafe { info::getinfo_all_json(entry.curl) }),
             ELEPHC_CURL_STR_OP_INFO_CERTINFO => Some(unsafe { info::certinfo_json(entry.curl) }),
-            _ => {
-                let _ = argument;
-                None
-            }
+            _ => None,
         };
         match produced {
             Some(bytes) => {
@@ -542,6 +547,149 @@ pub unsafe extern "C" fn elephc_curl_easy_take_body(
             }
         }
         1
+    })
+}
+
+/// Resets every libcurl option on handle `id` to its default and clears the
+/// PHP-layer state that goes with them, matching PHP's `curl_reset()`. Returns
+/// `0` for an unknown id.
+///
+/// THREE THINGS MUST BE PUT BACK AFTERWARDS, because `curl_easy_reset` resets
+/// OPTIONS and elephc's own plumbing is made of options: the write callback and
+/// its `userdata` (without them a later `curl_exec()` would write the body to
+/// libcurl's default stdout and the RETURNTRANSFER capture would silently stop
+/// working), and `CURLOPT_ERRORBUFFER` (without it `curl_error()` would report
+/// nothing forever after). The handle's slists are freed here too — libcurl
+/// dropped its pointers to them in the reset, so this is the first moment they
+/// are unreachable.
+#[no_mangle]
+pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
+    handles::ffi_guard(0, || {
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get_mut(&id) else {
+            return 0;
+        };
+        unsafe { easy::reset(entry.curl) };
+        entry.free_slists();
+        entry.return_transfer = false;
+        entry.body.clear();
+        entry.taken_body.clear();
+        entry.scratch.clear();
+        entry.last_errno = easy::CURLE_OK;
+        entry.last_error.clear();
+        entry.error_buf.iter_mut().for_each(|byte| *byte = 0);
+        unsafe {
+            php_layer::install_write_callback(entry.curl, id);
+            easy::setopt_ptr(
+                entry.curl,
+                easy::CURLOPT_ERRORBUFFER,
+                entry.error_buf.as_mut_ptr() as *mut c_void,
+            );
+        }
+        1
+    })
+}
+
+/// Applies a `CURLPAUSE_*` bitmask to handle `id`, returning libcurl's raw
+/// `CURLcode` — which is what PHP's `curl_pause()` returns. An unknown id
+/// answers `CURLE_BAD_FUNCTION_ARGUMENT` (43) rather than `CURLE_OK`, so a
+/// caller cannot read "nothing happened" as success.
+#[no_mangle]
+pub extern "C" fn elephc_curl_easy_pause(id: i64, bitmask: i32) -> i32 {
+    handles::ffi_guard(CURLE_BAD_FUNCTION_ARGUMENT, || {
+        let guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get(&id) else {
+            return CURLE_BAD_FUNCTION_ARGUMENT;
+        };
+        unsafe { easy::pause(entry.curl, bitmask as c_int) }
+    })
+}
+
+/// `CURLE_BAD_FUNCTION_ARGUMENT` (43): the `CURLcode`
+/// `elephc_curl_easy_pause` reports for an unknown handle id.
+const CURLE_BAD_FUNCTION_ARGUMENT: i32 = 43;
+
+/// Runs `curl_easy_upkeep` on handle `id`. Returns `1` only when libcurl
+/// reported `CURLE_OK`, matching PHP's `curl_upkeep(): bool`.
+#[no_mangle]
+pub extern "C" fn elephc_curl_easy_upkeep(id: i64) -> i32 {
+    handles::ffi_guard(0, || {
+        let guard = handles::lock_recover(handles::handles());
+        let Some(entry) = guard.get(&id) else {
+            return 0;
+        };
+        (unsafe { easy::upkeep(entry.curl) } == easy::CURLE_OK) as i32
+    })
+}
+
+/// Duplicates handle `id` — libcurl options AND the bridge's own PHP-layer
+/// state — and registers the copy under a fresh id, which it returns. `0` for
+/// an unknown id or a libcurl allocation failure.
+///
+/// THE COPY'S CALLBACK PLUMBING IS REINSTALLED, not inherited.
+/// `curl_easy_duphandle` copies every option VALUE, which means the copy would
+/// otherwise point `CURLOPT_WRITEDATA` at the ORIGINAL handle's id (so the
+/// copy's response body would land in the original's capture buffer) and
+/// `CURLOPT_ERRORBUFFER` at the original entry's buffer (a dangling write the
+/// moment the original is freed). Both are re-pointed at the new entry here.
+///
+/// THE SLIST MAP IS NOT COPIED, deliberately: libcurl duplicates slist options
+/// into lists the NEW easy handle owns and frees, so copying the bridge's own
+/// pointers would set up a double free. The copy's map starts empty and fills
+/// again the first time PHP sets a list option on it.
+#[no_mangle]
+pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
+    handles::ffi_guard(0, || {
+        let mut guard = handles::lock_recover(handles::handles());
+        let Some(source) = guard.get(&id) else {
+            return 0;
+        };
+        let copied = unsafe { easy::duphandle(source.curl) };
+        if copied.is_null() {
+            return 0;
+        }
+        let return_transfer = source.return_transfer;
+        let body = source.body.clone();
+        let last_errno = source.last_errno;
+        let last_error = source.last_error.clone();
+
+        let new_id = handles::next_id();
+        let mut entry = EasyEntry::new(copied);
+        entry.return_transfer = return_transfer;
+        entry.body = body;
+        entry.last_errno = last_errno;
+        entry.last_error = last_error;
+        unsafe {
+            php_layer::install_write_callback(copied, new_id);
+            easy::setopt_ptr(
+                copied,
+                easy::CURLOPT_ERRORBUFFER,
+                entry.error_buf.as_mut_ptr() as *mut c_void,
+            );
+        }
+        guard.insert(new_id, entry);
+        new_id
+    })
+}
+
+/// Copies libcurl's own message for a `CURLcode` into `out`, for PHP's
+/// `curl_strerror()`. Handle-free: a `CURLcode`'s text does not depend on any
+/// transfer. Always reports the message length through `out_len`, even when
+/// `out_cap` is too small (`0` return).
+///
+/// # Safety
+/// `out` must be valid for `out_cap` bytes when non-null. `out_len` must be
+/// valid for a write when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_curl_strerror(
+    code: i32,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    handles::ffi_guard(0, || {
+        let message = easy::strerror(code as c_int);
+        unsafe { publish_bytes(&message, out, out_cap, out_len) }
     })
 }
 

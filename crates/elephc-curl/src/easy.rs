@@ -197,6 +197,143 @@ extern "C" {
 
     /// Frees an entire `struct curl_slist`. Safe on null.
     fn curl_slist_free_all(list: *mut CurlSlist);
+
+    /// URL-encodes `len` bytes of `input` for this handle, returning a
+    /// libcurl-allocated NUL-terminated string the caller frees with
+    /// [`curl_free`], or null on allocation failure.
+    fn curl_easy_escape(curl: *mut CURL, input: *const c_char, len: c_int) -> *mut c_char;
+
+    /// URL-decodes `len` bytes of `input`, writing the decoded LENGTH through
+    /// `outlength` (decoded data may contain NUL). The result is
+    /// libcurl-allocated and freed with [`curl_free`].
+    fn curl_easy_unescape(
+        curl: *mut CURL,
+        input: *const c_char,
+        len: c_int,
+        outlength: *mut c_int,
+    ) -> *mut c_char;
+
+    /// Frees memory libcurl allocated for the caller
+    /// (`curl_easy_escape`/`curl_easy_unescape` results).
+    fn curl_free(ptr: *mut c_char);
+
+    /// Resets every option on `curl` to its default, keeping live connections,
+    /// the session id cache, DNS cache and cookies. Callbacks and the error
+    /// buffer are options, so they are reset too.
+    fn curl_easy_reset(curl: *mut CURL);
+
+    /// Pauses or unpauses the transfer on `curl` per the `CURLPAUSE_*` bitmask.
+    fn curl_easy_pause(curl: *mut CURL, bitmask: c_int) -> CURLcode;
+
+    /// Performs connection upkeep (keepalive pings) on `curl`'s idle
+    /// connections.
+    fn curl_easy_upkeep(curl: *mut CURL) -> CURLcode;
+
+    /// Duplicates `curl` and every option set on it. The copy carries NO live
+    /// connection, cookie, session or alt-svc state.
+    fn curl_easy_duphandle(curl: *mut CURL) -> *mut CURL;
+
+    /// Returns libcurl's `'static` human-readable text for a `CURLcode`.
+    fn curl_easy_strerror(code: CURLcode) -> *const c_char;
+}
+
+/// URL-encodes `input` for `curl`, returning owned bytes. `None` when libcurl
+/// could not allocate.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn escape(curl: *mut CURL, input: &[u8]) -> Option<Vec<u8>> {
+    // EMPTY INPUT NEVER REACHES libcurl. `curl_easy_escape` documents length `0` as
+    // "call strlen() on the input" — so passing the dangling (non-null, unallocated)
+    // pointer Rust hands back for an empty slice makes libcurl read out of bounds.
+    // Measured: a plain forward segfaulted on `curl_escape($ch, "")`.
+    if input.is_empty() {
+        return Some(Vec::new());
+    }
+    let Ok(len) = c_int::try_from(input.len()) else {
+        return None;
+    };
+    let encoded = curl_easy_escape(curl, input.as_ptr() as *const c_char, len);
+    if encoded.is_null() {
+        return None;
+    }
+    let bytes = std::ffi::CStr::from_ptr(encoded).to_bytes().to_vec();
+    curl_free(encoded);
+    Some(bytes)
+}
+
+/// URL-decodes `input` for `curl`, returning owned bytes. The decoded result
+/// may contain NUL bytes, so it is read by the LENGTH libcurl reports rather
+/// than as a C string. `None` when libcurl could not allocate.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn unescape(curl: *mut CURL, input: &[u8]) -> Option<Vec<u8>> {
+    // Same `strlen`-on-zero-length hazard as [`escape`] above.
+    if input.is_empty() {
+        return Some(Vec::new());
+    }
+    let Ok(len) = c_int::try_from(input.len()) else {
+        return None;
+    };
+    let mut out_len: c_int = 0;
+    let decoded = curl_easy_unescape(
+        curl,
+        input.as_ptr() as *const c_char,
+        len,
+        &mut out_len as *mut c_int,
+    );
+    if decoded.is_null() {
+        return None;
+    }
+    let bytes = std::slice::from_raw_parts(decoded as *const u8, out_len.max(0) as usize).to_vec();
+    curl_free(decoded);
+    Some(bytes)
+}
+
+/// Resets every option on `curl` to its default.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn reset(curl: *mut CURL) {
+    curl_easy_reset(curl);
+}
+
+/// Applies a `CURLPAUSE_*` bitmask, returning libcurl's `CURLcode`.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn pause(curl: *mut CURL, bitmask: c_int) -> CURLcode {
+    curl_easy_pause(curl, bitmask)
+}
+
+/// Runs connection upkeep, returning libcurl's `CURLcode`.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn upkeep(curl: *mut CURL) -> CURLcode {
+    curl_easy_upkeep(curl)
+}
+
+/// Duplicates `curl` and its options. Null on allocation failure.
+///
+/// # Safety
+/// `curl` must be a still-live pointer from [`init`].
+pub(crate) unsafe fn duphandle(curl: *mut CURL) -> *mut CURL {
+    curl_easy_duphandle(curl)
+}
+
+/// Returns libcurl's own message for a `CURLcode` as owned bytes.
+pub(crate) fn strerror(code: CURLcode) -> Vec<u8> {
+    ensure_global_init();
+    unsafe {
+        let text = curl_easy_strerror(code);
+        if text.is_null() {
+            Vec::new()
+        } else {
+            std::ffi::CStr::from_ptr(text).to_bytes().to_vec()
+        }
+    }
 }
 
 /// Ensures `curl_global_init` has run exactly once for this process. Every

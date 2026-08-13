@@ -28,6 +28,7 @@ mod easy_init;
 mod easy_perform;
 mod easy_setopt;
 mod easy_setopt_slist;
+mod lifecycle;
 mod option_kind;
 mod shared;
 mod str_op;
@@ -42,6 +43,10 @@ pub(crate) use easy_init::lower_curl_easy_init;
 pub(crate) use easy_perform::lower_curl_easy_perform;
 pub(crate) use easy_setopt::{lower_curl_easy_setopt_long, lower_curl_easy_setopt_str};
 pub(crate) use easy_setopt_slist::lower_curl_easy_setopt_slist;
+pub(crate) use lifecycle::{
+    lower_curl_easy_copy, lower_curl_easy_pause, lower_curl_easy_reset, lower_curl_easy_upkeep,
+    lower_curl_strerror,
+};
 pub(crate) use option_kind::lower_curl_option_kind;
 pub(crate) use str_op::lower_curl_easy_str_op;
 pub(crate) use version::lower_curl_version;

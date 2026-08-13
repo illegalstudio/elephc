@@ -475,6 +475,16 @@ pub enum RuntimeFnId {
     /// Runs one of the bridge's string-producing easy-handle operations (the string,
     /// list and array forms of `curl_getinfo()`, plus `curl_escape`/`curl_unescape`).
     CurlEasyStrOp,
+    /// Resets every libcurl option on an easy handle to its default.
+    CurlEasyReset,
+    /// Applies a `CURLPAUSE_*` bitmask to an easy handle's transfer.
+    CurlEasyPause,
+    /// Runs libcurl connection upkeep on an easy handle's idle connections.
+    CurlEasyUpkeep,
+    /// Duplicates an easy handle, boxing the copy as a new resource-kind-6 Mixed cell.
+    CurlEasyCopy,
+    /// Reports libcurl's human-readable message for a `CURLcode`.
+    CurlStrerror,
     /// Classifies a `curl_setopt()` option number against the bridge's frozen option
     /// table, so the prelude can pick the setter that matches the option's C type.
     CurlOptionKind,
@@ -1200,6 +1210,11 @@ impl RuntimeFnId {
             | RuntimeFnId::CurlEasyInit
             | RuntimeFnId::CurlEasyPerform
             | RuntimeFnId::CurlEasySetoptLong
+            | RuntimeFnId::CurlEasyCopy
+            | RuntimeFnId::CurlEasyPause
+            | RuntimeFnId::CurlEasyReset
+            | RuntimeFnId::CurlEasyUpkeep
+            | RuntimeFnId::CurlStrerror
             | RuntimeFnId::CurlEasyGetinfoDouble
             | RuntimeFnId::CurlEasyStrOp
             | RuntimeFnId::CurlEasySetoptSlist
@@ -1395,6 +1410,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlEasySetoptLong
                 | RuntimeFnId::CurlEasySetoptSlist
                 | RuntimeFnId::CurlEasySetoptStr
+                // `curl_reset`/`curl_upkeep` answer a bare acceptance flag and
+                // `curl_pause` a bare `CURLcode`; none of the three produces storage.
+                | RuntimeFnId::CurlEasyPause
+                | RuntimeFnId::CurlEasyReset
+                | RuntimeFnId::CurlEasyUpkeep
                 // A pure table lookup: it hands back a small integer kind code and takes
                 // no handle at all, so there is no storage and nothing to alias.
                 | RuntimeFnId::CurlOptionKind
@@ -1479,6 +1499,13 @@ impl RuntimeFnId {
                 // handle argument's own storage.
                 | RuntimeFnId::CurlEasyBody
                 | RuntimeFnId::CurlEasyError
+                // `curl_copy_handle` boxes a BRAND-NEW handle id: the copy shares no
+                // storage with the handle it was duplicated from, so treating it as an
+                // alias would keep the source's temporary (and its socket and TLS
+                // session) alive for the copy's whole lifetime. `curl_strerror` copies
+                // libcurl's `'static` message text into an owned string.
+                | RuntimeFnId::CurlEasyCopy
+                | RuntimeFnId::CurlStrerror
                 | RuntimeFnId::CurlEasyGetinfoDouble
                 | RuntimeFnId::CurlEasyGetinfoLong
                 | RuntimeFnId::CurlEasyInit
@@ -1969,7 +1996,12 @@ impl RuntimeFnId {
             RuntimeFnId::CurlEasyGetinfoDouble => "__elephc_curl_easy_getinfo_double",
             RuntimeFnId::CurlEasyGetinfoLong => "__elephc_curl_easy_getinfo_long",
             RuntimeFnId::CurlEasyStrOp => "__elephc_curl_easy_str_op",
+            RuntimeFnId::CurlEasyCopy => "__elephc_curl_easy_copy",
             RuntimeFnId::CurlEasyInit => "__elephc_curl_easy_init",
+            RuntimeFnId::CurlEasyPause => "__elephc_curl_easy_pause",
+            RuntimeFnId::CurlEasyReset => "__elephc_curl_easy_reset",
+            RuntimeFnId::CurlEasyUpkeep => "__elephc_curl_easy_upkeep",
+            RuntimeFnId::CurlStrerror => "__elephc_curl_strerror",
             RuntimeFnId::CurlEasyPerform => "__elephc_curl_easy_perform",
             RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",
             RuntimeFnId::CurlEasySetoptSlist => "__elephc_curl_easy_setopt_slist",

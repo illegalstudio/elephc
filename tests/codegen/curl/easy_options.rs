@@ -589,3 +589,171 @@ fn wave_c_typed_getinfo_shapes_do_not_leak() {
     let (allocs, frees) = parse_gc_stats(&output.stderr);
     assert_eq!(allocs, frees, "typed curl_getinfo() shapes must not leak or double-free");
 }
+
+/// Wave D: `curl_reset()` really puts libcurl's options back to default — a handle whose
+/// URL, headers and RETURNTRANSFER were set stops carrying any of them — while staying
+/// the SAME `CurlHandle` object, and stays usable for a fresh transfer afterwards.
+#[test]
+fn wave_d_reset_clears_options_and_php_state() {
+    if skip_without_curl_native("wave_d_reset_clears_options_and_php_state") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let echo = server.url("/echo");
+    let hello = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{echo}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-Before: 1"]);
+        curl_setopt($ch, CURLOPT_PRIVATE, "before");
+        $first = curl_exec($ch);
+        echo str_contains($first, "x-before: 1") ? "before\n" : "no-before\n";
+
+        curl_reset($ch);
+        echo get_class($ch), "\n";
+        echo curl_getinfo($ch, CURLINFO_PRIVATE) === false ? "private-cleared\n" : "private-kept\n";
+
+        curl_setopt($ch, CURLOPT_URL, "{echo}");
+        $second = curl_exec($ch);
+        echo $second === true ? "streamed\n" : "captured\n";
+        echo curl_getinfo($ch, CURLINFO_HTTP_CODE), "\n";
+
+        curl_setopt($ch, CURLOPT_URL, "{hello}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        echo curl_exec($ch), "\n";
+        "#
+    ));
+    assert!(
+        out.starts_with("before\nCurlHandle\nprivate-cleared\n"),
+        "{out}"
+    );
+    assert!(out.ends_with("streamed\n200\nhello-curl\n"), "{out}");
+}
+
+/// Wave D: `curl_copy_handle()` duplicates BOTH layers — libcurl's options and the
+/// PHP-layer state. The copy is a distinct `CurlHandle` that carries the original's URL,
+/// headers, RETURNTRANSFER capture (so `curl_exec()` keeps its string return shape) and
+/// `CURLOPT_PRIVATE`, and changing the copy does not disturb the original.
+#[test]
+fn wave_d_copy_handle_duplicates_both_layers() {
+    if skip_without_curl_native("wave_d_copy_handle_duplicates_both_layers") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_USERAGENT, "original-agent");
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-Copied: yes"]);
+        curl_setopt($ch, CURLOPT_PRIVATE, "tag-1");
+
+        $copy = curl_copy_handle($ch);
+        echo get_class($copy), "\n";
+        echo ($copy === $ch) ? "same\n" : "distinct\n";
+        echo curl_getinfo($copy, CURLINFO_PRIVATE), "\n";
+
+        $body = curl_exec($copy);
+        echo is_string($body) ? "captured\n" : "streamed\n";
+        echo str_contains($body, "user-agent: original-agent") ? "ua\n" : "no-ua\n";
+        echo str_contains($body, "x-copied: yes") ? "header\n" : "no-header\n";
+
+        curl_setopt($copy, CURLOPT_USERAGENT, "copy-agent");
+        $original = curl_exec($ch);
+        echo str_contains($original, "user-agent: original-agent") ? "unchanged\n" : "changed\n";
+        "#
+    ));
+    assert_eq!(
+        out,
+        "CurlHandle\ndistinct\ntag-1\ncaptured\nua\nheader\nunchanged\n"
+    );
+}
+
+/// Wave D: `curl_escape()` / `curl_unescape()` are libcurl's own percent-encoders, not
+/// PHP's `urlencode()` — a space becomes `%20`, never `+` — and they round-trip.
+#[test]
+fn wave_d_escape_and_unescape_round_trip() {
+    if skip_without_curl_native("wave_d_escape_and_unescape_round_trip") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        $ch = curl_init();
+        $escaped = curl_escape($ch, "a b&c=d/42");
+        echo $escaped, "\n";
+        echo curl_unescape($ch, $escaped), "\n";
+        echo curl_unescape($ch, "%48%65llo%21"), "\n";
+        echo curl_escape($ch, ""), "|\n";
+        "#,
+    );
+    assert_eq!(out, "a%20b%26c%3Dd%2F42\na b&c=d/42\nHello!\n|\n");
+}
+
+/// Wave D: `curl_pause()` answers a `CURLcode` (`CURLE_OK` on an idle handle),
+/// `curl_upkeep()` answers a bool, and `curl_strerror()` reports libcurl's own text for a
+/// code — including a recognizable message for a code libcurl does not know.
+#[test]
+fn wave_d_pause_upkeep_and_strerror() {
+    if skip_without_curl_native("wave_d_pause_upkeep_and_strerror") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        $ch = curl_init();
+        $paused = curl_pause($ch, CURLPAUSE_ALL);
+        echo is_int($paused) ? "int\n" : "not-int\n";
+        echo curl_pause($ch, CURLPAUSE_CONT), "\n";
+        echo is_bool(curl_upkeep($ch)) ? "bool\n" : "not-bool\n";
+        echo curl_strerror(CURLE_OK), "\n";
+        echo curl_strerror(CURLE_UNSUPPORTED_PROTOCOL), "\n";
+        echo strlen(curl_strerror(9999)) > 0 ? "unknown\n" : "empty\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        // 43 is CURLE_BAD_FUNCTION_ARGUMENT: libcurl's own answer for pausing a handle
+        // that has no connection, which an idle handle never does (lib/easy.c refuses
+        // before touching the pause state). php-src reports the same code.
+        "int\n43\nbool\nNo error\nUnsupported protocol\nunknown\n"
+    );
+}
+
+/// Wave D's handle-producing and string-producing calls keep the heap balanced: a loop of
+/// copies, resets and escapes over real transfers must free every handle it mints exactly
+/// once — a `curl_copy_handle()` mis-categorized as aliasing its argument would keep the
+/// SOURCE handle (and its socket) alive forever, and a double-free would show up here too.
+#[test]
+fn wave_d_lifecycle_calls_do_not_leak() {
+    if skip_without_curl_native("wave_d_lifecycle_calls_do_not_leak") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let output = compile_and_run_with_gc_stats(&format!(
+        r#"<?php
+        function cycle(): int {{
+            $ch = curl_init("{url}");
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-A: 1"]);
+            $copy = curl_copy_handle($ch);
+            $body = curl_exec($copy);
+            $escaped = curl_escape($copy, "a b");
+            $message = curl_strerror(curl_errno($copy));
+            $code = curl_getinfo($copy, CURLINFO_HTTP_CODE);
+            curl_reset($ch);
+            unset($copy);
+            unset($ch);
+            if ($body !== "hello-curl" || $escaped !== "a%20b" || strlen($message) === 0) {{
+                return 0;
+            }}
+            return $code;
+        }}
+        echo cycle(), cycle(), cycle(), "\n";
+        "#
+    ));
+    assert_eq!(output.stdout, "200200200\n");
+    let (allocs, frees) = parse_gc_stats(&output.stderr);
+    assert_eq!(allocs, frees, "Wave D lifecycle calls must not leak or double-free");
+}

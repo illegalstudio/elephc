@@ -38,10 +38,10 @@ mod version;
 mod warn_option;
 
 pub(crate) use easy_body::emit_curl_easy_body;
-pub(crate) use easy_error::emit_curl_easy_error;
+pub(crate) use easy_error::{emit_curl_easy_error, emit_curl_strerror};
 pub(crate) use easy_free::emit_curl_easy_free;
 pub(crate) use easy_getinfo::{emit_curl_easy_getinfo_double, emit_curl_easy_getinfo_long};
-pub(crate) use easy_init::emit_curl_easy_init;
+pub(crate) use easy_init::{emit_curl_easy_copy, emit_curl_easy_init};
 pub(crate) use easy_scalar::emit_curl_easy_scalar_helpers;
 pub(crate) use str_op::emit_curl_easy_str_op;
 pub(crate) use version::emit_curl_version;
@@ -50,9 +50,11 @@ pub(crate) use warn_option::emit_curl_warn_unsupported_option;
 /// Emits every `__rt_curl_*` helper for the target.
 pub(crate) fn emit_curl(emitter: &mut crate::codegen_support::emit::Emitter) {
     emit_curl_easy_init(emitter);
+    emit_curl_easy_copy(emitter);
     emit_curl_easy_scalar_helpers(emitter);
     emit_curl_easy_body(emitter);
     emit_curl_easy_error(emitter);
+    emit_curl_strerror(emitter);
     emit_curl_easy_getinfo_long(emitter);
     emit_curl_easy_getinfo_double(emitter);
     emit_curl_easy_str_op(emitter);
@@ -92,6 +94,11 @@ mod tests {
         "__rt_curl_easy_perform",
         "__rt_curl_easy_errno",
         "__rt_curl_easy_error",
+        "__rt_curl_strerror",
+        "__rt_curl_easy_copy",
+        "__rt_curl_easy_reset",
+        "__rt_curl_easy_pause",
+        "__rt_curl_easy_upkeep",
         "__rt_curl_easy_getinfo_long",
         "__rt_curl_easy_getinfo_double",
         "__rt_curl_easy_str_op",
@@ -181,6 +188,7 @@ mod tests {
     fn int32_bridge_returns_are_branched_at_32_bit_width() {
         for label in [
             "__rt_curl_easy_error",
+            "__rt_curl_strerror",
             "__rt_curl_easy_getinfo_long",
             "__rt_curl_easy_getinfo_double",
             "__rt_curl_easy_str_op",

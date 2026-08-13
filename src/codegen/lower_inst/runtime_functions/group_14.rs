@@ -37,6 +37,21 @@ pub(super) fn lower(
         RuntimeFnId::CurlEasyStrOp => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_str_op(ctx, inst)
         }),
+        RuntimeFnId::CurlEasyCopy => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_copy(ctx, inst)
+        }),
+        RuntimeFnId::CurlEasyPause => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_pause(ctx, inst)
+        }),
+        RuntimeFnId::CurlEasyReset => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_reset(ctx, inst)
+        }),
+        RuntimeFnId::CurlEasyUpkeep => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_easy_upkeep(ctx, inst)
+        }),
+        RuntimeFnId::CurlStrerror => Some({
+            crate::codegen::lower_inst::builtins::curl::lower_curl_strerror(ctx, inst)
+        }),
         RuntimeFnId::CurlEasyInit => Some({
             crate::codegen::lower_inst::builtins::curl::lower_curl_easy_init(ctx, inst)
         }),

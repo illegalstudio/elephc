@@ -18,16 +18,21 @@
 //!   typed dispatch tables.
 
 pub mod __elephc_curl_easy_body;
+pub mod __elephc_curl_easy_copy;
 pub mod __elephc_curl_easy_errno;
 pub mod __elephc_curl_easy_error;
 pub mod __elephc_curl_easy_getinfo_double;
 pub mod __elephc_curl_easy_getinfo_long;
 pub mod __elephc_curl_easy_init;
+pub mod __elephc_curl_easy_pause;
 pub mod __elephc_curl_easy_perform;
+pub mod __elephc_curl_easy_reset;
 pub mod __elephc_curl_easy_setopt_long;
 pub mod __elephc_curl_easy_setopt_slist;
 pub mod __elephc_curl_easy_setopt_str;
 pub mod __elephc_curl_easy_str_op;
+pub mod __elephc_curl_easy_upkeep;
 pub mod __elephc_curl_option_kind;
 pub mod __elephc_curl_setopt_unsupported_warning;
+pub mod __elephc_curl_strerror;
 pub mod __elephc_curl_version;

@@ -1,7 +1,8 @@
 //! Purpose:
-//! Emits `__rt_curl_easy_error`, the runtime helper behind the internal
-//! `__elephc_curl_easy_error` builtin: copies libcurl's own error message for the last
-//! transfer into an owned PHP string.
+//! Emits the two runtime helpers that copy a libcurl MESSAGE into an owned PHP string:
+//! `__rt_curl_easy_error` (behind `__elephc_curl_easy_error` — the last transfer's error
+//! text) and `__rt_curl_strerror` (behind `__elephc_curl_strerror` — a `CURLcode`'s own
+//! text, with no handle involved).
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::curl::emit_curl`.
@@ -19,6 +20,10 @@
 //!   success's — which is why `curl_error()` after a successful transfer is empty in PHP.
 //! - The message is copied through `__rt_str_persist` for the same reason the response
 //!   body is: the bridge's buffer is overwritten by the next transfer on that handle.
+//! - THE TWO HELPERS ARE THE SAME CODE because their bridge entry points share a C
+//!   signature — `(i64 id | i32 code, out, out_cap, out_len)` — and both messages fit the
+//!   same `CURL_ERROR_SIZE` bound. Only the first argument's MEANING and the slot differ,
+//!   and neither is touched by this body.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -33,12 +38,37 @@ const CURL_ERROR_SIZE: u32 = 256;
 /// `__rt_curl_easy_error` — in: handle id in `x0`/`rdi`. Out: PHP string (AArch64 `x1`/`x2`,
 /// x86_64 `rax`/`rdx`).
 pub(crate) fn emit_curl_easy_error(emitter: &mut Emitter) {
+    emit_message_copier(
+        emitter,
+        "__rt_curl_easy_error",
+        "_elephc_curl_easy_error_fn",
+        "curl_easy_error (copy libcurl's last error message)",
+    );
+}
+
+/// `__rt_curl_strerror` — in: a `CURLcode` in `x0`/`rdi`. Out: PHP string (AArch64
+/// `x1`/`x2`, x86_64 `rax`/`rdx`).
+pub(crate) fn emit_curl_strerror(emitter: &mut Emitter) {
+    emit_message_copier(
+        emitter,
+        "__rt_curl_strerror",
+        "_elephc_curl_strerror_fn",
+        "curl_strerror (copy libcurl's message for a CURLcode)",
+    );
+}
+
+/// Emits one message-copying helper: stack buffer, one bridge call, `__rt_str_persist`.
+fn emit_message_copier(emitter: &mut Emitter, label: &str, slot: &str, description: &str) {
     // 256-byte message buffer + an 8-byte length out-parameter + the 16-byte frame,
     // rounded to the 16-byte stack alignment both ABIs require.
     let frame = CURL_ERROR_SIZE + 32;
+    let empty = format!("{label}_empty");
+    let persist = format!("{label}_persist");
+    let empty_x86 = format!("{label}_empty_x86");
+    let persist_x86 = format!("{label}_persist_x86");
     emitter.blank();
-    emitter.comment("--- runtime: curl_easy_error (copy libcurl's last error message) ---");
-    emitter.label_global("__rt_curl_easy_error");
+    emitter.comment(&format!("--- runtime: {description} ---"));
+    emitter.label_global(label);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("sub sp, sp, #{frame}"));              // error buffer, length slot, and frame
@@ -55,11 +85,7 @@ pub(crate) fn emit_curl_easy_error(emitter: &mut Emitter) {
 
             emitter.instruction(&format!("add x3, sp, #{CURL_ERROR_SIZE}"));    // C ABI out_len = &message_length
 
-            emit_load_entry_or_branch(
-                emitter,
-                "_elephc_curl_easy_error_fn",
-                "__rt_curl_easy_error_empty",
-            );
+            emit_load_entry_or_branch(emitter, slot, &empty);
             emit_call_entry(emitter);                                           // elephc_curl_easy_error(id, out, cap, &len)
 
             // `w0`, NOT `x0`: the bridge returns a C `int32_t` and AAPCS64 leaves the
@@ -67,20 +93,20 @@ pub(crate) fn emit_curl_easy_error(emitter: &mut Emitter) {
             // 64-bit value could take the SUCCESS path on a failed call and then persist
             // whatever length the out-parameter holds — an out-of-bounds read past this
             // frame's 256-byte buffer straight into a PHP string.
-            emitter.instruction("cbz w0, __rt_curl_easy_error_empty");          // unknown id or oversized message -> empty string
+            emitter.instruction(&format!("cbz w0, {empty}"));                   // unknown id or oversized message -> empty string
 
             emitter.instruction(&format!("ldr x2, [sp, #{CURL_ERROR_SIZE}]"));  // reload the message length
 
             emitter.instruction("mov x1, sp");                                  // the message bytes live in the stack buffer
 
-            emitter.instruction("b __rt_curl_easy_error_persist");              // copy them into owned storage
+            emitter.instruction(&format!("b {persist}"));                       // copy them into owned storage
 
-            emitter.label("__rt_curl_easy_error_empty");
+            emitter.label(&empty);
             emitter.instruction("mov x1, sp");                                  // a valid address so the zero-length copy has a source
 
             emitter.instruction("mov x2, #0");                                  // no message is an empty PHP string
 
-            emitter.label("__rt_curl_easy_error_persist");
+            emitter.label(&persist);
             emitter.instruction("bl __rt_str_persist");                         // own the bytes; the stack buffer dies with this frame
 
             emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame - 16)); // restore frame pointer and return address
@@ -105,29 +131,25 @@ pub(crate) fn emit_curl_easy_error(emitter: &mut Emitter) {
 
             emitter.instruction(&format!("lea rcx, [rbp - {}]", CURL_ERROR_SIZE + 8)); // C ABI out_len = &message_length
 
-            emit_load_entry_or_branch(
-                emitter,
-                "_elephc_curl_easy_error_fn",
-                "__rt_curl_easy_error_empty_x86",
-            );
+            emit_load_entry_or_branch(emitter, slot, &empty_x86);
             emit_call_entry(emitter);                                           // elephc_curl_easy_error(id, out, cap, &len)
 
             emitter.instruction("test eax, eax");                               // unknown id or oversized message?
 
-            emitter.instruction("jz __rt_curl_easy_error_empty_x86");           // -> empty string
+            emitter.instruction(&format!("jz {empty_x86}"));                    // -> empty string
 
             emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", CURL_ERROR_SIZE + 8)); // reload the message length
 
             emitter.instruction(&format!("lea rax, [rbp - {CURL_ERROR_SIZE}]")); // the message bytes live in the stack buffer
 
-            emitter.instruction("jmp __rt_curl_easy_error_persist_x86");        // copy them into owned storage
+            emitter.instruction(&format!("jmp {persist_x86}"));                 // copy them into owned storage
 
-            emitter.label("__rt_curl_easy_error_empty_x86");
+            emitter.label(&empty_x86);
             emitter.instruction("mov rax, rbp");                                // a valid address so the zero-length copy has a source
 
             emitter.instruction("xor edx, edx");                                // no message is an empty PHP string
 
-            emitter.label("__rt_curl_easy_error_persist_x86");
+            emitter.label(&persist_x86);
             emitter.instruction("call __rt_str_persist");                       // own the bytes; the stack buffer dies with this frame
 
             emitter.instruction("mov rsp, rbp");                                // release the frame
