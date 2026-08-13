@@ -16,8 +16,13 @@
 //! - THE DISCARDED CELL USED TO BE A HEAP ALLOCATION THAT NOTHING FREED. `f($x)` against
 //!   `f($x, int &$out = null)` leaked 16 bytes PER CALL — unbounded in a loop, and PHP's
 //!   documented `while ($info = curl_multi_info_read($mh))` loop is exactly that shape.
-//!   Moving it into the existing cell block makes the release automatic; the heap path is
-//!   kept only as a defensive fallback for a caller that plans no cells at all.
+//!   Moving it into the existing cell block makes the release automatic.
+//! - THE HEAP PATH IS STILL LOAD-BEARING, not a leftover. A CONSTRUCTOR that promotes a
+//!   by-reference parameter binds a property which BORROWS the argument's cell for the whole
+//!   life of the object, so every constructor call is planned as
+//!   [`RefArgCellLifetime::MayOutliveCall`] and deliberately routed to
+//!   [`materialize_temporary_ref_arg_cell`]; a caller-stack cell there is a use-after-free.
+//!   See that function's own doc comment for both kinds of caller that reach it.
 
 use super::*;
 

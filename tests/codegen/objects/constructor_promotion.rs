@@ -284,3 +284,37 @@ echo $shared, ":", $eager->value;
          constructor call; the third field is the pre-existing write-direction gap (PHP: 7)"
     );
 }
+
+/// THE DYNAMIC-NEW CELL-LIFETIME PIN. `new $cls($holder->n)` passes a PROPERTY, not a local,
+/// to a by-reference promoted constructor parameter — and a property source is exactly the
+/// shape that plans a real caller-side cell (`plan_ref_arg_temp_cells` skips locals, whose
+/// own frame slot is passed directly, and array elements, which already have an address).
+///
+/// The promoted property BORROWS that cell for the object's whole life, so it must be heap
+/// storage: this fixture reads the property AFTER the constructor returned, which a
+/// caller-stack cell could not survive. Reverting the dynamic-new path to
+/// `RefArgCellLifetime::CallOnly` makes this program fail to compile — the receiver-register
+/// stager refuses to stage a cell while the receiver sits in a caller-saved register
+/// (verified by flipping the constant: *"receiver-register method call staging a
+/// by-reference cell with the receiver in x0"*).
+///
+/// HEAP BALANCE IS DELIBERATELY NOT ASSERTED: the borrowed cell is never freed (one 16-byte
+/// block per constructed object), the narrower pre-existing defect `materialize_temporary_ref_arg_cell`
+/// documents — only the object model can own that cell.
+#[test]
+fn test_dynamic_new_by_ref_promoted_property_from_a_property_source_outlives_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int &$value = 1) {}
+}
+final class Holder { public int $n = 42; }
+$eager = new Box();
+$holder = new Holder();
+$cls = "Box";
+$dynamic = new $cls($holder->n);
+echo $dynamic->value, ":", $holder->n, ":", $eager->value;
+"#,
+    );
+    assert_eq!(out, "42:42:1");
+}
