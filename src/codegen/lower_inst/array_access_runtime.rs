@@ -289,7 +289,7 @@ pub(super) fn lower_boxed_array_access_interface_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &return_ty)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Emits the concrete method body backing a PHP object runtime fallback.
@@ -312,6 +312,7 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
         &param_types,
         &ref_params,
         true,
+        RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -323,7 +324,7 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_runtime_object_call_result(ctx, inst, &target.return_ty)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Stores an object fallback call result, casting boxed Mixed values when the access type is known.

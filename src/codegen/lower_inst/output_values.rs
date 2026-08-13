@@ -68,7 +68,7 @@ pub(super) fn emit_object_tostring_call(
     );
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
     Ok(target.return_ty)
 }
 

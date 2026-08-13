@@ -48,6 +48,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         &ref_params,
         true,
         &borrowed_stack_mixed_args,
+        RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -70,7 +71,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Loads SSA operands into ABI argument registers and caller-stack slots for a direct call.
@@ -91,7 +92,14 @@ pub(super) fn materialize_direct_call_args_with_refs(
     param_types: &[PhpType],
     ref_params: &[bool],
 ) -> Result<CallArgMaterialization> {
-    materialize_direct_call_args_with_refs_and_options(ctx, args, param_types, ref_params, false)
+    materialize_direct_call_args_with_refs_and_options(
+        ctx,
+        args,
+        param_types,
+        ref_params,
+        false,
+        RefArgCellLifetime::CallOnly,
+    )
 }
 
 /// Loads SSA operands into ABI argument slots with optional caller-temp cleanup tracking.
@@ -101,6 +109,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_options(
     param_types: &[PhpType],
     ref_params: &[bool],
     track_mixed_temp_cleanups: bool,
+    ref_cell_lifetime: RefArgCellLifetime,
 ) -> Result<CallArgMaterialization> {
     materialize_direct_call_args_with_refs_and_borrowed_options(
         ctx,
@@ -109,6 +118,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_options(
         ref_params,
         track_mixed_temp_cleanups,
         &[],
+        ref_cell_lifetime,
     )
 }
 
@@ -120,6 +130,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     ref_params: &[bool],
     track_mixed_temp_cleanups: bool,
     borrowed_stack_mixed_args: &[BorrowedStackMixedArg],
+    ref_cell_lifetime: RefArgCellLifetime,
 ) -> Result<CallArgMaterialization> {
     if args.len() != param_types.len() {
         return Err(CodegenIrError::invalid_module(format!(
@@ -136,7 +147,15 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         )));
     }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
-    emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
+    let mut ref_temp_cells = plan_ref_arg_temp_cells(
+        ctx,
+        args,
+        param_types,
+        ref_params,
+        &ref_writebacks,
+        ref_cell_lifetime,
+    )?;
+    emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -171,6 +190,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
                 param_ty,
                 arg_temp_bytes,
                 &ref_writebacks,
+                &ref_temp_cells,
                 ref_cell_base_offset,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
@@ -198,6 +218,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
+        ref_temp_cells,
         cleanup_slots,
         cleanup_bytes,
         borrowed_stack_arg_bytes,
@@ -227,7 +248,17 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         )));
     }
     let mut ref_writebacks = plan_ref_arg_writebacks(ctx, args, param_types, ref_params)?;
-    emit_ref_arg_temp_cells(ctx, &mut ref_writebacks)?;
+    // `CallOnly`: PHP refuses `Foo::__construct()` as a static call, so nothing reachable
+    // here can promote a by-reference parameter into a property.
+    let mut ref_temp_cells = plan_ref_arg_temp_cells(
+        ctx,
+        args,
+        param_types,
+        ref_params,
+        &ref_writebacks,
+        RefArgCellLifetime::CallOnly,
+    )?;
+    emit_ref_arg_cell_block(ctx, &mut ref_writebacks, &mut ref_temp_cells)?;
     let cleanup_slots = plan_call_arg_temp_cleanups(ctx, args, param_types, ref_params, &[])?;
     let cleanup_bytes = cleanup_slots.len() * 16;
     if cleanup_bytes > 0 {
@@ -251,6 +282,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
                 param_ty,
                 arg_temp_bytes,
                 &ref_writebacks,
+                &ref_temp_cells,
                 cleanup_bytes,
             )?;
             abi::emit_push_result_value(ctx.emitter, &PhpType::Int);
@@ -267,6 +299,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
+        ref_temp_cells,
         cleanup_slots,
         cleanup_bytes,
         borrowed_stack_arg_bytes: 0,

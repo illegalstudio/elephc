@@ -621,7 +621,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     abi::emit_call_label(ctx.emitter, &call_symbol);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Invokes a selected dynamic constructor through its uniform descriptor invoker when PHP

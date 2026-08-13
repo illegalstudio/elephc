@@ -303,11 +303,6 @@ fn multi_attached_handle_survives_unset() {
         }} while ($running > 0);
         $handles = curl_multi_get_handles($mh);
         $kept = $handles[0];
-        // The optional `$queued_messages` argument is PASSED, not omitted: omitting an
-        // optional by-reference argument leaks one 16-byte caller-side cell per call
-        // (`materialize_temporary_ref_arg_cell`, a pre-existing codegen defect unrelated to
-        // curl — `multi_info_read_without_the_optional_by_reference_argument` covers that
-        // call shape's behaviour, and this fixture is the one asserting a balanced heap).
         $queued = 0;
         $info = curl_multi_info_read($mh, $queued);
         if ($info !== false) {{
@@ -484,4 +479,114 @@ fn multi_handles_are_freed_exactly_once() {
     assert_eq!(output.stdout, "body-abody-bbody-abody-b\n");
     let (allocs, frees) = parse_gc_stats(&output.stderr);
     assert_eq!(allocs, frees, "multi teardown must be balanced");
+}
+
+/// THE DRAIN LOOP WITH THE OPTIONAL ARGUMENT OMITTED, under `--gc-stats`, across several
+/// complete multi runs: `curl_multi_info_read($mh)` called until it answers `false`, with no
+/// `$queued_messages` variable at all.
+///
+/// This is the shape that made the caller-side cell for an omitted optional by-reference
+/// argument worth fixing: it used to leak one 16-byte block per call, which a long-running
+/// program repeats forever. The balance assertion here is the curl-facing half of
+/// `runtime_gc::omitted_by_ref_default_args`, which pins the same property with no curl
+/// involved.
+///
+/// The loop is written in the `while (true) { … break; }` form rather than php.net's
+/// `while ($info = curl_multi_info_read($mh))` because ASSIGNMENT-IN-A-LOOP-CONDITION leaks
+/// the assigned value on every iteration in this compiler — a separate, pre-existing defect
+/// with nothing to do with by-reference arguments (measured curl-free: a plain
+/// `while ($x = f())` over an array-returning `f()` leaks one array per iteration).
+/// `multi_info_read_php_documented_loop_shape` below covers that spelling's BEHAVIOUR.
+#[test]
+fn multi_info_read_drain_loop_is_heap_balanced() {
+    if skip_without_curl_native("multi_info_read_drain_loop_is_heap_balanced") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url_a = server.url("/a");
+    let url_b = server.url("/b");
+    let output = compile_and_run_with_gc_stats(&format!(
+        r#"<?php
+        function drain(): int {{
+            $mh = curl_multi_init();
+            $a = curl_init("{url_a}");
+            curl_setopt($a, CURLOPT_RETURNTRANSFER, true);
+            $b = curl_init("{url_b}");
+            curl_setopt($b, CURLOPT_RETURNTRANSFER, true);
+            curl_multi_add_handle($mh, $a);
+            curl_multi_add_handle($mh, $b);
+            $running = 0;
+            do {{
+                curl_multi_exec($mh, $running);
+                if ($running > 0) {{
+                    curl_multi_select($mh, 1.0);
+                }}
+            }} while ($running > 0);
+            $done = 0;
+            while (true) {{
+                $info = curl_multi_info_read($mh);
+                if ($info === false) {{
+                    break;
+                }}
+                if ($info['result'] === CURLE_OK) {{
+                    $done++;
+                }}
+            }}
+            return $done;
+        }}
+        echo drain(), drain(), drain(), "\n";
+        "#
+    ));
+    assert_eq!(output.stdout, "222\n");
+    let (allocs, frees) = parse_gc_stats(&output.stderr);
+    assert_eq!(
+        allocs, frees,
+        "the drain loop with the optional by-reference argument omitted must not leak: {}",
+        output.stderr
+    );
+}
+
+/// php.net's own spelling of the drain loop — `while ($info = curl_multi_info_read($mh))` —
+/// produces the right ANSWERS: two completed transfers, each naming the handle it belongs to,
+/// and the loop terminates on the `false` that ends the queue.
+///
+/// Balance is asserted by `multi_info_read_drain_loop_is_heap_balanced` on the equivalent
+/// `while (true)` form instead, because assignment-in-a-loop-condition leaks the assigned
+/// value in this compiler regardless of what produced it (see that fixture's comment).
+#[test]
+fn multi_info_read_php_documented_loop_shape() {
+    if skip_without_curl_native("multi_info_read_php_documented_loop_shape") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url_a = server.url("/a");
+    let url_b = server.url("/b");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $mh = curl_multi_init();
+        $a = curl_init("{url_a}");
+        curl_setopt($a, CURLOPT_RETURNTRANSFER, true);
+        $b = curl_init("{url_b}");
+        curl_setopt($b, CURLOPT_RETURNTRANSFER, true);
+        curl_multi_add_handle($mh, $a);
+        curl_multi_add_handle($mh, $b);
+        $running = 0;
+        do {{
+            curl_multi_exec($mh, $running);
+            if ($running > 0) {{
+                curl_multi_select($mh, 1.0);
+            }}
+        }} while ($running > 0);
+        $seen = "";
+        while ($info = curl_multi_info_read($mh)) {{
+            $seen .= $info['result'] === CURLE_OK ? "0" : "E";
+            $seen .= $info['handle'] === $a ? "A" : ($info['handle'] === $b ? "B" : "?");
+        }}
+        echo $seen, "\n";
+        "#
+    ));
+    assert!(
+        out == "0A0B\n" || out == "0B0A\n",
+        "both transfers must be reported, each naming its own handle; got {out:?}"
+    );
 }

@@ -143,7 +143,7 @@ pub(super) fn lower_generator_intrinsic(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &generator_intrinsic_return_type(intrinsic))?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Returns ABI-visible parameter types for a `Generator` intrinsic call.

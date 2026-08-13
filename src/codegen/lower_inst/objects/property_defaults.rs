@@ -241,12 +241,17 @@ pub(super) fn emit_constructor_call(
     let mut ref_params = Vec::with_capacity(constructor_ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend_from_slice(constructor_ref_params);
+    // `MayOutliveCall`: a constructor may PROMOTE a by-reference parameter into a property
+    // (`__construct(public int &$value = 1)`), and that property borrows the argument's cell
+    // for the whole life of the object. A caller-stack cell would be gone by the object's
+    // first read of it, so this call keeps the heap cell (see `RefArgCellLifetime`).
     let call_args = super::super::materialize_direct_call_args_with_refs_and_options(
         ctx,
         &args,
         &param_types,
         &ref_params,
         true,
+        crate::codegen::lower_inst::RefArgCellLifetime::MayOutliveCall,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -263,5 +268,5 @@ pub(super) fn emit_constructor_call(
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     super::super::emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     super::super::emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }

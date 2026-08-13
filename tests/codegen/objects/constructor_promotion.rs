@@ -220,3 +220,30 @@ echo ":" . $fromReturn->getName();
     );
     assert_eq!(out, "InDrC:idFC:id");
 }
+
+/// A `parent::__construct()` that OMITS a by-reference promoted default still binds a cell
+/// that outlives the call.
+///
+/// The caller-side cell for an omitted optional by-reference argument is an ordinary stack
+/// slot released when the call returns — except where the callee can KEEP the reference, and
+/// a constructor that promotes `&$value` into a property is exactly that case. `new Child()`
+/// reaches the parent constructor through the lexical-static lowering rather than the
+/// object-allocation one, so it needs the same exemption and nothing pinned it before.
+#[test]
+fn test_parent_constructor_by_ref_promoted_default_outlives_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(public int &$value = 1) {}
+}
+class Child extends Base {
+    public function __construct() { parent::__construct(); }
+}
+$c = new Child();
+echo $c->value;
+$c->value = 7;
+echo ":", $c->value;
+"#,
+    );
+    assert_eq!(out, "1:7");
+}

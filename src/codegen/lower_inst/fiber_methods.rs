@@ -490,5 +490,5 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     objects::emit_boxed_null(ctx);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
