@@ -22,4 +22,5 @@ mod http_fixture;
 mod multi;
 mod multipart;
 mod share;
+mod streams;
 mod tls_fixture;

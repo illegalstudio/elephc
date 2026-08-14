@@ -228,7 +228,7 @@ shorter lifetime off, so the share is never freed.
 
 `curl_setopt()` classifies every option number against a frozen table generated
 from the pinned libcurl headers, then reads the PHP value according to that
-option's real C type. **254 of PHP's 270 `CURLOPT_*` names are implemented.**
+option's real C type. **259 of PHP's 270 `CURLOPT_*` names are implemented.**
 
 An option this build cannot carry returns `false` and emits PHP's warning — never
 an inert `true`:
@@ -246,7 +246,7 @@ curl_setopt($ch, 987654, 1);
 // ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option
 ```
 
-### The 16 rejected options
+### The 11 rejected options
 
 This list is pinned by a test
 (`elephc_curl::tests::option_table::the_documented_rejection_set_is_exactly_this`),
@@ -256,7 +256,6 @@ so it cannot drift from the code:
 |---|---|
 | `CURLOPT_CAINFO_BLOB`, `CURLOPT_ISSUERCERT_BLOB`, `CURLOPT_PROXY_CAINFO_BLOB`, `CURLOPT_PROXY_ISSUERCERT_BLOB`, `CURLOPT_PROXY_SSLCERT_BLOB`, `CURLOPT_PROXY_SSLKEY_BLOB`, `CURLOPT_SSLCERT_BLOB`, `CURLOPT_SSLKEY_BLOB` | In-memory certificate/key blobs. The **file-path** forms (`CURLOPT_SSLCERT`, `CURLOPT_CAINFO`, …) all work — write the material to a file. |
 | `CURLOPT_FNMATCH_FUNCTION`, `CURLOPT_PREREQFUNCTION`, `CURLOPT_SSH_HOSTKEYFUNCTION` | Callbacks outside the six implemented ones (below). `SSH_HOSTKEYFUNCTION` is moot anyway — SSH is not built in. |
-| `CURLOPT_FILE`, `CURLOPT_INFILE`, `CURLOPT_READDATA`, `CURLOPT_STDERR`, `CURLOPT_WRITEHEADER` | Options whose value is a **PHP stream resource**. Use `CURLOPT_RETURNTRANSFER` and write the returned string yourself, or install a `CURLOPT_WRITEFUNCTION`. (`CURLOPT_INFILE` and `CURLOPT_READDATA` are the same option under two names.) |
 
 `CURLINFO_HEADER_OUT` — which is a `curl_setopt()` option despite its name — is
 rejected the same way, so `curl_getinfo($ch, CURLINFO_HEADER_OUT)` has nothing to
@@ -282,6 +281,61 @@ matching php-src:
 
 With no `CURLOPT_RETURNTRANSFER`, the body is written to stdout and `curl_exec()`
 returns `true` — the PHP CLI behavior.
+
+> **Divergence:** that stdout write goes straight to file descriptor 1, so
+> `ob_start()` does **not** capture it the way php's does. Wrap the transfer in
+> `CURLOPT_RETURNTRANSFER` (or a `CURLOPT_WRITEFUNCTION`) if you need the body as a
+> string.
+
+### Stream options
+
+`CURLOPT_FILE`, `CURLOPT_WRITEHEADER`, `CURLOPT_INFILE` (a.k.a. `CURLOPT_READDATA`)
+and `CURLOPT_STDERR` take a stream — whatever `fopen()` returned — and work as they
+do in php:
+
+```php
+$sink = fopen('/tmp/body.txt', 'wb');
+$ch = curl_init('https://example.com/');
+curl_setopt($ch, CURLOPT_FILE, $sink);
+curl_exec($ch);              // true; the body is in /tmp/body.txt
+```
+
+| Option | Behavior |
+|---|---|
+| `CURLOPT_FILE` | Response **body** is written to the stream; `curl_exec()` returns `true` |
+| `CURLOPT_WRITEHEADER` | Response **headers** are written to the stream |
+| `CURLOPT_INFILE` | Upload **source** for `CURLOPT_UPLOAD`/`CURLOPT_PUT`; pair it with `CURLOPT_INFILESIZE` |
+| `CURLOPT_STDERR` | libcurl's **verbose trace**, in libcurl's own format (`* `, `> `, `< ` prefixes). Requires `CURLOPT_VERBOSE`. |
+
+Three precedence rules, all matching php:
+
+- **The body has one sink.** `CURLOPT_FILE`, `CURLOPT_RETURNTRANSFER` and
+  `CURLOPT_WRITEFUNCTION` select the same mode, and **the last one set wins**.
+  Setting any of them to `null`/`false` falls back to stdout, *not* to a sibling
+  set earlier. `CURLOPT_WRITEHEADER`/`CURLOPT_HEADERFUNCTION` pair up the same
+  way, except their default is to discard headers rather than print them.
+- **A read callback outranks `CURLOPT_INFILE`, in either order.** Setting
+  `CURLOPT_INFILE` after a `CURLOPT_READFUNCTION` does *not* displace the
+  callback; clearing the callback with `null` falls back to the stream. A read
+  callback also receives the `CURLOPT_INFILE` stream as its `$fd` argument, so
+  `fread($fd, $length)` inside it works.
+- **`CURLOPT_STDERR` is a fallback, not a mode.** A `CURLOPT_DEBUGFUNCTION` always
+  wins over it, whichever order they are set in — and once `CURLOPT_DEBUGFUNCTION`
+  has been touched *at all*, even with `null`, `CURLOPT_STDERR` stays shadowed for
+  the rest of that handle's life.
+
+`curl_reset()` clears all four; `curl_copy_handle()` carries them onto the copy,
+which then reads from and writes to the same streams. Keep the stream open for as
+long as the handle uses it.
+
+A non-stream value raises `TypeError`, and a read-only stream given to
+`CURLOPT_FILE`/`CURLOPT_WRITEHEADER`/`CURLOPT_STDERR` raises `ValueError`, both
+with php's messages. `null` is accepted and clears the option.
+
+> **Divergence:** php answers a distinct `TypeError` for a stream that has already
+> been `fclose()`d ("supplied **resource** is not a valid File-Handle resource").
+> elephc's `is_resource()` still reports `true` for a closed stream, so it cannot
+> tell that case apart and reports the ordinary "supplied **argument**" message.
 
 ## `curl_getinfo()`
 
@@ -367,7 +421,7 @@ strings, `[$obj, 'method']` arrays, first-class callables):
 |---|---|
 | `CURLOPT_WRITEFUNCTION` | `fn(CurlHandle $ch, string $data): int` |
 | `CURLOPT_HEADERFUNCTION` | `fn(CurlHandle $ch, string $header): int` |
-| `CURLOPT_READFUNCTION` | `fn(CurlHandle $ch, $fd, int $length): string` — `$fd` is always `null`, since `CURLOPT_INFILE` is not supported |
+| `CURLOPT_READFUNCTION` | `fn(CurlHandle $ch, $fd, int $length): string` — `$fd` is the `CURLOPT_INFILE` stream, or `null` when none is set |
 | `CURLOPT_PROGRESSFUNCTION` | `fn(CurlHandle $ch, int $dlTotal, int $dlNow, int $ulTotal, int $ulNow): int` |
 | `CURLOPT_XFERINFOFUNCTION` | same as `CURLOPT_PROGRESSFUNCTION` |
 | `CURLOPT_DEBUGFUNCTION` | `fn(CurlHandle $ch, int $type, string $data): int` |
@@ -395,8 +449,10 @@ LONG / STRING / SLIST / OFF_T / PHP-layer option works, not a hand-picked subset
 - `CURLFile` / `CURLStringFile` / `curl_file_create()`, and with them the array
   (`multipart/form-data`) form of `CURLOPT_POSTFIELDS`. A **string**
   `CURLOPT_POSTFIELDS` body works.
-- Callback options and `CURLOPT_SHARE`, rejected with the same `false` + warning
-  path a genuinely unsupported option uses.
+- Callback options, `CURLOPT_SHARE`, and the four **stream** options
+  (`CURLOPT_FILE`, `CURLOPT_WRITEHEADER`, `CURLOPT_INFILE`/`CURLOPT_READDATA`,
+  `CURLOPT_STDERR`) — rejected with the same `false` + warning path a genuinely
+  unsupported option uses. Compiled code implements all four; `eval()` does not.
 
 Further differences inside `eval()`:
 

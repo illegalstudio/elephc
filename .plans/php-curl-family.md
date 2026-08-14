@@ -225,6 +225,31 @@ Implement inside `elephc-curl`, not by forwarding blindly:
 Default (no `RETURNTRANSFER`, no `FILE`): write the body to stdout, matching
 PHP CLI.
 
+> **Status note (WP-C of the punch list).** The four stream rows above —
+> `CURLOPT_FILE`, `CURLOPT_INFILE`, `CURLOPT_WRITEHEADER`, `CURLOPT_STDERR` — shipped
+> initially as `KIND_UNSUPPORTED` (`false` + PHP's warning) because elephc streams are
+> not `FILE *`. They are now IMPLEMENTED, but not "inside `elephc-curl`" as this section
+> anticipated: they live in the curl PRELUDE, composed out of the callback slots the
+> bridge already carries (an internal PHP closure per option that `fwrite()`s to, or
+> `fread()`s from, the stream). libcurl never receives a stream pointer and no new ABI
+> entry point exists for them; the bridge only gained an option KIND (`KIND_STREAM`).
+>
+> `CURLOPT_STDERR` in particular goes through the `CURLOPT_DEBUGFUNCTION` slot, which is
+> exact rather than approximate: libcurl's own `trc_write` (`lib/curl_trc.c`) writes to
+> `set.err` only when `set.fdebug` is NULL, so the debug callback IS the same branch
+> php's `FILE *` would have taken. Reproducing libcurl's default trace format from the
+> callback's raw `(type, data)` was verified byte-identical against a real
+> `CURLOPT_STDERR` transfer on PHP 8.4.20.
+>
+> Three precedence rules were measured rather than assumed, and they are not the same
+> rule: the body sink is one LAST-SET-WINS mode; the read source gives a
+> `CURLOPT_READFUNCTION` priority over `CURLOPT_INFILE` in BOTH orders; and
+> `CURLOPT_STDERR` is a fallback that any `CURLOPT_DEBUGFUNCTION` — even one set to
+> `null` — shadows permanently. See `docs/php/curl.md`'s "Stream options" and
+> `tests/codegen/curl/streams.rs`.
+>
+> `eval()` still rejects all four with the standard warning + `false`.
+
 ### `curl_exec` return shape
 
 | Situation | Return |

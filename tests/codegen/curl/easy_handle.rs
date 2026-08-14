@@ -304,16 +304,20 @@ fn curl_setopt_forwards_and_rejects_honestly() {
 ///
 /// This is a memory-safety regression test, not a politeness one. Every option here used
 /// to be forwarded verbatim: 20200 (`CURLOPT_FNMATCH_FUNCTION`) overwrote a libcurl
-/// callback slot with the address `1`, and 40291 (`CURLOPT_SSLCERT_BLOB`) mis-read a PHP
-/// string as a `struct curl_blob *`. 10001 (`CURLOPT_FILE`) is the PHP-stream option a
-/// later task owns. 20011 (`CURLOPT_WRITEFUNCTION`) used to lead this list — Task 12
-/// makes it work, and `tests/codegen/curl/callbacks.rs` covers it now, including its own
-/// honest rejection (a non-callable value is a `TypeError`, not a silent `false`) and the
-/// callback options that are still in the second wave. 10100 (`CURLOPT_SHARE`) used to be in this list too — Task 10 makes it
-/// work; `tests/codegen/curl/share.rs` covers it now, including its own honest rejection
-/// (a non-`CurlShareHandle` value is a `TypeError`, not a silent `false`). The transfer at
-/// the end is what proves nothing was corrupted: the handle still performs and still
-/// reports its own error, so none of the rejected options reached libcurl's state.
+/// callback slot with the address `1`, 20312 (`CURLOPT_PREREQFUNCTION`) the same, and
+/// 40291 (`CURLOPT_SSLCERT_BLOB`) mis-read a PHP string as a `struct curl_blob *`. The
+/// transfer at the end is what proves nothing was corrupted: the handle still performs and
+/// still reports its own error, so none of the rejected options reached libcurl's state.
+///
+/// THREE FAMILIES HAVE GRADUATED OUT OF THIS LIST, each to a fixture that also pins its
+/// own HONEST rejection — a wrongly-typed value is a `TypeError`, never a silent `false`:
+/// 20011 (`CURLOPT_WRITEFUNCTION`) and the rest of the first callback wave to
+/// `tests/codegen/curl/callbacks.rs`; 10100 (`CURLOPT_SHARE`) to
+/// `tests/codegen/curl/share.rs`; and 10001 (`CURLOPT_FILE`) with the other three PHP
+/// stream options to `tests/codegen/curl/streams.rs`. `CURLOPT_FILE` in particular can no
+/// longer appear here at all: `curl_setopt($ch, 10001, 1)` is now a `TypeError` for the
+/// non-stream `1`, which is php's own answer, so probing it with an int would abort the
+/// program rather than print `rejected`.
 #[test]
 fn unsupported_options_are_rejected_before_libcurl() {
     if skip_without_curl_native("unsupported_options_are_rejected_before_libcurl") {
@@ -324,7 +328,7 @@ fn unsupported_options_are_rejected_before_libcurl() {
         $ch = curl_init();
         echo curl_setopt($ch, 20200, 1) ? "accepted\n" : "rejected\n";
         echo curl_setopt($ch, 40291, "blob") ? "accepted\n" : "rejected\n";
-        echo curl_setopt($ch, 10001, 1) ? "accepted\n" : "rejected\n";
+        echo curl_setopt($ch, 20312, 1) ? "accepted\n" : "rejected\n";
         curl_setopt($ch, 10002, "file:///nonexistent-elephc-curl-probe");
         curl_setopt($ch, 19913, true);
         $body = curl_exec($ch);
@@ -336,7 +340,7 @@ fn unsupported_options_are_rejected_before_libcurl() {
         output.stdout,
         "rejected\nrejected\nrejected\nexec-false\nerrno\n"
     );
-    for option in ["20200", "40291", "10001"] {
+    for option in ["20200", "40291", "20312"] {
         assert!(
             output.stderr.contains(&format!(
                 "Warning: curl_setopt(): Option {option} is not supported by this build"

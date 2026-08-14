@@ -117,3 +117,74 @@ fn eval_without_curl_never_requires_the_curl_bridge() {
     );
     assert_eq!(out, "42:0");
 }
+
+/// THE FOUR PHP-STREAM OPTIONS STAY UNSUPPORTED IN `eval()`, and — the part worth pinning —
+/// they stay unsupported the SAFE way: `false` plus the honest warning, not a fatal.
+///
+/// They used to be `KIND_UNSUPPORTED`, which the interpreter already funnelled into that
+/// warning. Giving them their own `KIND_STREAM` for the AOT implementation moved them out
+/// of that arm, and anything the interpreter does not recognize falls through to its
+/// scalar-type guard — where a stream resource is none of int/string/float/bool and the
+/// answer is an UNCATCHABLE fatal. `crates/elephc-magician/src/interpreter/builtins/curl/
+/// handle.rs` names `KIND_STREAM` alongside `KIND_SHARE`/`KIND_CALLBACK` to prevent that,
+/// and this fixture is what would notice if it stopped doing so.
+///
+/// The AOT half of the same program shows the divergence in the other direction: compiled
+/// code writes the body to the stream, `eval()` refuses the option.
+#[test]
+fn eval_rejects_the_stream_options_with_a_warning_not_a_fatal() {
+    if skip_without_curl_native("eval_rejects_the_stream_options_with_a_warning_not_a_fatal") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let output = compile_and_run_capture(&format!(
+        r#"<?php
+        // A real top-level curl call, so the prelude is injected and the bridge linked
+        // (see this file's header).
+        $path = tempnam(sys_get_temp_dir(), "elephc-curl-eval");
+        $sink = fopen($path, "w+b");
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_FILE, $sink);
+        curl_exec($ch);
+        curl_close($ch);
+        fclose($sink);
+        echo "aot=", file_get_contents($path), "\n";
+        unlink($path);
+
+        // The same four options inside eval(): each answers false, none is fatal, and the
+        // script keeps running to print the marker below.
+        $results = eval('
+            $path = tempnam(sys_get_temp_dir(), "elephc-curl-eval2");
+            $sink = fopen($path, "w+b");
+            $ch = curl_init();
+            $out = "";
+            foreach ([CURLOPT_FILE, CURLOPT_WRITEHEADER, CURLOPT_INFILE, CURLOPT_STDERR] as $option) {{
+                $out .= curl_setopt($ch, $option, $sink) ? "t" : "f";
+            }}
+            curl_close($ch);
+            fclose($sink);
+            unlink($path);
+            return $out;
+        ');
+        echo "eval=", $results, "\n";
+        echo "alive\n";
+        "#
+    ));
+    assert_eq!(output.stdout, "aot=hello-curl\neval=ffff\nalive\n");
+    // The MESSAGE is the AOT one verbatim. The `Warning: ` PREFIX is not: the interpreter
+    // emits through its own generic warning channel, which does not prepend the label (or
+    // a newline) the compiled `__elephc_curl_setopt_unsupported_warning` does. That is a
+    // pre-existing eval-vs-AOT formatting difference across every eval warning, not
+    // something these four options introduce, so it is asserted as-is rather than
+    // papered over.
+    for option in ["10001", "10029", "10009", "10037"] {
+        assert!(
+            output.stderr.contains(&format!(
+                "curl_setopt(): Option {option} is not supported by this build"
+            )),
+            "each stream option must warn in eval(); stderr was: {}",
+            output.stderr
+        );
+    }
+}

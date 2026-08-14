@@ -32,16 +32,18 @@
 //!   - `CURLOPT_PRIVATE` (10103) stores an arbitrary PHP value that
 //!     `curl_getinfo(..., CURLINFO_PRIVATE)` reads back; libcurl never sees it, so it is
 //!     `KIND_PHP_LAYER` and lives on the `CurlHandle` object.
-//!   - `CURLOPT_FILE`/`INFILE`/`WRITEHEADER`/`STDERR`/`READDATA` need PHP stream plumbing
-//!     this build does not have, so they are `KIND_UNSUPPORTED` (`false` + PHP's warning,
-//!     locked decision 7) rather than silently accepted. `CURLOPT_SHARE` is the ONE row in
-//!     this bucket that diverges the OTHER way: Task 10 gives it its own kind,
-//!     `KIND_SHARE`, because it needs a share-handle id, not a scalar — see `KIND_SHARE`'s
-//!     own doc comment.
+//!   - `CURLOPT_FILE`/`INFILE`/`WRITEHEADER`/`STDERR`/`READDATA` take a PHP STREAM, which
+//!     is neither a scalar nor a `FILE *`, so they get their own kind, `KIND_STREAM` —
+//!     the curl prelude implements them by composing this crate's callback slots rather
+//!     than by forwarding anything to libcurl. They were `KIND_UNSUPPORTED` (`false` +
+//!     PHP's warning) until WP-C; see `KIND_STREAM`'s own doc comment.
+//!   - `CURLOPT_SHARE` diverges the same way: Task 10 gives it its own kind, `KIND_SHARE`,
+//!     because it needs a share-handle id, not a scalar — see that constant's doc comment.
 //! - `CURLINFO_HEADER_OUT` (2) is in the table even though it is not a `CURLOPT_*`
 //!   constant: php-src's `curl_setopt()` switch accepts it (it turns on request-header
 //!   tracking through the debug callback), so answering `ValueError` for it would be
-//!   wrong. It needs Task 12's callback infrastructure, so it is `KIND_UNSUPPORTED`.
+//!   wrong. Capturing the request header still needs machinery this build does not have,
+//!   so it stays `KIND_UNSUPPORTED`.
 //! - ANYTHING NOT IN THIS TABLE IS `KIND_INVALID`, which the prelude turns into php-src's
 //!   own `ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option`.
 //!   That is the real php-src behaviour for an unrecognized option number, and it is a
@@ -70,6 +72,18 @@ pub(crate) const KIND_UNSUPPORTED: i32 = 6;
 /// `_slist`. A distinct kind from every other row in this table, added by Task 10; before
 /// it, this option was `KIND_UNSUPPORTED` like its `file`-bucket siblings.
 pub(crate) const KIND_SHARE: i32 = 7;
+/// A `curl_setopt()` option whose value is a PHP STREAM RESOURCE (what `fopen()` returns),
+/// or `null` to clear it: `CURLOPT_FILE` (10001), `CURLOPT_INFILE`/`CURLOPT_READDATA`
+/// (10009), `CURLOPT_WRITEHEADER` (10029), `CURLOPT_STDERR` (10037).
+///
+/// NOTHING IS FORWARDED TO libcurl FOR THESE. php-src hands libcurl a `FILE *`/stream
+/// pointer; elephc streams are not `FILE *`, so the curl prelude implements all four by
+/// COMPOSING the callback options this crate already carries — an internal PHP closure in
+/// the write/header/read/debug slot that `fwrite()`s to (or `fread()`s from) the stream.
+/// The bridge therefore never sees a stream, and `setopt_str`/`_slist`/`_long` are never
+/// reachable for these numbers. See `src/curl_prelude.rs`'s `$kind === 9` branch for the
+/// precedence rules, all measured against PHP 8.4.20.
+pub(crate) const KIND_STREAM: i32 = 9;
 /// A `curl_setopt()` callback option whose value is a PHP `callable` (or `null` to
 /// restore the default). Routed to `elephc_curl_easy_set_callback` (`crate::callbacks`)
 /// with the option's slot index, never to any of `setopt_long`/`_str`/`_slist`. Covers
@@ -215,13 +229,13 @@ pub(crate) const OPTION_KINDS: &[(i32, i32)] = &[
     (321, KIND_LONG), // CURLOPT_CA_CACHE_TIMEOUT
     (322, KIND_LONG), // CURLOPT_QUICK_EXIT
     (326, KIND_LONG), // CURLOPT_TCP_KEEPCNT
-    (10001, KIND_UNSUPPORTED), // CURLOPT_FILE
+    (10001, KIND_STREAM), // CURLOPT_FILE
     (10002, KIND_STRING), // CURLOPT_URL
     (10004, KIND_STRING), // CURLOPT_PROXY
     (10005, KIND_STRING), // CURLOPT_USERPWD
     (10006, KIND_STRING), // CURLOPT_PROXYUSERPWD
     (10007, KIND_STRING), // CURLOPT_RANGE
-    (10009, KIND_UNSUPPORTED), // CURLOPT_INFILE/CURLOPT_READDATA
+    (10009, KIND_STREAM), // CURLOPT_INFILE/CURLOPT_READDATA
     (10015, KIND_STRING), // CURLOPT_POSTFIELDS
     (10016, KIND_STRING), // CURLOPT_REFERER
     (10017, KIND_STRING), // CURLOPT_FTPPORT
@@ -231,10 +245,10 @@ pub(crate) const OPTION_KINDS: &[(i32, i32)] = &[
     (10025, KIND_STRING), // CURLOPT_SSLCERT
     (10026, KIND_STRING), // CURLOPT_KEYPASSWD/CURLOPT_SSLCERTPASSWD/CURLOPT_SSLKEYPASSWD
     (10028, KIND_SLIST), // CURLOPT_QUOTE
-    (10029, KIND_UNSUPPORTED), // CURLOPT_WRITEHEADER
+    (10029, KIND_STREAM), // CURLOPT_WRITEHEADER
     (10031, KIND_STRING), // CURLOPT_COOKIEFILE
     (10036, KIND_STRING), // CURLOPT_CUSTOMREQUEST
-    (10037, KIND_UNSUPPORTED), // CURLOPT_STDERR
+    (10037, KIND_STREAM), // CURLOPT_STDERR
     (10039, KIND_SLIST), // CURLOPT_POSTQUOTE
     (10062, KIND_STRING), // CURLOPT_INTERFACE
     (10063, KIND_STRING), // CURLOPT_KRB4LEVEL/CURLOPT_KRBLEVEL

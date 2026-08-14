@@ -127,7 +127,16 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
         // CURLOPT_BINARYTRANSFER (19914): documented no-op in modern PHP.
         return values.bool_value(true);
     }
-    if kind == ffi::KIND_SHARE || kind == ffi::KIND_CALLBACK || kind == ffi::KIND_UNSUPPORTED {
+    // KIND_STREAM IS IN THIS LIST FOR A REASON THE OTHERS ARE NOT: without it, the four
+    // PHP-stream options would fall PAST the warning and into the scalar-type guard below,
+    // where a stream resource is none of int/string/float/bool and therefore a HARD FATAL.
+    // They used to be `KIND_UNSUPPORTED`, so leaving them out here would have turned a
+    // `false` + warning into an uncatchable fault the moment the AOT side implemented them.
+    if kind == ffi::KIND_SHARE
+        || kind == ffi::KIND_CALLBACK
+        || kind == ffi::KIND_STREAM
+        || kind == ffi::KIND_UNSUPPORTED
+    {
         warn_unsupported_option(option, values)?;
         return values.bool_value(false);
     }

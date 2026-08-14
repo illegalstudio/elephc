@@ -171,6 +171,31 @@ final class CurlHandle {
     // CURLOPT_WRITEFUNCTION). `curl_copy_handle()` needs the real mode to decide whether
     // to re-register slot 0 on the duplicate.
     public bool $__elephc_write_user = false;
+    // THE FOUR STREAM OPTIONS' SINKS/SOURCES, and the GC ROOTS that keep them open for as
+    // long as they are registered. libcurl never sees any of them: each is serviced by an
+    // internal closure installed in the matching callback slot above, which reads the
+    // stream back off `$ch` (the handle every curl callback receives as its first
+    // argument) instead of capturing it — so `curl_copy_handle()` re-registering that
+    // closure on the DUPLICATE makes it follow the duplicate's own streams, and no
+    // closure ever captures the handle it lives on (which would be the refcount cycle
+    // `curl_setopt()`'s callback branch documents).
+    public mixed $__elephc_file = null;         // CURLOPT_FILE (10001)
+    public mixed $__elephc_writeheader = null;  // CURLOPT_WRITEHEADER (10029)
+    public mixed $__elephc_infile = null;       // CURLOPT_INFILE/CURLOPT_READDATA (10009)
+    public mixed $__elephc_stderr = null;       // CURLOPT_STDERR (10037)
+    // The user's CURLOPT_READFUNCTION, kept OFF the slot table. The read slot always holds
+    // this prelude's dispatcher, because php's read path is the one place where the
+    // callback does NOT simply win by being set last: a user READFUNCTION outranks
+    // CURLOPT_INFILE whichever order the two arrive in, and clearing it falls BACK to the
+    // stream. See `curl_setopt()`'s `$kind === 9` branch for the measurements.
+    public mixed $__elephc_read_user = null;
+    // Whether CURLOPT_DEBUGFUNCTION has EVER been set on this handle (even to null).
+    // php-src installs its own C debug trampoline the first time and never removes it, so
+    // libcurl's `data->set.fdebug` stays non-NULL and CURLOPT_STDERR is shadowed for the
+    // rest of the handle's life. Measured on PHP 8.4.20: after
+    // `curl_setopt($ch, CURLOPT_DEBUGFUNCTION, null)`, a CURLOPT_STDERR stream that
+    // worked before receives NOTHING — even though no PHP callable is installed any more.
+    public bool $__elephc_debug_user = false;
 
     private function __construct() {}
 
@@ -380,11 +405,28 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
             $slot = 4;
             $optionName = "CURLOPT_DEBUGFUNCTION";
         }
+        // TOUCHING CURLOPT_DEBUGFUNCTION AT ALL — even with `null` — PERMANENTLY SHADOWS
+        // CURLOPT_STDERR, because php-src installs its C trampoline here and never takes
+        // it back out, leaving libcurl's `data->set.fdebug` non-NULL forever. Set BEFORE
+        // the null branch below so both paths record it.
+        if ($slot === 4) {
+            $handle->__elephc_debug_user = true;
+        }
         if (is_null($value)) {
             // php-src restores the option's DEFAULT, which for CURLOPT_WRITEFUNCTION is
             // stdout — NOT whatever CURLOPT_RETURNTRANSFER was set to earlier. Measured
             // on PHP 8.4.20: after `curl_setopt($ch, CURLOPT_WRITEFUNCTION, null)` on a
             // RETURNTRANSFER handle, `curl_exec()` prints the body and returns `true`.
+            //
+            // THE READ SLOT IS THE EXCEPTION: clearing CURLOPT_READFUNCTION falls back to
+            // the CURLOPT_INFILE stream when one is set, rather than to "no source"
+            // (measured: READFUNCTION, then INFILE, then READFUNCTION=null uploads the
+            // FILE's bytes). `__elephc_curl_sync_read_slot()` picks whichever is now in
+            // charge.
+            if ($slot === 2) {
+                $handle->__elephc_read_user = null;
+                return __elephc_curl_sync_read_slot($handle);
+            }
             $handle->__elephc_callbacks[$slot] = null;
             if ($slot === 0) {
                 $handle->__elephc_return_transfer = false;
@@ -399,6 +441,16 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
             throw new \TypeError("curl_setopt(): Argument #3 (\$value) must be a valid callback for option " . $optionName . ", no array or string given");
         }
         $normalized = __elephc_normalize_callable($value);
+        // THE READ SLOT NEVER HOLDS THE USER'S CALLABLE DIRECTLY. It is parked on the
+        // handle and the slot gets this prelude's dispatcher, so that (a) a later
+        // CURLOPT_INFILE cannot displace it — php gives the callback priority in BOTH
+        // orders — and (b) the callback still receives the INFILE stream as its `$fd`
+        // argument, which is what php-src passes and what the bridge, having no way to
+        // marshal a PHP resource, cannot pass on its own.
+        if ($slot === 2) {
+            $handle->__elephc_read_user = $normalized;
+            return __elephc_curl_sync_read_slot($handle);
+        }
         $descriptor = __elephc_callable_ptr($normalized);
         $adapter = __elephc_curl_adapter_addr();
         if (!__elephc_curl_easy_set_callback($raw, $slot, $descriptor, $handle, $adapter)) {
@@ -434,6 +486,164 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         }
         return true;
     }
+    // THE FOUR PHP STREAM OPTIONS: CURLOPT_FILE (10001), CURLOPT_INFILE/CURLOPT_READDATA
+    // (10009), CURLOPT_WRITEHEADER (10029), CURLOPT_STDERR (10037). php-src hands libcurl
+    // a `FILE *`; an elephc stream is not one, so all four are implemented HERE by
+    // composing the callback slots — an internal closure that `fwrite()`s to (or
+    // `fread()`s from) the stream. libcurl never receives a stream pointer.
+    //
+    // EVERY PRECEDENCE RULE BELOW WAS MEASURED against PHP 8.4.20 + libcurl 8.19.0
+    // (transcripts in `.superpowers/sdd/curl-punchlist/wpC-report.md`). They are NOT one
+    // rule: the write and header sinks are a single LAST-SET-WINS mode, the read source is
+    // a FIXED PRECEDENCE, and the debug sink is a ONE-WAY SHADOW.
+    //
+    //   WRITE (CURLOPT_FILE) — php-src keeps ONE `handlers.write->method`, so whichever of
+    //   FILE / RETURNTRANSFER / WRITEFUNCTION is set LAST wins, and `null` on any of them
+    //   falls back to PHP_CURL_STDOUT (never to a previously-selected sibling):
+    //     FILE                     -> body to the stream, curl_exec() answers `true`
+    //     FILE then RETURNTRANSFER -> capture (FILE deselected)
+    //     RETURNTRANSFER then FILE -> stream  (RETURNTRANSFER deselected)
+    //     FILE then WRITEFUNCTION  -> callback;  WRITEFUNCTION then FILE -> stream
+    //     FILE then RETURNTRANSFER=false, or WRITEFUNCTION=null, or FILE=null -> stdout
+    //
+    //   HEADER (CURLOPT_WRITEHEADER) — the same last-set-wins pair with
+    //   CURLOPT_HEADERFUNCTION, except the DEFAULT is "discard" rather than stdout, so
+    //   clearing either one silences headers instead of printing them.
+    //
+    //   READ (CURLOPT_INFILE) — NOT last-set-wins. A user CURLOPT_READFUNCTION outranks
+    //   the stream in BOTH orders (measured: setting INFILE after READFUNCTION does not
+    //   displace the callback), and clearing the callback falls BACK to the stream. That
+    //   is why the read slot always holds this prelude's dispatcher and the user's
+    //   callable is parked in `__elephc_read_user`. The dispatcher is also what lets the
+    //   user callback receive the INFILE stream as its `$fd` argument, which is what
+    //   php-src passes.
+    //
+    //   STDERR (CURLOPT_STDERR) — a FALLBACK sink, not a mode. libcurl's own
+    //   `trc_write` (pinned 8.21.0, lib/curl_trc.c) writes to `data->set.err` ONLY when
+    //   `data->set.fdebug` is NULL, so a debug callback always wins no matter the order.
+    //   php-src installs its C trampoline on the first CURLOPT_DEBUGFUNCTION and never
+    //   removes it, so once that option is touched — even with `null` — CURLOPT_STDERR
+    //   stays shadowed for the handle's life. `__elephc_debug_user` models exactly that.
+    if ($kind === 9) {
+        // php ACCEPTS `null` for all four, answers `true`, and clears the sink; it is the
+        // ONLY non-resource value that is not a TypeError.
+        if ($option === 10001) {
+            // CURLOPT_FILE -> the write slot.
+            if ($value === null) {
+                $handle->__elephc_file = null;
+                $handle->__elephc_return_transfer = false;
+                $handle->__elephc_write_user = false;
+                return __elephc_curl_install_internal_callback($handle, 0, null);
+            }
+            __elephc_curl_check_stream_option($value, true);
+            $handle->__elephc_file = $value;
+            // Installing slot 0 makes the BRIDGE select PHP_CURL_USER and clear its own
+            // return_transfer (see `apply_callback`); these mirror it on the object, which
+            // is what decides `curl_exec()`'s return shape and what `curl_copy_handle()`
+            // reads to decide whether slot 0 is ACTIVE on the duplicate.
+            $handle->__elephc_return_transfer = false;
+            $handle->__elephc_write_user = true;
+            return __elephc_curl_install_internal_callback($handle, 0, function (CurlHandle $ch, string $data): int {
+                $sink = $ch->__elephc_file;
+                if (!is_resource($sink)) {
+                    // The stream was closed or cleared mid-transfer. Returning a short
+                    // count is libcurl's "write failed" signal (CURLE_WRITE_ERROR), which
+                    // is the honest answer — silently dropping the body would not be.
+                    return 0;
+                }
+                $written = fwrite($sink, $data);
+                if (!is_int($written)) {
+                    return 0;
+                }
+                return $written;
+            });
+        }
+        if ($option === 10029) {
+            // CURLOPT_WRITEHEADER -> the header slot.
+            if ($value === null) {
+                $handle->__elephc_writeheader = null;
+                return __elephc_curl_install_internal_callback($handle, 1, null);
+            }
+            __elephc_curl_check_stream_option($value, true);
+            $handle->__elephc_writeheader = $value;
+            return __elephc_curl_install_internal_callback($handle, 1, function (CurlHandle $ch, string $data): int {
+                $sink = $ch->__elephc_writeheader;
+                if (!is_resource($sink)) {
+                    return 0;
+                }
+                $written = fwrite($sink, $data);
+                if (!is_int($written)) {
+                    return 0;
+                }
+                return $written;
+            });
+        }
+        if ($option === 10009) {
+            // CURLOPT_INFILE / CURLOPT_READDATA -> the read slot's dispatcher. php does
+            // NOT check this stream for readability (measured: a write-only handle is
+            // accepted), so neither does this.
+            if ($value !== null) {
+                __elephc_curl_check_stream_option($value, false);
+            }
+            $handle->__elephc_infile = $value;
+            return __elephc_curl_sync_read_slot($handle);
+        }
+        // CURLOPT_STDERR -> the debug slot, but only while no CURLOPT_DEBUGFUNCTION has
+        // ever been set on this handle.
+        if ($value === null) {
+            $handle->__elephc_stderr = null;
+            if ($handle->__elephc_debug_user) {
+                return true;
+            }
+            return __elephc_curl_install_internal_callback($handle, 4, null);
+        }
+        __elephc_curl_check_stream_option($value, true);
+        $handle->__elephc_stderr = $value;
+        if ($handle->__elephc_debug_user) {
+            // Accepted and remembered, but inert — a debug callback owns the sink. php
+            // answers `true` here too; it just never routes anything to the stream.
+            return true;
+        }
+        return __elephc_curl_install_internal_callback($handle, 4, function (CurlHandle $ch, int $type, string $data): int {
+            $sink = $ch->__elephc_stderr;
+            if (!is_resource($sink)) {
+                return 0;
+            }
+            // libcurl's OWN default trace format, reproduced byte for byte from the pinned
+            // 8.21.0 `lib/curl_trc.c`:
+            //
+            //     static const char s_infotype[CURLINFO_END][3] =
+            //       { "* ", "< ", "> ", "{ ", "} ", "{ ", "} " };
+            //     switch(type) {
+            //     case CURLINFO_TEXT: case CURLINFO_HEADER_OUT: case CURLINFO_HEADER_IN:
+            //       fwrite(s_infotype[type], 2, 1, data->set.err);
+            //       fwrite(ptr, size, 1, data->set.err);
+            //       break;
+            //     default: /* nada */
+            //     }
+            //
+            // Two details that a per-line prefixer would get wrong: the prefix is written
+            // ONCE PER CALLBACK INVOCATION, not once per line — so a multi-line
+            // HEADER_OUT block gets "> " only on its first line — and the DATA_IN/
+            // DATA_OUT/SSL_DATA_* types are DROPPED ENTIRELY rather than written raw.
+            // Verified byte-identical against a real CURLOPT_STDERR transfer on PHP
+            // 8.4.20 (only the ephemeral port/date differ).
+            $prefix = "";
+            if ($type === 0) {
+                $prefix = "* ";
+            } elseif ($type === 1) {
+                $prefix = "< ";
+            } elseif ($type === 2) {
+                $prefix = "> ";
+            } else {
+                return 0;
+            }
+            fwrite($sink, $prefix);
+            fwrite($sink, $data);
+            // php-src's debug trampoline always answers 0, and libcurl ignores the value.
+            return 0;
+        });
+    }
     if ($kind === 6) {
         // REJECTED BEFORE THE VALUE IS TYPE-CHECKED. An option this build cannot carry
         // gets PHP's unsupported-option warning and `false` (locked decision 7) whatever
@@ -455,6 +665,122 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     }
     __elephc_curl_setopt_unsupported_warning($option);
     return false;
+}
+
+// Validates the value of one of the four PHP-stream `curl_setopt()` options and hands it
+// back, or throws the error php-src throws.
+//
+// DIVERGENCE FROM PHP, and it is elephc's stream layer rather than curl's: php answers a
+// DIFFERENT TypeError for a CLOSED stream ("curl_setopt(): supplied resource is not a
+// valid File-Handle resource") than for a value that was never a resource ("supplied
+// argument …"). elephc's `is_resource()` still answers `true` for a stream that has been
+// `fclose()`d — closed-ness is not tracked on the value — so this build cannot tell the
+// two apart and gives the "supplied argument" message for both. The one that matters,
+// rejecting a non-stream, is exact. Recorded in `docs/php/curl.md`.
+//
+// The WRITABILITY check is php's own, and only the three WRITE sinks get it:
+// `curl_setopt($ch, CURLOPT_FILE, fopen($f, "rb"))` is a `ValueError` in php, while
+// `CURLOPT_INFILE` accepts even a write-only handle (both measured on PHP 8.4.20).
+// IT VALIDATES AND RETURNS NOTHING, and the caller then assigns `$value` ITSELF. Handing
+// the stream back out of here — `$handle->__elephc_file = __elephc_curl_check_stream(...)`
+// — miscompiles: a `mixed`-declared function that returns a value `is_resource()` has
+// narrowed to a resource produces a BORROWED return, and storing that into a property
+// releases a reference the caller still owns. The second
+// `curl_setopt($ch, CURLOPT_FILE, $s)` on the same stream then leaves the CALLER's `$s`
+// dangling (observed as `gettype($s) === "integer"`/`"NULL"`). Reduced to a curl-free
+// repro and recorded in `.superpowers/sdd/curl-punchlist/wpC-report.md`; it is a codegen
+// ownership bug, not a curl one, so this prelude routes around it rather than papering
+// over it. Assigning the parameter DIRECTLY at the call site is the shape that is correct.
+function __elephc_curl_check_stream_option(mixed $value, bool $mustBeWritable): void {
+    if (!is_resource($value)) {
+        throw new \TypeError("curl_setopt(): supplied argument is not a valid File-Handle resource");
+    }
+    if ($mustBeWritable) {
+        // elephc NORMALIZES the reported mode to one of "r", "r+", "w" (measured: "w+b"
+        // reports "r+", "ab" reports "w"), where php echoes the mode string verbatim.
+        // Testing for a "+" or a non-"r" first character is therefore correct on both:
+        // php's full set (w/a/x/c and every "+" form) and elephc's normalized three.
+        $mode = "";
+        $meta = stream_get_meta_data($value);
+        if (array_key_exists("mode", $meta)) {
+            $mode = (string) $meta["mode"];
+        }
+        if ($mode !== "" && !str_contains($mode, "+") && substr($mode, 0, 1) === "r") {
+            throw new \ValueError("curl_setopt(): The provided file handle must be writable");
+        }
+    }
+}
+
+// Installs (or, with a `null` closure, clears) one of THIS PRELUDE'S OWN closures in a
+// callback slot. Identical plumbing to `curl_setopt()`'s `$kind === 8` branch — normalize,
+// take the descriptor, register, then root — but for a closure the user never wrote and
+// cannot see.
+//
+// The internal closures take NO `use` captures: each reads the stream it needs off `$ch`,
+// the handle every curl callback receives as its first argument. That is what makes them
+// safe to re-register verbatim on a `curl_copy_handle()` duplicate (the bridge re-points
+// the object back-pointer, so the closure follows the COPY's streams, not the original's)
+// and what keeps them out of the refcount cycle a `use ($ch)` capture would create.
+function __elephc_curl_install_internal_callback(CurlHandle $handle, int $slot, mixed $closure): bool {
+    $raw = $handle->__elephc_handle;
+    if ($closure === null) {
+        $handle->__elephc_callbacks[$slot] = null;
+        return __elephc_curl_easy_set_callback($raw, $slot, 0, $handle, 0);
+    }
+    $normalized = __elephc_normalize_callable($closure);
+    $descriptor = __elephc_callable_ptr($normalized);
+    $adapter = __elephc_curl_adapter_addr();
+    if (!__elephc_curl_easy_set_callback($raw, $slot, $descriptor, $handle, $adapter)) {
+        return false;
+    }
+    $handle->__elephc_callbacks[$slot] = $normalized;
+    return true;
+}
+
+// Re-derives the read slot from the two things that can drive it, after either has
+// changed: the user's `CURLOPT_READFUNCTION` (`__elephc_read_user`) and the
+// `CURLOPT_INFILE` stream (`__elephc_infile`).
+//
+// The slot holds a DISPATCHER, never the user's callable, because php's read path is a
+// FIXED PRECEDENCE rather than the last-set-wins the write path uses: a callback outranks
+// the stream in both orders, and clearing the callback falls back to the stream. Resolving
+// that inside the dispatcher — at call time, off `$ch` — means neither `curl_setopt()`
+// order nor `curl_copy_handle()` has to re-derive anything.
+//
+// With NEITHER set the slot is cleared, which returns the handle to the bridge's default
+// end-of-data read behaviour.
+function __elephc_curl_sync_read_slot(CurlHandle $handle): bool {
+    if ($handle->__elephc_read_user === null && $handle->__elephc_infile === null) {
+        return __elephc_curl_install_internal_callback($handle, 2, null);
+    }
+    // The trampoline's own `$fd` argument is IGNORED (and named with a leading underscore
+    // so it does not read as an oversight): the bridge has no way to marshal a PHP
+    // resource, so it always passes null there. The stream a user callback should see is
+    // the CURLOPT_INFILE one, which this dispatcher reads off `$ch` and substitutes.
+    return __elephc_curl_install_internal_callback($handle, 2, function (CurlHandle $ch, mixed $_fd, int $length): string {
+        $user = $ch->__elephc_read_user;
+        $source = $ch->__elephc_infile;
+        if ($user !== null) {
+            // php-src passes the CURLOPT_INFILE stream (or null) as the second argument,
+            // NOT the `$fd` libcurl handed the trampoline.
+            $produced = call_user_func($user, $ch, $source, $length);
+            if (!is_string($produced)) {
+                // php-src treats a non-string return as end-of-data.
+                return "";
+            }
+            // A longer-than-requested string is TRUNCATED by the bridge's `out_cap`, which
+            // is php-src's own `MIN(size * nmemb, len)` behaviour.
+            return $produced;
+        }
+        if (!is_resource($source)) {
+            return "";
+        }
+        $chunk = fread($source, $length);
+        if (!is_string($chunk)) {
+            return "";
+        }
+        return $chunk;
+    });
 }
 
 // TASK 11: `CURLFile` / `CURLStringFile`. Pure PHP data classes — neither wraps a native
@@ -912,6 +1238,17 @@ function curl_reset(CurlHandle $handle): void {
     // The bridge dropped its own slots and libcurl registrations inside
     // __elephc_curl_easy_reset; this drops the GC roots that kept the descriptors alive.
     $handle->__elephc_callbacks = [];
+    // The four stream options go with them (measured: after curl_reset(), a CURLOPT_FILE
+    // stream receives nothing and the body prints to stdout instead). Dropping the roots
+    // here is also what lets the streams be closed/collected — nothing else holds them.
+    $handle->__elephc_file = null;
+    $handle->__elephc_writeheader = null;
+    $handle->__elephc_infile = null;
+    $handle->__elephc_stderr = null;
+    $handle->__elephc_read_user = null;
+    // A reset handle has never had CURLOPT_DEBUGFUNCTION set, so CURLOPT_STDERR works
+    // again on it — libcurl's own `curl_easy_reset` clears `set.fdebug` too.
+    $handle->__elephc_debug_user = false;
 }
 
 // DIVERGENCE FROM PHP, for the same reason `curl_init()` diverges (see its comment):
@@ -936,6 +1273,20 @@ function curl_copy_handle(CurlHandle $handle): CurlHandle {
     $new->__elephc_return_transfer = $handle->__elephc_return_transfer;
     $new->__elephc_write_user = $handle->__elephc_write_user;
     $new->__elephc_private = $handle->__elephc_private;
+    // THE STREAM OPTIONS ARE CARRIED ONTO THE COPY, which is php's behaviour — measured
+    // on PHP 8.4.20 for all four: a copy of a CURLOPT_FILE/WRITEHEADER/STDERR/INFILE
+    // handle writes to (or reads from) the SAME stream the original was pointed at.
+    // php-src copies its handler structs; these are the same facts on this object.
+    //
+    // Copying the property is ALSO what makes the internal closures work on the copy:
+    // they read the stream off `$ch`, and the callback loop below re-registers them with
+    // the COPY as that `$ch`. Copy the streams after the flags and BEFORE the loop.
+    $new->__elephc_file = $handle->__elephc_file;
+    $new->__elephc_writeheader = $handle->__elephc_writeheader;
+    $new->__elephc_infile = $handle->__elephc_infile;
+    $new->__elephc_stderr = $handle->__elephc_stderr;
+    $new->__elephc_read_user = $handle->__elephc_read_user;
+    $new->__elephc_debug_user = $handle->__elephc_debug_user;
     // CALLBACKS ARE RE-REGISTERED, NEVER INHERITED. libcurl's `dupset` copies the
     // callback function pointers AND their CURLOPT_*DATA values, and every one of those
     // data values is the ORIGINAL handle's bridge id — a copy left as libcurl made it

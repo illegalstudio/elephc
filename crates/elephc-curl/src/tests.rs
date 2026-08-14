@@ -51,7 +51,7 @@
 mod option_table {
     use crate::options::{
         option_kind, KIND_CALLBACK, KIND_INVALID, KIND_LONG, KIND_OFF_T, KIND_PHP_LAYER,
-        KIND_SHARE, KIND_SLIST, KIND_STRING, KIND_UNSUPPORTED, OPTION_KINDS,
+        KIND_SHARE, KIND_SLIST, KIND_STREAM, KIND_STRING, KIND_UNSUPPORTED, OPTION_KINDS,
     };
 
     /// Loads the frozen curl surface the whole feature is generated from.
@@ -77,9 +77,9 @@ mod option_table {
         }
     }
 
-    /// EVERY `CURLOPT_*` PHP exposes has a classification, and it is one of the EIGHT
-    /// kinds (Task 10 adds `KIND_SHARE`) — never the `KIND_INVALID` that would make
-    /// `curl_setopt()` raise `ValueError` for a real PHP option.
+    /// EVERY `CURLOPT_*` PHP exposes has a classification, and it is one of the TEN
+    /// kinds (Task 10 added `KIND_SHARE`, WP-C `KIND_STREAM`) — never the `KIND_INVALID`
+    /// that would make `curl_setopt()` raise `ValueError` for a real PHP option.
     #[test]
     fn every_frozen_curlopt_is_classified() {
         let surface = frozen_surface();
@@ -98,7 +98,7 @@ mod option_table {
                 unclassified.push(format!("{name} ({number})"));
             }
             assert!(
-                (KIND_INVALID..=KIND_CALLBACK).contains(&kind),
+                (KIND_INVALID..=KIND_STREAM).contains(&kind),
                 "{name} ({number}) has an out-of-range kind {kind}"
             );
         }
@@ -123,10 +123,15 @@ mod option_table {
         const DOCUMENTED_DIVERGENCES: &[(&str, i32, &str)] = &[
             ("CURLOPT_HEADER", KIND_LONG, "php_layer"),
             ("CURLOPT_INFILESIZE", KIND_LONG, "php_layer"),
-            ("CURLOPT_FILE", KIND_UNSUPPORTED, "php_layer"),
-            ("CURLOPT_INFILE", KIND_UNSUPPORTED, "php_layer"),
-            ("CURLOPT_WRITEHEADER", KIND_UNSUPPORTED, "php_layer"),
-            ("CURLOPT_STDERR", KIND_UNSUPPORTED, "php_layer"),
+            // The four PHP-stream options. The frozen surface buckets three of them
+            // `php_layer` and `CURLOPT_READDATA` — which is option 10009 under its other
+            // PHP name — `file`; all four are `KIND_STREAM` here, serviced by the curl
+            // prelude's internal callbacks rather than by anything the bridge forwards.
+            ("CURLOPT_FILE", KIND_STREAM, "php_layer"),
+            ("CURLOPT_INFILE", KIND_STREAM, "php_layer"),
+            ("CURLOPT_READDATA", KIND_STREAM, "file"),
+            ("CURLOPT_WRITEHEADER", KIND_STREAM, "php_layer"),
+            ("CURLOPT_STDERR", KIND_STREAM, "php_layer"),
             ("CURLOPT_PRIVATE", KIND_PHP_LAYER, "file"),
             ("CURLOPT_SHARE", KIND_SHARE, "file"),
         ];
@@ -245,14 +250,10 @@ mod option_table {
             "CURLOPT_FNMATCH_FUNCTION",
             "CURLOPT_PREREQFUNCTION",
             "CURLOPT_SSH_HOSTKEYFUNCTION",
-            // Options whose value is a PHP STREAM RESOURCE. The PHP layer captures and
-            // returns bodies itself; wiring a php:// stream through libcurl's write
-            // callbacks is a separate piece of work.
-            "CURLOPT_FILE",
-            "CURLOPT_INFILE",
-            "CURLOPT_READDATA",
-            "CURLOPT_STDERR",
-            "CURLOPT_WRITEHEADER",
+            // NOTE: the five PHP-STREAM options (`CURLOPT_FILE`, `CURLOPT_INFILE`/
+            // `CURLOPT_READDATA`, `CURLOPT_WRITEHEADER`, `CURLOPT_STDERR`) used to be
+            // here. WP-C implements them at the PHP layer on top of the callback slots,
+            // so they are `KIND_STREAM` now and this list is five names shorter.
         ];
 
         let surface = frozen_surface();
@@ -277,10 +278,10 @@ mod option_table {
              docs/php/curl.md to match before changing this test"
         );
 
-        // The headline the doc quotes: 270 PHP `CURLOPT_*` names, 16 rejected.
+        // The headline the doc quotes: 270 PHP `CURLOPT_*` names, 11 rejected.
         let total = constants.keys().filter(|n| n.starts_with("CURLOPT_")).count();
         assert_eq!(total, 270, "the frozen CURLOPT_* name count changed");
-        assert_eq!(rejected.len(), 16, "the rejected CURLOPT_* name count changed");
+        assert_eq!(rejected.len(), 11, "the rejected CURLOPT_* name count changed");
     }
 }
 
