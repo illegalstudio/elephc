@@ -28,6 +28,7 @@ env:
     -p elephc-image
     -p elephc-magician
     -p elephc-web
+    -p elephc-curl
 
 jobs:
   # Compile each platform once, then let that platform's tests start as soon as
@@ -80,7 +81,9 @@ jobs:
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssl/libcrypto/libz, see managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -151,7 +154,9 @@ jobs:
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssl/libcrypto/libz, see managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -217,7 +222,9 @@ jobs:
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssl/libcrypto/libz, see managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -933,6 +940,25 @@ jobs:
             --target "${{ matrix.target }}" \
             --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
 
+      - name: Materialize catalog curl (and its openssl/zlib dependencies) from verified source
+        # curl's recipe declares openssl and zlib as dependencies (see
+        # src/native_deps/catalog.rs), so this one `native add` also
+        # materializes both from verified source. A cold build of all three
+        # measured ~4.5 minutes on a fast local machine, comfortably inside
+        # this job's timeout; see `crates/elephc-curl/build.rs` for why the
+        # elephc_curl BRIDGE staticlib (built via BRIDGE_CRATES elsewhere)
+        # still needs these raw libcurl/libssl/libcrypto/libz archives at
+        # PHP-program link time even though `cargo build -p elephc-curl`
+        # itself does not.
+        shell: bash
+        run: |
+          ./target/debug/elephc native add curl \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/curl-get/elephc.toml
+          git diff --exit-code -- \
+            examples/curl-get/elephc.toml \
+            examples/curl-get/elephc.lock
+
       - name: Compile and run regex through the production resolver
         shell: bash
         run: |
@@ -943,6 +969,24 @@ jobs:
           grep -F "Valid email pattern" "$RUNNER_TEMP/date-json-regex.out"
           grep -F "Unicode letters detected" "$RUNNER_TEMP/date-json-regex.out"
 
+      - name: Compile and run curl through the production resolver
+        # Exercises the full chain the 136+ curl codegen fixtures also need but
+        # cannot assume in ordinary CI (see tests/codegen/support/curl_native.rs):
+        # the elephc_curl bridge staticlib linked against a real, managed
+        # libcurl/libssl/libcrypto/libz. The GET to example.com may or may not
+        # reach the network on a given runner, so only network-independent
+        # output is asserted — the compiled binary always reaches real
+        # curl_exec()/curl_errno()/curl_error() either way.
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ matrix.target }}" \
+            examples/curl-get/main.php
+          ./examples/curl-get/main > "$RUNNER_TEMP/curl-get.out"
+          grep -F "GET http://example.com/" "$RUNNER_TEMP/curl-get.out"
+          grep -F "handle still usable after curl_close()" "$RUNNER_TEMP/curl-get.out"
+          grep -F "connection refused, as expected" "$RUNNER_TEMP/curl-get.out"
+
       - name: Reinstall locked state offline
         shell: bash
         run: |
@@ -951,6 +995,11 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path examples/date-json-regex/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/curl-get/elephc.toml
 
   test:
     name: Build & Test

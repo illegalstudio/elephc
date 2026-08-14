@@ -1,0 +1,7 @@
+[native]
+schema = 1
+
+[native.dependencies]
+curl = "8.21.0"
+openssl = "3.5.7"
+zlib = "1.3.2"

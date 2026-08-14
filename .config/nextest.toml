@@ -40,6 +40,9 @@ relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_web.a"
 relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_curl.a"
+relative-to = "target"
 
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
