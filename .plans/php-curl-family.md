@@ -12,7 +12,10 @@
 - [x] Ship the share interface, including PHP 8.5 persistent shares.
 - [x] Ship `CURLFile`, `CURLStringFile`, and `curl_file_create`.
 - [x] Ship libcurl callbacks through the existing runtime callable invoker.
-- [x] Mirror the same ABI in magician `eval_builtin!` homes.
+- [x] Mirror the same ABI in magician `eval_builtin!` homes. (Partial: the easy
+  interface and the full constant table. Multi, share, `CURLFile`/`CURLStringFile`
+  and callback options are deferred in eval and honestly rejected —
+  `docs/php/curl.md`, "curl inside `eval()`".)
 - [x] Add local HTTP/HTTPS fixtures, example, generated docs, and a ROADMAP item.
 
 This is a first-class PHP `ext/curl` implementation for AOT and magician. It is

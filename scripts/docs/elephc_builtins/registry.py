@@ -53,6 +53,21 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # shares the "Network" docs area with the eval interpreter's `network_env`
     # family rather than opening a page of its own. The user-facing contract lives
     # in docs/php/curl.md.
+    #
+    # WHY NO PHP-VISIBLE `curl_*` ROW EXISTS ANYWHERE IN THIS REGISTRY, and why
+    # that is deliberate rather than a gap to close: the eval interpreter DOES have
+    # PHP-visible `curl_*` homes (`eval_builtin!`, the easy interface), but
+    # `tools/gen_builtins.rs` reads elephc-magician as a dev-dependency built with
+    # DEFAULT features, and those homes sit behind magician's `curl` Cargo feature
+    # (the pay-for-use gate: a program that only calls `eval()` must not be forced
+    # to link libcurl). Do NOT "fix" this by enabling the feature for the docs
+    # build — `extract.py`'s `_eval_only_builtin` path labels anything it finds
+    # there "compiled (AOT) code does not support it yet", which is FALSE for curl:
+    # AOT supports the full surface through the prelude. The registry has no shape
+    # for "prelude-implemented in AOT, interpreter-implemented in eval", so the
+    # honest reporting path is the one already in place — comparison_catalog.toml's
+    # `modules = ["curl"]` marks the coverage row with a dagger whose footnote says
+    # exactly that, and docs/php/curl.md carries the real contract.
     "curl": ("Network", "Network"),
 }
 

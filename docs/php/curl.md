@@ -85,10 +85,14 @@ echo curl_errno($ch);   // 1  (CURLE_UNSUPPORTED_PROTOCOL)
 echo curl_error($ch);   // Protocol "sftp" is disabled
 ```
 
-The disabled set is `dict`, `gopher`, `imap`, `ldap`, `ldaps`, `mqtt`, `pop3`,
-`rtsp`, `scp`, `sftp`, `smb`, `smbs`, `smtp`, `telnet`, `tftp`. A scheme libcurl
-does not know at all (`xyzzy://`) reports the same errno with the message
-`Protocol "xyzzy" not supported`.
+The disabled set is `dict`, `gopher`, `gophers`, `imap`, `imaps`, `ldap`,
+`ldaps`, `mqtt`, `pop3`, `pop3s`, `rtsp`, `scp`, `sftp`, `smb`, `smbs`, `smtp`,
+`smtps`, `telnet` and `tftp` — all reporting `Protocol "…" is disabled`.
+
+`rtmp`, `rtmps` and `rtmpe` report `Protocol "…" not supported` instead: librtmp
+was never linked, so libcurl does not know those schemes at all rather than
+knowing them and refusing. A scheme that is not a cURL scheme in the first place
+(`xyzzy://`) gets the same message. All of these are errno `1`.
 
 Also not built in, and therefore not available even over supported schemes:
 
@@ -298,7 +302,15 @@ do {
     }
 } while ($running > 0 && $status === CURLM_OK);
 
-while (($info = curl_multi_info_read($mh)) !== false) {
+// Note the loop shape: assign first, then test. php.net's
+// `while ($info = curl_multi_info_read($mh))` works, but an assignment used as a
+// loop condition leaks the assigned value on every iteration in this compiler —
+// a pre-existing defect with nothing to do with curl. See "Memory and lifetime".
+while (true) {
+    $info = curl_multi_info_read($mh);
+    if ($info === false) {
+        break;
+    }
     echo curl_multi_getcontent($info["handle"]);
 }
 ```
@@ -366,7 +378,7 @@ LONG / STRING / SLIST / OFF_T / PHP-layer option works, not a hand-picked subset
 - Callback options and `CURLOPT_SHARE`, rejected with the same `false` + warning
   path a genuinely unsupported option uses.
 
-Three further differences inside `eval()`:
+Further differences inside `eval()`:
 
 - **A handle is not a `CurlHandle` object.** It is a resource-like cell, so
   `gettype($ch)` reports `"resource"` and `$ch instanceof CurlHandle` is false.
@@ -376,6 +388,17 @@ Three further differences inside `eval()`:
   to compiled code is an opaque cell with no `CurlHandle` class instance behind
   it, and an AOT `CurlHandle` passed into an `eval()` string is not accepted by
   eval's curl functions.
+- **An invalid option number is a fatal, not a `ValueError`.** The
+  [Options](#options) section above promises a catchable `ValueError` for an
+  option number that is not a cURL option; inside `eval()` the same call is a
+  **non-catchable runtime fatal** that ends the program. The interpreter's
+  internals have no path for raising a catchable PHP exception, so this is a hard
+  fault — the same tradeoff `hash_final()` on an already-finalized context makes.
+  `try`/`catch` around the `eval()` will not save you.
+- **A non-array value for a `CURLOPT_*` string-list option returns `false`
+  silently.** Compiled code raises `TypeError: curl_setopt(): Argument #3
+  ($value) must be of type array, … given`; eval returns `false` with no warning
+  and no exception. Check the return value of `curl_setopt()` inside `eval()`.
 - **`--with-curl` is required** when curl appears *only* inside an `eval()`
   string, because usage detection reads the compiled source, not the string.
 
@@ -455,6 +478,22 @@ that is itself an array), and an object inside a nested array.
   php-src has the identical cycle and survives it only because Zend has a cycle
   collector. Pass the handle the callback already receives as its first argument
   instead of capturing it.
+- **`curl_version()` and the array form of `curl_getinfo()` leak on every call.**
+  Both build their array by decoding a JSON blob with the ordinary `json_decode()`
+  builtin, and `json_decode()` never releases the value it decodes — a
+  **pre-existing defect in a shared builtin, not something curl introduces**
+  (measured with `--gc-stats`: `json_decode('{"a":1,"b":2}', true)` leaks 10
+  blocks per call on its own, with no curl involved). Every `curl_version()` call
+  therefore leaks, as does every `curl_getinfo($ch)` called without an option.
+  Calling either once at startup is fine; calling one per request in a
+  long-running process is not. `curl_getinfo($ch, CURLINFO_*)` with an explicit
+  option takes a different path and does not leak.
+- **An assignment used as a loop condition leaks the assigned value every
+  iteration.** `while ($info = curl_multi_info_read($mh))` — php.net's own drain
+  loop — leaks one array per iteration. This too is a pre-existing, curl-free
+  compiler defect (a plain `while ($x = f())` over any array-returning `f()`
+  behaves the same). Write the assignment as its own statement, as the
+  [multi example](#the-multi-interface) above does.
 - **`curl_close()`, `curl_multi_close()` and `curl_share_close()` are no-ops**, as
   in PHP 8. A handle stays usable until its object is destroyed; `unset()` is what
   actually frees the libcurl session.
