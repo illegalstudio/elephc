@@ -359,10 +359,14 @@ unsafe extern "C" fn read_callback(
         let Some(slot) = take_slot(id, SLOT_READ as usize) else {
             return 0usize;
         };
-        // php-src passes the `CURLOPT_INFILE` stream as `$fd`. elephc rejects every
-        // stream option in this build, so there is never a resource to pass and the
-        // argument is always null — which is also what php-src passes when no
-        // `CURLOPT_INFILE` was set.
+        // php-src passes the `CURLOPT_INFILE` stream as `$fd`. THIS TRAMPOLINE ALWAYS
+        // PASSES NULL, and that is not the final answer PHP sees: a `CallArg` carries only
+        // an int, a string, or null, so there is no way to marshal a PHP resource from
+        // here. The curl prelude closes the gap instead — `CURLOPT_INFILE` and
+        // `CURLOPT_READFUNCTION` both go through a dispatcher installed in this slot
+        // (`__elephc_curl_sync_read_slot`), which ignores this argument and substitutes
+        // the real stream off `$ch` before calling the user's callable. Null remains
+        // correct for a handle with no `CURLOPT_INFILE`, which is also what php-src passes.
         let args = [
             CallArg {
                 tag: TAG_NULL,

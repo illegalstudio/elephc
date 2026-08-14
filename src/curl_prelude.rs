@@ -258,13 +258,18 @@ function curl_init(?string $url = null): CurlHandle {
 //   7  CURLOPT_SHARE (Task 10)       -> __elephc_curl_easy_set_share (a CurlShareHandle
 //                                        object, not a scalar; the ONLY option this whole
 //                                        function reads an OBJECT out of $value for)
+//   8  callback option               -> __elephc_curl_easy_set_callback (a PHP callable,
+//                                        or null to restore the default)
+//   9  PHP stream option             -> handled in this prelude, by installing an internal
+//                                        closure in the matching callback slot; libcurl
+//                                        never sees the stream
 //
 // THE 0-vs-6 SPLIT IS php-src's OWN. `_php_curl_setopt` (ext/curl/interface.c) ends its
 // switch with `zend_argument_value_error(2, "is not a valid cURL option")`, so an option
 // number php-src does not recognize THROWS; an option it recognizes but that fails at the
 // libcurl level merely returns `false`. Kind 6 is elephc's honest version of the second
-// case: the option is real PHP API surface, this build just cannot carry it (a blob, a
-// callback, a PHP stream, a share handle), so it answers `false` and says why.
+// case: the option is real PHP API surface, this build just cannot carry it (a blob, or a
+// callback outside the six implemented ones), so it answers `false` and says why.
 function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     $raw = $handle->__elephc_handle;
     $kind = __elephc_curl_option_kind($option);
@@ -426,6 +431,32 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
             if ($slot === 2) {
                 $handle->__elephc_read_user = null;
                 return __elephc_curl_sync_read_slot($handle);
+            }
+            // THE DEBUG SLOT IS NEVER DEREGISTERED ONCE TOUCHED, for the same class of
+            // reason the READ slot is never deregistered at all (see `apply_registration`
+            // in `crates/elephc-curl/src/callbacks.rs`): clearing the libcurl registration
+            // does not restore "nothing", it restores libcurl's OWN default, and here that
+            // default is LOUDER than what php does.
+            //
+            // With `CURLOPT_VERBOSE` on and no `CURLOPT_DEBUGFUNCTION` installed, libcurl's
+            // `trc_write` falls back to `data->set.err`, which defaults to the process's
+            // stderr (`lib/url.c`). elephc never hands libcurl a `CURLOPT_STDERR` — the
+            // option is serviced on this side — so clearing the registration dumps the
+            // whole verbose trace onto FD 2. php emits NOTHING there: its C trampoline is
+            // still installed and simply has no PHP callable to call. Measured on PHP
+            // 8.4.20 (VERBOSE + STDERR + DEBUGFUNCTION=null, both orders): php prints
+            // nothing to stdout, to the stream, or to fd 2, while clearing the slot here
+            // printed the entire trace to fd 2.
+            //
+            // A NO-OP closure reproduces php exactly: `set.fdebug` stays non-NULL, so
+            // `trc_write` calls it and never reaches `set.err`. Only when the user has
+            // TOUCHED the option, though — with `CURLOPT_VERBOSE` alone and
+            // `CURLOPT_DEBUGFUNCTION` never set, php leaks to fd 2 too (measured, both
+            // agree), and that parity is what `__elephc_debug_user` gates.
+            if ($slot === 4) {
+                return __elephc_curl_install_internal_callback($handle, 4, function (CurlHandle $_ch, int $_type, string $_data): int {
+                    return 0;
+                });
             }
             $handle->__elephc_callbacks[$slot] = null;
             if ($slot === 0) {
@@ -676,7 +707,17 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
 // argument …"). elephc's `is_resource()` still answers `true` for a stream that has been
 // `fclose()`d — closed-ness is not tracked on the value — so this build cannot tell the
 // two apart and gives the "supplied argument" message for both. The one that matters,
-// rejecting a non-stream, is exact. Recorded in `docs/php/curl.md`.
+// rejecting a value that is not a resource at all, is exact. Recorded in
+// `docs/php/curl.md`.
+//
+// The guard is also `is_resource()` rather than "is a STREAM resource", which php checks
+// (`php_stream_from_zval_no_verify`). The gap is narrow rather than theoretical-only:
+// PHP 8 has promoted almost every remaining resource type to an object (curl, sockets,
+// GD, FTP), and the ones left — including `opendir()` handles — report
+// `get_resource_type() === "stream"` and so pass php's check too (measured: php answers
+// the WRITABILITY `ValueError` for an `opendir()` handle, not a type error). elephc has
+// no narrower predicate to use here, so a hypothetical non-stream resource would be
+// accepted where php would reject it.
 //
 // The WRITABILITY check is php's own, and only the three WRITE sinks get it:
 // `curl_setopt($ch, CURLOPT_FILE, fopen($f, "rb"))` is a `ValueError` in php, while

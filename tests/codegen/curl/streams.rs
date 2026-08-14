@@ -387,6 +387,19 @@ fn curl_stderr_writes_libcurls_verbose_trace_to_the_stream() {
 /// been TOUCHED — even by setting it to `null` — `CURLOPT_STDERR` stays shadowed for the
 /// rest of the handle's life, because php-src never removes its C trampoline. Both
 /// measured on PHP 8.4.20.
+///
+/// THE THIRD SINK THIS CHECKS IS FILE DESCRIPTOR 2, and it is the one a
+/// stream-and-stdout-only fixture cannot see. "Shadowed" must mean SWALLOWED, not
+/// redirected: clearing libcurl's debug registration does not restore "nothing", it
+/// restores libcurl's own default, which is to write the verbose trace to `set.err` —
+/// the process's stderr, since elephc never hands libcurl a `CURLOPT_STDERR`. php emits
+/// NOTHING anywhere in these cases; an earlier revision of this build dumped the entire
+/// trace onto fd 2 while still passing every stream/stdout assertion here.
+///
+/// Every case below is one php answers silently, so the whole program's stderr must be
+/// EMPTY. (`CURLOPT_VERBOSE` with `CURLOPT_DEBUGFUNCTION` never touched does leak to fd 2
+/// — in php too, verified — which is why the no-op is installed only once the option has
+/// been used. That parity case is deliberately not mixed into this program.)
 #[test]
 fn curl_debugfunction_shadows_stderr_permanently() {
     if skip_without_curl_native("curl_debugfunction_shadows_stderr_permanently") {
@@ -394,7 +407,7 @@ fn curl_debugfunction_shadows_stderr_permanently() {
     }
     let server = LocalHttpServer::spawn_hello();
     let url = server.url("/hello");
-    let out = compile_and_run(&format!(
+    let output = compile_and_run_capture(&format!(
         r#"<?php
         function debugProbe(string $url, callable $setup): string {{
             $path = tempnam(sys_get_temp_dir(), "elephc-curl-dbg");
@@ -408,7 +421,7 @@ fn curl_debugfunction_shadows_stderr_permanently() {
             $printed = ob_get_clean();
             curl_close($ch);
             fclose($sink);
-            $trace = file_get_contents($path);
+            $trace = (string) file_get_contents($path);
             unlink($path);
             return ($trace === "" ? "-" : "stderr") . "/" . ($printed === "" ? "-" : "cb");
         }}
@@ -424,7 +437,8 @@ fn curl_debugfunction_shadows_stderr_permanently() {
             curl_setopt($ch, CURLOPT_DEBUGFUNCTION, $df);
             curl_setopt($ch, CURLOPT_STDERR, $sink);
         }}), "\n";
-        // Cleared, but the sink stays shadowed: NEITHER receives the trace.
+        // Cleared, but the sink stays shadowed: NEITHER receives the trace — and, the
+        // part fd 2 is what proves, neither does the process's stderr.
         echo debugProbe("{url}", function (CurlHandle $ch, $sink) use ($df) {{
             curl_setopt($ch, CURLOPT_STDERR, $sink);
             curl_setopt($ch, CURLOPT_DEBUGFUNCTION, $df);
@@ -435,9 +449,18 @@ fn curl_debugfunction_shadows_stderr_permanently() {
             curl_setopt($ch, CURLOPT_STDERR, $sink);
             curl_setopt($ch, CURLOPT_DEBUGFUNCTION, null);
         }}), "\n";
+        echo debugProbe("{url}", function (CurlHandle $ch, $sink) {{
+            curl_setopt($ch, CURLOPT_DEBUGFUNCTION, null);
+            curl_setopt($ch, CURLOPT_STDERR, $sink);
+        }}), "\n";
         "#
     ));
-    assert_eq!(out, "stderr/-\n-/cb\n-/cb\n-/-\n-/-\n");
+    assert_eq!(output.stdout, "stderr/-\n-/cb\n-/cb\n-/-\n-/-\n-/-\n");
+    assert_eq!(
+        output.stderr, "",
+        "a shadowed debug sink must SWALLOW the trace, as php does — not fall through to \
+         libcurl's default and print it to fd 2"
+    );
 }
 
 /// A NON-STREAM VALUE IS A `TypeError` and a READ-ONLY stream handed to a WRITE sink is a

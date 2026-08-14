@@ -345,6 +345,8 @@ with php's messages. `null` is accepted and clears the option.
 > been `fclose()`d ("supplied **resource** is not a valid File-Handle resource").
 > elephc's `is_resource()` still reports `true` for a closed stream, so it cannot
 > tell that case apart and reports the ordinary "supplied **argument**" message.
+> elephc also accepts any resource where php requires a *stream* resource — narrow
+> in practice, since PHP 8 has made almost every other resource type an object.
 
 ## `curl_getinfo()`
 

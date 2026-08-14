@@ -1100,7 +1100,7 @@ statics, and static class properties all reset between requests). Run it with
 
 ## v0.30.x — PHP curl extension
 
-- [x] `ext/curl` function, class, and constant surface on AOT — all 35 functions, 6 classes and 683 constants, with 254 of PHP's 270 `CURLOPT_*` implemented and the remaining 16 rejected with PHP's own warning (see `docs/php/curl.md`)
+- [x] `ext/curl` function, class, and constant surface on AOT — all 35 functions, 6 classes and 689 constants, with 260 of PHP's 271 `CURLOPT_*` implemented and the remaining 11 rejected with PHP's own warning (see `docs/php/curl.md`)
 - [x] Managed native `curl` 8.21.0 + OpenSSL TLS backend (no system fallback)
 - [x] Easy, multi, and share interfaces including PHP 8.5 additions (`curl_multi_get_handles`, `curl_share_init_persistent`, `CurlSharePersistentHandle`)
 - [x] `CURLFile` / `CURLStringFile` uploads
