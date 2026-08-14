@@ -58,6 +58,8 @@ use std::process::{Child, Command, Stdio};
 use crate::stream_wrappers;
 use crate::value::RuntimeCellHandle;
 
+#[cfg(feature = "curl")]
+mod curl;
 mod file_process_opening;
 mod operations;
 mod resource_registration;
@@ -77,6 +79,13 @@ pub(crate) struct EvalStreamResources {
     directories: HashMap<i64, EvalDirectoryStream>,
     filter_resources: HashSet<i64>,
     hash_contexts: HashMap<i64, EvalHashContext>,
+    // Analogous to `hash_contexts`: PHP 8's `curl_init()` returns a `CurlHandle` OBJECT,
+    // not a resource, so it is keyed from this SAME `next_id` counter (never its own),
+    // consumes no PHP resource id, and is freed only here — see
+    // `crate::interpreter::builtins::curl`'s module doc for the full argument and
+    // `EvalCurlEasyHandle`'s own doc for the PHP-layer mirror fields it carries.
+    #[cfg(feature = "curl")]
+    curl_easy_handles: HashMap<i64, EvalCurlEasyHandle>,
     process_children: HashMap<i64, Child>,
     socket_listeners: HashMap<i64, TcpListener>,
     socket_names: HashMap<i64, EvalSocketNames>,

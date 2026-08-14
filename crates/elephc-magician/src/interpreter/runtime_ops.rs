@@ -529,6 +529,22 @@ pub trait RuntimeValueOps {
     /// must never free anything.
     fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a runtime cell for an eval-owned curl easy/multi/share handle.
+    ///
+    /// A DEFAULT METHOD, not a new generated-runtime wrapper: PHP 8's `CurlHandle` /
+    /// `CurlMultiHandle` / `CurlShareHandle` are OBJECTS that consume nothing from the
+    /// resource counter, exactly like `HashContext` above, and the box shape that fact
+    /// requires — runtime tag 9, resource kind 5, no PHP id, no destructor — is already
+    /// exactly what `hash_context()` produces. Reusing it here means curl needs no new
+    /// entry in the generated `__elephc_eval_value_*` wrapper family
+    /// (`elephc::codegen_support::runtime::eval_bridge`) at all. `value` is a key into
+    /// `EvalStreamResources`'s curl tables (`crate::stream_resources::curl`, behind the
+    /// `curl` Cargo feature), which own the real `elephc_curl_*` handle and free it in
+    /// `EvalStreamResources`'s own `Drop`.
+    fn curl_handle(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.hash_context(value)
+    }
+
     /// Creates a runtime float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus>;
 

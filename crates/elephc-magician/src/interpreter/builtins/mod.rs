@@ -17,6 +17,8 @@ mod macros;
 mod array;
 mod class_metadata;
 mod core;
+#[cfg(feature = "curl")]
+mod curl;
 mod filesystem;
 mod formatting;
 mod hooks;
@@ -38,6 +40,8 @@ mod types;
 pub(super) use array::*;
 pub(super) use class_metadata::*;
 pub(super) use core::*;
+#[cfg(feature = "curl")]
+pub(super) use curl::*;
 pub(super) use filesystem::*;
 pub(super) use formatting::*;
 pub(super) use json::*;

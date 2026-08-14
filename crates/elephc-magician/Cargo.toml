@@ -9,6 +9,19 @@ publish = false
 [lib]
 crate-type = ["staticlib", "rlib"]
 
+# Off by default. `elephc-curl` needs the pinned native libcurl/OpenSSL/zlib
+# archives ONLY at the final PHP-program link step (see `crates/elephc-curl/
+# Cargo.toml`'s own header for why compiling it never does), so enabling this
+# feature costs nothing for `cargo build`/`cargo test -p elephc-magician`
+# without it. It exists so `src/linker/bridges.rs` can build a curl-aware
+# `libelephc_magician.a` ONLY for a compiled program that already links
+# `elephc_curl` (see `crates/elephc-magician/src/interpreter/builtins/curl/
+# mod.rs` for the full rationale) — every other consumer of this crate,
+# including every existing eval codegen test, keeps building the exact same
+# curl-free archive this crate has always produced.
+[features]
+curl = []
+
 [dependencies]
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }
 elephc-crypto = { path = "../elephc-crypto" }

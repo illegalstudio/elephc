@@ -27,6 +27,12 @@ pub(in crate::interpreter) enum EvalArea {
     Array,
     /// Core callable, constant, process-control, and debug-output builtins.
     Core,
+    /// `ext/curl` builtins (behind the `curl` Cargo feature; see
+    /// `crate::interpreter::builtins::curl`'s module doc). Gated the same as that module:
+    /// no home file constructs this variant without the feature, so an unconditional
+    /// variant would be permanently dead code in the default build.
+    #[cfg(feature = "curl")]
+    Curl,
     /// Filesystem, path, and stream builtins.
     Filesystem,
     /// Formatting and display-oriented numeric builtins.
@@ -57,6 +63,8 @@ impl EvalArea {
         match self {
             EvalArea::Array => "array",
             EvalArea::Core => "core",
+            #[cfg(feature = "curl")]
+            EvalArea::Curl => "curl",
             EvalArea::Filesystem => "filesystem",
             EvalArea::Formatting => "formatting",
             EvalArea::Json => "json",

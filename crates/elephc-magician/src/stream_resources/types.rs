@@ -11,7 +11,9 @@
 use super::*;
 
 impl Drop for EvalStreamResources {
-    /// Frees any incremental hash contexts that were never finalized.
+    /// Frees any incremental hash contexts that were never finalized, and (curl feature
+    /// only) any curl easy handles this eval context ever created — see
+    /// `EvalCurlEasyHandle`'s own doc for why this `Drop` is the ONLY place they are freed.
     fn drop(&mut self) {
         for context in self.hash_contexts.drain().map(|(_, context)| context) {
             unsafe {
@@ -19,6 +21,10 @@ impl Drop for EvalStreamResources {
                 // after the crypto free call.
                 elephc_crypto::elephc_crypto_free(context.handle);
             }
+        }
+        #[cfg(feature = "curl")]
+        for handle in self.curl_easy_handles.drain().map(|(_, handle)| handle) {
+            crate::curl_ffi::easy_free(handle.raw);
         }
     }
 }
@@ -245,6 +251,35 @@ impl EvalDirectoryStream {
 /// Opaque elephc-crypto incremental hash context resource.
 pub(super) struct EvalHashContext {
     pub(super) handle: *mut c_void,
+}
+
+/// Opaque `elephc-curl` easy-handle resource, plus the same small set of PHP-layer
+/// mirror fields `crate::curl_prelude::CurlHandle` keeps on the object in the AOT
+/// build (`$__elephc_return_transfer`/`$__elephc_private`/`$__elephc_write_user`):
+/// `curl_getinfo(..., CURLINFO_PRIVATE)` and `curl_exec()`'s return-shape decision both
+/// need them and neither is anything the bridge itself tracks.
+///
+/// FREED ONLY BY `EvalStreamResources::drop`, never by any PHP-visible action: eval has
+/// no real `CurlHandle` object to hang a destructor off (this is a `resource kind 5`
+/// cell, `RuntimeValueOps::hash_context`'s doc explains why that means "no destructor
+/// runs" at Mixed-cell teardown), and `curl_close()` is a documented no-op in PHP 8
+/// itself. A curl handle created inside `eval()` therefore lives for the lifetime of the
+/// surrounding `ElephcEvalContext` — the same accepted, documented tradeoff
+/// `EvalHashContext`'s never-finalized case already makes.
+#[cfg(feature = "curl")]
+pub(super) struct EvalCurlEasyHandle {
+    /// The bridge's own easy-handle id (`elephc_curl_easy_init()`'s return value) —
+    /// NOT the eval table key. Every `elephc_curl_easy_*` call needs this, not the
+    /// `EvalStreamResources` key that boxes it into a runtime cell.
+    pub(super) raw: i64,
+    /// Mirrors `CurlHandle::$__elephc_return_transfer`.
+    pub(super) return_transfer: bool,
+    /// Mirrors `CurlHandle::$__elephc_write_user`.
+    pub(super) write_user: bool,
+    /// Mirrors `CurlHandle::$__elephc_private` (`CURLOPT_PRIVATE`'s stored value).
+    /// `None` until first set, read back as PHP `false` — matching the AOT property's
+    /// `false` default.
+    pub(super) private_value: Option<RuntimeCellHandle>,
 }
 
 /// Stream context metadata tracked by eval.

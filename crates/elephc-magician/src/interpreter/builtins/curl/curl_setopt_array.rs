@@ -1,0 +1,72 @@
+//! Purpose:
+//! Eval home for `curl_setopt_array(CurlHandle $handle, array $options): bool`.
+//!
+//! Called from:
+//! - `crate::interpreter::builtins::curl` dispatch.
+
+eval_builtin! {
+    name: "curl_setopt_array",
+    area: Curl,
+    params: [handle, options],
+    direct: Curl,
+    values: Curl,
+}
+
+use super::*;
+
+/// Evaluates `curl_setopt_array($handle, $options)` over eval expressions.
+pub(in crate::interpreter) fn eval_builtin_curl_setopt_array(
+    args: &[EvalExpr],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [handle, options] = args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let handle = eval_expr(handle, context, scope, values)?;
+    let options = eval_expr(options, context, scope, values)?;
+    eval_curl_setopt_array_result(handle, options, context, values)
+}
+
+/// Dispatches evaluated `curl_setopt_array()` calls through the builtin leaf.
+pub(in crate::interpreter) fn eval_curl_setopt_array_values_result(
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let [handle, options] = evaluated_args else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    eval_curl_setopt_array_result(*handle, *options, context, values)
+}
+
+/// Applies `curl_setopt()` once per `$options` entry, short-circuiting `false` on the
+/// first rejected option — matching `crate::curl_prelude::curl_setopt_array`'s own
+/// `foreach` loop exactly.
+fn eval_curl_setopt_array_result(
+    handle: RuntimeCellHandle,
+    options: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !values.is_array_like(options)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let table_id = eval_curl_easy_table_id(handle, values)?;
+    let raw = context
+        .stream_resources()
+        .curl_easy_raw(table_id)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let len = values.array_len(options)?;
+    for position in 0..len {
+        let key = values.array_iter_key(options, position)?;
+        let value = values.array_get(options, key)?;
+        let option = eval_int_value(key, values)?;
+        let applied = eval_curl_setopt_apply(raw, table_id, option, value, context, values)?;
+        if !values.truthy(applied)? {
+            return values.bool_value(false);
+        }
+    }
+    values.bool_value(true)
+}

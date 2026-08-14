@@ -71,6 +71,11 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Ctype,
     /// Dispatches filesystem and path builtins.
     Filesystem,
+    /// Dispatches the whole `ext/curl` easy-interface family (behind the `curl` Cargo
+    /// feature; see `crate::interpreter::builtins::curl`'s module doc). One shared
+    /// variant with internal name dispatch, mirroring `HashContext`/`Openssl`.
+    #[cfg(feature = "curl")]
+    Curl,
     /// Dispatches `acos(...)`.
     Acos,
     /// Dispatches `asin(...)`.
@@ -390,6 +395,8 @@ impl EvalValuesHook {
             Self::Deg2rad => one_arg(evaluated_args, values, eval_deg2rad_result),
             Self::Exp => one_arg(evaluated_args, values, eval_exp_result),
             Self::Filesystem => eval_filesystem_values_result(name, evaluated_args, context, values),
+            #[cfg(feature = "curl")]
+            Self::Curl => eval_curl_declared_values_result(name, evaluated_args, context, values),
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Intval => match evaluated_args {

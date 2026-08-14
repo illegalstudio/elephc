@@ -187,7 +187,15 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION)),
         "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),
         "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
-        _ => None,
+        // Every `CURLOPT_*`/`CURLINFO_*`/`CURLE_*`/`CURL_*` name falls through to the
+        // 683-entry generated table rather than growing this hand-written match by 683
+        // arms. Table-driven, not gated behind the `curl` Cargo feature: see
+        // `super::curl_constants`'s header for why a bare numeric constant carries no
+        // ABI-linkage cost.
+        other => super::curl_constants::EVAL_CURL_INT_CONSTANTS
+            .iter()
+            .find(|(name, _)| *name == other)
+            .map(|(_, value)| EvalPredefinedConstant::Int(*value)),
     }
 }
 
@@ -225,5 +233,54 @@ pub(super) fn eval_magic_const(
         EvalMagicConst::Class => values.string(context.current_magic_class().unwrap_or("")),
         EvalMagicConst::Namespace => values.string(""),
         EvalMagicConst::Trait => values.string(context.current_magic_trait().unwrap_or("")),
+    }
+}
+
+#[cfg(test)]
+mod curl_constant_fallback_tests {
+    use super::*;
+
+    /// `CURLOPT_URL`/`CURLOPT_RETURNTRANSFER` resolve through the same predefined-constant
+    /// path `JSON_PRETTY_PRINT` etc. use, table-driven through
+    /// `crate::interpreter::curl_constants::EVAL_CURL_INT_CONSTANTS` rather than a
+    /// 683-arm hand-written match — this is a pure-data lookup, so it needs no bridge, no
+    /// feature flag, and no linked libcurl to verify (`crate::interpreter::curl_constants`'s
+    /// own header explains why the table is unconditional).
+    #[test]
+    fn curl_constants_resolve_through_the_predefined_constant_fallback() {
+        assert!(matches!(
+            eval_predefined_constant_value("CURLOPT_URL"),
+            Some(EvalPredefinedConstant::Int(10002))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("CURLOPT_RETURNTRANSFER"),
+            Some(EvalPredefinedConstant::Int(19913))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("CURLE_OK"),
+            Some(EvalPredefinedConstant::Int(0))
+        ));
+    }
+
+    /// A name that merely LOOKS curl-ish must not resolve — the fallback is a whole-name
+    /// table lookup, not a prefix match, matching every other predefined-constant arm in
+    /// this file.
+    #[test]
+    fn a_curl_shaped_unknown_name_does_not_resolve() {
+        assert!(eval_predefined_constant_value("CURLOPT_NOT_A_REAL_OPTION").is_none());
+    }
+
+    /// The existing (pre-curl) predefined constants must still resolve unchanged: the new
+    /// fallback arm must not have shadowed or reordered anything above it in the match.
+    #[test]
+    fn pre_existing_predefined_constants_still_resolve() {
+        assert!(matches!(
+            eval_predefined_constant_value("JSON_PRETTY_PRINT"),
+            Some(EvalPredefinedConstant::Int(_))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("PHP_INT_MAX"),
+            Some(EvalPredefinedConstant::Int(i64::MAX))
+        ));
     }
 }
