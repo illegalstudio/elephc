@@ -2060,8 +2060,8 @@ mod version_tests {
     }
 
     /// `curl_share_init_persistent()`/`CurlSharePersistentHandle` are PHP 8.5 ONLY, the
-    /// same locked-decision-8 gate `curl_multi_get_handles()` has — every earlier profile
-    /// must not declare either.
+    /// same PHP-version-profile gate `curl_multi_get_handles()` has — every earlier
+    /// profile must not declare either.
     #[test]
     fn curl_share_init_persistent_is_php_85_only() {
         for version in PhpVersion::ALL {
