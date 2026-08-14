@@ -27,4 +27,14 @@ libc = "0.2"
 # Encodes `elephc_curl_global_info`'s `curl_version()` associative array as a
 # JSON blob for the PHP-facing layer to decode. Pure Rust, already vendored
 # at the workspace root, so no new transitive footprint.
-serde_json = "1"
+#
+# `preserve_order` IS REQUIRED FOR PHP PARITY, not a stylistic preference. A PHP
+# array is ORDERED, and every blob this crate encodes becomes one: `curl_version()`,
+# `curl_getinfo()`'s no-option array and `CURLINFO_CERTINFO`. Without the feature
+# `serde_json::Map` is a `BTreeMap`, so the JSON comes out BYTE-SORTED and
+# `foreach`/`array_keys()`/`json_encode()` over the decoded array would report an
+# order php-src never produces (`age` before `version_number`, `ALTSVC` before
+# `AsynchDNS`). With it, `Map` is an `IndexMap` and the insertion order in
+# `crate::abi::build_global_info_json`/`crate::info` — which is php-src's own field
+# order, measured — survives all the way to the PHP value.
+serde_json = { version = "1", features = ["preserve_order"] }

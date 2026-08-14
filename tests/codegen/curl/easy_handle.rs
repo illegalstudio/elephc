@@ -119,11 +119,38 @@ fn curl_version_feature_list_is_an_assoc_of_bools() {
         echo array_key_exists('libssh_version', $v) ? "libssh\n" : "no-libssh\n";
         echo array_key_exists('ares', $v) ? "ares\n" : "no-ares\n";
         echo array_key_exists('libidn', $v) ? "libidn\n" : "no-libidn\n";
+        // PHP arrays are ORDERED: php-src's table starts at AsynchDNS and ends at GSASL.
+        $names = array_keys($list);
+        echo $names[0], " ", $names[28], "\n";
         "#,
     );
     assert_eq!(
         out,
-        "array\n29\n29 29\nssl\nlibz\nkrb4-false\niconv\nlibssh\nares\nlibidn\n"
+        "array\n29\n29 29\nssl\nlibz\nkrb4-false\niconv\nlibssh\nares\nlibidn\nAsynchDNS GSASL\n"
+    );
+}
+
+/// `curl_version()`'s own KEY ORDER is php-src's, measured with
+/// `array_keys(curl_version())` on PHP 8.4.20 — `feature_list` sits between `features` and
+/// `ssl_version_number`, and the age-gated sub-library keys close the list. A PHP array is
+/// ordered, so this is observable through `foreach`/`json_encode()`; the bridge's JSON
+/// encoder keeps the insertion order (`preserve_order`) and the prelude's `json_decode()`
+/// carries it into the array.
+#[test]
+fn curl_version_keys_are_in_php_s_order() {
+    if skip_without_curl_native("curl_version_keys_are_in_php_s_order") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        echo implode(",", array_keys(curl_version())), "\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        "version_number,age,features,feature_list,ssl_version_number,version,host,\
+         ssl_version,libz_version,protocols,ares,ares_num,libidn,iconv_ver_num,\
+         libssh_version,brotli_ver_num,brotli_version\n"
     );
 }
 

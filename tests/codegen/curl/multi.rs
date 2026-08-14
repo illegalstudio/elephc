@@ -448,6 +448,72 @@ fn multi_setopt_classifies_the_option_before_type_checking_the_value() {
     );
 }
 
+/// THE DRIFT RATCHET FOR `curl_multi_setopt()`'s PRELUDE-SIDE OPTION TABLE. The prelude
+/// classifies the option before it type-checks the value (the fixture above), which means
+/// it carries its own copy of the frozen `CURLMOPT_*` numbers next to `multi_option_kind`'s
+/// (`crates/elephc-curl/src/multi.rs`). Those two must move together: if the frozen surface
+/// grows a `CURLMOPT_*` and only the bridge learns it, the crate's own
+/// `multi_option_table_matches_the_frozen_surface` ratchet stays green while PHP code gets
+/// a `ValueError` for a perfectly valid option — a hard, wrong failure with the bridge
+/// never consulted.
+///
+/// THE OPTION LIST IS READ FROM THE FROZEN SURFACE AT TEST TIME, not hand-copied, so a new
+/// `CURLMOPT_*` constant enters this fixture the moment it is registered and fails here
+/// until the prelude classifies it too. The asserted property is only apply-or-refuse
+/// (`true`/`false`, warning allowed) versus `ValueError` — it says nothing about WHICH of
+/// the two an option gets, so it does not duplicate the fixtures above.
+#[test]
+fn every_registered_multi_option_is_classified_by_the_prelude() {
+    if skip_without_curl_native("every_registered_multi_option_is_classified_by_the_prelude") {
+        return;
+    }
+    let surface = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/docs/curl_surface.json"),
+    )
+    .expect("the frozen curl surface must be readable");
+    let surface: serde_json::Value =
+        serde_json::from_slice(&surface).expect("the frozen curl surface must be valid JSON");
+    let mut names: Vec<&str> = surface["constants"]
+        .as_object()
+        .expect("constants must be an object")
+        .keys()
+        .filter(|name| name.starts_with("CURLMOPT_"))
+        .map(String::as_str)
+        .collect();
+    names.sort_unstable();
+    assert!(!names.is_empty(), "the frozen surface must register CURLMOPT_* constants");
+    let entries = names
+        .iter()
+        .map(|name| format!("            \"{name}\" => {name},\n"))
+        .collect::<String>();
+
+    let output = compile_and_run_capture(&format!(
+        r#"<?php
+        $mh = curl_multi_init();
+        $options = [
+{entries}        ];
+        echo count($options), "\n";
+        foreach ($options as $name => $option) {{
+            try {{
+                curl_multi_setopt($mh, $option, 1);
+            }} catch (ValueError $e) {{
+                echo "VALUEERROR ", $name, "\n";
+            }} catch (TypeError $e) {{
+                echo "TYPEERROR ", $name, "\n";
+            }}
+        }}
+        echo "classified\n";
+        "#
+    ));
+    assert_eq!(
+        output.stdout,
+        format!("{}\nclassified\n", names.len()),
+        "every frozen CURLMOPT_* must be classified by the prelude, never rejected as \
+         'not a valid cURL multi option': the prelude's table (src/curl_prelude.rs, \
+         curl_multi_setopt) has drifted from multi_option_kind's"
+    );
+}
+
 /// `curl_multi_init()` mints a real `CurlMultiHandle` object (PHP 8's object model, not a
 /// resource), and `curl_multi_close()` is the no-op PHP 8 documents — the handle stays
 /// usable after it.

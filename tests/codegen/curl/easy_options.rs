@@ -598,6 +598,67 @@ fn wave_c_getinfo_array_uses_php_key_names() {
     );
 }
 
+/// A PHP ARRAY IS ORDERED, so `curl_getinfo()`'s KEY ORDER is part of its shape. It is
+/// php-src's field order, measured with `array_keys(curl_getinfo($ch))` on PHP 8.4.20:
+/// `url, content_type, http_code, header_size, …, effective_method, capath, cainfo`. The
+/// bridge encodes the array as JSON (`crates/elephc-curl/src/info.rs`) and `serde_json`'s
+/// `preserve_order` feature is what carries the insertion order through the blob — without
+/// it the decoded array came back byte-sorted (`appconnect_time_us` first), which no
+/// `foreach` over a real `ext/curl` result ever produces.
+///
+/// `posttransfer_time_us` sits between `starttransfer_time_us` and `total_time_us` in
+/// php's list and is absent here — a MISSING KEY, tracked separately; this fixture pins the
+/// order of the keys this build does report.
+///
+/// IT ALSO PINS THAT EACH `*_us` KEY REALLY IS ITS OWN TIMER. The first run of this fixture
+/// caught five scrambled `CURLINFO_*_T` numbers in `crates/elephc-curl/src/info.rs`:
+/// `redirect_time_us`/`starttransfer_time_us` were missing from the array entirely (their
+/// numbers were not `CURLINFO_OFF_T` fields), and `namelookup_time_us`/`connect_time_us`/
+/// `pretransfer_time_us` were silently reporting other fields. Comparing every `*_us`
+/// against its `double` counterpart is what makes that class of mistake loud.
+#[test]
+fn getinfo_array_keys_are_in_php_s_order() {
+    if skip_without_curl_native("getinfo_array_keys_are_in_php_s_order") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($ch);
+        $info = curl_getinfo($ch);
+        echo implode(",", array_keys($info)), "\n";
+        // Each microsecond timer must be its own double timer, to the microsecond: a
+        // swapped CURLINFO number would report a different (usually smaller or zero) field.
+        $pairs = [
+            "total_time", "namelookup_time", "connect_time", "pretransfer_time",
+            "starttransfer_time", "redirect_time",
+        ];
+        foreach ($pairs as $name) {{
+            $micros = (int) round($info[$name] * 1000000.0);
+            $reported = $info[$name . "_us"];
+            $delta = $micros > $reported ? $micros - $reported : $reported - $micros;
+            echo $name, $delta <= 1 ? "=ok " : "=MISMATCH({{$micros}} vs {{$reported}}) ";
+        }}
+        echo "\n";
+        "#
+    ));
+    assert_eq!(
+        out,
+        "url,content_type,http_code,header_size,request_size,filetime,ssl_verify_result,\
+         redirect_count,total_time,namelookup_time,connect_time,pretransfer_time,size_upload,\
+         size_download,speed_download,speed_upload,download_content_length,\
+         upload_content_length,starttransfer_time,redirect_time,redirect_url,primary_ip,\
+         certinfo,primary_port,local_ip,local_port,http_version,protocol,ssl_verifyresult,\
+         scheme,appconnect_time_us,connect_time_us,namelookup_time_us,pretransfer_time_us,\
+         redirect_time_us,starttransfer_time_us,total_time_us,effective_method,capath,cainfo\n\
+         total_time=ok namelookup_time=ok connect_time=ok pretransfer_time=ok \
+         starttransfer_time=ok redirect_time=ok \n"
+    );
+}
+
 /// Wave C: each `CURLINFO_*` type mask reads through its own typed entry point and comes
 /// back as PHP's documented type — string, int, float — with real values from a completed
 /// transfer, never a fabricated one.

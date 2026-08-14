@@ -110,13 +110,26 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
         pub(super) const SPEED_UPLOAD_T: i32 = 0x60_0000 + 10;
         pub(super) const CONTENT_LENGTH_DOWNLOAD_T: i32 = 0x60_0000 + 15;
         pub(super) const CONTENT_LENGTH_UPLOAD_T: i32 = 0x60_0000 + 16;
-        pub(super) const APPCONNECT_TIME_T: i32 = 0x60_0000 + 56;
-        pub(super) const CONNECT_TIME_T: i32 = 0x60_0000 + 55;
-        pub(super) const NAMELOOKUP_TIME_T: i32 = 0x60_0000 + 54;
-        pub(super) const PRETRANSFER_TIME_T: i32 = 0x60_0000 + 57;
-        pub(super) const REDIRECT_TIME_T: i32 = 0x60_0000 + 59;
-        pub(super) const STARTTRANSFER_TIME_T: i32 = 0x60_0000 + 60;
+        // THE SIX `_T` TIMER NUMBERS ARE A CONTIGUOUS BLOCK, `CURLINFO_OFF_T + 50..=56`,
+        // and five of them were WRONG here until the `curl_getinfo()` key-order fixture
+        // exposed it (`tests/codegen/curl/easy_options.rs`). Transcribed from the pinned
+        // libcurl 8.21.0 `include/curl/curl.h`:
+        //   50 TOTAL_TIME_T   51 NAMELOOKUP_TIME_T   52 CONNECT_TIME_T
+        //   53 PRETRANSFER_TIME_T   54 STARTTRANSFER_TIME_T   55 REDIRECT_TIME_T
+        //   56 APPCONNECT_TIME_T
+        // The old values (54/55/57/59/60) silently reported OTHER fields —
+        // `namelookup_time_us` carried STARTTRANSFER, `connect_time_us` carried REDIRECT,
+        // `pretransfer_time_us` carried `CURLINFO_RETRY_AFTER` (57) — while 59/60 are not
+        // `CURLINFO_OFF_T` fields at all, so `redirect_time_us`/`starttransfer_time_us`
+        // were dropped from the array entirely. `getinfo_array_keys_are_in_php_s_order`
+        // now pins the key set and a `*_us == *_time * 1e6` check pins the values.
         pub(super) const TOTAL_TIME_T: i32 = 0x60_0000 + 50;
+        pub(super) const NAMELOOKUP_TIME_T: i32 = 0x60_0000 + 51;
+        pub(super) const CONNECT_TIME_T: i32 = 0x60_0000 + 52;
+        pub(super) const PRETRANSFER_TIME_T: i32 = 0x60_0000 + 53;
+        pub(super) const STARTTRANSFER_TIME_T: i32 = 0x60_0000 + 54;
+        pub(super) const REDIRECT_TIME_T: i32 = 0x60_0000 + 55;
+        pub(super) const APPCONNECT_TIME_T: i32 = 0x60_0000 + 56;
     }
 
     let mut map = serde_json::Map::new();

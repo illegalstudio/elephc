@@ -286,10 +286,11 @@ returns `true` — the PHP CLI behavior.
 ## `curl_getinfo()`
 
 Called without an option, `curl_getinfo()` returns PHP's associative array. This
-build reports 38 keys, including `url`, `http_code`, `content_type`,
-`total_time`, `redirect_count`, `primary_ip`, `scheme`, `protocol`, `http_version`
-and the microsecond timers. Keys for features that are not compiled in are
-omitted rather than faked.
+build reports 40 keys, in PHP's own key order, including `url`, `http_code`,
+`content_type`, `total_time`, `redirect_count`, `primary_ip`, `scheme`,
+`protocol`, `http_version` and the microsecond timers. Keys for features that are
+not compiled in are omitted rather than faked; PHP 8.4 also reports
+`posttransfer_time_us`, which this build does not yet.
 
 Called with a `CURLINFO_*` option, the read dispatches on the option's type mask
 (string / long / double / slist / off_t), exactly as php-src does. Three options

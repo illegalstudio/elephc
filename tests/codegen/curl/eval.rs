@@ -39,9 +39,17 @@ fn eval_curl_version_matches_aot_curl_version() {
         $viaEval = eval('return curl_version();');
         echo ($aot['version'] === $viaEval['version']) ? "match" : "mismatch";
         echo ":", $viaEval['version'];
+        // THE KEY ORDER MUST SURVIVE THE EVAL DECODE PATH TOO. Both sides decode the same
+        // bridge JSON, but through different `json_decode` implementations (compiled
+        // runtime vs interpreter), and a PHP array is ordered — so this compares the
+        // orders, not just the key sets, for the outer array and for `feature_list`.
+        echo ":", implode(",", array_keys($aot)) === implode(",", array_keys($viaEval)) ? "same-order" : "reordered";
+        echo ":", implode(",", array_keys($aot['feature_list'])) === implode(",", array_keys($viaEval['feature_list'])) ? "same-features" : "reordered-features";
+        $names = array_keys($viaEval['feature_list']);
+        echo ":", $names[0];
         "#,
     );
-    assert!(out.starts_with("match:8.21.0"), "{out}");
+    assert_eq!(out, "match:8.21.0:same-order:same-features:AsynchDNS");
 }
 
 /// A full `curl_init()` + `curl_setopt(CURLOPT_URL, CURLOPT_RETURNTRANSFER)` +

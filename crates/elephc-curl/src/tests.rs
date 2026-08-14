@@ -583,6 +583,57 @@ mod native {
         assert_eq!(list["SSL"], serde_json::Value::Bool(true));
         assert_eq!(list["libz"], serde_json::Value::Bool(true));
         assert_eq!(list["krb4"], serde_json::Value::Bool(false));
+
+        // A PHP ARRAY IS ORDERED, so the key ORDER is part of the shape, not an
+        // implementation detail: php-src emits its table's declaration order
+        // (`AsynchDNS` first, `GSASL` last), which `serde_json`'s `preserve_order`
+        // feature is what keeps. Byte-sorted output would start at `ALTSVC`.
+        let names: Vec<&str> = list.keys().map(String::as_str).collect();
+        let expected: Vec<&str> = crate::abi::PHP_FEATURE_LIST
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(names, expected, "feature_list must keep php-src's own order");
+    }
+
+    /// The `curl_version()` array's own KEY ORDER is php-src's, measured on PHP
+    /// 8.4.20 (`array_keys(curl_version())`). PHP arrays are ordered, so a
+    /// byte-sorted blob would make `foreach`/`array_keys()`/`json_encode()` report
+    /// an order php never produces (`age` first, `version_number` last).
+    /// `ssl_version`/`libz_version` are in the list unconditionally: php-src adds
+    /// every string field through `CAAS`, which substitutes `""` for a null
+    /// pointer rather than dropping the key.
+    #[test]
+    fn global_info_keys_are_in_php_s_order() {
+        let json = global_info_json();
+        let keys: Vec<&str> = json
+            .as_object()
+            .expect("global_info must be a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "version_number",
+                "age",
+                "features",
+                "feature_list",
+                "ssl_version_number",
+                "version",
+                "host",
+                "ssl_version",
+                "libz_version",
+                "protocols",
+                "ares",
+                "ares_num",
+                "libidn",
+                "iconv_ver_num",
+                "libssh_version",
+                "brotli_ver_num",
+                "brotli_version",
+            ]
+        );
     }
 
     /// PUNCH-LIST ITEM 5: the sub-library keys are gated on the struct's `age`,

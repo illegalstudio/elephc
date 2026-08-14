@@ -1296,17 +1296,25 @@ pub(crate) unsafe fn publish_bytes(
 }
 
 /// Builds the `curl_version()` JSON blob from libcurl's own
-/// `curl_version_info(CURLVERSION_NOW)`, matching the key set
-/// `.superpowers/sdd/php-curl-family/global-constraints.md`'s "`curl_version()`
-/// keys" section documents. The always-present fields
-/// (`version_number`/`age`/`features`/`feature_list`/`ssl_version_number`/
-/// `version`/`host`/`protocols`) match every libcurl build; `ssl_version` and
-/// `libz_version` are included only for a non-null pointer, which is php-src's
-/// own rule for those two (`if (d->ssl_version) { … }`).
+/// `curl_version_info(CURLVERSION_NOW)`, key for key AND IN PHP'S OWN KEY ORDER —
+/// a PHP array is ordered, and `serde_json`'s `preserve_order` feature (see this
+/// crate's `Cargo.toml`) is what carries the insertion order below through the
+/// blob and into the decoded array. Measured against PHP 8.4.20, the order is
+/// `version_number, age, features, feature_list, ssl_version_number, version,
+/// host, ssl_version, libz_version, protocols`, then the age-gated tail.
+///
+/// EVERY KEY EXCEPT THE AGE-GATED TAIL IS UNCONDITIONAL, including `ssl_version`
+/// and `libz_version` for a build with no TLS or no zlib. php-src adds all four
+/// string fields through one macro,
+/// `#define CAAS(s, v) add_assoc_string_ex(return_value, s, sizeof(s) - 1, (char *) (v ? v : ""))`
+/// (`ext/curl/interface.c`), so a null pointer becomes `""` and the key is still
+/// there. (An earlier revision of this comment cited `if (d->ssl_version)` as
+/// php's rule for those two; that line is from `PHP_MINFO_FUNCTION` — the
+/// phpinfo() table — NOT from `PHP_FUNCTION(curl_version)`.)
 ///
 /// THE SUB-LIBRARY FIELDS ARE GATED ON THE STRUCT'S `age`, NOT ON WHETHER THE
 /// POINTER IS NULL, because that is php-src's rule and the two disagree for
-/// every library this libcurl was built without. `_php_curl_version`
+/// every library this libcurl was built without. `PHP_FUNCTION(curl_version)`
 /// (`ext/curl/interface.c`) adds `ares`/`ares_num` at `CURLVERSION_SECOND`,
 /// `libidn` at `CURLVERSION_THIRD`, `iconv_ver_num`/`libssh_version` at
 /// `CURLVERSION_FOURTH` and `brotli_ver_num`/`brotli_version` at
@@ -1323,23 +1331,42 @@ pub(crate) unsafe fn publish_bytes(
 /// lower-cased, build-dependent set (`AsynchDNS` vs `asyn-dns`, and it omits
 /// every feature this build lacks instead of reporting it `false`). Measured on
 /// PHP 8.4.20: `var_dump(curl_version()["feature_list"])` is 29 `string => bool`
-/// entries in the order [`PHP_FEATURE_LIST`] repeats, and their `true` bits add
-/// up to `features` minus `CURL_VERSION_THREADSAFE` (1<<30), which php 8.4 does
-/// not name.
+/// entries in [`PHP_FEATURE_LIST`]'s order, and their `true` bits add up to
+/// `features` minus `CURL_VERSION_THREADSAFE` (1<<30), which php 8.4 does not
+/// name.
 fn build_global_info_json() -> String {
     let info = easy::version_info();
     let mut map = serde_json::Map::new();
     map.insert("version_number".to_string(), info.version_num.into());
     map.insert("age".to_string(), info.age.into());
     map.insert("features".to_string(), info.features.into());
+    // php-src builds and adds `feature_list` HERE, between `features` and
+    // `ssl_version_number`, and the position is observable through `foreach`.
+    let mut features = serde_json::Map::new();
+    for (name, bit) in PHP_FEATURE_LIST {
+        features.insert(
+            (*name).to_string(),
+            serde_json::Value::Bool(info.features & bit != 0),
+        );
+    }
+    map.insert(
+        "feature_list".to_string(),
+        serde_json::Value::Object(features),
+    );
     map.insert(
         "ssl_version_number".to_string(),
         info.ssl_version_num.into(),
     );
     map.insert("version".to_string(), c_str_or_empty(info.version).into());
     map.insert("host".to_string(), c_str_or_empty(info.host).into());
-    insert_optional_str(&mut map, "ssl_version", info.ssl_version);
-    insert_optional_str(&mut map, "libz_version", info.libz_version);
+    map.insert(
+        "ssl_version".to_string(),
+        c_str_or_empty(info.ssl_version).into(),
+    );
+    map.insert(
+        "libz_version".to_string(),
+        c_str_or_empty(info.libz_version).into(),
+    );
     map.insert(
         "protocols".to_string(),
         c_str_array(info.protocols).into(),
@@ -1367,17 +1394,6 @@ fn build_global_info_json() -> String {
             c_str_or_empty(info.brotli_version).into(),
         );
     }
-    let mut features = serde_json::Map::new();
-    for (name, bit) in PHP_FEATURE_LIST {
-        features.insert(
-            (*name).to_string(),
-            serde_json::Value::Bool(info.features & bit != 0),
-        );
-    }
-    map.insert(
-        "feature_list".to_string(),
-        serde_json::Value::Object(features),
-    );
     serde_json::Value::Object(map).to_string()
 }
 
@@ -1444,19 +1460,6 @@ fn c_str_or_empty(ptr: *const c_char) -> String {
     unsafe { std::ffi::CStr::from_ptr(ptr) }
         .to_string_lossy()
         .into_owned()
-}
-
-/// Inserts `key => value` only when `ptr` is non-null, matching PHP's own
-/// omission of keys for sub-libraries this libcurl build was not compiled
-/// with.
-fn insert_optional_str(
-    map: &mut serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    ptr: *const c_char,
-) {
-    if !ptr.is_null() {
-        map.insert(key.to_string(), c_str_or_empty(ptr).into());
-    }
 }
 
 /// Reads a NULL-terminated `const char * const *` array of C strings (the
