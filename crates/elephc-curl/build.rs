@@ -13,7 +13,7 @@
 //!   `rlib` outputs never invoke the system linker, so libcurl's unresolved
 //!   `extern "C"` symbols stay unresolved in the archive regardless of
 //!   whether these directives were emitted. The PHP-program linker supplies
-//!   `libcurl.a` at final-binary link time (Task 4).
+//!   `libcurl.a` at final-binary link time instead.
 //! - `cargo test -p elephc-curl` DOES produce a real executable, so it needs
 //!   every symbol resolved. The crate's own gated unit tests
 //!   (`src/tests.rs`) that call the real ABI live behind
@@ -29,17 +29,17 @@
 //!   directories — these are separate `elephc native` packages with
 //!   unrelated content-hashed paths, so no single directory covers all four
 //!   archives. Link order mirrors libcurl's own dependency order: curl -> ssl
-//!   -> crypto -> z, plus the macOS system frameworks curl's TLS/resolver
-//!   backend needs (see `.superpowers/sdd/php-curl-family/task-2-report.md`'s
-//!   link smoke, and this file's own empirical `SystemConfiguration` fix
-//!   below, for the exact set).
-//! - These three env var names are deliberately NOT `ELEPHC_CURL_LIB_DIR`
-//!   alone reused for anything else: `src/linker/bridges.rs`'s `BRIDGES`
-//!   table convention (`ELEPHC_<NAME>_LIB_DIR`) will likely want that exact
-//!   name for a *different* purpose in Task 4 (overriding where the elephc
-//!   compiler finds a prebuilt `libelephc_curl.a` bridge archive). The two
-//!   never run in the same process, so there is no runtime collision, but a
-//!   human reading both names side by side should not conflate them.
+//!   -> crypto -> z, plus this file's own empirical `SystemConfiguration` fix
+//!   below for the macOS system frameworks curl's TLS/resolver backend needs.
+//! - `ELEPHC_CURL_LIB_DIR` NAMES THE SAME ENV VAR AS `src/linker/bridges.rs`'s
+//!   `BRIDGES` table entry for `elephc_curl`, but for a DIFFERENT purpose there:
+//!   the production compiler reads it as an override for the directory
+//!   containing a prebuilt `libelephc_curl.a` BRIDGE archive (this crate's own
+//!   staticlib output), not curl's real `libcurl.a`. The two readers never run
+//!   in the same process — this build script only runs under `cargo
+//!   build`/`cargo test -p elephc-curl`, never inside a compiled `elephc`
+//!   invocation — so there is no runtime collision, but a human reading both
+//!   names side by side should not conflate them.
 
 use std::env;
 use std::path::Path;
@@ -72,8 +72,8 @@ fn main() {
         return;
     };
 
-    // Real native artifacts requested: wire up the link order the Task 2
-    // report's C link smoke validated (curl -> ssl -> crypto -> z), plus the
+    // Real native artifacts requested: wire up libcurl's own dependency link
+    // order (curl -> ssl -> crypto -> z), plus the
     // macOS frameworks curl's OpenSSL/resolver backend needs there.
     add_search_path(&curl_lib_dir);
     println!("cargo:rustc-link-lib=static=curl");

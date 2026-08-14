@@ -11,13 +11,19 @@
 //!   [`apply_long_option`] for `CURLOPT_RETURNTRANSFER` handling.
 //!
 //! Key details:
-//! - Only `CURLOPT_RETURNTRANSFER` is implemented here (Task 3's scope).
-//!   `CURLOPT_HEADER`, `CURLOPT_FILE`, `CURLOPT_INFILE`, `CURLOPT_WRITEHEADER`,
-//!   `CURLOPT_STDERR`, and `CURLOPT_BINARYTRANSFER`/`CURLOPT_SAFE_UPLOAD` are
-//!   the rest of the PHP-layer option table
-//!   (`.superpowers/sdd/php-curl-family/global-constraints.md`); Task 8 adds
-//!   them. Every other `long` option is forwarded to real
-//!   `curl_easy_setopt` unchanged.
+//! - `CURLOPT_RETURNTRANSFER` is the ONLY PHP-layer pseudo-option this file carries.
+//!   The rest of `crate::options`' `KIND_PHP_LAYER` rows (`CURLOPT_PRIVATE`,
+//!   `CURLOPT_BINARYTRANSFER`, `CURLOPT_SAFE_UPLOAD`) never reach this crate at all —
+//!   the curl prelude (`src/curl_prelude.rs`) applies them entirely in PHP, before the
+//!   bridge is ever called. `CURLOPT_HEADER` is NOT a PHP-layer option despite the
+//!   name: it is an ordinary libcurl `long` option (`KIND_LONG`) that php-src also
+//!   forwards verbatim, so [`apply_long_option`]'s fallback branch below sends it
+//!   straight to `curl_easy_setopt` and real libcurl implements the header-in-body
+//!   behavior on its own. `CURLOPT_FILE`/`INFILE`/`WRITEHEADER`/`STDERR` are
+//!   `KIND_STREAM`, not `long` at all — the curl prelude services them by composing
+//!   `crate::callbacks`' write/header/read/debug slots, so they never reach this file
+//!   either. Every plain `long`/`off_t` option not named above is forwarded to real
+//!   `curl_easy_setopt` unchanged, the same fallback path `CURLOPT_HEADER` takes.
 //! - `write_callback` must never unwind across the C boundary: libcurl calls
 //!   it directly, not through one of this crate's own `#[no_mangle]` entry
 //!   points, so it carries its own panic firewall rather than relying on
@@ -31,8 +37,8 @@ use crate::easy::{self, CURL};
 use crate::handles::{self, EasyEntry};
 
 /// `CURLOPT_RETURNTRANSFER` (19913): a PHP-only pseudo-option, never a real
-/// libcurl `CURLOPT_*` value. Frozen from `scripts/docs/curl_surface.json`
-/// (Task 1's PHP surface extraction), not recomputed by hand. PHP's own
+/// libcurl `CURLOPT_*` value. Frozen from `scripts/docs/curl_surface.json`'s
+/// PHP surface extraction, not recomputed by hand. PHP's own
 /// `php_only_options` list confirms this is never forwarded to libcurl.
 pub(crate) const CURLOPT_RETURNTRANSFER: i32 = 19913;
 

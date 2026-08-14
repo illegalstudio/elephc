@@ -12,7 +12,7 @@
 //!   which is why its runtime helper SIGN-extends the bridge's `int32_t` the way
 //!   `__elephc_curl_easy_errno`'s does, rather than zero-extending it like the boolean
 //!   forwarders.
-//! - PAUSING ONLY MEANS ANYTHING MID-TRANSFER, i.e. from inside a callback (Task 12).
+//! - PAUSING ONLY MEANS ANYTHING MID-TRANSFER, i.e. from inside a callback.
 //!   Called on an idle handle libcurl answers `CURLE_OK` and nothing happens, which is
 //!   also what php-src reports; the option is accepted here so that code written against
 //!   PHP behaves the same, not because this build can pause a blocking `curl_exec()`.

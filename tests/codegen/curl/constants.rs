@@ -1,6 +1,5 @@
 //! Purpose:
-//! End-to-end proof that `ext/curl` integer constants are real, stable PHP values —
-//! Task 6's Step 2 fixture.
+//! End-to-end proof that `ext/curl` integer constants are real, stable PHP values.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests curl` through Rust's test harness.

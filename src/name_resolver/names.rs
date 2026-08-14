@@ -410,7 +410,7 @@ fn is_builtin_global_constant(name: &str) -> bool {
     // Shared source-of-truth slices for JSON, stream/socket, session, array, math, and curl
     // constants. CURL_INT_CONSTANTS is always in this chain (like JSON_INT_CONSTANTS) so a
     // bare `CURLOPT_URL` mention resolves to the global constant even inside a namespace,
-    // with or without the curl prelude/bridge being linked (Task 6).
+    // with or without the curl prelude/bridge being linked.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::openssl_constants::OPENSSL_INT_CONSTANTS.iter())

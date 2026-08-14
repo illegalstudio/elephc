@@ -89,7 +89,7 @@ pub(crate) struct EasyEntry {
     /// full lifetime argument this field is part of.
     pub(crate) share_id: Option<i64>,
     /// The `curl_mime` structure currently ATTACHED to this handle via `CURLOPT_MIMEPOST`
-    /// (Task 11's multipart/form-data uploads), or `None` when no array `CURLOPT_POSTFIELDS`
+    /// (`crate::mime`'s multipart/form-data uploads), or `None` when no array `CURLOPT_POSTFIELDS`
     /// has ever been applied. Owned by this entry the same way `slists` owns its lists:
     /// libcurl does not copy the structure a pointer-typed option carries, so it must
     /// outlive every `curl_easy_perform` on this handle, and is freed only on reset, free,
@@ -156,8 +156,8 @@ pub(crate) struct EasyEntry {
 // two `elephc_curl_*` calls for the SAME id are ever in flight concurrently
 // (mirrors the identical rationale in `elephc-pdo`'s connection/statement
 // tables). Any future concurrent caller (e.g. a multi-threaded driver, or
-// Task 9's multi interface if it ever fans work across OS threads) MUST
-// itself guarantee no two threads call `elephc_curl_easy_perform`/`_free`/
+// `crate::multi` if it ever fans work across OS threads — today it does not)
+// MUST itself guarantee no two threads call `elephc_curl_easy_perform`/`_free`/
 // `_setopt_*`/`_take_body` for the SAME id concurrently — this table cannot
 // enforce that without a per-handle lock, which is a deliberate redesign left
 // out of scope here. See `crate::abi`'s module doc and the

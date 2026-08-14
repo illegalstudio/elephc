@@ -9,7 +9,7 @@
 //!
 //! Key details:
 //! - Every expectation here was MEASURED against the host PHP 8.4.20 + ext/curl before it
-//!   was written down (see `.superpowers/sdd/php-curl-family/task-12-report.md`), not
+//!   was written down, not
 //!   inferred from the manual. The surprising ones: `curl_setopt(WRITEFUNCTION, …)`
 //!   OVERRIDES `RETURNTRANSFER` (and vice versa — the later call wins, because php-src
 //!   keeps a single write-mode enum); a short `WRITEFUNCTION`/`HEADERFUNCTION` return

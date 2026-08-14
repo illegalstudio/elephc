@@ -6,9 +6,7 @@
 //! curl/openssl/zlib package. Without the cfg, nothing in this test binary
 //! calls the real ABI, so the never-resolved libcurl `extern "C"` symbols it
 //! declares get dropped before the link step needs them, and `cargo test -p
-//! elephc-curl` still runs cleanly, printing a clear skip message (verified
-//! empirically; see task-3-report.md for the experiment and the RED/GREEN
-//! evidence).
+//! elephc-curl` still runs cleanly, printing a clear skip message.
 //!
 //! Called from:
 //! - `cargo test -p elephc-curl` through Rust's test harness.
@@ -26,10 +24,10 @@
 //!   `cargo test` runs tests in parallel threads sharing the one global
 //!   table.
 //! - The RETURNTRANSFER smoke uses a `file://` fixture instead of a live
-//!   HTTP server, matching the "tests never hit the public internet" rule
-//!   (`.superpowers/sdd/php-curl-family/global-constraints.md`) without
-//!   needing Task 7's HTTP fixture pattern yet — `file://` still drives the
-//!   exact same write-callback path HTTP does.
+//!   HTTP server, keeping these unit tests off the public internet without
+//!   needing a local HTTP fixture server here — `file://` still drives the
+//!   exact same write-callback path HTTP does. (`tests/codegen/curl/*`
+//!   integration fixtures cover real HTTP/HTTPS separately.)
 
 /// Purpose:
 /// The wave-completeness ratchet for `curl_setopt()`: every `CURLOPT_*` in the frozen
@@ -78,7 +76,7 @@ mod option_table {
     }
 
     /// EVERY `CURLOPT_*` PHP exposes has a classification, and it is one of the TEN
-    /// kinds (Task 10 added `KIND_SHARE`, WP-C `KIND_STREAM`) — never the `KIND_INVALID`
+    /// kinds `crate::options` defines — never the `KIND_INVALID`
     /// that would make `curl_setopt()` raise `ValueError` for a real PHP option.
     #[test]
     fn every_frozen_curlopt_is_classified() {
@@ -136,8 +134,8 @@ mod option_table {
             ("CURLOPT_SHARE", KIND_SHARE, "file"),
         ];
 
-        /// The callback options this build carries as real PHP callables (Task 12's
-        /// first wave). Every other `"callback"`-bucketed option stays `KIND_UNSUPPORTED`.
+        /// The callback options this build carries as real PHP callables.
+        /// Every other `"callback"`-bucketed option stays `KIND_UNSUPPORTED`.
         const IMPLEMENTED_CALLBACKS: &[&str] = &[
             "CURLOPT_WRITEFUNCTION",
             "CURLOPT_HEADERFUNCTION",
@@ -220,7 +218,7 @@ mod option_table {
         );
     }
 
-    /// The Task-14 AUDIT ARTIFACT: the exact set of `curl_setopt()` options this build
+    /// THE AUDIT ARTIFACT: the exact set of `curl_setopt()` options this build
     /// rejects, pinned by NAME.
     ///
     /// `docs/php/curl.md` publishes this list to users as the answer to "what does
@@ -296,8 +294,9 @@ mod option_table {
 /// Key details:
 /// - Runs WITHOUT native libcurl, like its easy sibling: the table is pure data.
 /// - `CURLMOPT_PUSHFUNCTION` is the one documented divergence — the frozen surface buckets
-///   it as `callback`, which php-src supports and this build cannot (Task 12), so it is
-///   classified `unsupported` (`false` + PHP's warning, locked decision 7).
+///   it as `callback`, which php-src supports and this build cannot (it is an HTTP/2
+///   server-push hook, and HTTP/2 is not built in), so it is classified `unsupported`
+///   (`false` + PHP's warning).
 #[cfg(test)]
 mod multi_option_table {
     use crate::multi::{
@@ -334,8 +333,9 @@ mod multi_option_table {
             let expected = match bucket {
                 "long" => MULTI_OPTION_LONG,
                 "off_t" => MULTI_OPTION_OFF_T,
-                // A real php-src option this build cannot carry: it needs Task 12's
-                // callback infrastructure, so it answers `false` plus PHP's warning.
+                // A real php-src option this build cannot carry (`CURLMOPT_PUSHFUNCTION` is
+                // an HTTP/2 server-push hook, and HTTP/2 is not built in), so it answers
+                // `false` plus PHP's warning.
                 "callback" => MULTI_OPTION_UNSUPPORTED,
                 other => panic!("{name} has unclassified frozen bucket {other:?}"),
             };
@@ -1062,7 +1062,7 @@ mod native {
 }
 
 /// Purpose:
-/// Task 11's `curl_mime` builder ABI: the `elephc_curl_mime_new`/`_add_part`/`_part_field`/
+/// The `curl_mime` builder ABI: the `elephc_curl_mime_new`/`_add_part`/`_part_field`/
 /// `_post`/`_abort` state machine, exercised directly (no PHP program involved) against
 /// real libcurl.
 ///
@@ -1352,7 +1352,7 @@ mod native_mime {
         // that same construction, but it is a NO-OP whenever `open_basedir` is unset (the
         // common case, including every fixture in this tree), so it does not perform an
         // eager existence check either. elephc's simpler `curl_mime_filedata()`-based
-        // design (no custom callback — that infrastructure is Task 12's, not this one's)
+        // design (no custom callback — `crate::callbacks`' machinery is not involved here)
         // fails EAGER, at `curl_setopt()` time, which is what this test pins: an honest,
         // defensible, but DIFFERENT answer to "the file does not exist" than php-src's own.
         // See `src/curl_prelude.rs`'s `__elephc_curl_build_multipart()` doc comment and

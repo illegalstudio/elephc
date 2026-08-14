@@ -902,9 +902,12 @@ mod tests {
         assert_eq!(magician.archive_filename(), "libelephc_magician.a");
         assert!(!magician.whole_archive);
 
-        // Task 4: `--with-curl` force-links the whole archive (the curl prelude's
-        // internal builtins arrive later, so pay-for-use detection cannot see them
-        // yet) and needs the same macOS proxy/keychain framework trio as the crate's
+        // `--with-curl` force-links the whole archive: a program that names no
+        // `curl_*` function/class/constant (the ordinary pay-for-use detection path,
+        // `src/curl_prelude/detect.rs`) but is compiled with the flag anyway references
+        // no `elephc_curl_*` symbol at all, so a selective (non-whole-archive) link
+        // would pull in nothing from the archive. It also needs the same macOS proxy/keychain
+        // framework trio as the crate's
         // own gated native tests (`crates/elephc-curl/build.rs`): `Security` and
         // `CoreFoundation` satisfy OpenSSL's keychain-backed trust store lookups,
         // `SystemConfiguration` satisfies libcurl's own `SCDynamicStoreCopyProxies`
@@ -962,9 +965,6 @@ mod tests {
         assert_eq!(php_extension_for_lib("elephc_web"), Some("session"));
         assert_eq!(php_extension_for_lib("elephc_tz"), None);
         assert_eq!(php_extension_for_lib("elephc_magician"), None);
-        // Task 4: no PHP-visible curl functions exist yet (the prelude lands in
-        // Task 5), so this bridge-table mapping is the only linked-bridge
-        // assertion possible until then — see the module doc for context.
         assert_eq!(php_extension_for_lib("elephc_curl"), Some("curl"));
         assert_eq!(php_extension_for_lib("elephc_bogus"), None);
     }

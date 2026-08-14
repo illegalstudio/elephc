@@ -1,7 +1,7 @@
 //! Purpose:
 //! Regression tests for the `CURLOPT_PRIVATE` retain/release fix in
-//! `crate::stream_resources::curl` (Task 13 follow-up, php-curl-family plan review
-//! findings, Critical 1).
+//! `crate::stream_resources::curl` — releasing a stored `CURLOPT_PRIVATE` value when its
+//! easy handle is torn down inside `eval()`.
 //!
 //! Called from:
 //! - `cargo test -p elephc-magician --features curl` through Rust's test harness.
@@ -190,7 +190,7 @@ fn adopt_curl_easy_handle_retains_an_independent_private_reference() {
     assert_eq!(values.releases.len(), 2);
 }
 
-/// `release_curl_easy_private_values` (item 19, php-curl-family punch list) must release
+/// `release_curl_easy_private_values` must release
 /// a retained `CURLOPT_PRIVATE` value that was NEVER explicitly reset/overwritten — the
 /// exact case `EvalStreamResources::drop` could never cover, because `Drop::drop` has no
 /// `RuntimeValueOps` to call `release` through. This is the storage-layer half of the fix;

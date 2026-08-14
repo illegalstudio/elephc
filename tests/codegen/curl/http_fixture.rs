@@ -3,7 +3,7 @@
 //! port, then serves `/hello` (`200`/`text/plain`/`hello-curl`), `/status` (`204`),
 //! `/redirect` (`302` to `/hello`), `/echo` (a `200` whose body reports the method,
 //! headers and request body it received), `/notype` (a `200` with NO `Content-Type`
-//! header at all), and `/multipart` (Task 11: a `200` whose body reports the method,
+//! header at all), and `/multipart` (a `200` whose body reports the method,
 //! `Content-Type`, and a per-part summary of a `multipart/form-data` request) on a
 //! background thread for the rest of the test process. Mirrors `tests/codegen/io/streams.rs`'s `spawn_http_server` family (bind on
 //! port 0, accept-loop on a detached thread, write a close-framed HTTP/1.0 response)

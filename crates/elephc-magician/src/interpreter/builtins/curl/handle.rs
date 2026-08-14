@@ -238,8 +238,8 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
         return values.bool_value(false);
     }
     // CURLOPT_POSTFIELDS (10015) with an ARRAY value posts real `multipart/form-data` in
-    // the AOT build (`crate::curl_prelude::__elephc_curl_build_multipart`, Task 11), which
-    // needs `CURLFile`/`CURLStringFile` — deferred here (this family's module doc). The
+    // the AOT build (`crate::curl_prelude::__elephc_curl_build_multipart`), which
+    // needs `CURLFile`/`CURLStringFile` — deferred here (see this module's own doc). The
     // plain STRING form (the common urlencoded-body case) still works below through the
     // ordinary KIND_STRING path.
     if option == 10015 && values.is_array_like(value)? {

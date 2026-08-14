@@ -18,7 +18,7 @@
 //!   bridge in turn requires the managed native `curl` package
 //!   (`crate::pipeline::backend`), so the surface is bridge-gated: a program that never
 //!   uses curl must neither declare `CurlHandle` nor link `-lelephc_curl` nor need
-//!   `libcurl.a`. Injecting only on demand preserves that (locked decision 4), and the
+//!   `libcurl.a`. Injecting only on demand (pay-for-use) preserves that, and the
 //!   whole feature then compiles through the ordinary class/function pipeline.
 //! - WHY THE BUILTINS ARE INTERNAL. A prelude function cannot shadow a builtin of the
 //!   same name (`Cannot redeclare built-in function`), so the raw work lives in
@@ -41,7 +41,7 @@
 //!   every wrapper added by later curl tasks.
 //! - `CURLOPT_RETURNTRANSFER` (19913) is mirrored into `$__elephc_return_transfer`
 //!   because `curl_exec()`'s RETURN SHAPE depends on it (`string` when capturing,
-//!   `true` otherwise) and the Task-3 C ABI exposes no way to ask a handle whether it is
+//!   `true` otherwise) and the bridge's C ABI exposes no way to ask a handle whether it is
 //!   capturing. The option is still forwarded to the bridge, which owns the actual
 //!   capture behaviour (`crates/elephc-curl/src/php_layer.rs`); the property only
 //!   selects between `curl_exec()`'s two success shapes.
@@ -60,8 +60,7 @@
 //!   `__elephc_curl_option_kind()`; see the comment above the function for the kind
 //!   codes and the libcurl source that fixes the ranges. An option php-src does not
 //!   recognize at all raises php-src's own `ValueError`; one it recognizes that this
-//!   build cannot carry answers `false` with a PHP warning (locked decision 7), never an
-//!   inert `true`.
+//!   build cannot carry answers `false` with a PHP warning, never an inert `true`.
 //! - `curl_getinfo()` DISPATCHES ON THE `CURLINFO_*` TYPE MASK, the read-side mirror of
 //!   `curl_setopt()`'s option table and php-src's own structure: string/long/double/slist/
 //!   off_t each read through their own typed entry point, three options are special-cased
@@ -78,7 +77,7 @@
 //!   instead of `array|false`. `curl_strerror()` returns `string` rather than `?string`,
 //!   which is not a limitation but a value that is never null. Runtime behaviour is
 //!   otherwise PHP's. `docs/php/curl.md`'s "Differences from PHP" section is where these reach users.
-//! - THE MULTI INTERFACE ADDS FOUR MORE DIVERGENCES OF THE SAME FAMILY, all in Task 9's
+//! - THE MULTI INTERFACE ADDS FOUR MORE DIVERGENCES OF THE SAME FAMILY, all in its
 //!   surface and all documented at their declarations: `curl_multi_info_read()` leaves its
 //!   return type undeclared instead of `array|false` (declaring the union makes a
 //!   `$info === false` guard answer TRUE for a real array once the same variable is later
@@ -94,7 +93,7 @@
 //!   itself. Without this, `curl_multi_getcontent($info['handle'])` — the canonical PHP
 //!   multi loop — would be a compile error, or, written with the `instanceof` narrowing
 //!   the checker accepts, a SILENTLY WRONG answer.
-//! - THE SHARE INTERFACE (Task 10) ADDS NO NEW SIGNATURE DIVERGENCE of the union-return or
+//! - THE SHARE INTERFACE ADDS NO NEW SIGNATURE DIVERGENCE of the union-return or
 //!   mixed-parameter families above — `CurlShareHandle`/`CurlSharePersistentHandle` are
 //!   never read back out of a `mixed` array/return slot the way a multi-attached
 //!   `CurlHandle` is, so `curl_share_setopt()`/`curl_share_errno()`/`curl_share_close()`
@@ -118,18 +117,17 @@
 //!   leak. `CurlShareHandle`'s Mixed cell teardown therefore never forcibly touches a live
 //!   easy handle's `CURLOPT_SHARE` at all; this holds regardless of `unset()` order.
 //! - `curl_share_init_persistent()` (PHP 8.5) IS PROCESS-LIFETIME, mirroring
-//!   `curl_multi_get_handles()`'s version gate (locked decision 8) but adding its own:
+//!   `curl_multi_get_handles()`'s PHP-8.5-only version gate but adding its own:
 //!   the underlying native share, once created, is NEVER freed by
 //!   `__elephc_curl_share_free()` — elephc has no PHP-FPM-worker-restart boundary to key a
 //!   shorter lifetime off, so "process lifetime" is the honest answer. See that function's
 //!   own comment below.
-//! - `CURLFile`/`CURLStringFile` (Task 11) ARE PLAIN PHP DATA CLASSES, UNLIKE EVERY OTHER
+//! - `CURLFile`/`CURLStringFile` ARE PLAIN PHP DATA CLASSES, UNLIKE EVERY OTHER
 //!   CLASS IN THIS FILE: neither wraps a native handle, so neither has `$__elephc_handle`,
 //!   a private constructor, or a `__elephc_wrap` factory — both are ordinary, user-
 //!   constructible classes with public properties, matching php-src's own shape
 //!   (`ext/curl/curl_file.stub.php`). `curl_setopt(..., CURLOPT_POSTFIELDS, $array)`'s
-//!   ARRAY FORM NOW POSTS REAL `multipart/form-data`, closing the divergence Task 8's
-//!   urlencoded stopgap documented: `__elephc_curl_build_multipart()` below walks the
+//!   ARRAY FORM POSTS REAL `multipart/form-data`: `__elephc_curl_build_multipart()` below walks the
 //!   array through `crates/elephc-curl/src/mime.rs`'s builder ABI field by field. A NESTED
 //!   ARRAY VALUE FLATTENS ONE LEVEL — PHP PARITY, measured against a real `ext/curl`: one
 //!   part per inner element, all sharing the outer key as their field name, matching
@@ -254,8 +252,8 @@ function curl_init(?string $url = null): CurlHandle {
 //   3  string list                   -> __elephc_curl_easy_setopt_slist (an array value)
 //   4  curl_off_t                    -> __elephc_curl_easy_setopt_long (the bridge widens)
 //   5  PHP-layer pseudo-option       -> handled in this prelude, libcurl never sees it
-//   6  real option, not carryable    -> false + PHP's warning (locked decision 7)
-//   7  CURLOPT_SHARE (Task 10)       -> __elephc_curl_easy_set_share (a CurlShareHandle
+//   6  real option, not carryable    -> false + PHP's warning
+//   7  CURLOPT_SHARE                 -> __elephc_curl_easy_set_share (a CurlShareHandle
 //                                        object, not a scalar; the ONLY option this whole
 //                                        function reads an OBJECT out of $value for)
 //   8  callback option               -> __elephc_curl_easy_set_callback (a PHP callable,
@@ -296,10 +294,10 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         return __elephc_curl_easy_setopt_slist($raw, $option, $blob);
     }
     // CURLOPT_POSTFIELDS (10015) is the one option whose value may be an array as well as
-    // a string. An array posts `multipart/form-data`, exactly matching php-src's own
-    // `build_mime_structure_from_hash` (`ext/curl/interface.c`) — as of Task 11, this is
-    // parity, not the urlencoded stopgap Task 8 shipped (see `__elephc_curl_build_multipart`
-    // below for the field-by-field mapping and its one documented divergence).
+    // a string. An array posts real `multipart/form-data`, exactly matching php-src's own
+    // `build_mime_structure_from_hash` (`ext/curl/interface.c`) — see
+    // `__elephc_curl_build_multipart` below for the field-by-field mapping and its one
+    // documented divergence.
     if ($option === 10015 && is_array($value)) {
         // AN EMPTY ARRAY IS AN EMPTY STRING BODY, NOT AN EMPTY MULTIPART. php-src
         // special-cases it before building any mime structure ("no need to build the mime
@@ -352,12 +350,11 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         return true;
     }
     // CURLOPT_SHARE (10100) IS THE ONE OBJECT-VALUED curl_setopt() OPTION, handled here
-    // before the scalar-type guard below (an object is never int/bool/float/string) — Task
-    // 10 makes it work; it used to be KIND_UNSUPPORTED. Both `CurlShareHandle` and PHP
-    // 8.5's `CurlSharePersistentHandle` are accepted, matching php-src's own CURLOPT_SHARE
-    // contract. The LATTER is matched by class NAME (`get_class()`) rather than
-    // `instanceof`, because `CurlSharePersistentHandle` is declared only for PHP >= 8.5
-    // (locked decision 8) and THIS function's body is never version-gated, so a literal
+    // before the scalar-type guard below (an object is never int/bool/float/string). Both
+    // `CurlShareHandle` and PHP 8.5's `CurlSharePersistentHandle` are accepted, matching
+    // php-src's own CURLOPT_SHARE contract. The LATTER is matched by class NAME
+    // (`get_class()`) rather than `instanceof`, because `CurlSharePersistentHandle` is
+    // declared only for PHP >= 8.5 and THIS function's body is never version-gated, so a literal
     // `instanceof CurlSharePersistentHandle` would fail to resolve the class name at all
     // when compiling for 8.4 — a plain runtime string comparison needs no such
     // declaration.
@@ -677,7 +674,7 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     }
     if ($kind === 6) {
         // REJECTED BEFORE THE VALUE IS TYPE-CHECKED. An option this build cannot carry
-        // gets PHP's unsupported-option warning and `false` (locked decision 7) whatever
+        // gets PHP's unsupported-option warning and `false` whatever
         // the value's type is; running the scalar guard first would answer a TypeError
         // for e.g. a closure passed to a still-unimplemented callback option, which is
         // both a worse diagnostic and further from php-src (which accepts those).
@@ -873,8 +870,8 @@ class CURLFile {
     }
 }
 
-// `curl_file_create()` is a plain alias of `CURLFile::__construct()`, matching the PHP
-// surface's own description of it (`.superpowers/sdd/php-curl-family/global-constraints.md`).
+// `curl_file_create()` is a plain alias of `CURLFile::__construct()`, matching php-src's
+// own `ext/curl/curl_file.stub.php` (both take the same three arguments in the same order).
 function curl_file_create(string $filename, ?string $mime_type = null, ?string $posted_filename = null): CURLFile {
     return new CURLFile($filename, $mime_type, $posted_filename);
 }
@@ -1209,8 +1206,11 @@ function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed {
         return $handle->__elephc_private;
     }
     // CURLINFO_HEADER_OUT (2): php-src returns the captured request header, but capturing
-    // it needs the CURLOPT_DEBUGFUNCTION plumbing this build does not have yet (Task 12),
-    // and `curl_setopt($ch, CURLINFO_HEADER_OUT, true)` is refused for that same reason.
+    // it needs internal request-header tracking through the debug callback that this build
+    // does not implement (the callback option itself, CURLOPT_DEBUGFUNCTION, is supported —
+    // see `crates/elephc-curl/src/callbacks.rs` — but nothing here wires it to auto-capture
+    // request headers), and `curl_setopt($ch, CURLINFO_HEADER_OUT, true)` is refused for
+    // that same reason.
     // php-src answers `false` for a handle where the option was never enabled, which is
     // therefore also the honest answer here — not a fabricated empty string.
     if ($option === 2) {
@@ -1396,7 +1396,7 @@ function curl_unescape(CurlHandle $handle, string $string): string {
 
 // `curl_pause()` returns libcurl's raw `CURLcode`, not a boolean — `0` (`CURLE_OK`) means
 // the pause state was applied. It only does anything to a transfer that is actually
-// running, i.e. from inside a callback (Task 12); on an idle handle libcurl accepts the
+// running, i.e. from inside a callback; on an idle handle libcurl accepts the
 // bitmask and answers `CURLE_OK`, which is also what php-src reports.
 function curl_pause(CurlHandle $handle, int $flags): int {
     $raw = $handle->__elephc_handle;
@@ -1672,7 +1672,7 @@ function curl_multi_getcontent(mixed $handle): ?string {
 // reads its third argument from the option's numeric range, so handing a PHP integer to
 // `CURLMOPT_PUSHFUNCTION` (20014) would install it as a function pointer. The answer is
 // three-way: `1` applied, `0` recognized but not carryable by this build (`false` plus
-// PHP's warning, locked decision 7), `-1` not a cURL multi option at all (php-src's own
+// PHP's warning), `-1` not a cURL multi option at all (php-src's own
 // `ValueError`).
 //
 // THE OPTION IS CLASSIFIED BEFORE THE VALUE IS TYPE-CHECKED, which is the order php-src
@@ -1683,8 +1683,8 @@ function curl_multi_getcontent(mixed $handle): ?string {
 //   curl_multi_setopt($mh, 999999, function () {})  -> ValueError (not TypeError)
 //   curl_multi_setopt($mh, 999999, [1])             -> ValueError
 //   curl_multi_setopt($mh, 20014,  null)            -> TypeError about a CALLBACK
-// This build cannot carry `CURLMOPT_PUSHFUNCTION` at all (Task 12 machinery), so its
-// answer is locked decision 7's `false` plus PHP's unsupported-option warning — for ANY
+// This build cannot carry `CURLMOPT_PUSHFUNCTION` at all (an HTTP/2 server-push hook, and
+// HTTP/2 is not built in), so its answer is `false` plus PHP's unsupported-option warning — for ANY
 // value, a closure included. Checking `is_int()` first (as this function used to) made a
 // closure on `CURLMOPT_PUSHFUNCTION` a `TypeError` about scalar types, which is both a
 // worse diagnostic and the one shape php-src never produces for it.
@@ -1846,7 +1846,7 @@ function curl_share_strerror(int $error_code): string {
     return $message;
 }
 // -- elephc PHP >= 8.5 curl_multi_get_handles begin --
-// PHP 8.5 ONLY (locked decision 8): 8.2-8.4 have no `curl_multi_get_handles`, and a
+// PHP 8.5 ONLY: 8.2-8.4 have no `curl_multi_get_handles`, and a
 // program compiled with `--php-version 8.4` must see an "undefined function" error for it,
 // exactly as those runtimes do. The block markers are what
 // `prelude_source_for_version` strips; `src/pdo_prelude.rs` uses the identical mechanism.
@@ -1859,7 +1859,7 @@ function curl_multi_get_handles(CurlMultiHandle $multi_handle): array {
 }
 // -- elephc PHP >= 8.5 curl_multi_get_handles end --
 // -- elephc PHP >= 8.5 curl_share_init_persistent begin --
-// PHP 8.5 ONLY (locked decision 8): `curl_share_init_persistent()`/`CurlSharePersistentHandle`
+// PHP 8.5 ONLY: `curl_share_init_persistent()`/`CurlSharePersistentHandle`
 // do not exist before 8.5, exactly like `curl_multi_get_handles()` above. The block
 // markers are what `prelude_source_for_version` strips.
 //
@@ -1955,7 +1955,7 @@ pub fn inject_if_used(
 /// Injects the curl prelude generated for an explicit PHP compatibility version.
 ///
 /// The curl surface is not the same in every supported PHP: `curl_multi_get_handles()`
-/// exists only from 8.5 (locked decision 8), so compiling with `--php-version 8.4` must
+/// exists only from 8.5, so compiling with `--php-version 8.4` must
 /// leave it undeclared and let the call fail as "undefined function", the way that runtime
 /// would. The version-specific parts of the source are fenced with
 /// `// -- elephc PHP >= <version> … begin/end --` markers and removed by
@@ -2116,7 +2116,7 @@ mod version_tests {
     }
 }
 
-/// The Task-14 SURFACE AUDIT: every PHP-visible name in the frozen
+/// THE SURFACE AUDIT: every PHP-visible name in the frozen
 /// `scripts/docs/curl_surface.json` has a home, and naming it is enough to pull the
 /// prelude in.
 ///
@@ -2143,7 +2143,7 @@ mod surface_audit_tests {
     use crate::php_version::PhpVersion;
     use std::path::Path;
 
-    /// The names the frozen surface records as PHP 8.5 additions (locked decision 8).
+    /// The names the frozen surface records as PHP 8.5 additions.
     /// Their `sources` entry is the plan/docs marker rather than a probed 8.4 binary.
     const PHP_85_SOURCE_MARKER: &str = "php-8.5 (plan/docs)";
 
@@ -2277,7 +2277,7 @@ mod surface_audit_tests {
 
     /// The audit's own negative control: a curl-free program must NOT pull the prelude
     /// in. Without this, a detector that always answered `true` would pass every test
-    /// above while breaking locked decision 4 (pay-for-use) for the whole language.
+    /// above while breaking the pay-for-use guarantee for the whole language.
     #[test]
     fn a_curl_free_program_does_not_trigger_injection() {
         for source in [

@@ -139,7 +139,7 @@ const ZLIB_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: ZLIB_HEADERS,
     provides: &["zlib"],
 }];
-/// Frozen source identity copied verbatim from `scripts/docs/curl_surface.json` (Task 1). OpenSSL
+/// Frozen source identity copied verbatim from `scripts/docs/curl_surface.json`. OpenSSL
 /// is used only as libcurl's TLS backend; `openssl_encrypt`/`hash()` stay on `elephc-crypto`.
 const OPENSSL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     version: "3.5.7",
@@ -157,7 +157,7 @@ const OPENSSL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: OPENSSL_HEADERS,
     provides: &["openssl"],
 }];
-/// Frozen source identity copied verbatim from `scripts/docs/curl_surface.json` (Task 1). Statically
+/// Frozen source identity copied verbatim from `scripts/docs/curl_surface.json`. Statically
 /// linked against the managed `openssl` and `zlib` packages; never a system libcurl/OpenSSL.
 const CURL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     version: "8.21.0",

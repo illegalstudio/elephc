@@ -8,8 +8,8 @@
 //!   `curl_setopt()` in `crate::curl_prelude`.
 //!
 //! Key details:
-//! - WHY A WARNING AND NOT AN EXCEPTION. Locked decision 7 of the php-curl-family plan
-//!   requires an unsupported option to return `false` and SAY SO, never an inert `true`.
+//! - WHY A WARNING AND NOT AN EXCEPTION. An unsupported option must
+//!   return `false` and SAY SO, never an inert `true`.
 //!   The option really is a valid PHP `CURLOPT_*` — it is this build that cannot carry it
 //!   yet — so PHP's `ValueError: … is not a valid cURL option` would be a lie, and a
 //!   silent `false` would leave the caller guessing.

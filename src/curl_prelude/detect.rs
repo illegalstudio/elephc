@@ -20,27 +20,29 @@
 //!   naming one of curl's six classes (new, static receivers, `instanceof`, `catch`,
 //!   `extends`/`implements`, type hints, trait uses, `use` imports); and (c) a
 //!   *constant* reference whose name carries one of curl's four frozen prefixes, so a
-//!   program that only mentions `CURLOPT_URL` still injects (see
-//!   `.superpowers/sdd/php-curl-family/task-5-brief.md`).
+//!   program that only mentions `CURLOPT_URL` still injects.
 //! - THE FUNCTION SET IS WHOLE-SEGMENT, NOT A BARE `curl` PREFIX. The exact names are
-//!   listed, plus the two families (`curl_multi_*`, `curl_share_*`) whose members are
-//!   still being added task by task and would otherwise need this list edited on every
-//!   landing. A bare `curl` prefix test would inject (and bridge-link) for a user's own
+//!   listed, plus the two families (`curl_multi_*`, `curl_share_*`) matched by their
+//!   `curl_multi_`/`curl_share_` prefix rather than individually enumerated. A bare
+//!   `curl` prefix test would inject (and bridge-link) for a user's own
 //!   `curl_helper()`; requiring the `curl_multi_`/`curl_share_` underscore keeps the
-//!   family match as tight as an enumeration while staying forward-compatible.
+//!   family match as tight as an enumeration while staying forward-compatible with any
+//!   future addition to either family.
 //! - Soundness over precision: a missed reference would drop the prelude and turn a
 //!   valid program into an "undefined function/class" error, so the `match`es are
 //!   exhaustive (no wildcard arm). Adding an AST node forces this file to be updated.
 //!   A false positive costs more here than it does for the hash prelude — the injected
 //!   declarations call the internal `__elephc_curl_*` builtins, which declare
 //!   `Bridge("elephc_curl")` and therefore require the managed native `curl` package —
-//!   which is exactly the pay-for-use contract locked decision 4 asks for, so the
+//!   which is exactly the pay-for-use guarantee this crate holds for every optional
+//!   native surface, so the
 //!   matching stays deliberately narrow rather than "anything starting with curl".
 //! - CONSTANT PREFIXES ARE MATCHED CASE-INSENSITIVELY for consistency with the rest of
 //!   this file, even though PHP constants are case-sensitive. The four frozen prefixes
-//!   are the ones the brief names; other real families (`CURLM_*`, `CURLPROTO_*`,
+//!   are `CURLOPT_`/`CURLINFO_`/`CURLE_`/`CURL_`; other real families (`CURLM_*`, `CURLPROTO_*`,
 //!   `CURLAUTH_*`) are deliberately NOT matched, because a constant on its own does no
-//!   curl work: it resolves through the builtin constant table (Task 6) with or without
+//!   curl work: it resolves through the builtin constant table unconditionally, with or
+//!   without
 //!   the prelude, and the call or class-name position that actually needs the prelude is
 //!   caught by (a) or (b) above.
 

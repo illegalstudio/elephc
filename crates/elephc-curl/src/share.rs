@@ -70,7 +70,7 @@
 //!   the Zend refcount php-src relies on.
 //! - **ONLY TWO `CURLSHOPT_*` VALUES ARE REAL PHP SURFACE.** `CURLSHOPT_SHARE` (1) and
 //!   `CURLSHOPT_UNSHARE` (2) are the only `CURLSHOPT_*` constants PHP's `ext/curl` exposes
-//!   at all (confirmed against `scripts/docs/curl_surface.json`, Task 1's frozen PHP
+//!   at all (confirmed against `scripts/docs/curl_surface.json`'s frozen PHP
 //!   8.2-8.5 extraction: `CURLSHOPT_LOCKFUNC`/`UNLOCKFUNC`/`USERDATA` are C-API-only
 //!   locking hooks with no PHP constant naming them). php-src's own `curl_share_setopt()`
 //!   switch has exactly two cases and a `default: zend_argument_value_error(...)`, so
@@ -81,7 +81,7 @@
 //!   itself refuses the `CURL_LOCK_DATA_*` value (`CURLSHE_BAD_OPTION` for one it does not
 //!   recognize, `CURLSHE_NOT_BUILT_IN` for a real one this libcurl build lacks), that is a
 //!   genuine libcurl-level answer, not "this elephc build cannot carry a real PHP option"
-//!   (locked decision 7's warning is for the LATTER). `curl_setopt()`'s own easy-option
+//!   (the unsupported-option warning is for the LATTER). `curl_setopt()`'s own easy-option
 //!   path draws exactly this distinction already: a carryable option libcurl refuses just
 //!   answers `false`, with the real code retrievable through `curl_share_errno()`/
 //!   `curl_share_strerror()`, never a warning invented for it.

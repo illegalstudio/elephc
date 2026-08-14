@@ -2,8 +2,8 @@
 //! Frozen `ext/curl` integer constant table for the eval interpreter (`EVAL_CURL_INT_CONSTANTS`),
 //! hand-forked from the root crate's `src/types/curl_constants.rs` the same way every other
 //! `EVAL_*` constant family in this crate is forked (see `crate::interpreter::constants`'s
-//! header and Task 6 of the php-curl-family plan, which found `elephc-magician` carries no
-//! path dependency on the root `elephc` crate and therefore cannot `use` its tables).
+//! header): `elephc-magician` carries no
+//! path dependency on the root `elephc` crate and therefore cannot `use` its tables.
 //!
 //! Called from:
 //! - `crate::interpreter::constant_eval::eval_predefined_constant_value`'s fallback arm.
@@ -12,8 +12,9 @@
 //! - UNCONDITIONALLY COMPILED, NOT behind the `curl` Cargo feature that gates
 //!   `crate::interpreter::builtins::curl`. A `CURLOPT_*`/`CURLINFO_*`/`CURLE_*`/`CURL_*`
 //!   name is frozen DATA with no `elephc_curl_*` ABI call behind it — exactly like the root
-//!   crate's own `CURL_INT_CONSTANTS`, which Task 6 registered "regardless of whether the
-//!   program links curl" — so gating it behind the feature would only make
+//!   crate's own `CURL_INT_CONSTANTS` (`src/types/curl_constants.rs`), which is registered
+//!   unconditionally regardless of whether the program links curl — so gating it behind the
+//!   feature here would only make
 //!   `eval('return CURLOPT_URL;')` depend on how `libelephc_magician.a` happened to be
 //!   built, for no safety or footprint benefit.
 //! - GENERATED, NOT HAND-TYPED: every `(name, value)` pair below was read verbatim out of

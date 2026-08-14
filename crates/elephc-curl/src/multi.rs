@@ -211,8 +211,9 @@ pub(crate) fn multi_option_kind(opt: i64) -> i32 {
         3 | 6 | 7 | 8 | 13 | 16 => MULTI_OPTION_LONG,
         30_009 | 30_010 => MULTI_OPTION_OFF_T,
         // A callback option php-src really does support, through machinery this
-        // build does not have yet (Task 12). Locked decision 7: `false` plus a
-        // warning, never an inert `true` and never a wild function pointer.
+        // build does not have (an HTTP/2 server-push hook, and HTTP/2 is not built
+        // in). `false` plus a warning, matching every other unsupported option here
+        // — never an inert `true` and never a wild function pointer.
         20_014 => MULTI_OPTION_UNSUPPORTED,
         _ => MULTI_OPTION_INVALID,
     }
@@ -497,7 +498,7 @@ pub extern "C" fn elephc_curl_multi_info_read(multi_id: i64, field: i64) -> i64 
 ///
 /// Answers [`MULTI_SETOPT_APPLIED`], [`MULTI_SETOPT_UNSUPPORTED`] (a real PHP
 /// option this build cannot carry, or one libcurl refused -> PHP `false` plus a
-/// warning, locked decision 7) or [`MULTI_SETOPT_INVALID`] (not a cURL multi
+/// warning) or [`MULTI_SETOPT_INVALID`] (not a cURL multi
 /// option at all -> php-src's `ValueError`). The three-way split is php-src's
 /// own: its `curl_multi_setopt` ends with
 /// `zend_argument_value_error(2, "is not a valid cURL multi option")`.

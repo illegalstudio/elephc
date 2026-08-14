@@ -1,6 +1,6 @@
 //! Purpose:
 //! End-to-end fixtures proving `eval()` and compiled PHP call the SAME `elephc_curl_*`
-//! ABI (Task 13, php-curl-family plan, Step 1's TDD acceptance): `curl_version()` inside
+//! ABI: `curl_version()` inside
 //! `eval()` matches the AOT builtin, and a full `curl_init`/`curl_setopt`/`curl_exec`
 //! request against the local fixture works from inside `eval()`.
 //!

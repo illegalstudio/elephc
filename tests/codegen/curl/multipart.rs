@@ -1,5 +1,5 @@
 //! Purpose:
-//! Task 11 end-to-end fixtures: `CURLFile`/`CURLStringFile` uploads through
+//! End-to-end fixtures: `CURLFile`/`CURLStringFile` uploads through
 //! `CURLOPT_POSTFIELDS`, driven against the `/multipart` route of the loopback HTTP
 //! fixture so a real `multipart/form-data` request is proven on the wire, not just a
 //! `curl_setopt()` return value.

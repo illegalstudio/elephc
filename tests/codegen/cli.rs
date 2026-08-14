@@ -184,10 +184,10 @@ fn test_cli_regex_final_link_requires_managed_pcre2_project() {
 }
 
 /// Verifies a final `--with-curl` link without a project fails with the same recovery
-/// style as PCRE2 (Task 4 of the php-curl-family plan). No PHP-visible curl function
-/// exists yet (the prelude lands in Task 5), so `--with-curl` is the only way to plan
-/// `elephc_curl` today; planning it must still emit the `curl` native requirement and
-/// never fall back to a system `-lcurl`.
+/// style as PCRE2. The compiled program itself never calls a `curl_*` function — the
+/// explicit `--with-curl` flag is what forces `elephc_curl` into the plan here, exercising
+/// that override path directly rather than source-based detection — but planning it must
+/// still emit the `curl` native requirement and never fall back to a system `-lcurl`.
 #[test]
 fn test_cli_with_curl_final_link_requires_managed_curl_project() {
     let dir = make_cli_test_dir("elephc_cli_curl_requires_native");

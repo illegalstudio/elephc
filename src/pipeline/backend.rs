@@ -238,9 +238,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // The curl bridge is a Rust `staticlib` (`elephc_curl`, planned above like any
     // other bridge) that itself links against the managed native `curl` package
     // (which pulls in `openssl`/`zlib` transitively through the catalog). Unlike
-    // `regex`, curl has no `RuntimeFeatures` bit yet (pay-for-use detection lands
-    // with the prelude in Task 5), so the only trigger today is `--with-curl`
-    // planning `elephc_curl`; this mirrors that into the native requirement so the
+    // `regex`, curl has no `RuntimeFeatures` bit: `elephc_curl` reaches
+    // `planned_link_libraries` either because the program actually uses curl (every
+    // curl `RuntimeFnId` declares `BuiltinRequirement::Bridge("elephc_curl")`, and the
+    // curl prelude is injected only when `src/curl_prelude/detect.rs` finds a `curl_*`
+    // reference) or because `--with-curl` forces it explicitly with no such reference;
+    // this mirrors that into the native requirement so the
     // final link resolves `libcurl.a`/`libssl.a`/`libcrypto.a`/`libz.a` instead of
     // failing on `elephc_curl`'s undefined libcurl symbols.
     if planned_link_libraries

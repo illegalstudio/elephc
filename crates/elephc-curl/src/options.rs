@@ -21,9 +21,9 @@
 //!   setter this table names, and nothing else.
 //! - THE NUMBERS COME FROM THE FROZEN SURFACE, never from a developer's `php -r`: the rows
 //!   below are generated from `scripts/docs/curl_surface.json`'s `constants` +
-//!   `option_kinds` (Task 1's extraction against the pinned libcurl 8.21.0), and
+//!   `option_kinds` (extracted against the pinned libcurl 8.21.0), and
 //!   `crate::tests::option_table_matches_the_frozen_surface` fails if the two ever drift.
-//! - FIVE ROWS DELIBERATELY DIVERGE FROM THE JSON'S `option_kinds` BUCKET, all inside its
+//! - EIGHT ROWS DELIBERATELY DIVERGE FROM THE JSON'S `option_kinds` BUCKET, all inside its
 //!   `php_layer`/`file` catch-alls, which describe how PHP *models* an option rather than
 //!   what libcurl needs:
 //!   - `CURLOPT_HEADER` (42) and `CURLOPT_INFILESIZE` (14) are ordinary libcurl `long`
@@ -32,12 +32,13 @@
 //!   - `CURLOPT_PRIVATE` (10103) stores an arbitrary PHP value that
 //!     `curl_getinfo(..., CURLINFO_PRIVATE)` reads back; libcurl never sees it, so it is
 //!     `KIND_PHP_LAYER` and lives on the `CurlHandle` object.
-//!   - `CURLOPT_FILE`/`INFILE`/`WRITEHEADER`/`STDERR`/`READDATA` take a PHP STREAM, which
+//!   - `CURLOPT_FILE`/`INFILE`/`WRITEHEADER`/`STDERR`/`READDATA` (four rows — `INFILE` and
+//!     `READDATA` share one option number) take a PHP STREAM, which
 //!     is neither a scalar nor a `FILE *`, so they get their own kind, `KIND_STREAM` —
 //!     the curl prelude implements them by composing this crate's callback slots rather
 //!     than by forwarding anything to libcurl. They were `KIND_UNSUPPORTED` (`false` +
 //!     PHP's warning) until WP-C; see `KIND_STREAM`'s own doc comment.
-//!   - `CURLOPT_SHARE` diverges the same way: Task 10 gives it its own kind, `KIND_SHARE`,
+//!   - `CURLOPT_SHARE` diverges the same way, with its own kind, `KIND_SHARE`,
 //!     because it needs a share-handle id, not a scalar — see that constant's doc comment.
 //! - `CURLINFO_HEADER_OUT` (2) is in the table even though it is not a `CURLOPT_*`
 //!   constant: php-src's `curl_setopt()` switch accepts it (it turns on request-header
@@ -69,8 +70,8 @@ pub(crate) const KIND_UNSUPPORTED: i32 = 6;
 /// `CURLOPT_SHARE` (10100) ONLY: the value is a `CurlShareHandle`/`CurlSharePersistentHandle`
 /// object, not a scalar libcurl setter can carry, so it is routed to
 /// `elephc_curl_easy_set_share` (`crate::share`) instead of any of `setopt_long`/`_str`/
-/// `_slist`. A distinct kind from every other row in this table, added by Task 10; before
-/// it, this option was `KIND_UNSUPPORTED` like its `file`-bucket siblings.
+/// `_slist`. A distinct kind from every other row in this table; before it existed, this
+/// option was `KIND_UNSUPPORTED` like its `file`-bucket siblings.
 pub(crate) const KIND_SHARE: i32 = 7;
 /// A `curl_setopt()` option whose value is a PHP STREAM RESOURCE (what `fopen()` returns),
 /// or `null` to clear it: `CURLOPT_FILE` (10001), `CURLOPT_INFILE`/`CURLOPT_READDATA`

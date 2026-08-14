@@ -10,8 +10,8 @@
 //!
 //! Key details:
 //! - Values are frozen against the pinned libcurl 8.21.0 headers plus PHP's own
-//!   PHP-only pseudo-options (Task 1); see `scripts/docs/curl_surface.json` and
-//!   `.superpowers/sdd/php-curl-family/global-constraints.md`. `CURLINFO_LASTONE` is 71
+//!   PHP-only pseudo-options; see `scripts/docs/curl_surface.json`.
+//!   `CURLINFO_LASTONE` is 71
 //!   here, the pinned value, deliberately differing from older libcurl releases.
 //! - Constants are always registered and visible, exactly like `JSON_*` (see
 //!   `crate::types::json_constants`), even in programs that never mention curl and

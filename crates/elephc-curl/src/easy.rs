@@ -1,7 +1,7 @@
 //! Purpose:
 //! Raw libcurl `extern "C"` bindings: the opaque `CURL` handle type, the
-//! `CURLcode`/`CURLoption` numeric constants Task 3 needs, and thin typed
-//! wrappers around the variadic `curl_easy_setopt`. Nothing here understands
+//! `CURLcode`/`CURLoption` numeric constants the rest of this crate needs, and
+//! thin typed wrappers around the variadic `curl_easy_setopt`. Nothing here understands
 //! PHP semantics (RETURNTRANSFER capture, stdout default) — see
 //! `crate::php_layer` for that.
 //!
@@ -18,8 +18,8 @@
 //!   `setopt_*` wrappers below each call it with the matching Rust type so
 //!   the C ABI sees the right argument shape.
 //! - `CURLOPT_*` numeric values are frozen from `scripts/docs/curl_surface.json`
-//!   (Task 1's PHP 8.2-8.5 surface extraction against this pinned libcurl),
-//!   not recomputed from `CURLOPTTYPE_*` bases by hand.
+//!   (PHP 8.2-8.5's surface extracted against this pinned libcurl), not
+//!   recomputed from `CURLOPTTYPE_*` bases by hand.
 
 use std::ffi::{c_char, c_int, c_long, c_void};
 
@@ -73,7 +73,7 @@ pub(crate) const CURLOPT_POSTFIELDSIZE_LARGE: c_int = 30120;
 pub(crate) const CURLOPT_COPYPOSTFIELDS: c_int = 10165;
 
 /// `CURLOPT_SHARE` (10100): attaches a `CURLSH *` share object to this easy handle,
-/// or detaches it when passed null. Task 10 (`crate::share`) is the only writer of
+/// or detaches it when passed null. `crate::share` is the only writer of
 /// this option; `crate::abi::elephc_curl_easy_duphandle` also clears it explicitly on
 /// every duplicate (see that function's doc comment for why).
 pub(crate) const CURLOPT_SHARE: c_int = 10100;

@@ -9,10 +9,10 @@
 //! Key details:
 //! - No fixture here reaches the public internet: every URL is `127.0.0.1` — either the
 //!   fixture server's ephemeral port or a closed port (`:1`) for the failure case.
-//! - `curl_get_returntransfer_localhost` is also `curl_getinfo()`'s first real test:
-//!   `CURLINFO_HTTP_CODE` (2097154) is the only option this build understands (see
-//!   `crate::curl_prelude`'s `curl_getinfo()`); the no-`$option` associative-array form and
-//!   every other `CURLINFO_*` option are Task 8 Wave C's responsibility.
+//! - `curl_get_returntransfer_localhost` is also `curl_getinfo()`'s first real test against
+//!   a live transfer: `CURLINFO_HTTP_CODE` (2097154). See `tests/codegen/curl/easy_options.rs`
+//!   and `docs/php/curl.md` for the full `CURLINFO_*` surface `curl_getinfo()` implements,
+//!   including the no-`$option` associative-array form.
 //! - Every prior curl transfer fixture (`easy_handle.rs`) used `file://` so the ownership
 //!   and RETURNTRANSFER-capture plumbing could be proven without a socket. These three are
 //!   the first to go over a REAL TCP connection, which is what actually exercises the write

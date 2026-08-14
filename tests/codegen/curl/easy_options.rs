@@ -1,6 +1,6 @@
 //! Purpose:
 //! End-to-end fixtures for the `curl_setopt()` option surface: the long/bool/enum and
-//! string options of Task 8 Wave A, driven against the loopback HTTP fixture so an option
+//! string options, driven against the loopback HTTP fixture so an option
 //! that is "accepted" is also PROVED to have changed the transfer.
 //!
 //! Called from:
@@ -13,8 +13,9 @@
 //!   fail), which is what distinguishes a working option from a silently-swallowed one.
 //! - No fixture reaches the public internet: every URL is `127.0.0.1`, either the
 //!   fixture server's ephemeral port or a closed port for the failure cases.
-//! - The `CURLOPT_*` constants are used by NAME here, not by number, because Task 6
-//!   registered them — which also makes these fixtures a second, end-to-end check that
+//! - The `CURLOPT_*` constants are used by NAME here, not by number, because
+//!   `crate::types::curl_constants` registers them unconditionally — which also makes these
+//!   fixtures a second, end-to-end check that
 //!   the frozen constant values and the bridge's option table agree.
 
 use super::http_fixture::LocalHttpServer;
@@ -240,8 +241,9 @@ fn wave_a_setopt_array_applies_and_stops_on_failure() {
     ));
     // CURLOPT_FNMATCH_FUNCTION is a real option this build cannot carry, so it warns and
     // answers `false` — `curl_setopt_array()` reports that as `false`, never a throw.
-    // (It used to be CURLOPT_WRITEFUNCTION here; Task 12 implements that one, so the
-    // rejection example moved to a callback option still in the second wave.)
+    // (It used to be CURLOPT_WRITEFUNCTION here; that callback is now implemented, so the
+    // rejection example moved to a callback option that still is not: see
+    // `docs/php/curl.md`'s "the 11 rejected options" for the full current list.)
     assert_eq!(out, "applied\nua\nstopped\n");
 }
 
@@ -355,11 +357,10 @@ fn wave_b_postfields_string_posts_a_raw_body() {
     assert_eq!(out, "post\nbody\nlen\n");
 }
 
-/// TASK 11: `CURLOPT_POSTFIELDS` as an ARRAY of scalars now posts REAL
+/// `CURLOPT_POSTFIELDS` as an ARRAY of scalars posts REAL
 /// `multipart/form-data` — one part per key/value pair — exactly as php-src does whether
-/// or not the array contains a `CURLFile`. This REPLACES the Task 8 stopgap that
-/// urlencoded a scalar array (a documented divergence, now gone): `wave_b_postfields_...`
-/// keeps its name for `git blame` continuity even though the assertion is now Task 11's.
+/// or not the array contains a `CURLFile`. This test's name
+/// (`wave_b_postfields_...`) predates that and is kept for `git blame` continuity.
 #[test]
 fn wave_b_postfields_array_form_encodes() {
     if skip_without_curl_native("wave_b_postfields_array_form_encodes") {
@@ -833,8 +834,8 @@ fn wave_c_slist_and_unknown_info_keys() {
 /// THE NO-`$OPTION` ARRAY FORM IS DELIBERATELY ABSENT from this loop. It leaks, and the
 /// leak is not curl's: `json_decode()` never releases the value it decodes (measured with
 /// `--gc-stats`: `json_decode('{"a":1,"b":2}', true)` leaks 10 blocks per call, a bare
-/// `json_decode('5', true)` leaks 1), which `curl_version()` has inherited since Task 5
-/// and `curl_getinfo($ch)` now inherits too. Asserting balance here would pin a bug in a
+/// `json_decode('5', true)` leaks 1), which `curl_version()` has inherited since it started
+/// decoding the bridge's JSON blob, and `curl_getinfo($ch)` now inherits too. Asserting balance here would pin a bug in a
 /// shared builtin to this feature's test; the report records it instead.
 #[test]
 fn wave_c_typed_getinfo_shapes_do_not_leak() {

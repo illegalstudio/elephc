@@ -287,7 +287,8 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
 
     // `request_header` is ABSENT, and that is php-src's own behaviour for a handle that
     // never had `CURLINFO_HEADER_OUT` turned on — which no elephc handle can, because
-    // that option needs the debug-callback plumbing (Task 12). php-src adds the key only
+    // that option stays `KIND_UNSUPPORTED` (see `crate::options`): capturing the request
+    // header needs debug-callback plumbing this build does not have. php-src adds the key only
     // when it has captured text, so an absent key here is indistinguishable from php-src
     // with the option off, rather than a fabricated empty string.
 

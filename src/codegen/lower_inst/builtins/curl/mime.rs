@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers Task 11's five `curl_mime` builder builtins — `__elephc_curl_mime_new($handle)`,
+//! Lowers the five `curl_mime` builder builtins — `__elephc_curl_mime_new($handle)`,
 //! `__elephc_curl_mime_add_part($handle)`, `__elephc_curl_mime_part_field($handle, $kind,
 //! $value)`, `__elephc_curl_mime_post($handle)`, and `__elephc_curl_mime_abort($handle)`.
 //!

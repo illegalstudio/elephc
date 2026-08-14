@@ -283,13 +283,17 @@ matching php-src:
 | Option | Behavior |
 |---|---|
 | `CURLOPT_RETURNTRANSFER` | Capture the body; `curl_exec()` returns a `string` |
-| `CURLOPT_HEADER` | Prepend response headers to the body |
 | `CURLOPT_BINARYTRANSFER` | No-op, as in modern PHP |
 | `CURLOPT_SAFE_UPLOAD` | Always on; `@file` strings in `CURLOPT_POSTFIELDS` stay literal. Disabling it raises `ValueError`, as in PHP 8. |
 | `CURLOPT_PRIVATE` | Stores an arbitrary PHP value, read back verbatim by `curl_getinfo($ch, CURLINFO_PRIVATE)` |
 
 With no `CURLOPT_RETURNTRANSFER`, the body is written to stdout and `curl_exec()`
 returns `true` — the PHP CLI behavior.
+
+`CURLOPT_HEADER` (prepend response headers to the body) is **not** one of these —
+despite the name, php-src forwards it straight to libcurl unchanged, and elephc does
+the same: it is an ordinary `long` option, and real libcurl implements the
+header-in-body behavior on its own.
 
 > **Divergence:** that stdout write goes straight to file descriptor 1, so
 > `ob_start()` does **not** capture it the way php's does. Wrap the transfer in

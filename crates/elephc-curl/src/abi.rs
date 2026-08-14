@@ -1,16 +1,16 @@
 //! Purpose:
-//! The Task 3 `elephc_curl_*` C ABI: the ten normative entry points
-//! (`.superpowers/sdd/php-curl-family/task-3-brief.md`) that own easy-handle
-//! lifecycle, URL/RETURNTRANSFER setup, performing a transfer, and reading
-//! back the error/body/global-version results, plus one Task 7 addition
-//! (`elephc_curl_easy_getinfo_long`, backing `curl_getinfo(..., CURLINFO_HTTP_CODE)` —
-//! Task 3's brief explicitly deferred every info entry point to a later task). Every
-//! function here is thin: it validates arguments, takes the table lock, and delegates to
-//! `crate::easy` (raw libcurl) or `crate::php_layer` (PHP-only semantics).
+//! The `elephc_curl_*` C ABI: every `#[no_mangle]` entry point this crate exposes —
+//! easy-handle lifecycle, URL/option setup in every typed form (`long`/`off_t`/`char *`/
+//! slist/blob/stream/share), performing a transfer, `curl_getinfo()`, the multi and share
+//! interfaces, MIME/multipart uploads, and callback registration. Every function here is
+//! thin: it validates arguments, takes the table lock, and delegates to `crate::easy` (raw
+//! libcurl), `crate::php_layer` (PHP-only semantics), or one of the interface-specific
+//! modules (`crate::multi`, `crate::share`, `crate::mime`, `crate::info`).
 //!
 //! Called from:
-//! - The PHP-program linker once a program uses curl (Task 4+); today, only
-//!   `crates/elephc-curl/src/tests.rs`.
+//! - The PHP-program linker, once a compiled program uses curl: the curl prelude
+//!   (`src/curl_prelude.rs`) emits `extern "elephc_curl"` calls into these entry points.
+//! - This crate's own gated tests (`crates/elephc-curl/src/tests.rs`).
 //!
 //! Key details:
 //! - Every entry point routes its whole body through
@@ -37,8 +37,8 @@
 //!   use-after-free at the libcurl level. This is sound only because
 //!   elephc-compiled PHP programs are effectively single-threaded today, so
 //!   no two `elephc_curl_*` calls for the same id are ever concurrent. Any
-//!   future concurrent caller (a multi-threaded driver, or Task 9's multi
-//!   interface if it ever fans work across OS threads) MUST itself guarantee
+//!   future concurrent caller (a multi-threaded driver, or `crate::multi` if
+//!   it ever fans work across OS threads — today it does not) MUST itself guarantee
 //!   that no two threads call into this ABI for the same id at once — see
 //!   `crate::handles::EasyEntry`'s `Send` impl for the full reasoning.
 
@@ -50,8 +50,8 @@ use crate::info;
 use crate::options;
 use crate::php_layer;
 
-/// Returns the `elephc_curl` ABI version. v1 = the Task 3 surface described
-/// in this module; bumped when the C ABI shape changes.
+/// Returns the `elephc_curl` ABI version. v1 = the surface described in this
+/// module; bumped when the C ABI shape changes.
 #[no_mangle]
 pub extern "C" fn elephc_curl_version_abi() -> i32 {
     1
@@ -136,9 +136,10 @@ pub unsafe extern "C" fn elephc_curl_easy_set_url(id: i64, ptr: *const u8, len: 
     })
 }
 
-/// Sets a `long`-valued `curl_setopt` option (`CURLOPT_RETURNTRANSFER` at
-/// minimum — see `crate::php_layer::apply_long_option` for the full Task 3
-/// option table). Returns `0` for an unknown id, an option this setter does not
+/// Sets a `long`- or `off_t`-valued `curl_setopt` option (including the
+/// PHP-only `CURLOPT_RETURNTRANSFER` pseudo-option — see
+/// `crate::php_layer::apply_long_option` for the full table). Returns `0` for
+/// an unknown id, an option this setter does not
 /// carry (see [`long_option_is_carryable`]), or a libcurl setopt failure.
 #[no_mangle]
 pub extern "C" fn elephc_curl_easy_setopt_long(id: i64, opt: i32, value: i64) -> i32 {

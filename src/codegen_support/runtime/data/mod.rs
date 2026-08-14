@@ -63,7 +63,7 @@ pub(crate) const OB_NTC_G_GET_FLUSH: &str =
 /// ob_start() invalid-callback warning prefix (completed with the name + suffix).
 /// `curl_setopt()`'s unsupported-option warning, split around the decimal option number.
 ///
-/// Locked decision 7 of the php-curl-family plan requires an unsupported option to answer
+/// An unsupported option must answer
 /// `false` AND say so, rather than returning an inert `true`. The wording follows PHP's
 /// own `php_error_docref(..., E_WARNING, ...)` rendering (`Warning: <fn>(): <message>`),
 /// and the split lets `__rt_curl_warn_unsupported_option` format the option number

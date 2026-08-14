@@ -1,7 +1,7 @@
 //! Purpose:
 //! Curl easy-handle storage for `EvalStreamResources` — the eval analog of
 //! `resource_registration.rs`'s/`storage.rs`'s hash-context accessors, extended for
-//! curl per Task 13 of the php-curl-family plan.
+//! curl.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::curl`'s home files.
@@ -171,7 +171,7 @@ impl EvalStreamResources {
     /// runs immediately after this at the SAME teardown, still frees those the way it
     /// always has.
     ///
-    /// WHY THIS EXISTS (item 19, php-curl-family punch list): `set_curl_easy_private`
+    /// WHY THIS EXISTS: `set_curl_easy_private`
     /// retains an independent owned reference for every stored `CURLOPT_PRIVATE` value
     /// (this file's own doc), and until this method existed nothing ever released that
     /// reference for a handle that was simply never explicitly reset/overwritten —

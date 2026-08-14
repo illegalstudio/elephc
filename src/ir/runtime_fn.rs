@@ -533,7 +533,7 @@ pub enum RuntimeFnId {
     /// (PHP 8.5), boxed as a resource-kind-8 Mixed cell.
     CurlShareInitPersistent,
     /// Starts a fresh `curl_mime` builder for an easy handle's forthcoming
-    /// `multipart/form-data` `CURLOPT_POSTFIELDS` body (Task 11).
+    /// `multipart/form-data` `CURLOPT_POSTFIELDS` body.
     CurlMimeNew,
     /// Appends a fresh, empty part to the pending mime builder.
     CurlMimeAddPart,
@@ -1530,7 +1530,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::CurlShareSetopt
                 | RuntimeFnId::CurlShareErrno
                 | RuntimeFnId::CurlEasySetShare
-                // Task 11's mime builder entry points every answer a bare `0`/`1`
+                // The mime builder entry points every answer a bare `0`/`1`
                 // acceptance flag — never storage — for the identical reason: their one
                 // (or, for `CurlMimePartField`, two) operand(s) is a boxed Mixed handle
                 // cell, and the default `MayAliasArguments` bucket would keep it (and the

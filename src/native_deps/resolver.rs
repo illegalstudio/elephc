@@ -119,8 +119,8 @@ pub(crate) fn resolve_for_compilation_with(
     // names the leaf feature (see `crate::pipeline::backend`), never the
     // transitive chain. Splicing at `cursor` (not appending) preserves the
     // pre-order dependent-before-dependency shape the lock already recorded
-    // (`curl, openssl, zlib`), which is also the exact static link order Task 2
-    // verified (`libcurl.a -> libssl.a -> libcrypto.a -> libz.a`).
+    // (`curl, openssl, zlib`), which is also the exact static link order libcurl's own
+    // dependency chain requires (`libcurl.a -> libssl.a -> libcrypto.a -> libz.a`).
     let mut queue: Vec<String> = requirements
         .iter()
         .map(|requirement| requirement.package_name().to_string())
@@ -473,7 +473,7 @@ mod tests {
     /// Verifies a single top-level `curl` requirement resolves its full catalog-declared
     /// transitive chain (`openssl`, `zlib` — `curl` is the first catalog package with
     /// non-empty `PackageVersion::dependencies`) without the caller ever naming them, in
-    /// exactly the dependent-before-dependency order Task 2's real static link required:
+    /// exactly the dependent-before-dependency order libcurl's own static link requires:
     /// `libcurl.a -> libssl.a -> libcrypto.a -> libz.a`. Before this test, `resolve_for_
     /// compilation_with` only ever iterated the exact `requirements` slice a caller passed
     /// in, so a lone `NativeRequirement::package("curl")` (what `crate::pipeline::backend`
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(
             archive_filenames,
             vec!["libcurl.a", "libssl.a", "libcrypto.a", "libz.a"],
-            "final link order must match Task 2's verified static link"
+            "final link order must match libcurl's own dependency order"
         );
 
         fs::remove_dir_all(root).unwrap();

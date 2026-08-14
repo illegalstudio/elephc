@@ -5,9 +5,8 @@
  * across every locally available PHP 8.2-8.5 binary, and derive libcurl
  * `curl_setopt` option kinds from a downloaded libcurl `curl.h` / `multi.h`.
  *
- * Writes scripts/docs/curl_surface.json (see Task 1 of
- * .superpowers/sdd/php-curl-family/task-1-brief.md and the plan's
- * global-constraints.md for the normative surface this is audited against).
+ * Writes scripts/docs/curl_surface.json, the frozen normative surface every
+ * curl-related crate/module in this repo is audited against.
  *
  * Usage:
  *   php scripts/curl/extract_php_curl_surface.php \
@@ -18,13 +17,13 @@
  *     [--out=scripts/docs/curl_surface.json]  (default: stdout)
  *
  * The curl.h / multi.h headers are NOT vendored into this repo (curl is a
- * managed native dependency fetched/built by Task 2, not a source import).
- * Re-download the pinned curl tarball (see $PINS below) to a scratch
+ * managed native dependency this build fetches/builds from source, not a
+ * source import). Re-download the pinned curl tarball (see $PINS below) to a scratch
  * directory and pass its extracted include/curl/{curl,multi}.h paths when
  * re-running this script.
  *
  * CI never runs this script. Its output is committed
- * (scripts/docs/curl_surface.json) so downstream tasks (constant tables,
+ * (scripts/docs/curl_surface.json) so downstream consumers (constant tables,
  * the elephc-curl bridge, option dispatch) work without a PHP or libcurl
  * source tree on disk. Re-run manually when:
  *   - the pinned libcurl or OpenSSL version changes (update $PINS below,
@@ -32,14 +31,15 @@
  *     never invent a checksum), or
  *   - a new local PHP minor version becomes available (extends real
  *     coverage beyond the hand-maintained PHP 8.5 fallback below), or
- *   - the plan's normative PHP surface (global-constraints.md) changes.
+ *   - PHP's own ext/curl surface changes in a future PHP release.
  */
 
 declare(strict_types=1);
 
 // ---------------------------------------------------------------------
-// Pinned native versions (Task 1 locked decision). These fields are the
-// audit source for Task 2's catalog entries. Values MUST be verified
+// Pinned native versions. These fields are the
+// audit source for the elephc native catalog's curl/openssl/zlib entries
+// (`src/native_deps/catalog.rs`). Values MUST be verified
 // against a real downloaded file (`shasum -a 256`, `stat -f%z` / `stat -c%s`)
 // -- never invented. Re-verify and update the whole block together when
 // re-pinning.
@@ -77,8 +77,7 @@ const PINS = [
 ];
 
 // ---------------------------------------------------------------------
-// PHP 8.5-only additions to the normative surface (global-constraints.md
-// PHP surface section + Task 1 brief). No PHP 8.5 binary is available on
+// PHP 8.5-only additions to the normative surface. No PHP 8.5 binary is available on
 // this generating machine, so these cannot be live-extracted; they are
 // hand-recorded here from https://www.php.net/manual/en/function.curl-share-init-persistent.php,
 // https://php.watch/versions/8.5/curl_multi_get_handles, and the pinned
@@ -166,9 +165,9 @@ const CURLSHOPT_KINDS = [
     'CURLSHOPT_UNSHARE' => 'long',
 ];
 
-// The exact PHP program from Task 1's brief (Step 1), run once per probed
-// binary via `php -r`. Kept byte-for-byte close to the brief so the
-// extraction is auditable against it.
+// The probe program, run once per probed binary via `php -r`, that extracts
+// the live function/class/constant surface `get_defined_functions()`,
+// `get_declared_classes()`, and `get_defined_constants()` report for ext/curl.
 const WANTED_PROGRAM = <<<'PHP'
 $wanted = [];
 foreach (get_defined_functions()['internal'] as $name) {
@@ -940,8 +939,8 @@ function main(array $argv): void
         if ($kindOverride !== null) {
             // Expected: the 3 genuinely PHP-invented pseudo-options
             // (CURLOPT_RETURNTRANSFER/BINARYTRANSFER/SAFE_UPLOAD) have no
-            // libcurl entry at all -- their values are PHP's own, per
-            // locked decision #1's "plus PHP's own extra options" clause.
+            // libcurl entry at all -- their values are PHP's own, not
+            // recomputed from any libcurl header.
             $optionKinds[$name] = $kindOverride;
             continue;
         }

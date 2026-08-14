@@ -67,8 +67,8 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 /// Releases every retained `CURLOPT_PRIVATE` value in `context.stream_resources` ONE STEP
 /// before the context (and, transitively, its `EvalStreamResources`) actually drops — see
 /// `EvalStreamResources::release_curl_easy_private_values`'s own doc for why that release
-/// cannot happen inside `Drop` itself and has to live here instead (item 19,
-/// php-curl-family punch list). `ElephcRuntimeOps::new()` needs no live eval call or
+/// cannot happen inside `Drop` itself and has to live here instead.
+/// `ElephcRuntimeOps::new()` needs no live eval call or
 /// context to construct — it is a stateless adapter over generated runtime C-ABI symbols —
 /// so it is safe to build one ad hoc for this one release pass even though this function
 /// itself receives no `RuntimeValueOps` parameter.

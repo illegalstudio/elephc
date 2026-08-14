@@ -1,5 +1,5 @@
 //! Purpose:
-//! Eval homes for PHP's `ext/curl` easy interface (Task 13, php-curl-family plan):
+//! Eval homes for PHP's `ext/curl` easy interface:
 //! `curl_init`, `curl_setopt[_array]`, `curl_exec`, `curl_getinfo`, `curl_close`,
 //! `curl_copy_handle`, `curl_errno`, `curl_error`, `curl_escape`/`curl_unescape`,
 //! `curl_pause`, `curl_reset`, `curl_upkeep`, `curl_version`, `curl_strerror`. Every one
@@ -15,8 +15,8 @@
 //! ## Why this whole tree sits behind the `curl` Cargo feature
 //!
 //! `crates/elephc-magician`'s Cargo.toml has never had a path dependency on `elephc-curl`
-//! (or on the root `elephc` crate at all — Task 6 of this plan already found that for the
-//! constant tables). `crate::curl_ffi` therefore reaches the bridge the SAME way
+//! (or on the root `elephc` crate at all — `crate::interpreter::curl_constants` hits the
+//! identical constraint for the constant tables). `crate::curl_ffi` therefore reaches the bridge the SAME way
 //! `elephc-curl` itself reaches raw libcurl: bare `extern "C"` declarations that stay
 //! unresolved in `libelephc_magician.a`'s own archive and are resolved only when the
 //! FINAL PHP-program link ALSO supplies `libelephc_curl.a`.
@@ -34,8 +34,8 @@
 //! including one that never mentions curl anywhere — would need `elephc_curl` (and
 //! therefore the pinned native libcurl/OpenSSL/zlib) linked into its final binary just to
 //! resolve those symbols, even though nothing in the program ever calls
-//! `elephc_curl_easy_init`. That is exactly the pay-for-use guarantee locked decision 4 of
-//! `.superpowers/sdd/php-curl-family/global-constraints.md` exists to prevent, and it is
+//! `elephc_curl_easy_init`. That is exactly the pay-for-use guarantee this crate holds for
+//! every optional native surface, and it is
 //! why this module — unlike `elephc-crypto`'s hash/openssl homes, which need no native
 //! library at all and are therefore unconditional — cannot be unconditional too.
 //!
@@ -106,7 +106,7 @@
 //! pre-existing interop story, which this module deliberately does not attempt to improve
 //! on.
 //!
-//! ## Scope shipped vs. deferred (see the Task 13 report for the full reasoning)
+//! ## Scope shipped vs. deferred
 //!
 //! SHIPPED: the complete easy interface above, the full 689-entry `CURLOPT_*`/
 //! `CURLINFO_*`/`CURLE_*`/`CURL_*` constant table (`crate::interpreter::curl_constants`,
@@ -125,15 +125,15 @@
 //! - Callback options (`CURLOPT_WRITEFUNCTION`/`_HEADERFUNCTION`/`_READFUNCTION`/
 //!   `_PROGRESSFUNCTION`/`_DEBUGFUNCTION`/`_XFERINFOFUNCTION`, option KIND 8): rejected
 //!   through the SAME honest "option ... is not supported by this build" warning +
-//!   `false` path KIND 6 (a real option this build cannot carry) already uses, per the
-//!   task brief's explicit fallback instruction — installing a callback from inside
+//!   `false` path KIND 6 (a real option this build cannot carry) already uses —
+//!   installing a callback from inside
 //!   `eval()` would need the descriptor-based runtime callable invoker
 //!   (`src/codegen/runtime_callable_invoker.rs`), which is generated-assembly machinery
 //!   this crate has no access to from a pure interpreter context.
 //! - `CURLOPT_SHARE` (option KIND 7) for the same reason as the multi/share interfaces:
 //!   there is no eval-side `CurlShareHandle` to read it from.
 //! - `CURLOPT_FILE`/`CURLOPT_INFILE`/`CURLOPT_WRITEHEADER`/`CURLOPT_STDERR` (PHP-stream-
-//!   valued options): these are KIND 5 PHP-layer options that need a live PHP stream
+//!   valued options): these are KIND 9 (`KIND_STREAM`) options that need a live PHP stream
 //!   resource on the far end; wiring them is future work, tracked with the rest of this
 //!   list, not attempted here.
 //!

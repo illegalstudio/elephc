@@ -1,5 +1,6 @@
 //! Purpose:
-//! Task 11's `curl_mime` builder: the raw libcurl mime bindings, and the small state
+//! The `curl_mime` builder for `CURLOPT_POSTFIELDS`'s array (multipart-upload) form:
+//! the raw libcurl mime bindings, and the small state
 //! machine (`new_pending` -> `add_part` -> `set_field`* -> `post`, or `abort` on failure)
 //! `crate::abi`'s five `elephc_curl_mime_*` entry points drive to build a
 //! `multipart/form-data` body one PHP array item at a time.
@@ -43,7 +44,7 @@
 //!   through a PHP-visible option number of its own.
 //! - `curl_easy_duphandle` DUPLICATES A HANDLE'S ATTACHED MIME, per libcurl 8.21.0's
 //!   `lib/easy.c` `dupset` (already established at `crate::abi::elephc_curl_easy_duphandle`'s
-//!   doc comment when that function was written for Task 8's copy-handle work), so
+//!   own doc comment), so
 //!   `curl_copy_handle()` needs no mime-specific rebuild the way it rebuilds slists — see
 //!   that function for the one open question this leaves (the DUPLICATE's own copy of the
 //!   structure is never a pointer this crate holds, so it is never a pointer this crate can

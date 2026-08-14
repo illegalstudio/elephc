@@ -19,8 +19,8 @@ categories = ["compilers", "command-line-utilities"]
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
 # libelephc_web.a (--web prefork HTTP server), libelephc_magician.a
-# (optional eval runtime), and libelephc_curl.a (ext/curl bridge, Task 3 of
-# the php-curl-family plan) into target/<profile>/, where linker.rs locates
+# (optional eval runtime), and libelephc_curl.a (ext/curl bridge)
+# into target/<profile>/, where linker.rs locates
 # them for programs that use those features. elephc-curl declares libcurl's
 # `extern "C"` symbols without linking them, so being a default member never
 # requires a system/managed libcurl for a plain `cargo build`/`cargo test`;

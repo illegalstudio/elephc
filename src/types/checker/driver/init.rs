@@ -122,8 +122,8 @@ impl Checker {
         }
         // `ext/curl` constants (CURLOPT_*, CURLINFO_*, CURLE_*, CURL_*, ...) are always
         // registered and visible, exactly like JSON_*, even in programs that never mention
-        // curl and therefore never link the `elephc_curl` bridge (Task 6). See
-        // `crate::types::curl_constants` and `.superpowers/sdd/php-curl-family/task-6-brief.md`.
+        // curl and therefore never link the `elephc_curl` bridge. See
+        // `crate::types::curl_constants` for why.
         for (name, _value) in CURL_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }

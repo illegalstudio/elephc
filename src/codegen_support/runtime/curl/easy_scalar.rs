@@ -87,7 +87,7 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
         "curl_option_kind (classify a curl_setopt option number)",
         IntResult::Boolean,
     );
-    // Task 12: installs/replaces/clears one PHP callback on a handle. Five C arguments
+    // Installs/replaces/clears one PHP callback on a handle. Five C arguments
     // (id, slot, descriptor, CurlHandle object, adapter address) — still inside both
     // ABIs' integer argument registers, so the plain forwarder shape carries it.
     emit_forwarder(
@@ -133,7 +133,7 @@ pub(crate) fn emit_curl_easy_scalar_helpers(emitter: &mut Emitter) {
         "curl_easy_errno (report the last CURLcode)",
         IntResult::CurlCode,
     );
-    // Task 11: the curl_mime builder family. All five are the SAME "forward whatever's
+    // The curl_mime builder family. All five are the SAME "forward whatever's
     // already in the C argument registers, widen a 0/1 answer" shape as the setters above
     // — `elephc_curl_mime_part_field`'s extra (kind, ptr, len) arguments are staged by its
     // lowering exactly the way `elephc_curl_easy_setopt_str`'s (option, ptr, len) already
