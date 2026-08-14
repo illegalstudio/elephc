@@ -1222,5 +1222,3 @@ fn curl_remaining_callback_options_stay_rejected() {
     );
     assert_eq!(out, "FFF");
 }
-
-

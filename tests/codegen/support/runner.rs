@@ -407,6 +407,107 @@ pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
     ensure_bridge_staticlibs(actual_link_libs, &bridge_staticlib_dir());
 }
 
+/// Builds (or reuses, if fresh) the curl-aware magician archive a fixture that links BOTH
+/// `elephc_magician` (it calls `eval()`) and `elephc_curl` (it uses the curl surface, inside
+/// or outside eval) needs. Mirrors the production fix in `src/linker/bridges.rs`'s
+/// `BridgeStaticlib::magician_curl_archive_path`/`build_magician_curl_staticlib` exactly,
+/// for the identical reason documented there: `crates/elephc-magician`'s default build
+/// (`cargo build -p elephc-magician`, no features) never compiles curl's eval homes in at
+/// all (`crates/elephc-magician/src/interpreter/builtins/curl/mod.rs`'s module doc), so a
+/// fixture that needs `curl_init()` et al. reachable from `eval()` needs a SEPARATE archive
+/// built `--features curl` — and that build must land at a DISTINCT filename
+/// (`libelephc_magician_curl.a`), built into an ISOLATED `--target-dir`, never written
+/// in-place over the plain `libelephc_magician.a` every curl-free eval fixture in this same
+/// test binary already relies on. `cargo test` runs multiple test binaries (and, within one
+/// binary, multiple `#[test]` functions) concurrently, so an in-place-overwrite approach
+/// here would risk the exact cross-test contamination the production bug report documents:
+/// a curl-free eval fixture racing against this build could pick up a stale curl-aware
+/// `libelephc_magician.a` and fail to link.
+///
+/// Guarded by `BRIDGE_STATICLIB_BUILD_LOCK` (the same lock `ensure_bridge_staticlibs`
+/// takes) so two fixtures needing this in parallel do not race the same `cargo build`.
+fn ensure_magician_curl_staticlib(bridge_staticlib_dir: &Path) {
+    let _guard = BRIDGE_STATICLIB_BUILD_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("bridge staticlib build lock poisoned");
+
+    let archive_path = bridge_staticlib_dir.join("libelephc_magician_curl.a");
+    if !bridge_staticlib_needs_build(&archive_path, "elephc-magician") {
+        return;
+    }
+
+    // Isolated `--target-dir`, exactly like the production fix: a plain `cargo build -p
+    // elephc-magician --features curl` against the ordinary workspace `target/` would
+    // overwrite the very same `libelephc_magician.a` a curl-free fixture in this same test
+    // process depends on (Cargo does not vary a staticlib's output filename by feature
+    // set).
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let curl_target_dir = manifest_dir.join("target/elephc-magician-curl-test-build");
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "elephc-magician",
+            "--features",
+            "curl",
+            "--target-dir",
+        ])
+        .arg(&curl_target_dir)
+        .current_dir(manifest_dir)
+        .status()
+        .unwrap_or_else(|err| panic!("failed to run cargo build for elephc-magician --features curl: {err}"));
+    assert!(status.success(), "failed to build curl-aware elephc-magician staticlib");
+
+    let built = curl_target_dir.join("debug/libelephc_magician.a");
+    std::fs::create_dir_all(bridge_staticlib_dir).unwrap_or_else(|err| {
+        panic!(
+            "failed to create bridge staticlib directory {}: {err}",
+            bridge_staticlib_dir.display()
+        )
+    });
+    std::fs::copy(&built, &archive_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy curl-aware magician archive from {} to {}: {err}",
+            built.display(),
+            archive_path.display()
+        )
+    });
+}
+
+/// Returns a NEW link plan with the `elephc_magician` `NamedLibrary` entry renamed to the
+/// curl-aware archive — the test-harness equivalent of `src/linker/bridges.rs`'s
+/// `resolve()` routing `elephc_magician` to `magician_curl_archive_path()` only when the
+/// SAME plan also names `elephc_curl`. Every other item, including a magician-only plan's
+/// `elephc_magician` entry (when `needs_magician_curl` is `false`), passes through
+/// unchanged. Takes `&LinkPlan` and returns an owned copy rather than consuming the
+/// original, so callers can keep using the original plan's borrows (e.g. `named_libraries`'
+/// `Vec<&str>`) afterward.
+fn magician_curl_aware_plan(
+    plan: &elephc::link_plan::LinkPlan,
+    needs_magician_curl: bool,
+) -> elephc::link_plan::LinkPlan {
+    use elephc::link_plan::LinkItem;
+
+    let items = plan
+        .items()
+        .iter()
+        .cloned()
+        .map(|item| match item {
+            LinkItem::NamedLibrary { name, origin }
+                if needs_magician_curl && name == "elephc_magician" =>
+            {
+                LinkItem::NamedLibrary {
+                    name: "elephc_magician_curl".to_string(),
+                    origin,
+                }
+            }
+            other => other,
+        })
+        .collect();
+    elephc::link_plan::LinkPlan::from_items(items)
+}
+
 /// Reports whether a bridge staticlib is missing or older than its package
 /// sources. This keeps codegen tests from linking stale bridge archives after a
 /// bridge crate changes inside the same worktree. Archived CI runs can declare
@@ -562,6 +663,19 @@ fn source_tree_newer_than(dir: &Path, archive_mtime: std::time::SystemTime) -> b
 /// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
 /// static linking when no extra libs are needed. Linux links each selected PDO
 /// system client after the bridge archive, followed by the common runtime libs.
+///
+/// `-dead_strip` ON macOS MATCHES `src/linker/command.rs`'s production `render_macos_command`
+/// (which has carried it unconditionally for every `Emit::Executable` link), and this
+/// harness previously omitted it — invisible until a fixture links two bridges that embed
+/// the SAME upstream symbols (e.g. `elephc_crypto`'s hash/cipher entry points, embedded
+/// both standalone and inside the curl-aware `elephc_magician` archive): production's
+/// `-dead_strip` link resolves the duplicates as non-fatal `ld: warning: duplicate symbol`
+/// and keeps one definition; without it, this harness's `ld` invocation turned the SAME
+/// duplicates into a hard `ld: N duplicate symbols` link failure — first surfaced by the
+/// eval+curl fixtures in `tests/codegen/curl/eval.rs`, which are also what confirmed this
+/// one-flag difference (not `archive_dedup.rs`-style whole-archive deduplication, which
+/// only `elephc_curl`'s `whole_archive: true` entry among the three involved bridges
+/// participates in) is the actual, sufficient fix.
 pub(crate) fn link_binary(
     obj_path: &Path,
     runtime_obj: &Path,
@@ -584,6 +698,17 @@ pub(crate) fn link_binary(
     if needs_bridge_staticlib {
         ensure_bridge_staticlibs(&actual_link_libs, &bridge_staticlib_dir);
     }
+    // A fixture that links BOTH `elephc_magician` (it calls `eval()`) and `elephc_curl`
+    // needs a curl-aware magician archive — the plain one `ensure_bridge_staticlibs` just
+    // built above never compiles curl's eval homes in at all. See
+    // `ensure_magician_curl_staticlib`'s own doc for the full argument and why this is a
+    // SEPARATE archive/build, not a rebuild-in-place of the plain one.
+    let needs_magician_curl = actual_link_libs.contains(&"elephc_magician")
+        && actual_link_libs.contains(&"elephc_curl");
+    if needs_magician_curl {
+        ensure_magician_curl_staticlib(&bridge_staticlib_dir);
+    }
+    let final_plan = magician_curl_aware_plan(&plan, needs_magician_curl);
     let needs_libpq = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
         && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some();
     let needs_dblib = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
@@ -594,7 +719,7 @@ pub(crate) fn link_binary(
     match target().platform {
         Platform::MacOS => {
             let mut ld_cmd = Command::new("ld");
-            ld_cmd.args(["-arch", target().darwin_arch_name(), "-e", "_main", "-o"]);
+            ld_cmd.args(["-arch", target().darwin_arch_name(), "-e", "_main", "-dead_strip", "-o"]);
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
@@ -626,12 +751,12 @@ pub(crate) fn link_binary(
             if needs_bridge_staticlib {
                 ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
             }
-            append_test_search_paths(&mut ld_cmd, &plan);
-            append_test_link_inputs(&mut ld_cmd, &plan, Platform::MacOS);
+            append_test_search_paths(&mut ld_cmd, &final_plan);
+            append_test_link_inputs(&mut ld_cmd, &final_plan, Platform::MacOS);
             if needs_libpq {
                 ld_cmd.arg("-lpq");
             }
-            append_test_frameworks(&mut ld_cmd, &plan);
+            append_test_frameworks(&mut ld_cmd, &final_plan);
             // The PostgreSQL driver in the PDO bridge pulls in `whoami`, which
             // references CoreFoundation / SystemConfiguration on macOS.
             if actual_link_libs.iter().any(|lib| *lib == "elephc_pdo") {
@@ -650,7 +775,7 @@ pub(crate) fn link_binary(
             ld_cmd.arg("-o").arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
-            if matches!(plan.linux_mode(), elephc::link_plan::LinuxLinkMode::Static) {
+            if matches!(final_plan.linux_mode(), elephc::link_plan::LinuxLinkMode::Static) {
                 ld_cmd.arg("-static");
             }
             if !actual_link_libs.is_empty() {
@@ -659,8 +784,8 @@ pub(crate) fn link_binary(
             if needs_bridge_staticlib {
                 ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
             }
-            append_test_search_paths(&mut ld_cmd, &plan);
-            append_test_link_inputs(&mut ld_cmd, &plan, Platform::Linux);
+            append_test_search_paths(&mut ld_cmd, &final_plan);
+            append_test_link_inputs(&mut ld_cmd, &final_plan, Platform::Linux);
             if needs_libpq {
                 ld_cmd.arg("-lpq");
             }

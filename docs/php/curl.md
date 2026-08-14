@@ -24,6 +24,21 @@ Everything is pay-for-use. A program that never mentions a `curl_*` function, a
 constant does not declare the classes, does not link the bridge, and does not
 require the native `curl` package at all.
 
+The inverse holds just as literally: merely *referencing* one of those constant
+prefixes is enough to opt in, even with no other curl usage anywhere in the
+program. `<?php echo CURLOPT_URL;` alone injects the curl prelude, links the
+bridge, and requires the native `curl` package — reading the constant is all
+detection needs to see, whether or not the value is ever passed to
+`curl_setopt()`. Detection matches the prefix, not the specific name, and it is
+triggered by a *reference* to the constant (`CURLOPT_URL` used as a value), not
+by a string that merely spells the name — a program that `define()`s its
+**own** `CURL_`-prefixed constant and never reads it back stays curl-free, but
+the moment that constant is *read* anywhere (`echo CURL_MY_TIMEOUT;`,
+`CURL_MY_TIMEOUT + 1`, …) detection fires identically, even though the
+constant has nothing to do with `ext/curl`. If that surprises you and you
+don't actually want curl, rename the constant; there is no way to opt out
+while keeping a `CURL_`-prefixed name that the program ever reads.
+
 ## Enabling curl
 
 curl needs a native package, so it is opt-in at the project level even though
