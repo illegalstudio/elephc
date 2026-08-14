@@ -366,10 +366,16 @@ fn persistent_share_survives_unset_and_stays_usable() {
     assert_eq!(out, "ok\n");
 }
 
-/// `curl_copy_handle()` on a share-attached source does NOT inherit the attachment at the
-/// BRIDGE level — `elephc_curl_easy_duphandle` (`crates/elephc-curl/src/abi.rs`)
-/// explicitly clears `CURLOPT_SHARE` on the copy, the same "re-point rather than inherit"
-/// rule that function already applies to `WRITEDATA`/`ERRORBUFFER`. Proven here by freeing
+/// `curl_copy_handle()` on a share-attached source does NOT inherit the attachment — which
+/// is PHP'S OWN BEHAVIOR, re-measured on PHP 8.4.20 / libcurl 8.19.0 after a punch-list
+/// item claimed the opposite: with only the COPY alive, `curl_share_setopt()` on the share
+/// still succeeds (libcurl reports `CURLSHE_IN_USE` for as long as any easy handle is
+/// attached, and the two-real-handles control confirms the probe), and PHP's
+/// `WeakReference` shows the copy holds no reference to the share object either. The
+/// bridge matches by construction: `elephc_curl_easy_duphandle`
+/// (`crates/elephc-curl/src/abi.rs`, which carries the full transcript) explicitly clears
+/// `CURLOPT_SHARE` on the copy, the same "re-point rather than inherit" rule that function
+/// already applies to `WRITEDATA`/`ERRORBUFFER`. Proven here by freeing
 /// the share AFTER copying and confirming both the original and the copy still perform
 /// cleanly: if the copy had silently inherited a raw, untracked `CURLSH *` reference, the
 /// bridge's `attached` list would UNDERCOUNT real attachments, so freeing the share once

@@ -271,6 +271,17 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
     // parity, not the urlencoded stopgap Task 8 shipped (see `__elephc_curl_build_multipart`
     // below for the field-by-field mapping and its one documented divergence).
     if ($option === 10015 && is_array($value)) {
+        // AN EMPTY ARRAY IS AN EMPTY STRING BODY, NOT AN EMPTY MULTIPART. php-src
+        // special-cases it before building any mime structure ("no need to build the mime
+        // structure for an empty array" -> `curl_easy_setopt(cp, CURLOPT_POSTFIELDS, "")`),
+        // and it is observable on the wire: measured against a local echo server on PHP
+        // 8.4.20, `CURLOPT_POSTFIELDS => []` sends `Content-Type:
+        // application/x-www-form-urlencoded` with an empty body — byte for byte what
+        // `CURLOPT_POSTFIELDS => ""` sends — while a built-but-empty `curl_mime` would send
+        // a `multipart/form-data` content type and a boundary-only body.
+        if (count($value) === 0) {
+            return __elephc_curl_easy_setopt_str($raw, $option, "");
+        }
         return __elephc_curl_build_multipart($raw, $value);
     }
     // THE PHP-LAYER OPTIONS ARE DISPATCHED BEFORE THE SCALAR TYPE GUARD BELOW, because
@@ -1271,13 +1282,48 @@ function curl_multi_getcontent(mixed $handle): ?string {
 // three-way: `1` applied, `0` recognized but not carryable by this build (`false` plus
 // PHP's warning, locked decision 7), `-1` not a cURL multi option at all (php-src's own
 // `ValueError`).
+//
+// THE OPTION IS CLASSIFIED BEFORE THE VALUE IS TYPE-CHECKED, which is the order php-src
+// uses and the order `curl_setopt()` above already uses (its `$kind === 6` block runs
+// before the scalar guard). php-src's `curl_multi_setopt` is one `switch (option)`: an
+// option it does not recognize is `ValueError` and `CURLMOPT_PUSHFUNCTION` is a CALLBACK
+// question, and neither ever looks at the value's scalar type. Measured on PHP 8.4.20:
+//   curl_multi_setopt($mh, 999999, function () {})  -> ValueError (not TypeError)
+//   curl_multi_setopt($mh, 999999, [1])             -> ValueError
+//   curl_multi_setopt($mh, 20014,  null)            -> TypeError about a CALLBACK
+// This build cannot carry `CURLMOPT_PUSHFUNCTION` at all (Task 12 machinery), so its
+// answer is locked decision 7's `false` plus PHP's unsupported-option warning — for ANY
+// value, a closure included. Checking `is_int()` first (as this function used to) made a
+// closure on `CURLMOPT_PUSHFUNCTION` a `TypeError` about scalar types, which is both a
+// worse diagnostic and the one shape php-src never produces for it.
+//
+// THE THREE NUMBERS BELOW MIRROR `multi_option_kind` (`crates/elephc-curl/src/multi.rs`),
+// which mirrors the frozen surface (`scripts/docs/curl_surface.json`, `option_kinds`);
+// the bridge stays the AUTHORITY and re-classifies every call that gets past here, so
+// this table only decides WHICH of the three answers is reached first. Both sides move
+// together when the frozen surface grows a `CURLMOPT_*`.
 function curl_multi_setopt(CurlMultiHandle $multi_handle, int $option, mixed $value): bool {
     $raw = $multi_handle->__elephc_handle;
+    // 3 PIPELINING, 6 MAXCONNECTS, 7 MAX_HOST_CONNECTIONS, 8 MAX_PIPELINE_LENGTH,
+    // 13 MAX_TOTAL_CONNECTIONS, 16 MAX_CONCURRENT_STREAMS -> long;
+    // 30009 CONTENT_LENGTH_PENALTY_SIZE, 30010 CHUNK_LENGTH_PENALTY_SIZE -> off_t.
+    $carryable = $option === 3 || $option === 6 || $option === 7 || $option === 8
+        || $option === 13 || $option === 16 || $option === 30009 || $option === 30010;
+    if (!$carryable) {
+        // 20014 CURLMOPT_PUSHFUNCTION: a real php-src option this build cannot carry.
+        if ($option === 20014) {
+            __elephc_curl_multi_setopt_unsupported_warning($option);
+            return false;
+        }
+        throw new \ValueError("curl_multi_setopt(): Argument #2 (\$option) is not a valid cURL multi option");
+    }
     if (!is_int($value) && !is_bool($value) && !is_float($value) && !is_string($value)) {
         $given = is_array($value) ? "array" : (is_object($value) ? get_class($value) : (is_null($value) ? "null" : gettype($value)));
         throw new \TypeError("curl_multi_setopt(): Argument #3 (\$value) must be of type string|int|float|bool, " . $given . " given");
     }
     $applied = __elephc_curl_multi_setopt($raw, $option, (int) $value);
+    // Both remaining answers stay honored rather than assumed unreachable: the bridge is
+    // the authority, and `0` is also how it reports an option libcurl itself refused.
     if ($applied === -1) {
         throw new \ValueError("curl_multi_setopt(): Argument #2 (\$option) is not a valid cURL multi option");
     }

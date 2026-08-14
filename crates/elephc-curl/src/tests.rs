@@ -440,9 +440,10 @@ mod skipped {
 #[cfg(elephc_curl_native)]
 mod native {
     use crate::abi::{
-        elephc_curl_easy_error, elephc_curl_easy_errno, elephc_curl_easy_free,
-        elephc_curl_easy_getinfo_long, elephc_curl_easy_init, elephc_curl_easy_perform,
-        elephc_curl_easy_set_url, elephc_curl_easy_setopt_long, elephc_curl_easy_take_body,
+        elephc_curl_easy_duphandle, elephc_curl_easy_errno, elephc_curl_easy_error,
+        elephc_curl_easy_free, elephc_curl_easy_getinfo_long, elephc_curl_easy_init,
+        elephc_curl_easy_perform, elephc_curl_easy_set_url, elephc_curl_easy_setopt_long,
+        elephc_curl_easy_setopt_slist, elephc_curl_easy_setopt_str, elephc_curl_easy_take_body,
         elephc_curl_global_info, elephc_curl_version_abi,
     };
     use crate::handles;
@@ -545,6 +546,87 @@ mod native {
                 "missing required protocol {required} in {protocols:?}"
             );
         }
+    }
+
+    /// PUNCH-LIST ITEM 4: `feature_list` is php-src's ASSOCIATIVE `name => bool`
+    /// map over the `features` bitmask, not the list of strings libcurl's own
+    /// `feature_names` array would give (measured against PHP 8.4.20:
+    /// `var_dump(curl_version()["feature_list"])` prints 29 `string => bool`
+    /// pairs, `"AsynchDNS" => bool(true)` first). Every name php publishes is
+    /// present — including the ones this build lacks, reported `false` rather
+    /// than omitted — and every value agrees with the bit it stands for, so a
+    /// mis-transcribed bit in the table cannot pass.
+    #[test]
+    fn global_info_feature_list_is_php_s_name_to_bool_map() {
+        let json = global_info_json();
+        let features = json["features"]
+            .as_i64()
+            .expect("features must be an integer bitmask");
+        let list = json["feature_list"]
+            .as_object()
+            .expect("feature_list must be a JSON object (PHP assoc array), not an array");
+        assert_eq!(
+            list.len(),
+            crate::abi::PHP_FEATURE_LIST.len(),
+            "feature_list must carry exactly php-src's own name set"
+        );
+        for (name, bit) in crate::abi::PHP_FEATURE_LIST {
+            let expected = features & i64::from(*bit) != 0;
+            assert_eq!(
+                list.get(*name).and_then(serde_json::Value::as_bool),
+                Some(expected),
+                "feature_list[{name}] must be a bool matching bit {bit:#x} of {features}"
+            );
+        }
+        // Pinned-build sanity: this libcurl is built against OpenSSL and zlib,
+        // and nothing has shipped Kerberos V4 in two decades.
+        assert_eq!(list["SSL"], serde_json::Value::Bool(true));
+        assert_eq!(list["libz"], serde_json::Value::Bool(true));
+        assert_eq!(list["krb4"], serde_json::Value::Bool(false));
+    }
+
+    /// PUNCH-LIST ITEM 5: the sub-library keys are gated on the struct's `age`,
+    /// php-src's own rule, so `iconv_ver_num` is present on every build recent
+    /// enough to have the field — it used to hang off `libssh_version`'s NULL
+    /// pointer and therefore never appeared at all here. Measured on PHP 8.4.20
+    /// (no c-ares, no libidn, no libssh): all five keys are present, with `""`
+    /// for the libraries that are missing.
+    #[test]
+    fn global_info_reports_the_age_gated_sublibrary_keys() {
+        let json = global_info_json();
+        let age = json["age"].as_i64().expect("age must be an integer");
+        assert!(age >= 4, "pinned libcurl 8.21.0 reports CURLVERSION_TWELFTH");
+        for key in ["ares", "libidn", "libssh_version", "brotli_version"] {
+            assert!(
+                json.get(key).map(serde_json::Value::is_string) == Some(true),
+                "{key} must be present as a string (empty when unavailable): {json}"
+            );
+        }
+        for key in ["ares_num", "iconv_ver_num", "brotli_ver_num"] {
+            assert!(
+                json.get(key).map(serde_json::Value::is_i64) == Some(true),
+                "{key} must be present as an integer: {json}"
+            );
+        }
+    }
+
+    /// Reads `elephc_curl_global_info`'s JSON blob through its grow-the-buffer
+    /// protocol, the same loop the version smoke above documents.
+    fn global_info_json() -> serde_json::Value {
+        let mut cap = 64usize;
+        let mut buf: Vec<u8>;
+        let mut len = 0usize;
+        loop {
+            buf = vec![0u8; cap];
+            let ok = unsafe { elephc_curl_global_info(buf.as_mut_ptr(), buf.len(), &mut len) };
+            if ok == 1 {
+                break;
+            }
+            assert!(len > cap, "a 0 return must always grow the required length");
+            cap = len;
+        }
+        buf.truncate(len);
+        serde_json::from_slice(&buf).expect("global_info must produce valid JSON")
     }
 
     /// End-to-end: init -> set_url (a `file://` fixture, no network) ->
@@ -704,6 +786,226 @@ mod native {
         let ok = unsafe { elephc_curl_easy_getinfo_long(-999, CURLINFO_RESPONSE_CODE, &mut value) };
         assert_eq!(ok, 0);
         assert_eq!(value, -1);
+    }
+
+    /// PUNCH-LIST ITEM 2: a duplicate starts with a CLEAN transfer record — no
+    /// captured body, `curl_errno() == 0`, an empty `curl_error()` — however the
+    /// SOURCE's last transfer ended. Both halves are checked here because the two
+    /// used to be copied together: a successful transfer (whose body was carried
+    /// onto the copy, so `curl_multi_getcontent($copy)` answered the original's
+    /// bytes before the copy had performed anything) and a failed one (whose
+    /// `CURLcode`/message were carried too). Measured against PHP 8.4.20 — see
+    /// `crate::abi::elephc_curl_easy_duphandle`'s doc comment for the transcript.
+    #[test]
+    fn copy_handle_starts_with_a_clean_transfer_record() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let suffix = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-curl-copy-{}-{suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture_path = dir.join("body.txt");
+        std::fs::write(&fixture_path, b"copied fixture body\n").unwrap();
+        let url = format!("file://{}", fixture_path.display());
+
+        // 1. A SUCCESSFUL transfer's captured body must not travel.
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+        assert_eq!(unsafe { elephc_curl_easy_set_url(id, url.as_ptr(), url.len()) }, 1);
+        assert_eq!(elephc_curl_easy_setopt_long(id, CURLOPT_RETURNTRANSFER, 1), 1);
+        assert_eq!(elephc_curl_easy_perform(id), 1);
+        assert_eq!(take_body(id), b"copied fixture body\n");
+
+        let copy = elephc_curl_easy_duphandle(id);
+        assert_ne!(copy, 0);
+        assert!(
+            take_body(copy).is_empty(),
+            "the copy must have no captured body before it performs anything"
+        );
+        assert_eq!(elephc_curl_easy_errno(copy), 0);
+        assert!(read_error(copy).is_empty());
+        // The OPTION did travel, which is the half that must not regress: the copy
+        // still captures rather than streaming to stdout.
+        assert_eq!(elephc_curl_easy_perform(copy), 1);
+        assert_eq!(take_body(copy), b"copied fixture body\n");
+        elephc_curl_easy_free(copy);
+        elephc_curl_easy_free(id);
+
+        // 2. A FAILED transfer's errno/message must not travel either.
+        let failed = elephc_curl_easy_init();
+        let bad = "xyzzy://not-a-protocol";
+        assert_eq!(unsafe { elephc_curl_easy_set_url(failed, bad.as_ptr(), bad.len()) }, 1);
+        assert_eq!(elephc_curl_easy_perform(failed), 0);
+        assert_ne!(
+            elephc_curl_easy_errno(failed),
+            0,
+            "an unsupported protocol must leave a real CURLcode on the source"
+        );
+        assert!(!read_error(failed).is_empty());
+
+        let copy = elephc_curl_easy_duphandle(failed);
+        assert_ne!(copy, 0);
+        assert_eq!(
+            elephc_curl_easy_errno(copy),
+            0,
+            "curl_errno() on a fresh copy must be 0, not the source's last CURLcode"
+        );
+        assert!(
+            read_error(copy).is_empty(),
+            "curl_error() on a fresh copy must be empty"
+        );
+        elephc_curl_easy_free(copy);
+        elephc_curl_easy_free(failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `elephc_curl_easy_take_body`'s two-out-parameter protocol as an owned `Vec`.
+    fn take_body(id: i64) -> Vec<u8> {
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut len = 0usize;
+        assert_eq!(unsafe { elephc_curl_easy_take_body(id, &mut ptr, &mut len) }, 1);
+        if len == 0 {
+            return Vec::new();
+        }
+        unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+    }
+
+    /// `elephc_curl_easy_error`'s message for `id` as owned bytes.
+    fn read_error(id: i64) -> Vec<u8> {
+        let mut buf = vec![0u8; 512];
+        let mut len = 0usize;
+        assert_eq!(
+            unsafe { elephc_curl_easy_error(id, buf.as_mut_ptr(), buf.len(), &mut len) },
+            1
+        );
+        buf.truncate(len);
+        buf
+    }
+
+    /// PUNCH-LIST ITEM 17: each setter verifies the OPTION'S KIND itself before it
+    /// calls libcurl, so a caller that picks the wrong setter gets a plain `0` —
+    /// never a `long` read as a `char *`, a string read as a `long`, or an integer
+    /// installed as a function pointer. The prelude and the eval interpreter both
+    /// classify correctly today; this pins the BOUNDARY rather than their good
+    /// behavior.
+    ///
+    /// BOTH FAILURE MODES WERE MEASURED against this pinned libcurl 8.21.0, with a
+    /// throwaway probe calling `crate::easy`'s raw setters directly:
+    /// `setopt_str(CURLOPT_TIMEOUT, ptr)` and `setopt_str(CURLOPT_HTTPHEADER, ptr)`
+    /// both answered `CURLE_OK` (0) — a pointer silently accepted as a timeout, and
+    /// as a list libcurl will walk — and `setopt_long(CURLOPT_URL, 42)` did not
+    /// return at all: the test process died with SIGSEGV as libcurl dereferenced
+    /// `42` as a `char *`. That is the difference this check makes.
+    #[test]
+    fn setters_refuse_options_of_another_kind_before_calling_libcurl() {
+        const CURLOPT_TIMEOUT: i32 = 13; // KIND_LONG
+        const CURLOPT_URL: i32 = 10_002; // KIND_STRING
+        const CURLOPT_HTTPHEADER: i32 = 10_023; // KIND_SLIST
+        const CURLOPT_MAXFILESIZE_LARGE: i32 = 30_117; // KIND_OFF_T
+        const CURLOPT_WRITEFUNCTION: i32 = 20_011; // KIND_CALLBACK
+        const CURLOPT_BINARYTRANSFER: i32 = 19_914; // KIND_PHP_LAYER, char * range
+        const CURLOPT_SHARE: i32 = 10_100; // KIND_SHARE
+        let url = b"file:///dev/null";
+        let header = b"X-Kind: check\0";
+
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+
+        // The RIGHT setter for each kind still applies.
+        assert_eq!(elephc_curl_easy_setopt_long(id, CURLOPT_TIMEOUT, 30), 1);
+        assert_eq!(elephc_curl_easy_setopt_long(id, CURLOPT_MAXFILESIZE_LARGE, 4096), 1);
+        assert_eq!(
+            elephc_curl_easy_setopt_long(id, CURLOPT_RETURNTRANSFER, 1),
+            1,
+            "the one PHP-layer option the prelude forwards to the long setter"
+        );
+        assert_eq!(
+            unsafe { elephc_curl_easy_setopt_str(id, CURLOPT_URL, url.as_ptr(), url.len()) },
+            1
+        );
+        assert_eq!(
+            unsafe {
+                elephc_curl_easy_setopt_slist(
+                    id,
+                    CURLOPT_HTTPHEADER,
+                    header.as_ptr(),
+                    header.len(),
+                )
+            },
+            1
+        );
+
+        // The WRONG setter is refused, in every direction.
+        assert_eq!(
+            elephc_curl_easy_setopt_long(id, CURLOPT_URL, 42),
+            0,
+            "an integer must never reach a char * option"
+        );
+        assert_eq!(
+            elephc_curl_easy_setopt_long(id, CURLOPT_HTTPHEADER, 42),
+            0,
+            "an integer must never reach a slist option"
+        );
+        assert_eq!(
+            elephc_curl_easy_setopt_long(id, CURLOPT_WRITEFUNCTION, 1),
+            0,
+            "an integer must never be installed as a function pointer"
+        );
+        assert_eq!(
+            elephc_curl_easy_setopt_long(id, CURLOPT_BINARYTRANSFER, 1),
+            0,
+            "a PHP-layer option in libcurl's char * range must not be forwarded"
+        );
+        assert_eq!(
+            elephc_curl_easy_setopt_long(id, CURLOPT_SHARE, 1),
+            0,
+            "a share option takes a CURLSH *, never a long"
+        );
+        assert_eq!(
+            unsafe { elephc_curl_easy_setopt_str(id, CURLOPT_TIMEOUT, url.as_ptr(), url.len()) },
+            0,
+            "a char * must never reach a long option"
+        );
+        assert_eq!(
+            unsafe {
+                elephc_curl_easy_setopt_str(id, CURLOPT_HTTPHEADER, url.as_ptr(), url.len())
+            },
+            0,
+            "a char * must never reach a slist option"
+        );
+        assert_eq!(
+            unsafe {
+                elephc_curl_easy_setopt_slist(id, CURLOPT_TIMEOUT, header.as_ptr(), header.len())
+            },
+            0,
+            "a slist must never reach a long option"
+        );
+        assert_eq!(
+            unsafe { elephc_curl_easy_setopt_slist(id, CURLOPT_URL, header.as_ptr(), header.len()) },
+            0,
+            "a slist must never reach a char * option"
+        );
+
+        // An option number that is not in the table at all is refused by all three,
+        // the same answer the prelude's `ValueError` path already gives it.
+        assert_eq!(elephc_curl_easy_setopt_long(id, 999_999, 1), 0);
+        assert_eq!(
+            unsafe { elephc_curl_easy_setopt_str(id, 999_999, url.as_ptr(), url.len()) },
+            0
+        );
+        assert_eq!(
+            unsafe {
+                elephc_curl_easy_setopt_slist(id, 999_999, header.as_ptr(), header.len())
+            },
+            0
+        );
+
+        // The handle is still fully usable after every refusal: nothing was
+        // half-applied and no list was left dangling behind a rejected call.
+        assert_eq!(elephc_curl_easy_perform(id), 1);
+        elephc_curl_easy_free(id);
     }
 }
 

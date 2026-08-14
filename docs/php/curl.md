@@ -347,6 +347,10 @@ curl_setopt($ch, CURLOPT_POSTFIELDS, [
 ]);
 ```
 
+An **empty** array is php-src's own special case and posts an empty
+`application/x-www-form-urlencoded` body — exactly what
+`CURLOPT_POSTFIELDS => ""` posts — never an empty multipart with a boundary.
+
 A string `CURLOPT_POSTFIELDS` still posts that string verbatim, unchanged.
 Nested-array flattening matches php-src exactly: one part per inner element, all
 sharing the outer key. When no `postname` is given, `CURLFile` sends the full

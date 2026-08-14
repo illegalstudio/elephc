@@ -398,6 +398,56 @@ fn multi_setopt_pushfunction_warns_and_returns_false() {
     );
 }
 
+/// PUNCH-LIST ITEM 7: `curl_multi_setopt()` CLASSIFIES THE OPTION BEFORE IT TYPE-CHECKS
+/// THE VALUE, the order php-src uses (one `switch (option)`) and the order `curl_setopt()`
+/// already used. A closure on `CURLMOPT_PUSHFUNCTION` is therefore the ordinary
+/// "unsupported by this build" answer — `false` plus PHP's warning, locked decision 7 —
+/// not a `TypeError` about scalar types, and a closure on an option number that is not a
+/// multi option at all is php-src's `ValueError`. Measured on PHP 8.4.20:
+/// `curl_multi_setopt($mh, 999999, function () {})` raises `ValueError`, and a non-callable
+/// array on `CURLMOPT_PUSHFUNCTION` raises a TypeError about a CALLBACK — never the
+/// `string|int|float|bool` complaint the value-first order produced here.
+#[test]
+fn multi_setopt_classifies_the_option_before_type_checking_the_value() {
+    if skip_without_curl_native("multi_setopt_classifies_the_option_before_type_checking_the_value")
+    {
+        return;
+    }
+    let output = compile_and_run_capture(
+        r#"<?php
+        $mh = curl_multi_init();
+        try {
+            echo curl_multi_setopt($mh, CURLMOPT_PUSHFUNCTION, function () { return 0; }) ? "T" : "F", "\n";
+        } catch (TypeError $e) {
+            echo "TypeError: ", $e->getMessage(), "\n";
+        }
+        try {
+            curl_multi_setopt($mh, 999999, function () { return 0; });
+            echo "no-throw\n";
+        } catch (ValueError $e) {
+            echo "ValueError\n";
+        } catch (TypeError $e) {
+            echo "TypeError\n";
+        }
+        // A non-scalar on a REAL carryable option is still a TypeError, unchanged.
+        try {
+            curl_multi_setopt($mh, CURLMOPT_MAXCONNECTS, [1]);
+            echo "no-throw\n";
+        } catch (TypeError $e) {
+            echo "TypeError\n";
+        }
+        "#,
+    );
+    assert_eq!(output.stdout, "F\nValueError\nTypeError\n");
+    assert!(
+        output.stderr.contains(
+            "Warning: curl_multi_setopt(): Option 20014 is not supported by this build"
+        ),
+        "the closure must reach the unsupported-option warning, not a type error; stderr was: {}",
+        output.stderr
+    );
+}
+
 /// `curl_multi_init()` mints a real `CurlMultiHandle` object (PHP 8's object model, not a
 /// resource), and `curl_multi_close()` is the no-op PHP 8 documents — the handle stays
 /// usable after it.

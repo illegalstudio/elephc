@@ -85,6 +85,48 @@ fn curl_version_exposes_php_key_shape() {
     assert_eq!(out, "array\nint\nint\nstring\nprotocols\nssl\n");
 }
 
+/// PUNCH-LIST ITEMS 4 AND 5, through the real prelude/`json_decode()` path: PHP's
+/// `feature_list` is an ASSOCIATIVE `name => bool` map (never a list of feature-name
+/// strings), and the age-gated sub-library keys — `iconv_ver_num` above all, which used
+/// to be gated on a non-null `libssh_version` and therefore never appeared — are present
+/// whatever this build was compiled with. Measured on PHP 8.4.20:
+/// `var_dump(curl_version()['feature_list'])` prints 29 `string => bool` pairs, and
+/// `curl_version()['iconv_ver_num']` is `0` on a build with no libssh at all.
+#[test]
+fn curl_version_feature_list_is_an_assoc_of_bools() {
+    if skip_without_curl_native("curl_version_feature_list_is_an_assoc_of_bools") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        $v = curl_version();
+        $list = $v['feature_list'];
+        echo is_array($list) ? "array\n" : "not-array\n";
+        echo count($list), "\n";
+        // A list of strings would have integer keys and string values; PHP's shape is
+        // the other way round for every entry.
+        $strings = 0;
+        $bools = 0;
+        foreach ($list as $name => $enabled) {
+            if (is_string($name)) { $strings++; }
+            if (is_bool($enabled)) { $bools++; }
+        }
+        echo $strings, " ", $bools, "\n";
+        echo $list['SSL'] ? "ssl\n" : "no-ssl\n";
+        echo $list['libz'] ? "libz\n" : "no-libz\n";
+        echo $list['krb4'] === false ? "krb4-false\n" : "krb4-wrong\n";
+        echo array_key_exists('iconv_ver_num', $v) ? "iconv\n" : "no-iconv\n";
+        echo array_key_exists('libssh_version', $v) ? "libssh\n" : "no-libssh\n";
+        echo array_key_exists('ares', $v) ? "ares\n" : "no-ares\n";
+        echo array_key_exists('libidn', $v) ? "libidn\n" : "no-libidn\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        "array\n29\n29 29\nssl\nlibz\nkrb4-false\niconv\nlibssh\nares\nlibidn\n"
+    );
+}
+
 /// The PHP names come from the injected prelude, so `function_exists()` sees them
 /// exactly like php-src's own `ext/curl` registrations.
 #[test]

@@ -388,6 +388,91 @@ fn wave_b_postfields_array_form_encodes() {
     );
 }
 
+/// PUNCH-LIST ITEM 16: `CURLOPT_POSTFIELDS => []` posts an EMPTY STRING BODY, not an
+/// empty multipart. php-src special-cases the empty array before it builds any mime
+/// structure, and the difference is visible on the wire: measured on PHP 8.4.20 against a
+/// local echo server, `[]` sends `Content-Type: application/x-www-form-urlencoded` with a
+/// zero-length body — identical to `CURLOPT_POSTFIELDS => ""` — whereas a built-but-empty
+/// `curl_mime` sends `multipart/form-data` with a boundary. The fixture's `/echo` route
+/// dumps every request header plus the body, so both halves are checked here.
+#[test]
+fn postfields_empty_array_posts_an_empty_urlencoded_body() {
+    if skip_without_curl_native("postfields_empty_array_posts_an_empty_urlencoded_body") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        function post($url, $fields) {{
+            $ch = curl_init($url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $fields);
+            $body = curl_exec($ch);
+            echo str_contains($body, "method=POST") ? "post " : "no-post ";
+            echo str_contains($body, "content-type: application/x-www-form-urlencoded") ? "urlencoded " : "not-urlencoded ";
+            echo str_contains($body, "multipart") || str_contains($body, "boundary") ? "multipart " : "no-multipart ";
+            echo str_ends_with($body, "body=\n") ? "empty-body\n" : "some-body\n";
+        }}
+        post("{url}", []);
+        post("{url}", "");
+        "#
+    ));
+    // Both forms must answer identically — that is the whole claim.
+    assert_eq!(
+        out,
+        "post urlencoded no-multipart empty-body\npost urlencoded no-multipart empty-body\n"
+    );
+}
+
+/// PUNCH-LIST ITEM 2: a copy starts with a CLEAN transfer record. `curl_errno()` /
+/// `curl_error()` / `curl_multi_getcontent()` on a freshly copied handle report the copy's
+/// own (empty) history, never the source's last transfer — measured on PHP 8.4.20, where a
+/// copy of a handle that had just failed with `CURLE_COULDNT_CONNECT` answers `0` / `""` /
+/// `""`. `CURLOPT_RETURNTRANSFER` is an OPTION and does travel, which the last line pins so
+/// the fix cannot regress into "the copy streams to stdout instead".
+#[test]
+fn copy_handle_starts_with_a_clean_error_and_body() {
+    if skip_without_curl_native("copy_handle_starts_with_a_clean_error_and_body") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        // 1. after a SUCCESSFUL transfer, the captured body does not travel.
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $body = curl_exec($ch);
+        echo $body === "hello-curl" ? "orig-body\n" : "orig-wrong\n";
+        echo curl_multi_getcontent($ch) === "hello-curl" ? "orig-content\n" : "orig-no-content\n";
+        $copy = curl_copy_handle($ch);
+        echo curl_multi_getcontent($copy) === "" ? "copy-empty\n" : "copy-inherited\n";
+        echo curl_errno($copy), "\n";
+        echo curl_error($copy) === "" ? "copy-no-error\n" : "copy-error\n";
+
+        // 2. after a FAILED transfer, errno/error do not travel either.
+        $bad = curl_init("xyzzy://not-a-protocol");
+        curl_setopt($bad, CURLOPT_RETURNTRANSFER, true);
+        $failed = curl_exec($bad);
+        echo $failed === false ? "failed\n" : "unexpected-success\n";
+        echo curl_errno($bad) !== 0 ? "orig-errno\n" : "orig-no-errno\n";
+        echo curl_error($bad) !== "" ? "orig-message\n" : "orig-no-message\n";
+        $badCopy = curl_copy_handle($bad);
+        echo curl_errno($badCopy), "\n";
+        echo curl_error($badCopy) === "" ? "clean\n" : "dirty\n";
+
+        // 3. RETURNTRANSFER itself is an option and DID travel: the copy captures.
+        echo curl_exec($copy) === "hello-curl" ? "copy-captures\n" : "copy-streams\n";
+        "#
+    ));
+    assert_eq!(
+        out,
+        "orig-body\norig-content\ncopy-empty\n0\ncopy-no-error\n\
+         failed\norig-errno\norig-message\n0\nclean\ncopy-captures\n"
+    );
+}
+
 /// A POST body containing NUL bytes survives intact: the bridge sets
 /// `CURLOPT_POSTFIELDSIZE_LARGE` before `CURLOPT_COPYPOSTFIELDS`, so libcurl copies the
 /// exact byte count instead of calling `strlen` and truncating at the first NUL. A plain

@@ -138,10 +138,14 @@ pub unsafe extern "C" fn elephc_curl_easy_set_url(id: i64, ptr: *const u8, len: 
 
 /// Sets a `long`-valued `curl_setopt` option (`CURLOPT_RETURNTRANSFER` at
 /// minimum — see `crate::php_layer::apply_long_option` for the full Task 3
-/// option table). Returns `0` for an unknown id or a libcurl setopt failure.
+/// option table). Returns `0` for an unknown id, an option this setter does not
+/// carry (see [`long_option_is_carryable`]), or a libcurl setopt failure.
 #[no_mangle]
 pub extern "C" fn elephc_curl_easy_setopt_long(id: i64, opt: i32, value: i64) -> i32 {
     handles::ffi_guard(0, || {
+        if !long_option_is_carryable(opt) {
+            return 0;
+        }
         let mut guard = handles::lock_recover(handles::handles());
         let Some(entry) = guard.get_mut(&id) else {
             return 0;
@@ -150,11 +154,47 @@ pub extern "C" fn elephc_curl_easy_setopt_long(id: i64, opt: i32, value: i64) ->
     })
 }
 
+/// THE ABI'S OWN KIND CHECK, THE WRITE-SIDE MIRROR OF `easy::getinfo_long`'s
+/// `CURLINFO_TYPEMASK` GUARD. `curl_easy_setopt` is variadic and reads its third
+/// argument purely from the option's numeric range (libcurl 8.21.0,
+/// `lib/setopt.c`): a `long` handed to a `10000..20000` option is read as a
+/// `char *` and dereferenced, and an integer handed to a `20000..30000` option is
+/// read as a FUNCTION POINTER and called. Measured against this pinned libcurl:
+/// `curl_easy_setopt(curl, CURLOPT_URL, 42L)` kills the process with SIGSEGV,
+/// while `curl_easy_setopt(curl, CURLOPT_TIMEOUT, "file:///dev/null")` and the
+/// same pointer on `CURLOPT_HTTPHEADER` are ACCEPTED with `CURLE_OK` — a wrong
+/// call is as likely to be silently wrong as to crash. The curl prelude classifies correctly
+/// before it picks a setter (`crate::options::option_kind`), and so does the eval
+/// interpreter — but "the only two callers get it right" is not the same
+/// guarantee as "the boundary refuses to get it wrong", and this is an
+/// `extern "C"` boundary any future caller can reach. Each setter therefore
+/// re-checks the frozen table itself and answers its ordinary failure return (`0`,
+/// PHP `false`) WITHOUT calling libcurl when the kinds disagree. The cost is one
+/// binary search over a ~300-row static table per `curl_setopt()` call.
+///
+/// [`elephc_curl_easy_setopt_long`] accepts the two kinds whose value really is an
+/// integer — `KIND_LONG` and `KIND_OFF_T`, which `apply_long_option` routes to
+/// `setopt_long`/`setopt_off_t` by range — plus `CURLOPT_RETURNTRANSFER`, the one
+/// PHP-layer pseudo-option the prelude forwards here (it never reaches libcurl;
+/// `apply_long_option` handles it and returns). Every other `KIND_PHP_LAYER` row
+/// is refused: `CURLOPT_BINARYTRANSFER` (19914) sits in libcurl's `char *` range
+/// and would be exactly the wild-pointer write this check exists to stop.
+fn long_option_is_carryable(opt: i32) -> bool {
+    if opt == php_layer::CURLOPT_RETURNTRANSFER {
+        return true;
+    }
+    matches!(
+        options::option_kind(opt),
+        options::KIND_LONG | options::KIND_OFF_T
+    )
+}
+
 /// Sets a string-valued `curl_setopt` option, forwarded to real
 /// `curl_easy_setopt` unchanged — except `CURLOPT_POSTFIELDS`, which goes
 /// through [`set_postfields`] because a request body is not a C string.
-/// Returns `0` for an unknown id, embedded NUL bytes, or a libcurl setopt
-/// failure.
+/// Returns `0` for an unknown id, an option that is not `KIND_STRING` in the
+/// frozen table (the kind check [`long_option_is_carryable`] documents),
+/// embedded NUL bytes, or a libcurl setopt failure.
 ///
 /// # Safety
 /// `ptr` must be valid for `len` bytes when non-null.
@@ -166,6 +206,12 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
     len: usize,
 ) -> i32 {
     handles::ffi_guard(0, || {
+        // Refused BEFORE the bytes are even read: a `char *` written into a `long`
+        // option is the mirror image of the hazard the long setter guards, and a
+        // slist option would make libcurl walk the string as a linked list.
+        if options::option_kind(opt) != options::KIND_STRING {
+            return 0;
+        }
         // The body must be read as BYTES, before any `CString` conversion: a
         // POST body may legitimately contain NUL (a PHP string is binary-safe,
         // and so is `application/octet-stream`), and `bytes_to_cstring` would
@@ -209,8 +255,10 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
 /// after libcurl has accepted the replacement, so a failed `setopt` leaves the
 /// handle exactly as it was rather than pointing at freed memory.
 ///
-/// Returns `0` for an unknown id, a null pointer with a nonzero length, an item
-/// libcurl could not allocate, or a libcurl setopt failure.
+/// Returns `0` for an unknown id, an option that is not `KIND_SLIST` in the
+/// frozen table (the kind check [`long_option_is_carryable`] documents), a null
+/// pointer with a nonzero length, an item libcurl could not allocate, or a
+/// libcurl setopt failure.
 ///
 /// # Safety
 /// `ptr` must be valid for `len` bytes when non-null.
@@ -222,6 +270,12 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_slist(
     len: usize,
 ) -> i32 {
     handles::ffi_guard(0, || {
+        // Checked before anything is allocated, so a refusal also builds no list to
+        // leak: handing a `struct curl_slist *` to a `char *`/`long` option would have
+        // libcurl read the list header as a string or an integer.
+        if options::option_kind(opt) != options::KIND_SLIST {
+            return 0;
+        }
         let blob: &[u8] = if len == 0 {
             &[]
         } else if ptr.is_null() {
@@ -833,6 +887,30 @@ pub extern "C" fn elephc_curl_easy_upkeep(id: i64) -> i32 {
 /// state — and registers the copy under a fresh id, which it returns. `0` for
 /// an unknown id or a libcurl allocation failure.
 ///
+/// **THE COPY STARTS WITH A CLEAN TRANSFER RECORD: NO CAPTURED BODY, NO
+/// `curl_errno()`, NO `curl_error()`.** Only the OPTIONS travel — including
+/// `CURLOPT_RETURNTRANSFER`, which is an option (php-src's `curl_copy_handle`
+/// copies its write METHOD, so the copy keeps `curl_exec()`'s return shape) —
+/// never the RESULT of a transfer the copy never ran. Measured on PHP 8.4.20 /
+/// libcurl 8.19.0:
+///
+/// ```text
+/// $ch = curl_init(); curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+/// curl_setopt($ch, CURLOPT_URL, "http://127.0.0.1:1/nope"); curl_exec($ch);
+/// // orig: curl_errno 7, curl_error "Failed to connect …"
+/// $copy = curl_copy_handle($ch);
+/// // copy: curl_errno 0, curl_error "", curl_multi_getcontent "" — and the same
+/// // three answers after a SUCCESSFUL 549-byte transfer on the original.
+/// ```
+///
+/// An earlier version of this function copied `body`/`last_errno`/`last_error`
+/// onto the duplicate (the original plan mandated carrying the captured body
+/// across), which made `curl_multi_getcontent($copy)`/`curl_errno($copy)`/
+/// `curl_error($copy)` report the ORIGINAL's last transfer before the copy had
+/// performed one — the state php-src leaves untouched in its freshly `ecalloc`'d
+/// `php_curl` (`_php_setup_easy_copy_handlers` copies handlers and options, not
+/// `err.no`/`err.str`/the write buffer).
+///
 /// THE COPY'S CALLBACK PLUMBING IS REINSTALLED, not inherited.
 /// `curl_easy_duphandle` copies every option VALUE, which means the copy would
 /// otherwise point `CURLOPT_WRITEDATA` at the ORIGINAL handle's id (so the
@@ -881,8 +959,10 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
 
         // Snapshot everything the copy needs while the source is borrowed, list
         // options included: `easy::read_slist` walks each list into owned bytes
-        // so the rebuild below never reads the source's memory again.
-        let (copied, return_transfer, body, last_errno, last_error, slist_items) = {
+        // so the rebuild below never reads the source's memory again. The
+        // source's `body`/`last_errno`/`last_error` are deliberately NOT among
+        // them — see this function's doc comment for the measurement.
+        let (copied, return_transfer, slist_items) = {
             let Some(source) = guard.get(&id) else {
                 return 0;
             };
@@ -895,22 +975,12 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
             if copied.is_null() {
                 return 0;
             }
-            (
-                copied,
-                source.return_transfer,
-                source.body.clone(),
-                source.last_errno,
-                source.last_error.clone(),
-                slist_items,
-            )
+            (copied, source.return_transfer, slist_items)
         };
 
         let new_id = handles::next_id();
         let mut entry = EasyEntry::new(copied, new_id);
         entry.return_transfer = return_transfer;
-        entry.body = body;
-        entry.last_errno = last_errno;
-        entry.last_error = last_error;
         unsafe {
             php_layer::install_write_callback(copied, new_id);
             crate::callbacks::install_read_callback(copied, new_id);
@@ -919,12 +989,34 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
                 easy::CURLOPT_ERRORBUFFER,
                 entry.error_buf.as_mut_ptr() as *mut c_void,
             );
-            // CURLOPT_SHARE IS EXPLICITLY CLEARED ON THE COPY, not inherited — the same
-            // "re-point rather than trust the copied value" rule this function already
-            // applies to WRITEDATA/ERRORBUFFER, and for the identical reason: whether
-            // `curl_easy_duphandle` itself carries the raw `CURLSH *` pointer (and its
-            // refcount) across is an internal libcurl detail this bridge does not rely on
-            // either way. The new entry's `share_id` field defaults to `None`
+            // CURLOPT_SHARE IS EXPLICITLY CLEARED ON THE COPY, not inherited — AND THAT IS
+            // PHP'S OWN ANSWER, not merely this bridge's convenience. The question was
+            // reopened by a punch-list item claiming php-src re-applies `ch->share` to the
+            // duplicate; MEASURED on PHP 8.4.20 / libcurl 8.19.0, it does not, at either
+            // level:
+            //
+            // ```text
+            // $sh = curl_share_init(); curl_share_setopt($sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+            // $ch = curl_init(); curl_setopt($ch, CURLOPT_SHARE, $sh);
+            // $copy = curl_copy_handle($ch); unset($ch);
+            // curl_share_setopt($sh, CURLSHOPT_UNSHARE, CURL_LOCK_DATA_DNS);  // true
+            // ```
+            //
+            // libcurl answers `CURLSHE_IN_USE` (PHP `false`) from `curl_share_setopt` for as
+            // long as ANY easy handle is attached (`share->dirty`), so a `true` there means
+            // the surviving copy holds no attachment. The probe is not a false negative: with
+            // two REAL attached handles, freeing one still answers `false`, and PHP's
+            // `WeakReference` shows the copy does not even hold a PHP-level reference to the
+            // share object (it is destroyed by `unset($ch)` while `$copy` is alive), so
+            // php-src's `_php_setup_easy_copy_handlers` carries no `share` across either.
+            // A copy therefore starts genuinely unattached in PHP, exactly as it does here.
+            //
+            // Clearing the option is also what keeps this bridge's own bookkeeping honest —
+            // the same "re-point rather than trust the copied value" rule this function
+            // already applies to WRITEDATA/ERRORBUFFER: whether `curl_easy_duphandle` itself
+            // carries the raw `CURLSH *` pointer (and its refcount) across is an internal
+            // libcurl detail this bridge does not rely on either way. The new entry's
+            // `share_id` field defaults to `None`
             // (`EasyEntry::new`), so setting the option to null here keeps the bridge's
             // `attached`-list bookkeeping and libcurl's real refcount on the share in
             // agreement by construction: the copy starts genuinely unattached. Without
@@ -1207,13 +1299,33 @@ pub(crate) unsafe fn publish_bytes(
 /// `curl_version_info(CURLVERSION_NOW)`, matching the key set
 /// `.superpowers/sdd/php-curl-family/global-constraints.md`'s "`curl_version()`
 /// keys" section documents. The always-present fields
-/// (`version_number`/`age`/`features`/`ssl_version_number`/`version`/`host`/
-/// `ssl_version`/`libz_version`/`protocols`) match every libcurl build; the
-/// optional sub-library fields (`ares`/`ares_num`, `libidn`,
-/// `iconv_ver_num`/`libssh_version`, `brotli_ver_num`/`brotli_version`,
-/// `feature_list`) are included only when libcurl reports a non-null
-/// pointer, mirroring PHP's own `_php_curl_version` (`ext/curl/interface.c`),
-/// which omits keys for libraries this libcurl build was not compiled with.
+/// (`version_number`/`age`/`features`/`feature_list`/`ssl_version_number`/
+/// `version`/`host`/`protocols`) match every libcurl build; `ssl_version` and
+/// `libz_version` are included only for a non-null pointer, which is php-src's
+/// own rule for those two (`if (d->ssl_version) { … }`).
+///
+/// THE SUB-LIBRARY FIELDS ARE GATED ON THE STRUCT'S `age`, NOT ON WHETHER THE
+/// POINTER IS NULL, because that is php-src's rule and the two disagree for
+/// every library this libcurl was built without. `_php_curl_version`
+/// (`ext/curl/interface.c`) adds `ares`/`ares_num` at `CURLVERSION_SECOND`,
+/// `libidn` at `CURLVERSION_THIRD`, `iconv_ver_num`/`libssh_version` at
+/// `CURLVERSION_FOURTH` and `brotli_ver_num`/`brotli_version` at
+/// `CURLVERSION_FIFTH`, reporting a null string as `""` rather than dropping the
+/// key. Measured on PHP 8.4.20 (age 11, no c-ares, no libidn, no libssh):
+/// `ares => ''`, `ares_num => 0`, `libidn => ''`, `iconv_ver_num => 0`,
+/// `libssh_version => ''` are ALL present. The previous null-pointer gating cost
+/// `iconv_ver_num` on every build — it hung off `libssh_version`'s pointer, and
+/// no libssh means no `iconv_ver_num` — which is punch-list item 5.
+///
+/// `feature_list` IS AN ASSOCIATIVE `name => bool` MAP, NOT A LIST OF STRINGS,
+/// and it is built from php-src's OWN fixed 29-name table against the `features`
+/// bitmask — never from libcurl's `feature_names` array, which is a different,
+/// lower-cased, build-dependent set (`AsynchDNS` vs `asyn-dns`, and it omits
+/// every feature this build lacks instead of reporting it `false`). Measured on
+/// PHP 8.4.20: `var_dump(curl_version()["feature_list"])` is 29 `string => bool`
+/// entries in the order [`PHP_FEATURE_LIST`] repeats, and their `true` bits add
+/// up to `features` minus `CURL_VERSION_THREADSAFE` (1<<30), which php 8.4 does
+/// not name.
 fn build_global_info_json() -> String {
     let info = easy::version_info();
     let mut map = serde_json::Map::new();
@@ -1232,27 +1344,95 @@ fn build_global_info_json() -> String {
         "protocols".to_string(),
         c_str_array(info.protocols).into(),
     );
-    insert_optional_str(&mut map, "ares", info.ares);
-    if !info.ares.is_null() {
+    // php-src's age gates, in php-src's order. `c_str_or_empty` is what turns a
+    // library this build lacks into `""`, which is the value php reports for it.
+    if info.age >= CURLVERSION_SECOND {
+        map.insert("ares".to_string(), c_str_or_empty(info.ares).into());
         map.insert("ares_num".to_string(), info.ares_num.into());
     }
-    insert_optional_str(&mut map, "libidn", info.libidn);
-    insert_optional_str(&mut map, "libssh_version", info.libssh_version);
-    if !info.libssh_version.is_null() {
+    if info.age >= CURLVERSION_THIRD {
+        map.insert("libidn".to_string(), c_str_or_empty(info.libidn).into());
+    }
+    if info.age >= CURLVERSION_FOURTH {
         map.insert("iconv_ver_num".to_string(), info.iconv_ver_num.into());
-    }
-    insert_optional_str(&mut map, "brotli_version", info.brotli_version);
-    if !info.brotli_version.is_null() {
-        map.insert("brotli_ver_num".to_string(), info.brotli_ver_num.into());
-    }
-    if !info.feature_names.is_null() {
         map.insert(
-            "feature_list".to_string(),
-            c_str_array(info.feature_names).into(),
+            "libssh_version".to_string(),
+            c_str_or_empty(info.libssh_version).into(),
         );
     }
+    if info.age >= CURLVERSION_FIFTH {
+        map.insert("brotli_ver_num".to_string(), info.brotli_ver_num.into());
+        map.insert(
+            "brotli_version".to_string(),
+            c_str_or_empty(info.brotli_version).into(),
+        );
+    }
+    let mut features = serde_json::Map::new();
+    for (name, bit) in PHP_FEATURE_LIST {
+        features.insert(
+            (*name).to_string(),
+            serde_json::Value::Bool(info.features & bit != 0),
+        );
+    }
+    map.insert(
+        "feature_list".to_string(),
+        serde_json::Value::Object(features),
+    );
     serde_json::Value::Object(map).to_string()
 }
+
+/// `CURLVERSION_SECOND`: the `curl_version_info_data` age that added
+/// `ares`/`ares_num` (libcurl 7.11.1, `include/curl/curl.h`).
+const CURLVERSION_SECOND: c_int = 1;
+/// `CURLVERSION_THIRD`: the age that added `libidn` (libcurl 7.12.0).
+const CURLVERSION_THIRD: c_int = 2;
+/// `CURLVERSION_FOURTH`: the age that added `iconv_ver_num`/`libssh_version`
+/// (libcurl 7.16.1).
+const CURLVERSION_FOURTH: c_int = 3;
+/// `CURLVERSION_FIFTH`: the age that added `brotli_ver_num`/`brotli_version`
+/// (libcurl 7.57.0).
+const CURLVERSION_FIFTH: c_int = 4;
+
+/// php-src's own `curl_version()` feature table: the `feature_list` key names it
+/// publishes, paired with the `CURL_VERSION_*` bit each one reports
+/// (`ext/curl/interface.c`, `curl_version`). THE NAMES AND THE ORDER ARE PHP'S,
+/// NOT libcurl's — several are legacy spellings for capabilities libcurl itself
+/// no longer advertises (`krb4`, `NTLMWB`, `CharConv`), and php reports them
+/// `false` rather than omitting them. `CURL_VERSION_THREADSAFE` (1<<30) and
+/// `CURL_VERSION_CURLDEBUG` (1<<13) are deliberately absent: php 8.4 does not
+/// name them, and a 30th key would be a divergence in the other direction
+/// (measured: PHP 8.4.20 reports exactly these 29 keys).
+pub(crate) const PHP_FEATURE_LIST: &[(&str, c_int)] = &[
+    ("AsynchDNS", 1 << 7),     // CURL_VERSION_ASYNCHDNS
+    ("CharConv", 1 << 12),     // CURL_VERSION_CONV
+    ("Debug", 1 << 6),         // CURL_VERSION_DEBUG
+    ("GSS-Negotiate", 1 << 5), // CURL_VERSION_GSSNEGOTIATE
+    ("IDN", 1 << 10),          // CURL_VERSION_IDN
+    ("IPv6", 1 << 0),          // CURL_VERSION_IPV6
+    ("krb4", 1 << 1),          // CURL_VERSION_KERBEROS4
+    ("Largefile", 1 << 9),     // CURL_VERSION_LARGEFILE
+    ("libz", 1 << 3),          // CURL_VERSION_LIBZ
+    ("NTLM", 1 << 4),          // CURL_VERSION_NTLM
+    ("NTLMWB", 1 << 15),       // CURL_VERSION_NTLM_WB
+    ("SPNEGO", 1 << 8),        // CURL_VERSION_SPNEGO
+    ("SSL", 1 << 2),           // CURL_VERSION_SSL
+    ("SSPI", 1 << 11),         // CURL_VERSION_SSPI
+    ("TLS-SRP", 1 << 14),      // CURL_VERSION_TLSAUTH_SRP
+    ("HTTP2", 1 << 16),        // CURL_VERSION_HTTP2
+    ("GSSAPI", 1 << 17),       // CURL_VERSION_GSSAPI
+    ("KERBEROS5", 1 << 18),    // CURL_VERSION_KERBEROS5
+    ("UNIX_SOCKETS", 1 << 19), // CURL_VERSION_UNIX_SOCKETS
+    ("PSL", 1 << 20),          // CURL_VERSION_PSL
+    ("HTTPS_PROXY", 1 << 21),  // CURL_VERSION_HTTPS_PROXY
+    ("MULTI_SSL", 1 << 22),    // CURL_VERSION_MULTI_SSL
+    ("BROTLI", 1 << 23),       // CURL_VERSION_BROTLI
+    ("ALTSVC", 1 << 24),       // CURL_VERSION_ALTSVC
+    ("HTTP3", 1 << 25),        // CURL_VERSION_HTTP3
+    ("UNICODE", 1 << 27),      // CURL_VERSION_UNICODE
+    ("ZSTD", 1 << 26),         // CURL_VERSION_ZSTD
+    ("HSTS", 1 << 28),         // CURL_VERSION_HSTS
+    ("GSASL", 1 << 29),        // CURL_VERSION_GSASL
+];
 
 /// Converts a possibly-null `*const c_char` to an owned `String` (empty for
 /// null), replacing invalid UTF-8 with the standard replacement character so

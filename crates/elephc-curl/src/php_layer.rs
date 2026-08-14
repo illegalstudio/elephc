@@ -146,6 +146,17 @@ unsafe extern "C" fn write_callback(
 /// `libc::write` may write fewer bytes than requested, e.g. to a pipe).
 /// Returns the number of bytes actually written, so a partial/failed
 /// underlying write correctly reports back to libcurl as a short write.
+///
+/// A WRITE INTERRUPTED BY A SIGNAL IS RETRIED, NOT REPORTED AS A FAILURE.
+/// `write(2)` returns `-1`/`EINTR` when a signal is delivered before any byte
+/// has been transferred, which says nothing about fd 1 — but the caller turns a
+/// short return into `CURLE_WRITE_ERROR` and aborts the whole transfer, so
+/// treating it as terminal made any signal that arrives mid-download (a
+/// `SIGCHLD` from a background process, an alarm, a resized terminal's
+/// `SIGWINCH`) able to kill a streaming `curl_exec()`. Every other `errno` is
+/// still terminal, and a `0` return on a NONZERO count still ends the loop: per
+/// POSIX that is not an interruption but a write that made no progress, and
+/// retrying it would spin forever.
 fn write_all_stdout(bytes: &[u8]) -> usize {
     let mut written = 0usize;
     while written < bytes.len() {
@@ -158,7 +169,13 @@ fn write_all_stdout(bytes: &[u8]) -> usize {
                 bytes.len() - written,
             )
         };
-        if n <= 0 {
+        if n < 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            break;
+        }
+        if n == 0 {
             break;
         }
         written += n as usize;
