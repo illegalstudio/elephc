@@ -77,7 +77,7 @@
 //!   throw instead of `string|false`; `curl_version()` leaves its return type undeclared
 //!   instead of `array|false`. `curl_strerror()` returns `string` rather than `?string`,
 //!   which is not a limitation but a value that is never null. Runtime behaviour is
-//!   otherwise PHP's. `docs/php/curl.md` (Task 14) is where these reach users.
+//!   otherwise PHP's. `docs/php/curl.md`'s "Differences from PHP" section is where these reach users.
 //! - THE MULTI INTERFACE ADDS FOUR MORE DIVERGENCES OF THE SAME FAMILY, all in Task 9's
 //!   surface and all documented at their declarations: `curl_multi_info_read()` leaves its
 //!   return type undeclared instead of `array|false` (declaring the union makes a
@@ -196,7 +196,7 @@ final class CurlHandle {
 // expected nor narrows it after a `=== false` guard, so the union return would make the
 // standard `$ch = curl_init(); curl_setopt($ch, …);` flow a COMPILE ERROR. Failure here
 // means libcurl is out of memory, which no real program recovers from anyway. Error
-// handling uses try/catch. (docs/php/curl.md, Task 14, records this for users.)
+// handling uses try/catch. (docs/php/curl.md records this for users.)
 function curl_init(?string $url = null): CurlHandle {
     $raw = __elephc_curl_easy_init();
     if ($raw === false) {
@@ -411,7 +411,7 @@ function curl_setopt(CurlHandle $handle, int $option, mixed $value): bool {
         // callback already receives the handle as its first argument, which is what it is
         // there for), or capture only what you need by value. Pinned by
         // `curl_callback_capturing_its_own_handle_leaks_the_session` in
-        // tests/codegen/curl/callbacks.rs; see docs/php/curl.md (Task 14).
+        // tests/codegen/curl/callbacks.rs; see docs/php/curl.md.
         $handle->__elephc_callbacks[$slot] = $normalized;
         if ($slot === 0) {
             // php-src keeps ONE write mode: installing CURLOPT_WRITEFUNCTION selects
@@ -782,17 +782,17 @@ function curl_error(CurlHandle $handle): string {
     return $message;
 }
 
-// KNOWN NOISE, NOT FIXED: `$handle` is unused (the function is a no-op) and the
-// checker (`src/types/warnings/scope_usage.rs`) has no per-parameter or per-prelude
-// exemption for that — only a leading `_` in the name suppresses it, which is not
-// available here because `$handle` is PHP-VISIBLE: `curl_close(handle: $ch)` is legal
-// PHP 8 named-argument syntax, and renaming the parameter would silently break it
-// (`src/types/signatures.rs` requires parameter names to stay coherent with php-src).
-// Compiling any program that calls `curl_close()` therefore prints a harmless
-// `Unused variable: $handle` warning from the injected prelude (verified: it appears
-// unconditionally when compiling through the real CLI, e.g. `elephc file.php
-// --emit-asm`, not gated behind any flag) — no codegen test caught this because none
-// of them assert on the FULL warning set, only on specific expected diagnostics.
+// `$handle` is unused because the function is a no-op, and it CANNOT be renamed to the
+// `_handle` form the checker ignores: the name is PHP-VISIBLE, since `curl_close(handle:
+// $ch)` is legal PHP 8 named-argument syntax and `src/types/signatures.rs` requires
+// parameter names to stay coherent with php-src. This used to print a bogus
+// `Unused variable: $handle` on every compile of every program that called it, pointing
+// at an invisible prelude line. The fix is in the checker, not here:
+// `src/types/warnings/scope_usage.rs` now exempts EMPTY-BODIED functions entirely, since
+// a body with no statements cannot read anything and the parameter list of a deliberate
+// no-op is public contract. `curl_multi_close()` and `curl_share_close()` below are the
+// same shape and covered by the same exemption. Pinned in
+// `tests/error_tests/warnings.rs::test_warning_empty_body_params_not_flagged_as_unused`.
 function curl_close(CurlHandle $handle): void {}
 
 // `curl_getinfo()` DISPATCHES ON THE OPTION'S TYPE MASK, exactly as php-src does
@@ -1023,7 +1023,7 @@ function curl_strerror(int $error_code): string {
 // representation; returning the decoded hash through it reinterprets the payload and
 // every string-keyed read comes back `NULL` (measured: `$v['version']` was `NULL` with
 // the declaration, `"8.21.0"` without). Undeclared keeps the runtime shape honest.
-// (docs/php/curl.md, Task 14, records this for users.)
+// (docs/php/curl.md records this for users.)
 function curl_version() {
     $json = __elephc_curl_version();
     if ($json === "") {
@@ -1235,9 +1235,10 @@ function curl_multi_info_read(CurlMultiHandle $multi_handle, int &$queued_messag
     return ["msg" => $msg, "result" => $result, "handle" => $handle];
 }
 
-// KNOWN NOISE, NOT FIXED: `$multi_handle` is unused, for the same reason `curl_close()`'s
-// `$handle` is (see its comment) — the function is a no-op in PHP 8 and the parameter name
-// is PHP-visible named-argument surface that cannot be renamed to `_multi_handle`.
+// `$multi_handle` is unused for the same reason `curl_close()`'s `$handle` is (see its
+// comment): the function is a no-op in PHP 8 and the parameter name is PHP-visible
+// named-argument surface that cannot be renamed to `_multi_handle`. The checker's
+// empty-body exemption keeps it from warning.
 function curl_multi_close(CurlMultiHandle $multi_handle): void {}
 
 // `curl_multi_getcontent()` READS THE CAPTURE BUFFER WITHOUT CONSUMING IT, because
@@ -1388,9 +1389,10 @@ function curl_share_setopt(CurlShareHandle $share_handle, int $option, mixed $va
     return $applied === 1;
 }
 
-// KNOWN NOISE, NOT FIXED: `$share_handle` is unused, for the same reason `curl_close()`'s
-// `$handle` is (see this file's header) — the function is a no-op in PHP 8 and the
-// parameter name is PHP-visible named-argument surface that cannot be renamed.
+// `$share_handle` is unused for the same reason `curl_close()`'s `$handle` is (see its
+// comment): the function is a no-op in PHP 8 and the parameter name is PHP-visible
+// named-argument surface that cannot be renamed. The checker's empty-body exemption
+// keeps it from warning.
 function curl_share_close(CurlShareHandle $share_handle): void {}
 
 function curl_share_errno(CurlShareHandle $share_handle): int {
@@ -1672,6 +1674,183 @@ mod version_tests {
                 .unwrap_or_else(|e| panic!("{version} curl prelude must tokenize: {e:?}"));
             crate::parser::parse_internal(&tokens)
                 .unwrap_or_else(|e| panic!("{version} curl prelude must parse: {e:?}"));
+        }
+    }
+}
+
+/// The Task-14 SURFACE AUDIT: every PHP-visible name in the frozen
+/// `scripts/docs/curl_surface.json` has a home, and naming it is enough to pull the
+/// prelude in.
+///
+/// The three halves of "does elephc implement `ext/curl`?" live in three different
+/// places, and each needs its own ratchet against the same frozen file:
+///
+/// - FUNCTIONS and CLASSES — here. Declared by the prelude, and reachable by
+///   `detect::program_uses_curl` so the declaration is actually injected.
+/// - CONSTANTS — `crate::types::curl_constants`
+///   (`curl_constants_match_frozen_surface`, both directions, 683 names) and the eval
+///   fork in `elephc_magician::interpreter::curl_constants`.
+/// - `CURLOPT_*` BEHAVIOUR — `elephc_curl::tests`
+///   (`every_frozen_curlopt_is_classified` proves none is silently unknown;
+///   `option_table_matches_the_frozen_surface` proves none is silently misclassified,
+///   with the deliberate rejections listed by name).
+///
+/// This module deliberately re-reads the JSON instead of hard-coding a second list:
+/// a name added to the frozen surface without a home must FAIL here, which is the
+/// only thing that keeps "complete `ext/curl` surface" an auditable claim rather
+/// than a prose one.
+#[cfg(test)]
+mod surface_audit_tests {
+    use super::*;
+    use crate::php_version::PhpVersion;
+    use std::path::Path;
+
+    /// The names the frozen surface records as PHP 8.5 additions (locked decision 8).
+    /// Their `sources` entry is the plan/docs marker rather than a probed 8.4 binary.
+    const PHP_85_SOURCE_MARKER: &str = "php-8.5 (plan/docs)";
+
+    /// Re-parses the frozen surface at test time — the same source of truth the
+    /// constant tables and the bridge's option table are generated from.
+    fn frozen_surface() -> serde_json::Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/docs/curl_surface.json");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        serde_json::from_str(&raw).expect("curl_surface.json must be valid JSON")
+    }
+
+    /// Returns whether the frozen entry for a name is marked PHP 8.5-only.
+    fn is_php_85_only(entry: &serde_json::Value) -> bool {
+        if let Some(sources) = entry.get("sources").and_then(|v| v.as_array()) {
+            return sources
+                .iter()
+                .all(|source| source.as_str() == Some(PHP_85_SOURCE_MARKER));
+        }
+        entry.get("source_note").and_then(|v| v.as_str()) == Some(PHP_85_SOURCE_MARKER)
+    }
+
+    /// EVERY function in the frozen surface is declared by the prelude for the PHP
+    /// version that has it — and the 8.5-only ones are declared for 8.5 ONLY, so an
+    /// `--php-version 8.4` build fails them as "undefined function" the way that
+    /// runtime would.
+    #[test]
+    fn every_frozen_function_is_declared_for_its_php_versions() {
+        let surface = frozen_surface();
+        let functions = surface["functions"]
+            .as_object()
+            .expect("frozen surface must carry a functions map");
+        assert_eq!(functions.len(), 35, "the frozen ext/curl function count changed");
+
+        for (name, entry) in functions {
+            let php_85_only = is_php_85_only(entry);
+            let declaration = format!("function {name}(");
+            for version in PhpVersion::ALL {
+                let source = prelude_source_for_version(version);
+                let declared = source.contains(&declaration);
+                let expected = !php_85_only || version >= PhpVersion::Php85;
+                assert_eq!(
+                    declared, expected,
+                    "{name}() must be declared exactly when expected on {version} \
+                     (php_85_only={php_85_only}); the frozen surface lists it, so it \
+                     needs a prelude wrapper or an explicit version gate"
+                );
+            }
+        }
+    }
+
+    /// EVERY class in the frozen surface is declared by the prelude, under the same
+    /// 8.5 gate. `CURLFile`/`CURLStringFile` are user-constructible; the four handle
+    /// classes are `final` and minted only by the runtime.
+    #[test]
+    fn every_frozen_class_is_declared_for_its_php_versions() {
+        let surface = frozen_surface();
+        let classes = surface["classes"]
+            .as_object()
+            .expect("frozen surface must carry a classes map");
+        assert_eq!(classes.len(), 6, "the frozen ext/curl class count changed");
+
+        for (name, entry) in classes {
+            let php_85_only = is_php_85_only(entry);
+            for version in PhpVersion::ALL {
+                let source = prelude_source_for_version(version);
+                let declared = source.contains(&format!("class {name} {{"))
+                    || source.contains(&format!("class {name}\n"));
+                let expected = !php_85_only || version >= PhpVersion::Php85;
+                assert_eq!(
+                    declared, expected,
+                    "class {name} must be declared exactly when expected on {version} \
+                     (php_85_only={php_85_only})"
+                );
+            }
+        }
+    }
+
+    /// A DECLARATION IS USELESS IF DETECTION NEVER INJECTS IT. Naming any frozen
+    /// function must make `detect::program_uses_curl` true, or a program calling it
+    /// would compile as "undefined function" while the prelude sat unused (locked
+    /// decision 4 makes injection demand-driven, so this is the failure mode).
+    #[test]
+    fn naming_any_frozen_function_triggers_injection() {
+        let surface = frozen_surface();
+        let functions = surface["functions"]
+            .as_object()
+            .expect("frozen surface must carry a functions map");
+        for name in functions.keys() {
+            let program = format!("<?php {name}();");
+            assert!(
+                program_triggers_curl(&program),
+                "calling {name}() must trigger curl prelude injection, but detection \
+                 did not recognize it (see src/curl_prelude/detect.rs)"
+            );
+        }
+    }
+
+    /// The same gate for the six classes, in the two positions that matter most: a
+    /// `new` expression and an `instanceof` test. `CurlHandle` is not constructible at
+    /// run time, but detection is purely syntactic and must fire either way.
+    #[test]
+    fn naming_any_frozen_class_triggers_injection() {
+        let surface = frozen_surface();
+        let classes = surface["classes"]
+            .as_object()
+            .expect("frozen surface must carry a classes map");
+        for name in classes.keys() {
+            for program in [
+                format!("<?php $x = new {name}();"),
+                format!("<?php $x = null; $y = $x instanceof {name};"),
+                format!("<?php function f({name} $h): void {{ $h->x = 1; }}"),
+            ] {
+                assert!(
+                    program_triggers_curl(&program),
+                    "{program} must trigger curl prelude injection, but detection did \
+                     not recognize class {name}"
+                );
+            }
+        }
+    }
+
+    /// Parses a PHP snippet and asks the real detector whether it uses curl.
+    fn program_triggers_curl(source: &str) -> bool {
+        let tokens = crate::lexer::tokenize(source)
+            .unwrap_or_else(|e| panic!("audit snippet must tokenize ({source}): {e:?}"));
+        let program = crate::parser::parse_internal(&tokens)
+            .unwrap_or_else(|e| panic!("audit snippet must parse ({source}): {e:?}"));
+        detect::program_uses_curl(&program)
+    }
+
+    /// The audit's own negative control: a curl-free program must NOT pull the prelude
+    /// in. Without this, a detector that always answered `true` would pass every test
+    /// above while breaking locked decision 4 (pay-for-use) for the whole language.
+    #[test]
+    fn a_curl_free_program_does_not_trigger_injection() {
+        for source in [
+            "<?php echo 1;",
+            "<?php function curl_helper($x) { return $x; } curl_helper(1);",
+            "<?php $c = new Curler(); $c->run();",
+        ] {
+            assert!(
+                !program_triggers_curl(source),
+                "{source} must NOT trigger curl prelude injection"
+            );
         }
     }
 }

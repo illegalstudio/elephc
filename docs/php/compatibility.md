@@ -21,7 +21,7 @@ Overall builtin coverage: **473 / 2030** (23%).
 | `calendar`† | 0 / 18 | 0% | 0 | 0 |
 | `core` | 32 / 59 | 54% | 29 | 30 |
 | `ctype` | 4 / 11 | 36% | 4 | 4 |
-| `curl` | 0 / 33 | 0% | 0 | 0 |
+| `curl`† | 0 / 33 | 0% | 0 | 0 |
 | `date`† | 11 / 48 | 23% | 11 | 11 |
 | `dba` | 0 / 15 | 0% | 0 | 0 |
 | `dom` | 0 / 2 | 0% | 0 | 0 |
@@ -112,6 +112,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 | [DateTime](./datetime.md) ([PHP](https://www.php.net/manual/en/book.datetime.php)) | 🟡 Partial |  |
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
+| [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 683 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 254 of 270 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() ships the easy interface only. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
 

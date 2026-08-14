@@ -1100,11 +1100,14 @@ statics, and static class properties all reset between requests). Run it with
 
 ## v0.30.x — PHP curl extension
 
-- [ ] `ext/curl` function, class, and constant surface on AOT and magician
-- [ ] Managed native `curl` 8.21.0 + OpenSSL TLS backend (no system fallback)
-- [ ] Easy, multi, and share interfaces including PHP 8.5 additions
-- [ ] `CURLFile` / `CURLStringFile` uploads
-- [ ] libcurl callbacks via the runtime callable invoker
+- [x] `ext/curl` function, class, and constant surface on AOT — all 35 functions, 6 classes and 683 constants, with 254 of PHP's 270 `CURLOPT_*` implemented and the remaining 16 rejected with PHP's own warning (see `docs/php/curl.md`)
+- [x] Managed native `curl` 8.21.0 + OpenSSL TLS backend (no system fallback)
+- [x] Easy, multi, and share interfaces including PHP 8.5 additions (`curl_multi_get_handles`, `curl_share_init_persistent`, `CurlSharePersistentHandle`)
+- [x] `CURLFile` / `CURLStringFile` uploads
+- [x] libcurl callbacks via the runtime callable invoker — six callback options (`WRITE`/`HEADER`/`READ`/`PROGRESS`/`XFERINFO`/`DEBUG`)
+- [ ] The same surface inside `eval()` (magician) — **partial**: the easy interface (16 functions) and the full constant table are in; the multi and share interfaces, `CURLFile`/`CURLStringFile`, and callback options are not, and are honestly rejected
+- [ ] A bundled CA trust store — the managed curl build inherits the build machine's CA path, so HTTPS clients must set `CURLOPT_CAINFO` to be portable
+- [ ] HTTP/2, HTTP/3, and the disabled protocol set (SSH/SFTP, SMTP, IMAP, LDAP, MQTT, …)
 
 
 ## Deferred ideas

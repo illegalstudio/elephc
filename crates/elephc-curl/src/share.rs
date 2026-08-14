@@ -526,15 +526,19 @@ pub(crate) fn share_cleanup_result(share_id: i64) -> Option<CURLSHcode> {
 /// time — php-src's own "keyed by the sorted option set" semantics — or `0` when libcurl
 /// could not allocate a genuinely new share.
 ///
-/// Named `elephc_curl_share_persistent_init`, NOT `..._init_persistent`, on purpose: the
-/// latter would be a textual PREFIX of the `elephc_curl_share_init` C name (this module's
-/// plain `curl_share_init()` entry point), which the runtime object's own
-/// "never bare-references an `elephc_curl_*` symbol outside its slot name" test scans for
-/// as a substring — `..._init` immediately followed by `..._persistent_fn` inside this
-/// function's OWN slot symbol trips that check as a false collision. The PHP-visible name
+/// Named `elephc_curl_share_persistent_init`, NOT `..._init_persistent`. This began as a
+/// workaround: the latter has `elephc_curl_share_init` (this module's plain
+/// `curl_share_init()` entry point) as a textual PREFIX, and the runtime object's
+/// "never bare-references an `elephc_curl_*` symbol outside its slot name" test used to
+/// scan for that as a SUBSTRING, so this function's own slot symbol read as a false
+/// collision. That test now matches whole identifiers
+/// (`crate::codegen_support::runtime::curl`'s
+/// `the_shared_runtime_never_references_the_curl_bridge` in the elephc crate), so the
+/// workaround is no longer load-bearing — the name is simply kept, because renaming a
+/// published C symbol is churn for no behavioural gain. The PHP-visible name
 /// (`curl_share_init_persistent()`) and every other identifier in this feature (the
 /// `__elephc_curl_share_init_persistent` builtin, the `__rt_curl_share_init_persistent`
-/// runtime label, neither of which collides the same way) are unaffected.
+/// runtime label) never collided in the first place.
 ///
 /// # Safety
 /// `ptr` must be valid for `len` bytes when non-null.

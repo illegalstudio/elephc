@@ -46,6 +46,14 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "callables": ("Misc", "Callables"),
     "spl": ("SPL", "SPL"),
     "pointers": ("Pointer", "Pointer"),
+    # `Area::Curl`. Every member is `internal: true` — PHP's `curl_*` names are
+    # elephc-PHP wrappers declared by `src/curl_prelude.rs`, and these are the raw
+    # `__elephc_curl_*` entry points those wrappers call — so this area contributes
+    # only to docs/internals/builtins, never to a user-facing builtin page. It
+    # shares the "Network" docs area with the eval interpreter's `network_env`
+    # family rather than opening a page of its own. The user-facing contract lives
+    # in docs/php/curl.md.
+    "curl": ("Network", "Network"),
 }
 
 

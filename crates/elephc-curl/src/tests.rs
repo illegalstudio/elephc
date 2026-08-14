@@ -214,6 +214,74 @@ mod option_table {
             "CURLINFO_HEADER_OUT is a real curl_setopt option php-src recognizes"
         );
     }
+
+    /// The Task-14 AUDIT ARTIFACT: the exact set of `curl_setopt()` options this build
+    /// rejects, pinned by NAME.
+    ///
+    /// `docs/php/curl.md` publishes this list to users as the answer to "what does
+    /// elephc's curl not do?", so it has to be the code's list rather than a prose
+    /// approximation of it. Its two siblings above catch a *missing* or *wrong*
+    /// classification; this one catches the case they cannot — an option quietly
+    /// gaining or losing support without the user-facing table following it. Shipping
+    /// a rejected option is a one-line edit here plus a one-line edit in the doc.
+    ///
+    /// `CURLOPT_INFILE` and `CURLOPT_READDATA` are the same option number (10009) under
+    /// two PHP names, so 16 names cover 15 distinct numbers.
+    #[test]
+    fn the_documented_rejection_set_is_exactly_this() {
+        const DOCUMENTED_REJECTIONS: &[&str] = &[
+            // Certificate/key material passed as an in-memory blob. libcurl's
+            // `struct curl_blob` is a pointer-plus-length shape no current elephc-curl
+            // entry point carries; the file-path forms (`CURLOPT_SSLCERT`, …) work.
+            "CURLOPT_CAINFO_BLOB",
+            "CURLOPT_ISSUERCERT_BLOB",
+            "CURLOPT_PROXY_CAINFO_BLOB",
+            "CURLOPT_PROXY_ISSUERCERT_BLOB",
+            "CURLOPT_PROXY_SSLCERT_BLOB",
+            "CURLOPT_PROXY_SSLKEY_BLOB",
+            "CURLOPT_SSLCERT_BLOB",
+            "CURLOPT_SSLKEY_BLOB",
+            // Callbacks outside the six this build invokes.
+            "CURLOPT_FNMATCH_FUNCTION",
+            "CURLOPT_PREREQFUNCTION",
+            "CURLOPT_SSH_HOSTKEYFUNCTION",
+            // Options whose value is a PHP STREAM RESOURCE. The PHP layer captures and
+            // returns bodies itself; wiring a php:// stream through libcurl's write
+            // callbacks is a separate piece of work.
+            "CURLOPT_FILE",
+            "CURLOPT_INFILE",
+            "CURLOPT_READDATA",
+            "CURLOPT_STDERR",
+            "CURLOPT_WRITEHEADER",
+        ];
+
+        let surface = frozen_surface();
+        let constants = surface["constants"].as_object().expect("constants map");
+        let mut rejected: Vec<&str> = Vec::new();
+        for (name, value) in constants {
+            if !name.starts_with("CURLOPT_") {
+                continue;
+            }
+            let number =
+                i32::try_from(value.as_i64().expect("integer option value")).expect("fits i32");
+            if option_kind(number) == KIND_UNSUPPORTED {
+                rejected.push(name.as_str());
+            }
+        }
+        rejected.sort_unstable();
+        let mut expected = DOCUMENTED_REJECTIONS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(
+            rejected, expected,
+            "the set of rejected curl_setopt() options changed; update the table in \
+             docs/php/curl.md to match before changing this test"
+        );
+
+        // The headline the doc quotes: 270 PHP `CURLOPT_*` names, 16 rejected.
+        let total = constants.keys().filter(|n| n.starts_with("CURLOPT_")).count();
+        assert_eq!(total, 270, "the frozen CURLOPT_* name count changed");
+        assert_eq!(rejected.len(), 16, "the rejected CURLOPT_* name count changed");
+    }
 }
 
 /// Purpose:

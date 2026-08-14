@@ -178,21 +178,53 @@ mod tests {
 
     /// The runtime object never names an `elephc_curl_*` symbol: the bridge is reached
     /// only through the null-by-default slots, which a curl-free program never publishes.
+    ///
+    /// Matches WHOLE IDENTIFIERS, not substrings. The earlier version asked that every
+    /// occurrence of a C name be followed immediately by `_fn`, which is false whenever
+    /// one C name is a textual PREFIX of another: `elephc_curl_share_init` occurs inside
+    /// the slot symbol `_elephc_curl_share_init_persistent_fn` followed by `_persistent_fn`,
+    /// so a perfectly legal slot declaration read as a bridge reference. That fragility is
+    /// why `crates/elephc-curl/src/share.rs` names its persistent entry point
+    /// `elephc_curl_share_persistent_init` rather than `..._init_persistent`; the name is
+    /// kept (renaming a published C symbol is churn for no gain) but the test no longer
+    /// depends on it. Expanding each hit to its full identifier and comparing against the
+    /// declared slot symbols is also STRICTER: a typo'd or stale `elephc_curl_*` name with
+    /// no slot at all now fails, where the substring check never looked for one.
     #[test]
     fn the_shared_runtime_never_references_the_curl_bridge() {
+        /// Expands `asm[start..start + len]` to the full `[A-Za-z0-9_]` identifier
+        /// surrounding it.
+        fn identifier_at(asm: &str, start: usize, len: usize) -> &str {
+            let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+            let bytes = asm.as_bytes();
+            let mut begin = start;
+            while begin > 0 && is_ident(bytes[begin - 1]) {
+                begin -= 1;
+            }
+            let mut end = start + len;
+            while end < bytes.len() && is_ident(bytes[end]) {
+                end += 1;
+            }
+            &asm[begin..end]
+        }
+
+        let allowed: std::collections::HashSet<&str> = super::slots::CURL_ABI_SLOTS
+            .iter()
+            .map(|(_, slot)| *slot)
+            .collect();
+
         for target_name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
             let asm = runtime_for(target_name);
-            for (c_name, _) in super::slots::CURL_ABI_SLOTS {
-                // The slot symbols are the C names with an `_fn` suffix and a leading
-                // underscore, so a bare-name search would match them; the check looks for
-                // the C symbol NOT followed by the slot suffix.
-                for occurrence in asm.match_indices(c_name) {
-                    let rest = &asm[occurrence.0 + c_name.len()..];
-                    assert!(
-                        rest.starts_with("_fn"),
-                        "{target_name} runtime references {c_name} outside its slot name"
-                    );
-                }
+            // One scan for the whole family rather than one per row: any identifier that
+            // mentions the bridge at all must be exactly a declared slot symbol.
+            for (offset, needle) in asm.match_indices("elephc_curl_") {
+                let identifier = identifier_at(&asm, offset, needle.len());
+                assert!(
+                    allowed.contains(identifier),
+                    "{target_name} runtime names {identifier}, which is not one of the \
+                     declared curl ABI slot symbols — the shared runtime must reach the \
+                     bridge only through its null-by-default slots"
+                );
             }
         }
     }

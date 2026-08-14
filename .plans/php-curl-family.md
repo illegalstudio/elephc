@@ -1,19 +1,19 @@
 # PHP curl family
 
-- [ ] Freeze the PHP 8.2–8.5 curl surface and pin native library versions.
-- [ ] Add managed native packages for libcurl and its TLS backend (no system fallback).
-- [ ] Land `crates/elephc-curl` with a versioned C ABI and an i64 handle table.
-- [ ] Wire `--with-curl`, pay-for-use linking, and `extension_loaded('curl')`.
-- [ ] Inject a HashContext-style prelude for the PHP 8 handle/file classes.
-- [ ] Register the full `CURLOPT_*` / `CURLINFO_*` / `CURLE_*` constant tables.
-- [ ] Ship the easy interface (`curl_init` … `curl_version`) on every supported target.
-- [ ] Implement CURLOPT/CURLINFO option waves without inert acceptance.
-- [ ] Ship the multi interface, including PHP 8.5 `curl_multi_get_handles`.
-- [ ] Ship the share interface, including PHP 8.5 persistent shares.
-- [ ] Ship `CURLFile`, `CURLStringFile`, and `curl_file_create`.
-- [ ] Ship libcurl callbacks through the existing runtime callable invoker.
-- [ ] Mirror the same ABI in magician `eval_builtin!` homes.
-- [ ] Add local HTTP/HTTPS fixtures, example, generated docs, and a ROADMAP item.
+- [x] Freeze the PHP 8.2–8.5 curl surface and pin native library versions.
+- [x] Add managed native packages for libcurl and its TLS backend (no system fallback).
+- [x] Land `crates/elephc-curl` with a versioned C ABI and an i64 handle table.
+- [x] Wire `--with-curl`, pay-for-use linking, and `extension_loaded('curl')`.
+- [x] Inject a HashContext-style prelude for the PHP 8 handle/file classes.
+- [x] Register the full `CURLOPT_*` / `CURLINFO_*` / `CURLE_*` constant tables.
+- [x] Ship the easy interface (`curl_init` … `curl_version`) on every supported target.
+- [x] Implement CURLOPT/CURLINFO option waves without inert acceptance.
+- [x] Ship the multi interface, including PHP 8.5 `curl_multi_get_handles`.
+- [x] Ship the share interface, including PHP 8.5 persistent shares.
+- [x] Ship `CURLFile`, `CURLStringFile`, and `curl_file_create`.
+- [x] Ship libcurl callbacks through the existing runtime callable invoker.
+- [x] Mirror the same ABI in magician `eval_builtin!` homes.
+- [x] Add local HTTP/HTTPS fixtures, example, generated docs, and a ROADMAP item.
 
 This is a first-class PHP `ext/curl` implementation for AOT and magician. It is
 **not** the v0.28 Zend-extension consumer PoC (`ROADMAP.md` “link against PHP
@@ -258,7 +258,7 @@ version exposes it. Values reflect **our** pinned libcurl, not the host PHP.
 **Interfaces:**
 - Produces: committed JSON with `php_versions`, `functions`, `classes`, `constants` (`name` → integer), `php_only_options`, `option_kinds` (`long` / `string` / `blob` / `slist` / `off_t` / `callback` / `file` / `php_layer`), `libcurl` (`version`, `url`, `sha256`, `exact_size`), `openssl` (same fields)
 
-- [ ] **Step 1: Extract the PHP surface**
+- [x] **Step 1: Extract the PHP surface**
 
 Run against every available local PHP 8.2–8.5 binary (skip a version if it
 is not installed; still commit the union and mark the source version per
@@ -283,13 +283,13 @@ Cross-check the function list against this plan. The committed JSON is the
 audit source; later tasks may not add a PHP-visible name that is absent here
 except for `internal: true` `__elephc_*` aliases.
 
-- [ ] **Step 2: Pin native archives**
+- [x] **Step 2: Pin native archives**
 
 Download the official source tarballs, record `exact_size` and SHA-256, and
 write them into `curl_surface.json`. Do not invent checksums. Catalog code
 in Task 2 copies these exact fields.
 
-- [ ] **Step 3: Add the ROADMAP section**
+- [x] **Step 3: Add the ROADMAP section**
 
 ```markdown
 ## v0.30.x — PHP curl extension
@@ -304,7 +304,7 @@ in Task 2 copies these exact fields.
 Do not tick the v0.28 “call a PHP curl `.so`” item. That is a different
 product.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/curl/extract_php_curl_surface.php scripts/docs/curl_surface.json ROADMAP.md
@@ -368,12 +368,12 @@ Enable HTTP, HTTPS, FILE, FTP, FTPS. Use the existing toolchain discovery
 own build requires it; prefer OpenSSL's documented `Configure` + `make`
 and curl's `configure` + `make`.
 
-- [ ] **Step 1: Write a recipe unit test that the dispatcher recognizes `curl` and `openssl`**
+- [x] **Step 1: Write a recipe unit test that the dispatcher recognizes `curl` and `openssl`**
 
 Extend `current_catalog_recipe_revisions_have_dispatchers` by adding the
 packages. The test already walks `catalog::known_names()`.
 
-- [ ] **Step 2: Implement catalog entries and recipes**
+- [x] **Step 2: Implement catalog entries and recipes**
 
 Copy the exact URL/size/SHA-256 from Task 1. `supported_targets` is
 `macos-aarch64`, `linux-aarch64`, `linux-x86_64`.
@@ -383,7 +383,7 @@ If lock expansion still requires every transitive dep to be declared in
 `elephc native add curl` also installs `openssl` and `zlib`. Do not teach
 users to list OpenSSL by hand.
 
-- [ ] **Step 3: Install once on the development machine**
+- [x] **Step 3: Install once on the development machine**
 
 ```bash
 elephc native add curl
@@ -393,7 +393,7 @@ elephc native list
 Expected: `curl 8.21.0`, `openssl <pinned>`, `zlib 1.3.2` present for the
 host target.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/native_deps
@@ -446,7 +446,7 @@ The crate **declares** libcurl `extern "C"` symbols. It does **not** link
 libcurl at `cargo build -p elephc-curl` time. The PHP-program linker
 supplies `libcurl.a` (Task 4).
 
-- [ ] **Step 1: Add a crate unit test that init/free is balanced**
+- [x] **Step 1: Add a crate unit test that init/free is balanced**
 
 `cargo test -p elephc-curl` can only run if the test binary links libcurl.
 Gate those tests with an env var `ELEPHC_CURL_LIB_DIR` pointing at the
@@ -454,13 +454,13 @@ native artifact, or skip with a clear message when the archive is absent.
 Do not make `cargo test -p elephc` require curl artifacts for unrelated
 tests.
 
-- [ ] **Step 2: Implement the handle table and the Task 3 ABI**
+- [x] **Step 2: Implement the handle table and the Task 3 ABI**
 
 Use a private write callback to fill `body` when `RETURNTRANSFER` is set.
 Default write callback writes to stdout via `libc::write` on fd 1 so
 `curl_exec` without `RETURNTRANSFER` matches PHP CLI.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add crates/elephc-curl Cargo.toml tests/codegen/support/runner.rs
@@ -505,7 +505,7 @@ libelephc_curl.a → libcurl.a → libssl.a → libcrypto.a → libz.a
 Missing native artifacts must print the same recovery style as PCRE2
 (`elephc native add curl` + project path). Do not fall back to `-lcurl`.
 
-- [ ] **Step 1: Failing test — `extension_loaded('curl')` is false without usage**
+- [x] **Step 1: Failing test — `extension_loaded('curl')` is false without usage**
 
 Existing tests already cover this. Add:
 
@@ -525,9 +525,9 @@ fn with_curl_reports_extension_loaded() {
 }
 ```
 
-- [ ] **Step 2: Implement the table entry and native requirement**
+- [x] **Step 2: Implement the table entry and native requirement**
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/linker/bridges.rs src/pipeline/backend.rs tests/extension_loaded_tests.rs docs
@@ -630,9 +630,9 @@ function curl_close(CurlHandle $handle): void {}
 `curl_setopt_array` is a prelude loop over `curl_setopt` that stops on the
 first `false`, matching PHP.
 
-- [ ] **Step 1: Write failing detection tests** (copy the hash-prelude table)
+- [x] **Step 1: Write failing detection tests** (copy the hash-prelude table)
 
-- [ ] **Step 2: Write a failing codegen test that `curl_init()` returns an object**
+- [x] **Step 2: Write a failing codegen test that `curl_init()` returns an object**
 
 ```rust
 #[test]
@@ -650,14 +650,14 @@ fn curl_init_returns_curlhandle() {
 
 Expected first run: `Call to undefined function curl_init`.
 
-- [ ] **Step 3: Implement prelude, homes, RuntimeFnIds, group 13, lowerers**
+- [x] **Step 3: Implement prelude, homes, RuntimeFnIds, group 13, lowerers**
 
 Lowerers call the C ABI from Task 3 through the existing target-aware call
 helpers. Do not hardcode ARM64 register names. `CurlEasyInit` result
 ownership is `Fresh` (new handle cell). `CurlEasyExec` body string is
 `Fresh`. `CurlEasyErrno` / `CurlEasyClose` are `NonHeap`.
 
-- [ ] **Step 4: Re-run the object test and a no-network `curl_version()` test**
+- [x] **Step 4: Re-run the object test and a no-network `curl_version()` test**
 
 ```rust
 #[test]
@@ -674,7 +674,7 @@ fn curl_version_reports_pinned_libcurl() {
 }
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/curl_prelude.rs src/curl_prelude src/builtins/curl src/builtins/mod.rs \
@@ -699,12 +699,12 @@ Constants are always visible (like `JSON_*`), even in programs that do not
 link curl. Using a constant as a *value* does not need libcurl; *executing*
 a curl function does.
 
-- [ ] **Step 1: Generate `CURL_INT_CONSTANTS` from the frozen JSON**
+- [x] **Step 1: Generate `CURL_INT_CONSTANTS` from the frozen JSON**
 
 Keep a tiny generator or a checked-in table plus a unit test that
 re-parses the JSON. Do not hand-type 300 values.
 
-- [ ] **Step 2: Codegen test**
+- [x] **Step 2: Codegen test**
 
 ```rust
 #[test]
@@ -715,7 +715,7 @@ fn curlopt_url_is_defined_and_stable() {
 }
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/types/curl_constants.rs src/types/checker/driver/init.rs \
@@ -738,7 +738,7 @@ Fixture: bind `127.0.0.1:0`, serve a single GET `/hello` → `200` /
 `text/plain` / `hello-curl`, and `/status` → `204`. Mirror the TLS helper
 in `tests/codegen/io/streams.rs` for HTTPS in Task 8, not here.
 
-- [ ] **Step 1: Failing GET test**
+- [x] **Step 1: Failing GET test**
 
 ```rust
 #[test]
@@ -757,9 +757,9 @@ fn curl_get_returntransfer_localhost() {
 }
 ```
 
-- [ ] **Step 2: Implement `CURLOPT_URL`, `CURLOPT_RETURNTRANSFER`, `CURLINFO_HTTP_CODE`, and `curl_getinfo` without an option (array form can wait one commit if the option form is enough for this test)**
+- [x] **Step 2: Implement `CURLOPT_URL`, `CURLOPT_RETURNTRANSFER`, `CURLINFO_HTTP_CODE`, and `curl_getinfo` without an option (array form can wait one commit if the option form is enough for this test)**
 
-- [ ] **Step 3: Default-stdout test**
+- [x] **Step 3: Default-stdout test**
 
 ```rust
 #[test]
@@ -777,7 +777,7 @@ fn curl_exec_writes_stdout_without_returntransfer() {
 }
 ```
 
-- [ ] **Step 4: Connection-refused error shape**
+- [x] **Step 4: Connection-refused error shape**
 
 ```rust
 #[test]
@@ -796,7 +796,7 @@ fn curl_exec_connection_refused_returns_false() {
 }
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/codegen/curl examples/curl-get crates/elephc-curl src
@@ -862,14 +862,14 @@ Reuse `tests/codegen/io/streams.rs`'s self-signed server. Test
 `CURLOPT_SSL_VERIFYPEER=false` success and `true` failure against that
 cert. A `#[ignore]` live `https://example.com` smoke is optional.
 
-- [ ] **Step 1: Add a table-driven “option is accepted or rejected” unit test in `elephc-curl`**
+- [x] **Step 1: Add a table-driven “option is accepted or rejected” unit test in `elephc-curl`**
 
 Every frozen `CURLOPT_*` is either implemented or returns the documented
 unsupported status. The test fails if a new JSON constant is neither.
 
-- [ ] **Step 2: Implement waves A–E with one commit per wave**
+- [x] **Step 2: Implement waves A–E with one commit per wave**
 
-- [ ] **Step 3: Error tests**
+- [x] **Step 3: Error tests**
 
 ```rust
 #[test]
@@ -900,12 +900,12 @@ fn curl_setopt_rejects_wrong_handle_type() {
 PHP 8.5 `curl_multi_get_handles`: return the easy handles currently
 attached, in add order. Gate the prelude function with `--php-version`.
 
-- [ ] **Step 1: Failing parallel GET test**
+- [x] **Step 1: Failing parallel GET test**
 
 Two local paths `/a` and `/b`. Add both handles, loop `curl_multi_exec`
 until `$running == 0`, assert both bodies via `curl_multi_getcontent`.
 
-- [ ] **Step 2: Implement and commit**
+- [x] **Step 2: Implement and commit**
 
 ```bash
 git commit -m "feat: add curl_multi interface"
@@ -925,14 +925,14 @@ git commit -m "feat: add curl_multi interface"
   option set. Document that elephc has no PHP-FPM worker restart; the
   handle lives until process exit.
 
-- [ ] **Step 1: Failing DNS-share test**
+- [x] **Step 1: Failing DNS-share test**
 
 Two sequential GETs to the same host on one share with
 `CURL_LOCK_DATA_DNS`. Assert both succeed. A stricter “second lookup is
 cached” assertion is optional if `CURLINFO_NAMELOOKUP_TIME` is stable
 enough; do not flake CI on timing.
 
-- [ ] **Step 2: Implement and commit**
+- [x] **Step 2: Implement and commit**
 
 ```bash
 git commit -m "feat: add curl_share interface"
@@ -950,7 +950,7 @@ git commit -m "feat: add curl_share interface"
   - `CURLFile` → `curl_mime` / `CURLFORM_FILE` file part
   - `CURLStringFile` → in-memory mime part
 
-- [ ] **Step 1: Local upload fixture**
+- [x] **Step 1: Local upload fixture**
 
 Server echoes `Content-Type` and the uploaded field filename. Compile:
 
@@ -963,7 +963,7 @@ curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 echo curl_exec($ch);
 ```
 
-- [ ] **Step 2: Implement and commit**
+- [x] **Step 2: Implement and commit**
 
 ```bash
 git commit -m "feat: add CURLFile and CURLStringFile uploads"
@@ -997,7 +997,7 @@ Remaining libcurl callbacks (`OPENSOCKETFUNCTION`, `SOCKOPTFUNCTION`,
 `SSL_CTX_FUNCTION`) stay rejected with the unsupported-option warning
 until a follow-up. List them in `docs/php/curl.md`.
 
-- [ ] **Step 1: Failing WRITEFUNCTION test**
+- [x] **Step 1: Failing WRITEFUNCTION test**
 
 ```php
 $buf = '';
@@ -1009,7 +1009,7 @@ curl_exec($ch);
 echo $buf;
 ```
 
-- [ ] **Step 2: Implement trampolines on both targets and commit**
+- [x] **Step 2: Implement trampolines on both targets and commit**
 
 ```bash
 git commit -m "feat: invoke PHP callables from libcurl callbacks"
@@ -1026,11 +1026,11 @@ git commit -m "feat: invoke PHP callables from libcurl callbacks"
 - Call the same `elephc_curl_*` symbols; do not reimplement HTTP in the interpreter
 - Magician `extension_loaded('curl')` stays `false` unless the eval host linked the bridge (document if eval cannot load it). Prefer linking the bridge into magician when curl builtins are compiled in, so AOT and eval do not diverge
 
-- [ ] **Step 1: Eval parity test**
+- [x] **Step 1: Eval parity test**
 
 `tests/codegen/eval_builtin_parity.rs` (or a curl sibling): `eval('return curl_version();')['version']` equals the AOT `curl_version()` string.
 
-- [ ] **Step 2: Implement and commit**
+- [x] **Step 2: Implement and commit**
 
 ```bash
 git commit -m "feat: add magician curl builtins on the shared ABI"
@@ -1058,7 +1058,7 @@ git commit -m "feat: add magician curl builtins on the shared ABI"
 - `elephc native add curl`
 - `--with-curl`
 
-- [ ] **Step 1: Generate builtin docs**
+- [x] **Step 1: Generate builtin docs**
 
 ```bash
 cargo build --example gen_builtins
@@ -1067,7 +1067,7 @@ python3 scripts/docs/audit_builtins.py
 python3 scripts/docs/elephc_builtins/validate_site_compat.py
 ```
 
-- [ ] **Step 2: Focused verification**
+- [x] **Step 2: Focused verification**
 
 ```bash
 cargo build
@@ -1078,13 +1078,13 @@ git diff --check
 
 Do not run the full suite locally unless asked.
 
-- [ ] **Step 3: Final audit against `scripts/docs/curl_surface.json`**
+- [x] **Step 3: Final audit against `scripts/docs/curl_surface.json`**
 
 Every function, class, and constant has a home. Every `CURLOPT_*` is
 implemented or documented as rejected. Tick the checklist at the top of
 this plan only when that audit is clean.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs scripts/docs src/builtins/parity_tests.rs

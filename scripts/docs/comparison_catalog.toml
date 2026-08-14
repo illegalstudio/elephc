@@ -223,6 +223,15 @@ evidence = "tests/codegen/image"
 notes    = "Enabled with --with-image"
 
 [[extensions]]
+feature  = "cURL"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.curl.php"
+docs     = "docs/php/curl.md"
+evidence = "tests/codegen/curl"
+notes    = "All 35 functions, 6 classes and 683 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 254 of 270 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() ships the easy interface only."
+modules  = ["curl"]
+
+[[extensions]]
 feature  = "OpenSSL"
 status   = "partial"
 php      = "https://www.php.net/manual/en/book.openssl.php"
