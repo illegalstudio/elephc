@@ -40,6 +40,33 @@ fn test_warning_byref_params_not_flagged_as_unused() {
     );
 }
 
+/// Verifies that a function with an EMPTY body never reports its parameters as
+/// unused. A no-op cannot read anything, so the warning would fire on every
+/// parameter of every deliberate stub, and the parameter names are part of the
+/// public contract (PHP 8 named arguments bind to them) — renaming them to
+/// silence the warning would break callers.
+///
+/// elephc's injected curl prelude depends on this: PHP 8's `curl_close()`,
+/// `curl_multi_close()` and `curl_share_close()` are no-ops with a required
+/// parameter, so compiling any program that calls one used to print an
+/// "Unused variable" warning against an invisible prelude line.
+#[test]
+fn test_warning_empty_body_params_not_flagged_as_unused() {
+    expect_no_warning(
+        "<?php function noop($handle): void {}",
+        "Unused variable: $handle",
+    );
+    expect_no_warning(
+        "<?php class C { public function noop($handle): void {} }",
+        "Unused variable: $handle",
+    );
+    // A non-empty body still reports, so the exemption is scoped to the no-op case.
+    expect_warning(
+        "<?php function almost_noop($handle): void { $y = 1; echo $y; }",
+        "Unused variable: $handle",
+    );
+}
+
 /// Verifies that code immediately following a `return` statement within a function
 /// body is flagged as unreachable.
 #[test]
