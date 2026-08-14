@@ -558,7 +558,7 @@ Further differences inside `eval()`:
 - **An invalid option number throws a catchable `ValueError`, not a fatal.**
   Matches the [Options](#options) section above:
   ```php
-  eval('curl_setopt($ch, 987654, 1);');
+  eval('$ch = curl_init(); curl_setopt($ch, 987654, 1);');
   // ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option
   ```
 - **`CURLOPT_SAFE_UPLOAD` set falsy throws a catchable `ValueError`,** matching

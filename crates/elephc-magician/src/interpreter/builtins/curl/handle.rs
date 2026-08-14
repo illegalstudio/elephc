@@ -115,9 +115,16 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Ok(opt) = i32::try_from(option) else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
+    // CLASSIFY BEFORE NARROWING. `option_kind` takes the option number as the SAME `i64`
+    // `curl_setopt()`'s own `int $option` parameter carries (mirroring
+    // `crate::curl_prelude::curl_setopt`'s `__elephc_curl_option_kind($option)`, whose PHP
+    // `$option` is a 64-bit int too) — narrowing to `i32` FIRST, before classification,
+    // used to answer an uncatchable `RuntimeFatal` for any option number outside `i32`
+    // range (e.g. `2**40`), even though AOT throws the same catchable `ValueError` an
+    // ordinary unrecognized option gets: `option_kind` on a value that large still
+    // correctly answers `KIND_INVALID` (it is a lookup against a frozen table of real,
+    // small `CURLOPT_*` numbers), so classifying first catches this shape as an ordinary
+    // "not a valid cURL option" rejection instead of a special one.
     let kind = ffi::option_kind(option);
     if kind == ffi::KIND_INVALID {
         // php-src's own `ValueError` for an option number it does not recognize at all
@@ -132,6 +139,15 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
             values,
         );
     }
+    // Every option number `option_kind` classifies as anything OTHER than `KIND_INVALID`
+    // is one of the frozen table's real `CURLOPT_*` numbers — comfortably inside `i32`
+    // (below 10000 for LONG/bool/enum options, up to the low 40000s for blob options) — so
+    // this narrowing cannot fail for a value that reached this point. Kept as an explicit
+    // guard rather than an unchecked cast, for the same "should not realistically happen"
+    // tradeoff every other internal-invariant check in this crate already makes.
+    let Ok(opt) = i32::try_from(option) else {
+        return Err(EvalStatus::RuntimeFatal);
+    };
     if kind == ffi::KIND_SLIST {
         if !values.is_array_like(value)? {
             let given = eval_curl_given_type_name(value, values)?;

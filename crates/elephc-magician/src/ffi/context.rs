@@ -73,23 +73,34 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 /// so it is safe to build one ad hoc for this one release pass even though this function
 /// itself receives no `RuntimeValueOps` parameter.
 ///
+/// ORDER IS LOAD-BEARING: the curl-private release runs BEFORE
+/// `context.unregister_dynamic_object_context()` below, not after. A retained
+/// `CURLOPT_PRIVATE` value can be (or transitively reference, through an array/object
+/// graph) an eval-declared object with a `__destruct()` method; releasing it to a
+/// zero refcount runs that destructor, and dispatching it correctly depends on this
+/// context still being registered as the object's owner
+/// (`crate::ffi::dynamic_destructors::dynamic_object_owner_context`). Releasing AFTER
+/// unregistering would let that lookup fail for exactly this one teardown-time release,
+/// silently skipping (or misrouting) a `__destruct()` call every other release path in
+/// this crate correctly triggers.
+///
 /// # Safety
 /// `ctx` must be null or a pointer returned by `__elephc_eval_context_new`
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
     if !ctx.is_null() {
+        #[cfg(all(feature = "curl", not(test)))]
+        if let Some(context) = unsafe { ctx.as_mut() } {
+            let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
+            context
+                .stream_resources_mut()
+                .release_curl_easy_private_values(&mut values);
+        }
         if let Some(context) = unsafe { ctx.as_ref() } {
             context.unregister_dynamic_object_context();
         }
         crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
-        #[cfg(all(feature = "curl", not(test)))]
-        if let Some(context) = unsafe { ctx.as_mut() } {
-            let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
-            let _ = context
-                .stream_resources_mut()
-                .release_curl_easy_private_values(&mut values);
-        }
         drop(Box::from_raw(ctx));
     }
 }

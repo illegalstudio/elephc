@@ -56,6 +56,13 @@ pub(super) fn eval_named_callable_with_call_user_func_values(
             values,
         );
     }
+    // See `eval_curl_deferred_function_name`'s own doc: `call_user_func('curl_multi_init')`
+    // (a string callback with no by-ref/named args) resolves through THIS fallback, and
+    // must be rejected the same way `eval_call`'s own literal-name dispatch is.
+    #[cfg(feature = "curl")]
+    if eval_curl_deferred_function_name(name) {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
     if let Some(function) = context.native_function(name) {
         let evaluated_args = positional_args(evaluated_args);
         let evaluated_args = bind_evaluated_native_function_args_for_call_user_func(
@@ -123,6 +130,13 @@ pub(super) fn eval_named_callable_with_call_user_func_args(
             context,
             values,
         );
+    }
+    // See `eval_curl_deferred_function_name`'s own doc: `call_user_func('curl_multi_init',
+    // ...)` with named arguments resolves through THIS fallback, and must be rejected the
+    // same way `eval_call`'s own literal-name dispatch is.
+    #[cfg(feature = "curl")]
+    if eval_curl_deferred_function_name(name) {
+        return Err(EvalStatus::UnsupportedConstruct);
     }
     if let Some(function) = context.native_function(name) {
         let evaluated_args = bind_evaluated_native_function_args_for_call_user_func(

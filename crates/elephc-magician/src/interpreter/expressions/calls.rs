@@ -160,7 +160,8 @@ pub(in crate::interpreter) fn eval_call(
     // Checked BEFORE the native-function fallback below — see
     // `eval_curl_deferred_function_name`'s own doc for why the AOT prelude's real
     // `curl_multi_*`/`curl_share_*`/`curl_file_create` symbols must never be reached
-    // through it.
+    // through it (and why the check itself is gated behind the `curl` feature).
+    #[cfg(feature = "curl")]
     if eval_curl_deferred_function_name(name) {
         return Err(EvalStatus::UnsupportedConstruct);
     }

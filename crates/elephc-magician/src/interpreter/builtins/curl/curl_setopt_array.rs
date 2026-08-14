@@ -44,16 +44,23 @@ pub(in crate::interpreter) fn eval_curl_setopt_array_values_result(
 /// Applies `curl_setopt()` once per `$options` entry, short-circuiting `false` on the
 /// first rejected option — matching `crate::curl_prelude::curl_setopt_array`'s own
 /// `foreach` loop exactly.
+///
+/// `$handle` (argument #1) is resolved BEFORE the `$options` (argument #2) array check,
+/// matching AOT's own declared parameter order (`CurlHandle $handle, array $options`):
+/// with a bad value in both positions, PHP validates left to right, so argument #1's
+/// error must be the one reported. This used to check `$options` first, which would have
+/// reported the wrong argument's error for `curl_setopt_array("not a handle", "not an
+/// array")`.
 fn eval_curl_setopt_array_result(
     handle: RuntimeCellHandle,
     options: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let (table_id, raw) = eval_curl_easy_handle("curl_setopt_array", handle, context, values)?;
     if !values.is_array_like(options)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let (table_id, raw) = eval_curl_easy_handle("curl_setopt_array", handle, context, values)?;
     let len = values.array_len(options)?;
     for position in 0..len {
         let key = values.array_iter_key(options, position)?;

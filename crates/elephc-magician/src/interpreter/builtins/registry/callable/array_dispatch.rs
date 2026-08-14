@@ -134,6 +134,13 @@ pub(in crate::interpreter) fn eval_callable_with_values(
     if let Some(function) = context.function(name).cloned() {
         return eval_dynamic_function_with_values(&function, evaluated_args, context, values);
     }
+    // See `eval_curl_deferred_function_name`'s own doc: a bare `$f()` variable call with
+    // `$f` bound to a deferred curl name reaches this fallback too, and must be rejected
+    // the same way `eval_call`'s own literal-name dispatch is.
+    #[cfg(feature = "curl")]
+    if eval_curl_deferred_function_name(name) {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
     if let Some(function) = context.native_function(name) {
         let evaluated_args = positional_args(evaluated_args);
         let evaluated_args =
@@ -191,6 +198,14 @@ pub(in crate::interpreter) fn eval_callable_with_call_array_args(
             context,
             values,
         );
+    }
+    // See `eval_curl_deferred_function_name`'s own doc: `usort()`/`array_walk()`/
+    // `iterator_apply()` callbacks, `call_user_func_array()`'s array-callback path, and
+    // `ReflectionFunction::invoke()` all resolve a "Named" callable through this fallback
+    // too, and must be rejected the same way `eval_call`'s own literal-name dispatch is.
+    #[cfg(feature = "curl")]
+    if eval_curl_deferred_function_name(name) {
+        return Err(EvalStatus::UnsupportedConstruct);
     }
     if let Some(function) = context.native_function(name) {
         let evaluated_args = bind_evaluated_native_function_args_for_call_user_func(

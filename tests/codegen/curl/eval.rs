@@ -270,6 +270,75 @@ fn eval_new_curlfile_is_rejected_not_a_working_aot_object() {
     );
 }
 
+/// Review follow-up to item 6: the direct-literal-name interception
+/// (`eval_curl_multi_share_and_file_create_are_rejected_not_working_aot_objects` above)
+/// does not cover every path that can resolve a "Named" callable to
+/// `context.native_function()`. `call_user_func('curl_multi_init')` resolves through
+/// `registry::callable::object_dispatch::eval_named_callable_with_call_user_func_values`'s
+/// OWN native-function fallback — a completely separate call site from `eval_call`'s — so
+/// it used to bypass the guard entirely and return a real, working `CurlMultiHandle`
+/// object. Same fix (the same `eval_curl_deferred_function_name` check, added to that
+/// fallback too), same fatal.
+#[test]
+fn eval_call_user_func_of_a_deferred_curl_name_is_rejected() {
+    if skip_without_curl_native("eval_call_user_func_of_a_deferred_curl_name_is_rejected") {
+        return;
+    }
+    let output = compile_and_run_capture(
+        r#"<?php
+        curl_version();
+        $r = eval('$h = call_user_func("curl_multi_init"); return get_class($h);');
+        echo "unexpectedly reached: ", $r;
+        "#,
+    );
+    assert!(
+        !output.success,
+        "call_user_func('curl_multi_init') must fail instead of returning a working AOT \
+        object; stdout was: {}",
+        output.stdout
+    );
+    assert!(
+        output
+            .stderr
+            .contains("eval() fragment uses an unsupported construct"),
+        "stderr was: {}",
+        output.stderr
+    );
+}
+
+/// Review follow-up to item 6, the variable-function shape: `$f = 'curl_multi_init'; $f();`
+/// resolves through `registry::callable::array_dispatch::eval_callable_with_call_array_args`
+/// (via `expressions::calls::eval_dynamic_call`) — yet ANOTHER separate native-function
+/// fallback from both `eval_call`'s literal-name dispatch and `call_user_func`'s own path
+/// above. Same fix, same fatal.
+#[test]
+fn eval_variable_function_call_of_a_deferred_curl_name_is_rejected() {
+    if skip_without_curl_native("eval_variable_function_call_of_a_deferred_curl_name_is_rejected")
+    {
+        return;
+    }
+    let output = compile_and_run_capture(
+        r#"<?php
+        curl_version();
+        $r = eval('$f = "curl_share_init"; $h = $f(); return get_class($h);');
+        echo "unexpectedly reached: ", $r;
+        "#,
+    );
+    assert!(
+        !output.success,
+        "$f = 'curl_share_init'; $f(); must fail instead of returning a working AOT object; \
+        stdout was: {}",
+        output.stdout
+    );
+    assert!(
+        output
+            .stderr
+            .contains("eval() fragment uses an unsupported construct"),
+        "stderr was: {}",
+        output.stderr
+    );
+}
+
 /// ITEMS 8 & 9 (WP-B, curl punch list): every curl_*() function that takes a `$handle`
 /// must throw a catchable `\TypeError` for a non-`CurlHandle` value, matching real PHP
 /// 8.4.20's own wording (verified against the real interpreter: `curl_close("x")` ->
@@ -373,6 +442,40 @@ fn eval_curl_setopt_throws_catchable_errors_for_invalid_option_and_non_scalar_va
         |ValueError:curl_setopt(): Disabling safe uploads is no longer supported\
         |TypeError:curl_setopt(): Argument #3 ($value) must be of type string|int|float|bool, array given\
         |alive"
+    );
+}
+
+/// Review follow-up to item 10: `999999999` above still fits in `i32` (max ~2.1 billion),
+/// so it never exercised the actual bug. `curl_setopt()` used to narrow `$option` to `i32`
+/// BEFORE classifying it — `i32::try_from(2**40)` fails — so an option number outside
+/// `i32` range hard-faulted (uncatchable) instead of hitting the SAME "not a valid cURL
+/// option" `ValueError` an in-range-but-unrecognized number gets, even though AOT
+/// classifies against the full `i64` `$option` first and throws the identical catchable
+/// error for this shape too. Fixed by classifying before narrowing (`handle.rs`'s
+/// `eval_curl_setopt_apply`).
+#[test]
+fn eval_curl_setopt_option_number_outside_i32_throws_catchably() {
+    if skip_without_curl_native("eval_curl_setopt_option_number_outside_i32_throws_catchably") {
+        return;
+    }
+    let output = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init();
+            try {
+                curl_setopt($ch, 2 ** 40, 1);
+                return "no exception";
+            } catch (\ValueError $e) {
+                return get_class($e) . ":" . $e->getMessage() . ":alive";
+            }
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(
+        output,
+        "ValueError:curl_setopt(): Argument #2 ($option) is not a valid cURL option:alive"
     );
 }
 

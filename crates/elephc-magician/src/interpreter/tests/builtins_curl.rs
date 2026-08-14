@@ -221,8 +221,7 @@ fn release_curl_easy_private_values_releases_every_still_retained_entry() {
 
     context
         .stream_resources_mut()
-        .release_curl_easy_private_values(&mut values)
-        .expect("release every retained private value");
+        .release_curl_easy_private_values(&mut values);
 
     assert_eq!(values.releases.len(), 2, "both retained cells must be released");
     assert!(
@@ -238,8 +237,7 @@ fn release_curl_easy_private_values_releases_every_still_retained_entry() {
     // left to release, so no further `values.release()` calls and no double-release.
     context
         .stream_resources_mut()
-        .release_curl_easy_private_values(&mut values)
-        .expect("idempotent second call");
+        .release_curl_easy_private_values(&mut values);
     assert_eq!(values.releases.len(), 2, "a second call must not double-release");
 }
 
@@ -253,8 +251,7 @@ fn release_curl_easy_private_values_skips_handles_with_no_stored_private_value()
 
     context
         .stream_resources_mut()
-        .release_curl_easy_private_values(&mut values)
-        .expect("release over a table with no private values");
+        .release_curl_easy_private_values(&mut values);
 
     assert!(values.releases.is_empty());
 }

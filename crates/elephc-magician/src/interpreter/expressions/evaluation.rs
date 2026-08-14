@@ -135,7 +135,9 @@ pub(super) fn eval_new_object_result(
     }
     // Checked BEFORE the native-class fallback below — see
     // `eval_curl_deferred_class_name`'s own doc for why a real AOT `CURLFile`/
-    // `CURLStringFile` object must never be constructed through it.
+    // `CURLStringFile` object must never be constructed through it (and why the check
+    // itself is gated behind the `curl` feature).
+    #[cfg(feature = "curl")]
     if eval_curl_deferred_class_name(class_name) {
         return Err(EvalStatus::UnsupportedConstruct);
     }

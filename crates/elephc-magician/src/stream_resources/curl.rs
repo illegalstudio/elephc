@@ -191,16 +191,25 @@ impl EvalStreamResources {
     /// beyond the process's already-running runtime heap), so it can be constructed
     /// ad hoc, right there, a moment before `Box::from_raw(ctx)` drops the context (and,
     /// transitively, this table). See `__elephc_eval_context_free`'s own call site for the
-    /// wiring; this method is the storage-layer half of that fix.
-    pub(crate) fn release_curl_easy_private_values(
-        &mut self,
-        values: &mut impl RuntimeValueOps,
-    ) -> Result<(), EvalStatus> {
+    /// wiring — INCLUDING WHERE it calls this relative to that function's OTHER teardown
+    /// steps, which is load-bearing (a retained `CURLOPT_PRIVATE` value can be, or
+    /// transitively reference, an eval-declared object with a `__destruct()`, and that
+    /// dispatch needs this context's dynamic-object registration still intact) — this
+    /// method is the storage-layer half of that fix.
+    ///
+    /// CONTINUES ON A PER-ENTRY RELEASE FAILURE rather than propagating the first one:
+    /// this runs once, at teardown, with no later chance to retry, so letting one
+    /// `values.release()` failure short-circuit the loop (the previous `?`-propagating
+    /// shape) would silently leak every OTHER still-retained entry in this same table
+    /// instead of just the one that failed. Every entry's own `private_value` is still
+    /// unconditionally `.take()`n either way, so a failed release cannot be retried twice
+    /// (matching `RuntimeValueOps::release`'s own contract: a failure here is not a
+    /// "nothing happened" outcome to undo).
+    pub(crate) fn release_curl_easy_private_values(&mut self, values: &mut impl RuntimeValueOps) {
         for handle in self.curl_easy_handles.values_mut() {
             if let Some(previous) = handle.private_value.take() {
-                values.release(previous)?;
+                let _ = values.release(previous);
             }
         }
-        Ok(())
     }
 }
