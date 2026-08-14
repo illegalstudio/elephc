@@ -461,3 +461,53 @@ echo "|" . sprintf('%1$s %1$f', "3.5");
     );
     assert_eq!(out, "42|42|3.500000|42|7 7 7|3.5 3.500000");
 }
+
+/// Verifies `sprintf()` keeps a `mixed` argument when the format string is not a literal.
+///
+/// The test above already covered a runtime format string — but with a STATICALLY TYPED value
+/// (`$f = "%d"; sprintf($f, "42")`), which is why it passed while this was broken. The defect
+/// needed BOTH halves: no literal format, so no conversion category is known at compile time,
+/// AND a `mixed` operand, which then fell into the argument packer's catch-all arm and was
+/// pushed as a zero payload tagged as an integer.
+///
+/// A heterogeneous array produces exactly that pair, and it is the shape real code writes: a
+/// table of `[format, value]` rows. Every row below printed `0` before.
+///
+/// `echo` rendered the same values correctly throughout, which is what made this read as a
+/// formatting bug rather than an argument-marshalling one.
+#[test]
+fn test_sprintf_keeps_a_mixed_argument_under_a_runtime_format() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([["%5d", 42], ["%x", 255], ["%s", "hi"], ["%.2f", 1.5], ["%d", true]] as $row) {
+    echo "[", sprintf($row[0], $row[1]), "]";
+}
+"#,
+    );
+    assert_eq!(out, "[   42][ff][hi][1.50][1]");
+}
+
+/// Verifies a `null` argument formats as PHP's empty string, not as the internal null sentinel.
+///
+/// `vsprintf("%s", [null])` answered `9223372036854775806` — `0x7FFF_FFFF_FFFF_FFFE`, the raw
+/// null sentinel, printed straight into the output. The record ladder sent a boxed null down its
+/// "anything else, treat as an integer" arm, whose payload is that sentinel.
+///
+/// PHP renders `null` as `""` under `%s` and `0` under `%d`. Packing it as a ZERO-LENGTH STRING
+/// gives both, because the formatter already guards a null string pointer on every conversion
+/// path. Both spellings are asserted: they now share one ladder, and this is the assertion that
+/// would catch them drifting apart again.
+#[test]
+fn test_null_formats_as_empty_string_not_the_internal_sentinel() {
+    let out = compile_and_run(
+        r#"<?php
+echo "[", sprintf("%s", null), "]";
+echo "[", vsprintf("%s", [null]), "]";
+echo "[", sprintf("%d", null), "]";
+echo "[", vsprintf("%d", [null]), "]";
+$f = "%s";
+echo "[", sprintf($f, null), "]";
+"#,
+    );
+    assert_eq!(out, "[][][0][0][]");
+}

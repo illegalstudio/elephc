@@ -286,16 +286,55 @@ pub(in crate::codegen::lower_inst::builtins) fn pack_sprintf_like_arg(
 }
 
 /// Packs one sprintf variadic operand using its static PHP representation.
+///
+/// A Mixed operand cannot be packed from its static type — there is nothing static about it — so
+/// it goes through `__rt_sprintf_pack_mixed`, which reads the cell's real runtime tag. This
+/// matters only when the format string is NOT a compile-time literal: with a literal format,
+/// `sprintf_spec_cats_for_format` knows each conversion category and the caller takes the
+/// `load_sprintf_arg_as_*` path instead, which already handled Mixed.
+///
+/// Both conditions together are what made `sprintf($fmt, $v)` with both read out of a
+/// heterogeneous array answer `0`: no known category, so the operand fell to the catch-all arm
+/// below, which pushes a zero payload tagged as an integer for every shape it does not name.
+/// `echo` printed the same value correctly, which is why this read as a formatting bug rather
+/// than a marshalling one.
 pub(super) fn pack_static_sprintf_arg(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     owner: &str,
 ) -> Result<()> {
+    if matches!(
+        ctx.raw_value_php_type(value)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        load_value_to_first_int_arg(ctx, value)?;
+        abi::emit_call_label(ctx.emitter, "__rt_sprintf_pack_mixed");
+        return pack_sprintf_prepacked_arg(ctx);
+    }
     let ty = ctx.load_value_to_result(value)?.codegen_repr();
     match ctx.emitter.target.arch {
         Arch::AArch64 => pack_sprintf_arg_aarch64(ctx, &ty, owner),
         Arch::X86_64 => pack_sprintf_arg_x86_64(ctx, &ty, owner),
     }
+}
+
+/// Pushes a 16-byte record whose payload and tag words a helper already built.
+///
+/// `__rt_sprintf_pack_mixed` returns the pair in the same registers the int|false stat helpers
+/// use — payload in `x0`/`rax`, metadata in `x1`/`rdx` — so this only has to store them.
+fn pack_sprintf_prepacked_arg(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // push the packed sprintf operand payload
+            ctx.emitter.instruction("str x1, [sp, #8]");                        // store the packed tag/length metadata word
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve one packed sprintf operand record
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store the packed sprintf operand payload
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // store the packed tag/length metadata word
+        }
+    }
+    Ok(())
 }
 
 /// Loads an operand as the integer payload consumed by integer printf specifiers.
@@ -444,6 +483,15 @@ pub(super) fn pack_sprintf_arg_aarch64(
             ctx.emitter.instruction("orr x0, x0, #1");                          // mark the sprintf operand metadata as a string
             ctx.emitter.instruction("str x0, [sp, #8]");                        // store the packed string length and type tag
         }
+        PhpType::Void | PhpType::Never => {
+            // A statically known null is a ZERO-LENGTH STRING record, not an integer zero. That
+            // is what makes `%s` render "" and `%d` render 0, matching PHP on both — the
+            // formatter guards a null string pointer on every conversion path. Tagged as an
+            // integer instead, `sprintf($fmt, null)` printed "0" under `%s`.
+            ctx.emitter.instruction("str xzr, [sp, #-16]!");                    // null string pointer payload
+            ctx.emitter.instruction("mov x0, #1");                              // (0 << 8) | 1 = a zero-length string record
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // store the packed string length and type tag
+        }
         _other => {
             ctx.emitter.instruction("str xzr, [sp, #-16]!");                    // push a zero payload for an unsupported sprintf operand
             ctx.emitter.instruction("str xzr, [sp, #8]");                       // tag the unsupported sprintf operand as integer zero
@@ -482,6 +530,13 @@ pub(super) fn pack_sprintf_arg_x86_64(
             ctx.emitter.instruction("shl rcx, 8");                              // shift the string length into the packed metadata word
             ctx.emitter.instruction("or rcx, 1");                               // mark the sprintf operand metadata as a string
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rcx");            // store the packed string length and type tag
+        }
+        PhpType::Void | PhpType::Never => {
+            // See the AArch64 half: a statically known null packs as a zero-length STRING record
+            // so that `%s` renders "" and `%d` renders 0, both matching PHP.
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve one packed sprintf operand record
+            ctx.emitter.instruction("mov QWORD PTR [rsp], 0");                  // null string pointer payload
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 1");              // (0 << 8) | 1 = a zero-length string record
         }
         _other => {
             ctx.emitter.instruction("sub rsp, 16");                             // reserve one packed sprintf operand record

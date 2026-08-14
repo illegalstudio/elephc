@@ -80,6 +80,7 @@ mod rawurlencode;
 mod base64_encode;
 mod base64_decode;
 mod sprintf;
+mod sprintf_pack_mixed;
 mod sprintf_x86_64;
 mod vsprintf;
 mod md5;
@@ -248,6 +249,7 @@ pub use base64_decode::emit_base64_decode;
 /// `_b64_decode_tbl` from the exact classification `__rt_base64_decode` reads back.
 pub use base64_decode::{B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE};
 pub use sprintf::emit_sprintf;
+pub use sprintf_pack_mixed::emit_sprintf_pack_mixed;
 pub use vsprintf::emit_vsprintf;
 /// Emit sprintf formatting helper.
 pub use md5::emit_md5;
