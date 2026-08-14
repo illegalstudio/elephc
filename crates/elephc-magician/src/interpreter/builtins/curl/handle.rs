@@ -105,13 +105,16 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
                 .set_curl_easy_write_mode(table_id, truthy, false);
             return values.bool_value(ffi::easy_setopt_long(raw, opt, i64::from(truthy)));
         }
-        // CURLOPT_PRIVATE (10103): stored verbatim, read back by
-        // `curl_getinfo(..., CURLINFO_PRIVATE)`.
+        // CURLOPT_PRIVATE (10103): retained and stored, read back by
+        // `curl_getinfo(..., CURLINFO_PRIVATE)`. `set_curl_easy_private` retains its own
+        // independent reference — see that method's doc for why storing the caller's bare
+        // (unretained) `value` cell here would be a use-after-free as soon as the caller's
+        // own variable is unset or reassigned.
         if option == 10103 {
-            context
+            let stored = context
                 .stream_resources_mut()
-                .set_curl_easy_private(table_id, value);
-            return values.bool_value(true);
+                .set_curl_easy_private(table_id, value, values)?;
+            return values.bool_value(stored);
         }
         // CURLOPT_SAFE_UPLOAD (-1): always on, matching php-src's own rejection of a
         // falsy value.

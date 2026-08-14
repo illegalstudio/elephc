@@ -738,34 +738,48 @@ return function_exists("inet_ntop");"#,
 }
 
 /// Verifies eval `get_loaded_extensions()` returns the compile-time-known extension lists.
+///
+/// Curl is the one deliberate exception to these otherwise-static lists (mirrors
+/// `extension_loaded('curl')` — see
+/// `crate::interpreter::builtins::network_env::extension_loaded`'s module doc): with
+/// `--features curl` it both appears in the list and satisfies `in_array`, so this test
+/// reads the expected shape from `cfg!(feature = "curl")` rather than hard-coding one.
 #[test]
 fn execute_program_dispatches_get_loaded_extensions_builtin() {
-    let program = parse_fragment(
-        br#"$ext = get_loaded_extensions();
+    let curl_present = cfg!(feature = "curl");
+    let source = format!(
+        r#"$ext = get_loaded_extensions();
 echo count($ext) . ":" . $ext[0] . ":";
 echo (in_array("json", $ext) ? "json" : "bad") . ":";
 echo (in_array("Zend OPcache", $ext) ? "opcache" : "bad") . ":";
-echo (in_array("curl", $ext) ? "bad" : "no-curl") . ":";
+echo (in_array("curl", $ext) ? "curl-present" : "curl-absent") . ":";
 $zend = get_loaded_extensions(true);
 echo count($zend) . ":" . $zend[0] . ":";
 echo (in_array("Reflection", $zend) ? "bad" : "no-reflection") . ":";
 echo is_array($ext) ? "array" : "bad";
 return function_exists("get_loaded_extensions");"#,
-    )
-    .expect("parse eval fragment");
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
+    let count = if curl_present { 12 } else { 11 };
+    let curl_label = if curl_present { "curl-present" } else { "curl-absent" };
     assert_eq!(
         values.output,
-        "11:Core:json:opcache:no-curl:1:Zend OPcache:no-reflection:array"
+        format!("{count}:Core:json:opcache:{curl_label}:1:Zend OPcache:no-reflection:array")
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
 /// Verifies eval `extension_loaded()` resolves the compile-time-known extension set.
+///
+/// `curl` is the one deliberate exception that tracks `cfg!(feature = "curl")` instead of
+/// a fixed answer — see
+/// `crate::interpreter::builtins::network_env::extension_loaded`'s module doc — so the
+/// expected trailing digit is read from that same `cfg!` rather than hard-coded.
 #[test]
 fn execute_program_dispatches_extension_loaded_builtin() {
     let program = parse_fragment(
@@ -781,6 +795,7 @@ return function_exists("extension_loaded");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "1100");
+    let curl_digit = if cfg!(feature = "curl") { "1" } else { "0" };
+    assert_eq!(values.output, format!("110{curl_digit}"));
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

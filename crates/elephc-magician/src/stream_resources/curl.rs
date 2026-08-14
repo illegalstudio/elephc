@@ -13,6 +13,9 @@
 //!   uses, so a curl handle id can never collide with a hash-context, directory, or
 //!   stream-context id in the same table generation — see `EvalCurlEasyHandle`'s own doc.
 
+use crate::errors::EvalStatus;
+use crate::interpreter::RuntimeValueOps;
+
 use super::*;
 
 impl EvalStreamResources {
@@ -38,13 +41,25 @@ impl EvalStreamResources {
     /// `open_curl_easy_handle` without re-initializing the raw handle itself. Takes the
     /// fields rather than a whole `EvalCurlEasyHandle`, which stays private to this
     /// module — callers outside `crate::stream_resources` have no way to name that type.
+    ///
+    /// RETAINS `private_value` when present: the source handle's own entry keeps its
+    /// existing (already-retained — see `set_curl_easy_private`) reference, so the new
+    /// entry needs an INDEPENDENT owned reference of its own. Without this, both entries
+    /// would share one retained cell with only one owner recorded anywhere, and freeing
+    /// either handle (or overwriting `CURLOPT_PRIVATE` on either) would release a
+    /// reference the OTHER handle still points at.
     pub(crate) fn adopt_curl_easy_handle(
         &mut self,
         raw: i64,
         return_transfer: bool,
         write_user: bool,
         private_value: Option<RuntimeCellHandle>,
-    ) -> i64 {
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<i64, EvalStatus> {
+        let private_value = match private_value {
+            Some(value) => Some(values.retain(value)?),
+            None => None,
+        };
         let id = self.take_next_id();
         self.curl_easy_handles.insert(
             id,
@@ -55,7 +70,7 @@ impl EvalStreamResources {
                 private_value,
             },
         );
-        id
+        Ok(id)
     }
 
     /// Returns the bridge's raw easy-handle id for an eval table key.
@@ -103,24 +118,51 @@ impl EvalStreamResources {
             .and_then(|handle| handle.private_value)
     }
 
-    /// Stores a `CURLOPT_PRIVATE` value. Returns `false` for an unknown id.
-    pub(crate) fn set_curl_easy_private(&mut self, id: i64, value: RuntimeCellHandle) -> bool {
+    /// Stores a `CURLOPT_PRIVATE` value, RETAINING it so this table holds an independent
+    /// owned reference — not the caller's borrowed scope cell, which `unset()`/reassignment
+    /// can release out from under a stored-but-unretained handle (the exact use-after-free
+    /// this method used to allow: `curl_setopt($ch, CURLOPT_PRIVATE, $k); unset($k);
+    /// curl_getinfo($ch, CURLINFO_PRIVATE);` retained a freed cell). Releases any
+    /// PREVIOUSLY stored value first, matching PHP's own property-reassignment semantics
+    /// (`crate::curl_prelude`'s `$handle->__elephc_private = $value;` drops the old
+    /// reference the same way) and preventing an unbounded retain leak across repeated
+    /// `curl_setopt($ch, CURLOPT_PRIVATE, ...)` calls on one handle. Returns `false` (after
+    /// releasing the just-retained value, so nothing leaks) for an unknown id.
+    pub(crate) fn set_curl_easy_private(
+        &mut self,
+        id: i64,
+        value: RuntimeCellHandle,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<bool, EvalStatus> {
+        let retained = values.retain(value)?;
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            return false;
+            values.release(retained)?;
+            return Ok(false);
         };
-        handle.private_value = Some(value);
-        true
+        if let Some(previous) = handle.private_value.replace(retained) {
+            values.release(previous)?;
+        }
+        Ok(true)
     }
 
     /// Resets the PHP-layer mirror fields to `curl_reset()`'s fresh-handle defaults,
     /// leaving the raw bridge id untouched (the bridge's own `elephc_curl_easy_reset`
-    /// already reset libcurl's own options).
-    pub(crate) fn reset_curl_easy_mirror(&mut self, id: i64) -> bool {
+    /// already reset libcurl's own options). Releases the stored `CURLOPT_PRIVATE` value
+    /// (if any) before clearing it — the same reference `set_curl_easy_private` retained on
+    /// the way in, mirroring `crate::curl_prelude::curl_reset`'s
+    /// `$handle->__elephc_private = false;`.
+    pub(crate) fn reset_curl_easy_mirror(
+        &mut self,
+        id: i64,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<bool, EvalStatus> {
         self.set_curl_easy_write_mode(id, false, false);
         let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
-            return false;
+            return Ok(false);
         };
-        handle.private_value = None;
-        true
+        if let Some(previous) = handle.private_value.take() {
+            values.release(previous)?;
+        }
+        Ok(true)
     }
 }

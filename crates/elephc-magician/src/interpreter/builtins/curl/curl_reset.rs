@@ -57,6 +57,8 @@ fn eval_curl_reset_result(
         .curl_easy_raw(table_id)
         .ok_or(EvalStatus::RuntimeFatal)?;
     ffi::easy_reset(raw);
-    context.stream_resources_mut().reset_curl_easy_mirror(table_id);
+    context
+        .stream_resources_mut()
+        .reset_curl_easy_mirror(table_id, values)?;
     values.null()
 }

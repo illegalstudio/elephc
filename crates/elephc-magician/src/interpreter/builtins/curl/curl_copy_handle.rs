@@ -75,6 +75,7 @@ fn eval_curl_copy_handle_result(
         return_transfer,
         write_user,
         private_value,
-    );
+        values,
+    )?;
     values.curl_handle(new_table_id)
 }

@@ -228,3 +228,178 @@ pub(crate) fn easy_free(id: i64) {
 pub(crate) fn global_info_json() -> Vec<u8> {
     read_sized(|ptr, cap, len| unsafe { elephc_curl_global_info(ptr, cap, len) })
 }
+
+/// LINK-SATISFYING STAND-INS for `cargo test -p elephc-magician --features curl`, NOT a
+/// curl fake. `EvalDirectHook::call`/`EvalValuesHook::call` are single functions
+/// containing ONE match over every registered builtin name (see
+/// `crate::interpreter::builtins::curl`'s module doc for the full argument), so as soon
+/// as `--features curl` compiles this crate's dispatch table in, it is unconditionally
+/// "live" for the whole test binary — Rust cannot dead-strip individual match arms — and
+/// every `elephc_curl_*` symbol above needs SOME definition to link, regardless of which
+/// specific `#[test]` runs. Real `elephc-curl` is deliberately never linked into this
+/// crate's own test binary (that would need real pinned libcurl/OpenSSL/zlib present on
+/// every machine that runs `cargo test`, which is exactly what
+/// `crates/elephc-curl/src/tests.rs`'s own `elephc_curl_native` gate exists to avoid).
+/// These provide the bare minimum so the LINKER is satisfied; they do not implement any
+/// libcurl semantic. Tests that need real curl behavior belong in the AOT
+/// `tests/codegen/curl/` suite instead, gated by `skip_without_curl_native`.
+#[cfg(test)]
+mod test_stubs {
+    /// Classifies the handful of options `crates/elephc-magician/src/stream_resources/
+    /// tests` (the `CURLOPT_PRIVATE` retain/release regression) actually exercises,
+    /// matching `crates/elephc-curl/src/options.rs`'s real table for exactly those
+    /// entries; every other option answers `KIND_INVALID` (`0`), same as a genuinely
+    /// unrecognized option — this stub does not attempt to reproduce the full table.
+    #[no_mangle]
+    extern "C" fn elephc_curl_option_kind(opt: i64) -> i32 {
+        match opt {
+            10002 => 2,  // CURLOPT_URL -> KIND_STRING
+            10103 => 5,  // CURLOPT_PRIVATE -> KIND_PHP_LAYER
+            19913 => 5,  // CURLOPT_RETURNTRANSFER -> KIND_PHP_LAYER
+            _ => 0,      // KIND_INVALID
+        }
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_init() -> i64 {
+        // A fixed non-zero fake id: `curl_ffi::easy_init()` treats `0` as libcurl
+        // allocation failure, and `curl_init()` (`crate::interpreter::builtins::curl::
+        // curl_init`) hard-faults on that — tests need `curl_init()` to succeed so they
+        // can reach `curl_setopt()`/`curl_getinfo()`'s own logic. Every eval `curl_init()`
+        // call in a test gets its own independent `EvalStreamResources` table entry
+        // regardless of this shared raw id, so reusing one value across handles is safe.
+        42
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_set_url(_id: i64, _ptr: *const u8, _len: usize) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_setopt_long(_id: i64, _opt: i32, _value: i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_setopt_str(
+        _id: i64,
+        _opt: i32,
+        _ptr: *const u8,
+        _len: usize,
+    ) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_setopt_slist(
+        _id: i64,
+        _opt: i32,
+        _ptr: *const u8,
+        _len: usize,
+    ) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_perform(_id: i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_errno(_id: i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_error(
+        _id: i64,
+        _out: *mut u8,
+        _out_cap: usize,
+        out_len: *mut usize,
+    ) -> i32 {
+        if !out_len.is_null() {
+            unsafe {
+                *out_len = 0;
+            }
+        }
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_getinfo_long(_id: i64, _info: i32, _out: *mut i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_getinfo_double(_id: i64, _info: i32, _out: *mut f64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_str_op(
+        _id: i64,
+        _op: i32,
+        _ptr: *const u8,
+        _len: usize,
+        _number: i64,
+    ) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_take_scratch(
+        _id: i64,
+        _ptr: *mut *mut u8,
+        len: *mut usize,
+    ) -> i32 {
+        if !len.is_null() {
+            unsafe {
+                *len = 0;
+            }
+        }
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_take_body(
+        _id: i64,
+        _ptr: *mut *mut u8,
+        len: *mut usize,
+    ) -> i32 {
+        if !len.is_null() {
+            unsafe {
+                *len = 0;
+            }
+        }
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_reset(_id: i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_pause(_id: i64, _bitmask: i32) -> i32 {
+        43
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_upkeep(_id: i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_duphandle(_id: i64) -> i64 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_strerror(
+        _code: i32,
+        _out: *mut u8,
+        _out_cap: usize,
+        out_len: *mut usize,
+    ) -> i32 {
+        if !out_len.is_null() {
+            unsafe {
+                *out_len = 0;
+            }
+        }
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_free(_id: i64) {}
+    #[no_mangle]
+    extern "C" fn elephc_curl_global_info(_out_json: *mut u8, _cap: usize, len: *mut usize) -> i32 {
+        if !len.is_null() {
+            unsafe {
+                *len = 0;
+            }
+        }
+        0
+    }
+}
