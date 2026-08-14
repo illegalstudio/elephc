@@ -116,8 +116,8 @@
 //! STRING/SLIST/OFF_T/PHP-LAYER option `curl_setopt()` recognizes works, not just a
 //! hand-picked subset.
 //!
-//! DEFERRED (not implemented; calling these from `eval()` fails as an undefined
-//! function/unsupported option, not a silent wrong answer):
+//! DEFERRED (not implemented — the multi interface, the share interface, and
+//! `CURLFile`/`CURLStringFile`):
 //! - The multi interface (`curl_multi_*`) and the share interface (`curl_share_*`).
 //! - `CURLFile`/`CURLStringFile`/`curl_file_create()` and, with them,
 //!   `CURLOPT_POSTFIELDS`'s ARRAY (`multipart/form-data`) form — `curl_setopt()` still
@@ -136,6 +136,56 @@
 //!   valued options): these are KIND 5 PHP-layer options that need a live PHP stream
 //!   resource on the far end; wiring them is future work, tracked with the rest of this
 //!   list, not attempted here.
+//!
+//! WHY EASY-ONLY IS A DELIBERATE, PERMANENT-ISH SCOPE DECISION (WP-B, curl punch list
+//! coda), not merely "not gotten to yet":
+//!
+//! 1. OBJECT-MODEL MISMATCH. A curl easy handle in `eval()` is a resource-like cell (see
+//!    "Handle representation" above), not a real object — the same shape `hash_init()`'s
+//!    `HashContext` already uses. The multi and share interfaces are fundamentally
+//!    OBJECT-IDENTITY APIs: `curl_multi_add_handle()` attaches a handle by identity,
+//!    `curl_multi_info_read()` hands back the SAME `CurlHandle` object instance that was
+//!    attached (not a new one with the same raw id), and `CURLOPT_SHARE` reads a
+//!    `CurlShareHandle` OBJECT out of a `curl_setopt()` call whose third argument is
+//!    otherwise always a scalar. None of that has a home in a resource-cell world without
+//!    inventing a parallel object-identity map inside this interpreter — real, nontrivial
+//!    new machinery, not a missing case in an existing dispatch table.
+//! 2. CALLBACKS NEED EVAL-INTERPRETER CALLABLE INVOCATION FROM C, WHICH DOES NOT EXIST.
+//!    AOT installs a callback by decomposing it into a descriptor pointer plus the shared
+//!    codegen adapter's address (`src/codegen/runtime_callable_invoker.rs`), so libcurl's
+//!    C trampoline can call back into compiled PHP. A pure Rust interpreter with no
+//!    generated assembly has no address to hand libcurl for that trampoline to call INTO
+//!    eval-interpreted PHP — this is not "harder to implement", it is a capability this
+//!    interpreter does not have anywhere yet, for curl or otherwise.
+//! 3. PAY-FOR-USE, applied to eval SPECIFICALLY. Multi/share/callbacks are common in
+//!    compiled code and rare from inside a STRING passed to `eval()` — carrying
+//!    object-identity tracking and C-callback-invocation machinery for that combination
+//!    would cost every eval()-using program (this module's own Cargo-feature-gating doc
+//!    above explains the same tradeoff for curl as a whole) for a path few `eval()`
+//!    callers exercise.
+//!
+//! ROADMAP: none of the three reasons above is permanent in principle, but (2) is the hard
+//! one — it needs eval-callable invocation from a C trampoline, machinery this interpreter
+//! does not have for ANY builtin family yet, not just curl. No committed timeline exists.
+//!
+//! WHAT HAPPENS IF YOU TRY (post item-6 fix): every `curl_multi_*`/`curl_share_*` function
+//! name, `curl_file_create()`, and `new CURLFile(...)`/`new CURLStringFile(...)` is
+//! INTERCEPTED and answers eval's own honest "eval() fragment uses an unsupported
+//! construct" fatal — the identical rejection any other undefined-in-eval name already
+//! produces — rather than silently doing something confusing. This is a deliberate fix,
+//! not the original behavior: before it, an unrecognized-by-eval name fell through to
+//! `context.native_function()` (the interpreter's normal "call this AOT-compiled function
+//! by name" escape hatch), and whenever the host program also linked `elephc_curl` (which
+//! ANY non-`eval()` curl usage in the same program causes), that fallthrough resolved to
+//! the REAL compiled `curl_multi_init()`/`curl_share_init()`/`curl_file_create()`/
+//! `CURLFile` and handed back a genuine, apparently-working AOT object — right up until it
+//! was mixed with an eval-owned easy handle and failed confusingly (the "TWO DISTINCT
+//! OBJECT SPACES" consequence documented above). See
+//! `crate::interpreter::builtins::registry::names::{eval_curl_deferred_function_name,
+//! eval_curl_deferred_class_name}` for the interception itself and
+//! `crate::interpreter::expressions::{eval_call, evaluation::eval_new_object_result}` for
+//! where each is checked, ahead of their respective native-function/native-class
+//! fallbacks.
 
 mod handle;
 

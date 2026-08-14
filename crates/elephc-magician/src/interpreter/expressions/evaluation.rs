@@ -133,6 +133,12 @@ pub(super) fn eval_new_object_result(
     if let Some(class) = context.class(class_name).cloned() {
         return eval_dynamic_class_new_object(&class, args, context, scope, values);
     }
+    // Checked BEFORE the native-class fallback below — see
+    // `eval_curl_deferred_class_name`'s own doc for why a real AOT `CURLFile`/
+    // `CURLStringFile` object must never be constructed through it.
+    if eval_curl_deferred_class_name(class_name) {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
     let object = values.new_object(class_name)?;
     if let Err(err) =
         eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)

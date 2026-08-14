@@ -49,18 +49,24 @@ pub(in crate::interpreter) fn eval_curl_init_values_result(
 
 /// Allocates a fresh easy handle, optionally seeds `CURLOPT_URL`, and boxes it.
 ///
-/// Mirrors `crate::curl_prelude::curl_init`'s allocation-failure handling: real PHP
-/// throws `\RuntimeException` there; this interpreter has no catchable-exception path
-/// from internals (see `crate::interpreter::builtins::curl::handle`'s own note on the same
-/// tradeoff for `curl_setopt()`), so a libcurl allocation failure — which no real program
-/// meaningfully recovers from either way — is a hard fault here instead.
+/// Mirrors `crate::curl_prelude::curl_init`'s allocation-failure handling verbatim: a
+/// catchable `\RuntimeException` with AOT's exact message
+/// (`"curl_init(): libcurl could not allocate an easy handle"`), through the same
+/// `eval_throw_runtime_exception` mechanism `curl_escape()`/`curl_unescape()` use for their
+/// own libcurl-failure path (WP-B item 8, curl punch list) — this file used to hard-fault
+/// here instead, on the mistaken belief that this interpreter has no catchable-exception
+/// path from internals at all.
 fn eval_curl_init_result(
     url: Option<RuntimeCellHandle>,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(raw) = ffi::easy_init() else {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_runtime_exception(
+            "curl_init(): libcurl could not allocate an easy handle",
+            context,
+            values,
+        );
     };
     if let Some(url) = url {
         if values.type_tag(url)? != EVAL_TAG_NULL {

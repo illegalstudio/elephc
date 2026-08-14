@@ -51,24 +51,26 @@ pub(in crate::interpreter) fn eval_curl_copy_handle_values_result(
 /// this copies the PHP-layer mirror fields — mirrors
 /// `crate::curl_prelude::curl_copy_handle`'s own two-layer argument.
 ///
-/// Allocation failure is a hard fault, for the same reason `curl_init()`'s own doc gives:
-/// no catchable-exception path exists from this interpreter's internals.
+/// Allocation failure throws a catchable `\RuntimeException` with AOT's exact message
+/// (`"curl_copy_handle(): libcurl could not duplicate the easy handle"`), the same
+/// `eval_throw_runtime_exception` mechanism `curl_init()`'s own allocation-failure path
+/// uses (WP-B item 8, curl punch list) — this used to hard-fault instead.
 fn eval_curl_copy_handle_result(
     handle: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let table_id = eval_curl_easy_table_id(handle, values)?;
-    let (raw, return_transfer, write_user, private_value) = {
-        let resources = context.stream_resources();
-        let raw = resources.curl_easy_raw(table_id).ok_or(EvalStatus::RuntimeFatal)?;
-        let (return_transfer, write_user, private_value) = resources
-            .curl_easy_mirror(table_id)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        (raw, return_transfer, write_user, private_value)
-    };
+    let (table_id, raw) = eval_curl_easy_handle("curl_copy_handle", handle, context, values)?;
+    let (return_transfer, write_user, private_value) = context
+        .stream_resources()
+        .curl_easy_mirror(table_id)
+        .ok_or(EvalStatus::RuntimeFatal)?;
     let Some(new_raw) = ffi::easy_duphandle(raw) else {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_runtime_exception(
+            "curl_copy_handle(): libcurl could not duplicate the easy handle",
+            context,
+            values,
+        );
     };
     let new_table_id = context.stream_resources_mut().adopt_curl_easy_handle(
         new_raw,

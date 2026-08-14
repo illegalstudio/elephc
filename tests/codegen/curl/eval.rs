@@ -188,3 +188,248 @@ fn eval_rejects_the_stream_options_with_a_warning_not_a_fatal() {
         );
     }
 }
+
+/// ITEM 6 (WP-B, curl punch list): `curl_multi_*`/`curl_share_*`/`curl_file_create` are
+/// deliberately unimplemented in `eval()` (this family's module doc, "Scope shipped vs.
+/// deferred"). Before the fix, an unrecognized-by-eval name FELL THROUGH to
+/// `context.native_function()`, which — whenever the host program also links
+/// `elephc_curl`, exactly the condition this test's top-level `curl_version()` call
+/// creates — resolved to the REAL AOT prelude function and silently handed back a working
+/// `CurlMultiHandle`/`CurlShareHandle`/`CURLFile` object instead of failing. The fix
+/// intercepts these names and rejects them with eval's own honest "unsupported construct"
+/// fatal (the same one any other undefined-in-eval name already produces) — an
+/// UNCATCHABLE process exit, not a PHP-catchable exception, so this asserts the process
+/// exit code and stderr message rather than wrapping in try/catch.
+#[test]
+fn eval_curl_multi_share_and_file_create_are_rejected_not_working_aot_objects() {
+    if skip_without_curl_native(
+        "eval_curl_multi_share_and_file_create_are_rejected_not_working_aot_objects",
+    ) {
+        return;
+    }
+    let cases = [
+        ("curl_multi_init();", "curl_multi_init"),
+        ("curl_share_init();", "curl_share_init"),
+        (r#"curl_file_create("/etc/hosts");"#, "curl_file_create"),
+    ];
+    for (call, label) in cases {
+        let output = compile_and_run_capture(&format!(
+            r#"<?php
+            curl_version();
+            $r = eval('$h = {call} return get_class($h);');
+            echo "unexpectedly reached: ", $r;
+            "#
+        ));
+        assert!(
+            !output.success,
+            "{label}(): eval() must fail instead of returning a working AOT object; stdout was: {}",
+            output.stdout
+        );
+        assert!(
+            output
+                .stderr
+                .contains("eval() fragment uses an unsupported construct"),
+            "{label}(): stderr was: {}",
+            output.stderr
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{label}(): must never reach the echo after eval(); stdout was: {}",
+            output.stdout
+        );
+    }
+}
+
+/// The class-construction half of item 6: `new CURLFile(...)`/`new CURLStringFile(...)`
+/// inside `eval()` used to construct a real AOT object the same way the function names
+/// above did (verified before this fix: `get_class($f) === "CURLFile"`), through
+/// `values.new_object()`'s own native-class fallback. Same fatal, same reasoning.
+#[test]
+fn eval_new_curlfile_is_rejected_not_a_working_aot_object() {
+    if skip_without_curl_native("eval_new_curlfile_is_rejected_not_a_working_aot_object") {
+        return;
+    }
+    let output = compile_and_run_capture(
+        r#"<?php
+        curl_version();
+        $r = eval('$f = new CURLFile("/etc/hosts"); return get_class($f);');
+        echo "unexpectedly reached: ", $r;
+        "#,
+    );
+    assert!(
+        !output.success,
+        "new CURLFile(...) must fail instead of returning a working AOT object; stdout was: {}",
+        output.stdout
+    );
+    assert!(
+        output
+            .stderr
+            .contains("eval() fragment uses an unsupported construct"),
+        "stderr was: {}",
+        output.stderr
+    );
+}
+
+/// ITEMS 8 & 9 (WP-B, curl punch list): every curl_*() function that takes a `$handle`
+/// must throw a catchable `\TypeError` for a non-`CurlHandle` value, matching real PHP
+/// 8.4.20's own wording (verified against the real interpreter: `curl_close("x")` ->
+/// `TypeError: curl_close(): Argument #1 ($handle) must be of type CurlHandle, string
+/// given`) — `curl_close()` used to accept literally anything with no check at all, and
+/// `curl_escape()`/`curl_unescape()` hard-faulted (an uncatchable process abort) instead of
+/// throwing. This proves catchability end to end: the exception is caught by ordinary PHP
+/// `try`/`catch` running inside `eval()`, and the script keeps running afterward.
+#[test]
+fn eval_curl_handle_functions_throw_a_catchable_type_error_for_a_non_handle_value() {
+    if skip_without_curl_native(
+        "eval_curl_handle_functions_throw_a_catchable_type_error_for_a_non_handle_value",
+    ) {
+        return;
+    }
+    let output = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $out = [];
+            try {
+                curl_close("not a handle");
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_escape(42, "a b");
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_unescape(null, "a%20b");
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    // The "given" type name is AOT's OWN `gettype()`-based wording (`crate::curl_prelude`'s
+    // `$given` ternary in, e.g., `curl_multi_add_handle`), not real php-src's newer
+    // "int"/"bool"/"float" short names — verified against the real AOT binary
+    // (`curl_multi_add_handle($mh, 42)` -> "...must be of type CurlHandle, integer
+    // given"). This is a pre-existing AOT/php-src divergence this test intentionally
+    // mirrors rather than papers over: the goal is eval-matches-AOT, not eval-matches-real-
+    // php for a wording AOT itself does not use.
+    assert_eq!(
+        output,
+        "curl_close(): Argument #1 ($handle) must be of type CurlHandle, string given\
+        |curl_escape(): Argument #1 ($handle) must be of type CurlHandle, integer given\
+        |curl_unescape(): Argument #1 ($handle) must be of type CurlHandle, null given\
+        |alive"
+    );
+}
+
+/// ITEM 10 (WP-B, curl punch list): `curl_setopt()`'s catchable-exception paths — an
+/// unrecognized option number, `CURLOPT_SAFE_UPLOAD` set falsy, and a non-scalar `$value`
+/// for an ordinary option — used to be `RuntimeFatal` (an uncatchable process abort) in
+/// `eval()` while AOT throws a catchable `\ValueError`/`\TypeError`
+/// (`crate::curl_prelude::curl_setopt`'s own guards, mirrored verbatim here). Proven end to
+/// end with `try`/`catch` running inside `eval()`, script alive afterward.
+#[test]
+fn eval_curl_setopt_throws_catchable_errors_for_invalid_option_and_non_scalar_value() {
+    if skip_without_curl_native(
+        "eval_curl_setopt_throws_catchable_errors_for_invalid_option_and_non_scalar_value",
+    ) {
+        return;
+    }
+    let output = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init();
+            $out = [];
+            try {
+                curl_setopt($ch, 999999999, "x");
+            } catch (\ValueError $e) {
+                $out[] = get_class($e) . ":" . $e->getMessage();
+            }
+            try {
+                curl_setopt($ch, CURLOPT_SAFE_UPLOAD, false);
+            } catch (\ValueError $e) {
+                $out[] = get_class($e) . ":" . $e->getMessage();
+            }
+            try {
+                curl_setopt($ch, CURLOPT_URL, ["not", "scalar"]);
+            } catch (\TypeError $e) {
+                $out[] = get_class($e) . ":" . $e->getMessage();
+            }
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(
+        output,
+        "ValueError:curl_setopt(): Argument #2 ($option) is not a valid cURL option\
+        |ValueError:curl_setopt(): Disabling safe uploads is no longer supported\
+        |TypeError:curl_setopt(): Argument #3 ($value) must be of type string|int|float|bool, array given\
+        |alive"
+    );
+}
+
+/// ITEM 11 (WP-B, curl punch list): a string-list option (`CURLOPT_HTTPHEADER`) rejects a
+/// non-array `$value` and rejects an array containing a non-scalar item with a catchable
+/// `\TypeError`, matching `crate::curl_prelude::curl_setopt`'s own two guards verbatim —
+/// eval used to answer `false` for the first case and silently `(string)`-cast the second.
+#[test]
+fn eval_curl_setopt_slist_option_throws_catchable_type_errors_for_non_scalar_items() {
+    if skip_without_curl_native(
+        "eval_curl_setopt_slist_option_throws_catchable_type_errors_for_non_scalar_items",
+    ) {
+        return;
+    }
+    let output = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init();
+            $out = [];
+            try {
+                curl_setopt($ch, CURLOPT_HTTPHEADER, "not-an-array");
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-Ok: 1", ["nested-array"]]);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            $out[] = curl_setopt($ch, CURLOPT_HTTPHEADER, ["X-Ok: 1", 42, 3.5, true]) ? "scalars-ok" : "scalars-failed";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(
+        output,
+        "curl_setopt(): Argument #3 ($value) must be of type array, string given\
+        |curl_setopt(): Argument #3 ($value) must be an array of strings for this option\
+        |scalars-ok"
+    );
+}
+
+// ITEM 19 (WP-B, curl punch list) end-to-end coverage note: `EvalStreamResources::drop`
+// cannot release a retained `CURLOPT_PRIVATE` value (`Drop::drop` receives no
+// `RuntimeValueOps`), so the release now happens one step earlier, in
+// `crate::ffi::context::__elephc_eval_context_free` — see that function's own doc and
+// `crate::stream_resources::curl::EvalStreamResources::release_curl_easy_private_values`'s
+// for the full mechanism. An end-to-end `--gc-stats` fixture was attempted here but
+// dropped: `curl_init()`'s own eval-owned handle cell (resource kind 5, "no destructor
+// runs" by design, same as `hash_init()`'s `HashContext`) and other curl-bridge one-time
+// overhead dominate the process-wide alloc/free counts enough that a single retained
+// string cell is not a reliable signal above that noise (measured: identical imbalances
+// with the fix present, with the fix reverted, and with an explicit `curl_reset()` that
+// independently exercises the SAME already-tested release path). The precise, deterministic
+// regression coverage lives in `crate::interpreter::tests::builtins_curl`'s
+// `release_curl_easy_private_values_releases_every_still_retained_entry` and
+// `..._skips_handles_with_no_stored_private_value` (magician unit tests, `--features curl`),
+// which exercise the storage-layer method directly with no such confound.

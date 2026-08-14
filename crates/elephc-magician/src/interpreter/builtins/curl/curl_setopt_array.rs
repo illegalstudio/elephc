@@ -53,11 +53,7 @@ fn eval_curl_setopt_array_result(
     if !values.is_array_like(options)? {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let table_id = eval_curl_easy_table_id(handle, values)?;
-    let raw = context
-        .stream_resources()
-        .curl_easy_raw(table_id)
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let (table_id, raw) = eval_curl_easy_handle("curl_setopt_array", handle, context, values)?;
     let len = values.array_len(options)?;
     for position in 0..len {
         let key = values.array_iter_key(options, position)?;

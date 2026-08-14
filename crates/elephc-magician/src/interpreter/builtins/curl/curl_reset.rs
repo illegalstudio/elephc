@@ -51,11 +51,7 @@ fn eval_curl_reset_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let table_id = eval_curl_easy_table_id(handle, values)?;
-    let raw = context
-        .stream_resources()
-        .curl_easy_raw(table_id)
-        .ok_or(EvalStatus::RuntimeFatal)?;
+    let (table_id, raw) = eval_curl_easy_handle("curl_reset", handle, context, values)?;
     ffi::easy_reset(raw);
     context
         .stream_resources_mut()

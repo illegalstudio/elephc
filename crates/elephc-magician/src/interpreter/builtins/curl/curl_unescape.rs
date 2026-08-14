@@ -49,11 +49,18 @@ fn eval_curl_unescape_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let raw = eval_curl_easy_raw(handle, context, values)?;
+    let raw = eval_curl_easy_raw("curl_unescape", handle, context, values)?;
     let string = values.cast_string(string)?;
     let bytes = values.string_bytes(string)?;
     match ffi::easy_str_op(raw, ffi::STR_OP_UNESCAPE, &bytes, 0) {
         Some(unescaped) => values.string_bytes_value(&unescaped),
-        None => values.bool_value(false),
+        // See `curl_escape`'s matching branch: mirrors
+        // `crate::curl_prelude::curl_unescape`'s catchable `\RuntimeException` on a
+        // libcurl decode failure instead of answering `false`.
+        None => eval_throw_runtime_exception(
+            "curl_unescape(): libcurl could not URL-decode the string",
+            context,
+            values,
+        ),
     }
 }

@@ -49,11 +49,22 @@ fn eval_curl_escape_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let raw = eval_curl_easy_raw(handle, context, values)?;
+    let raw = eval_curl_easy_raw("curl_escape", handle, context, values)?;
     let string = values.cast_string(string)?;
     let bytes = values.string_bytes(string)?;
     match ffi::easy_str_op(raw, ffi::STR_OP_ESCAPE, &bytes, 0) {
         Some(escaped) => values.string_bytes_value(&escaped),
-        None => values.bool_value(false),
+        // Mirrors `crate::curl_prelude::curl_escape`'s own failure path: AOT's
+        // `string`-returning signature cannot answer `false`, so a libcurl escape
+        // failure throws a catchable `\RuntimeException` there instead — this used to
+        // answer eval's own `false` here, which was reachable (unlike a `false` for a
+        // genuinely bad handle, which the compiled signature also cannot reach — see
+        // `eval_curl_easy_raw`'s doc) because encoding failure is a real, if rare,
+        // libcurl outcome (allocation failure), not a static-typing question.
+        None => eval_throw_runtime_exception(
+            "curl_escape(): libcurl could not URL-encode the string",
+            context,
+            values,
+        ),
     }
 }

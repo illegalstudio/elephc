@@ -49,7 +49,7 @@ fn eval_curl_pause_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let raw = eval_curl_easy_raw(handle, context, values)?;
+    let raw = eval_curl_easy_raw("curl_pause", handle, context, values)?;
     let flags = eval_int_value(flags, values)?;
     let Ok(bitmask) = i32::try_from(flags) else {
         return Err(EvalStatus::RuntimeFatal);

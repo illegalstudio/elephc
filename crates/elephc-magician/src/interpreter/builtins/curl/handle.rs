@@ -10,28 +10,76 @@ use crate::curl_ffi as ffi;
 
 use super::*;
 
-/// Resolves a `curl_init()`-produced handle cell to its bridge raw id, validating that
-/// the eval table key actually names a LIVE curl easy handle (not a foreign resource cell,
-/// and not one this same `ElephcEvalContext` never created).
-pub(in crate::interpreter) fn eval_curl_easy_raw(
-    handle: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+/// Computes the "given" type name AOT's curl prelude uses in its own `TypeError`/
+/// `ValueError` messages: `get_class($value)` for an object, the literal `"null"` for
+/// `null` (NOT `gettype()`'s `"NULL"`), and `gettype($value)` for everything else —
+/// `crate::curl_prelude::curl_setopt`'s own `$given` ternary, reproduced here so an eval
+/// curl error message reads identically to the AOT one for the same misuse.
+fn eval_curl_given_type_name(
+    value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
-) -> Result<i64, EvalStatus> {
-    let id = eval_resource_payload(handle, values)?;
-    context
-        .stream_resources()
-        .curl_easy_raw(id)
-        .ok_or(EvalStatus::RuntimeFatal)
+) -> Result<String, EvalStatus> {
+    let tag = values.type_tag(value)?;
+    if tag == EVAL_TAG_NULL {
+        return Ok("null".to_string());
+    }
+    if tag == EVAL_TAG_OBJECT {
+        let class_name = values.object_class_name(value)?;
+        let bytes = values.string_bytes(class_name)?;
+        return Ok(String::from_utf8_lossy(&bytes).into_owned());
+    }
+    Ok(eval_gettype_name(tag).to_string())
 }
 
-/// Resolves a handle cell to its EVAL TABLE KEY (not the bridge's raw id) for callers that
-/// need to read/write the PHP-layer mirror fields (`EvalStreamResources::curl_easy_*`).
-pub(in crate::interpreter) fn eval_curl_easy_table_id(
+/// Resolves a `curl_*()` call's `$handle` argument to its EVAL TABLE KEY and bridge raw id,
+/// throwing PHP's own `\TypeError` when the cell is not a live curl easy handle this same
+/// `ElephcEvalContext` created (not a foreign resource cell, and not a resource at all).
+///
+/// `function` names the calling builtin for the message; every `curl_*()` function that
+/// takes a handle takes it as argument #1, so the position is not parameterized. The
+/// message wording — "Argument #1 ($handle) must be of type CurlHandle, X given" — matches
+/// `crate::curl_prelude`'s own runtime `instanceof` guards for the handful of curl
+/// functions that cannot enforce `CurlHandle` statically (`curl_multi_add_handle`,
+/// `curl_multi_getcontent`, `curl_setopt()`'s `CURLOPT_SHARE` case) and real PHP 8.4.20
+/// (verified: `curl_close("x")` -> `TypeError: curl_close(): Argument #1 ($handle) must be
+/// of type CurlHandle, string given`).
+///
+/// Every OTHER `curl_*()` function (`curl_escape`, `curl_close`, `curl_setopt`, …)
+/// declares `CurlHandle $handle` STRICTLY in the AOT prelude, so a mismatched call site is
+/// rejected at COMPILE TIME there — never a runtime throw (verified:
+/// `curl_escape($mixedTypedValue, "s")` is a checker error, not a runtime one). eval() has
+/// no static checker at all, so this is the runtime-only counterpart of that same compiled
+/// guarantee, not a literal reproduction of an AOT runtime throw that does not exist.
+pub(in crate::interpreter) fn eval_curl_easy_handle(
+    function: &str,
     handle: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(i64, i64), EvalStatus> {
+    if values.type_tag(handle)? == EVAL_TAG_RESOURCE {
+        if let Ok(table_id) = i64::try_from(values.raw_value_word(handle)?) {
+            if let Some(raw) = context.stream_resources().curl_easy_raw(table_id) {
+                return Ok((table_id, raw));
+            }
+        }
+    }
+    let given = eval_curl_given_type_name(handle, values)?;
+    eval_throw_type_error(
+        &format!("{function}(): Argument #1 ($handle) must be of type CurlHandle, {given} given"),
+        context,
+        values,
+    )
+}
+
+/// `eval_curl_easy_handle`, keeping only the bridge raw id — for callers that never need
+/// the eval table key.
+pub(in crate::interpreter) fn eval_curl_easy_raw(
+    function: &str,
+    handle: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    eval_resource_payload(handle, values)
+    Ok(eval_curl_easy_handle(function, handle, context, values)?.1)
 }
 
 /// `curl_setopt()`'s message for KIND 6 (a real option this build cannot carry) and KIND 7/
@@ -73,21 +121,49 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
     let kind = ffi::option_kind(option);
     if kind == ffi::KIND_INVALID {
         // php-src's own `ValueError` for an option number it does not recognize at all
-        // (`crate::curl_prelude::curl_setopt`'s header). No catchable-exception path
-        // exists from inside this interpreter's internals, so this is a hard fault —
-        // the same tradeoff every other "should not realistically happen" guard in this
-        // crate already makes (e.g. `hash_final` on an already-finalized context).
-        return Err(EvalStatus::RuntimeFatal);
+        // (`crate::curl_prelude::curl_setopt`'s header). This interpreter DOES have a
+        // catchable-exception path from internals — `eval_throw_builtin_value_error`,
+        // the same mechanism `range()`'s step `ValueError` or `callable_validation.rs`'s
+        // `TypeError`s use — so this mirrors AOT's message verbatim instead of hard-
+        // faulting.
+        return eval_throw_builtin_value_error(
+            "curl_setopt(): Argument #2 ($option) is not a valid cURL option",
+            context,
+            values,
+        );
     }
     if kind == ffi::KIND_SLIST {
         if !values.is_array_like(value)? {
-            return values.bool_value(false);
+            let given = eval_curl_given_type_name(value, values)?;
+            return eval_throw_type_error(
+                &format!(
+                    "curl_setopt(): Argument #3 ($value) must be of type array, {given} given"
+                ),
+                context,
+                values,
+            );
         }
         let mut blob = Vec::new();
         let len = values.array_len(value)?;
         for position in 0..len {
             let key = values.array_iter_key(value, position)?;
             let item = values.array_get(value, key)?;
+            // AOT throws a catchable `\TypeError` for an array/object/null item instead
+            // of silently casting it (`crate::curl_prelude::curl_setopt`'s own `is_array
+            // ($item) || is_object($item) || is_null($item)` guard) — an eval-side
+            // `(string)` cast of an array is a warning plus `"Array"`, not the same
+            // failure, so this checks the item's tag before ever reaching `cast_string`.
+            let item_tag = values.type_tag(item)?;
+            if matches!(
+                item_tag,
+                EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_NULL
+            ) {
+                return eval_throw_type_error(
+                    "curl_setopt(): Argument #3 ($value) must be an array of strings for this option",
+                    context,
+                    values,
+                );
+            }
             let item = values.cast_string(item)?;
             blob.extend_from_slice(&values.string_bytes(item)?);
             blob.push(0);
@@ -117,10 +193,15 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
             return values.bool_value(stored);
         }
         // CURLOPT_SAFE_UPLOAD (-1): always on, matching php-src's own rejection of a
-        // falsy value.
+        // falsy value with a catchable `\ValueError` (`crate::curl_prelude::curl_setopt`'s
+        // own guard, mirrored verbatim).
         if option == -1 {
             if !values.truthy(value)? {
-                return Err(EvalStatus::RuntimeFatal);
+                return eval_throw_builtin_value_error(
+                    "curl_setopt(): Disabling safe uploads is no longer supported",
+                    context,
+                    values,
+                );
             }
             return values.bool_value(true);
         }
@@ -150,15 +231,21 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
         return values.bool_value(false);
     }
     // php-src rejects a non-scalar `$value` with a catchable `\TypeError` here
-    // (`crate::curl_prelude::curl_setopt`'s own guard). This interpreter has no
-    // catchable-exception path from internals, so the fault is a hard one instead — see
-    // `KIND_INVALID`'s branch above for the same tradeoff.
+    // (`crate::curl_prelude::curl_setopt`'s own guard, mirrored verbatim) — see
+    // `KIND_INVALID`'s branch above for the same catchable-exception mechanism.
     let tag = values.type_tag(value)?;
     if !matches!(
         tag,
         EVAL_TAG_INT | EVAL_TAG_STRING | EVAL_TAG_FLOAT | EVAL_TAG_BOOL
     ) {
-        return Err(EvalStatus::RuntimeFatal);
+        let given = eval_curl_given_type_name(value, values)?;
+        return eval_throw_type_error(
+            &format!(
+                "curl_setopt(): Argument #3 ($value) must be of type string|int|float|bool, {given} given"
+            ),
+            context,
+            values,
+        );
     }
     if kind == ffi::KIND_STRING {
         let value = values.cast_string(value)?;

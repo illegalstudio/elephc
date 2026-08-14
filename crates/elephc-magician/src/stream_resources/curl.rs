@@ -165,4 +165,42 @@ impl EvalStreamResources {
         }
         Ok(true)
     }
+
+    /// Releases every retained `CURLOPT_PRIVATE` value this table still holds, leaving the
+    /// raw bridge handles themselves untouched — `EvalStreamResources`'s `Drop` impl, which
+    /// runs immediately after this at the SAME teardown, still frees those the way it
+    /// always has.
+    ///
+    /// WHY THIS EXISTS (item 19, php-curl-family punch list): `set_curl_easy_private`
+    /// retains an independent owned reference for every stored `CURLOPT_PRIVATE` value
+    /// (this file's own doc), and until this method existed nothing ever released that
+    /// reference for a handle that was simply never explicitly reset/overwritten —
+    /// `Drop for EvalStreamResources` frees the RAW bridge handle
+    /// (`crate::curl_ffi::easy_free`) but cannot also call `RuntimeValueOps::release`,
+    /// because `Drop::drop` receives only `&mut self`, never a `RuntimeValueOps`
+    /// implementor.
+    ///
+    /// THE FIX IS NOT IN `Drop`, because `Drop` genuinely cannot reach a `RuntimeValueOps`
+    /// — it is ONE STEP EARLIER, in `crate::ffi::context::__elephc_eval_context_free`, the
+    /// FFI teardown entry point generated code calls to free an `ElephcEvalContext`
+    /// (`EvalStreamResources`'s owner). That function has NO `RuntimeValueOps` PARAMETER
+    /// either, but — unlike `Drop` — it does not need one handed to it: production's
+    /// `RuntimeValueOps` implementor, `crate::runtime_hooks::ElephcRuntimeOps`, is a
+    /// STATELESS adapter over generated runtime C-ABI symbols
+    /// (`ElephcRuntimeOps::new()` needs no context pointer, no live eval call, nothing
+    /// beyond the process's already-running runtime heap), so it can be constructed
+    /// ad hoc, right there, a moment before `Box::from_raw(ctx)` drops the context (and,
+    /// transitively, this table). See `__elephc_eval_context_free`'s own call site for the
+    /// wiring; this method is the storage-layer half of that fix.
+    pub(crate) fn release_curl_easy_private_values(
+        &mut self,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<(), EvalStatus> {
+        for handle in self.curl_easy_handles.values_mut() {
+            if let Some(previous) = handle.private_value.take() {
+                values.release(previous)?;
+            }
+        }
+        Ok(())
+    }
 }

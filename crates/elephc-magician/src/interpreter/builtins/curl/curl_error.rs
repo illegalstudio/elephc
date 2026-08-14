@@ -47,7 +47,7 @@ fn eval_curl_error_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let raw = eval_curl_easy_raw(handle, context, values)?;
+    let raw = eval_curl_easy_raw("curl_error", handle, context, values)?;
     let message = ffi::easy_error(raw);
     values.string_bytes_value(&message)
 }

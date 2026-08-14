@@ -34,6 +34,11 @@
 //!   owner ever recorded).
 
 use crate::context::ElephcEvalContext;
+use crate::errors::EvalStatus;
+use crate::interpreter::builtins::{
+    eval_curl_close_values_result, eval_curl_escape_values_result,
+    eval_curl_unescape_values_result,
+};
 use crate::interpreter::RuntimeValueOps;
 
 use super::support::{FakeOps, FakeValue};
@@ -183,4 +188,170 @@ fn adopt_curl_easy_handle_retains_an_independent_private_reference() {
         .reset_curl_easy_mirror(copy_id, &mut values)
         .expect("reset copy");
     assert_eq!(values.releases.len(), 2);
+}
+
+/// `release_curl_easy_private_values` (item 19, php-curl-family punch list) must release
+/// a retained `CURLOPT_PRIVATE` value that was NEVER explicitly reset/overwritten — the
+/// exact case `EvalStreamResources::drop` could never cover, because `Drop::drop` has no
+/// `RuntimeValueOps` to call `release` through. This is the storage-layer half of the fix;
+/// `crate::ffi::context::__elephc_eval_context_free` is the real call site, but this test
+/// exercises the storage method directly, matching this file's own established pattern
+/// (see the module doc).
+#[test]
+fn release_curl_easy_private_values_releases_every_still_retained_entry() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let first_id = context.stream_resources_mut().open_curl_easy_handle(42);
+    let second_id = context.stream_resources_mut().open_curl_easy_handle(43);
+
+    let first_key = values.string("first-secret").expect("fake string cell");
+    context
+        .stream_resources_mut()
+        .set_curl_easy_private(first_id, first_key, &mut values)
+        .expect("store on first handle");
+    let second_key = values.string("second-secret").expect("fake string cell");
+    context
+        .stream_resources_mut()
+        .set_curl_easy_private(second_id, second_key, &mut values)
+        .expect("store on second handle");
+
+    // Neither handle was reset or closed — the exact "never explicitly reset" case that
+    // used to leak both retained references at context teardown.
+    assert!(values.releases.is_empty());
+
+    context
+        .stream_resources_mut()
+        .release_curl_easy_private_values(&mut values)
+        .expect("release every retained private value");
+
+    assert_eq!(values.releases.len(), 2, "both retained cells must be released");
+    assert!(
+        context.stream_resources().curl_easy_private(first_id).is_none(),
+        "the first handle's stored private value must be cleared, not just released"
+    );
+    assert!(
+        context.stream_resources().curl_easy_private(second_id).is_none(),
+        "the second handle's stored private value must be cleared, not just released"
+    );
+
+    // Calling it again (mirroring a second teardown attempt) must be a safe no-op: nothing
+    // left to release, so no further `values.release()` calls and no double-release.
+    context
+        .stream_resources_mut()
+        .release_curl_easy_private_values(&mut values)
+        .expect("idempotent second call");
+    assert_eq!(values.releases.len(), 2, "a second call must not double-release");
+}
+
+/// A handle that never had `CURLOPT_PRIVATE` set at all must be a complete no-op —
+/// `release_curl_easy_private_values` must not touch `values` for it.
+#[test]
+fn release_curl_easy_private_values_skips_handles_with_no_stored_private_value() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    context.stream_resources_mut().open_curl_easy_handle(42);
+
+    context
+        .stream_resources_mut()
+        .release_curl_easy_private_values(&mut values)
+        .expect("release over a table with no private values");
+
+    assert!(values.releases.is_empty());
+}
+
+/// Returns the fake `message` property string stored on a fake `Throwable`-like object,
+/// exactly as `crate::interpreter::tests::support`'s `runtime_construct_object` stores it
+/// for `new Error($message, $code)`-shaped calls (see that function's doc).
+fn fake_exception_message(values: &mut FakeOps, exception: crate::value::RuntimeCellHandle) -> String {
+    let FakeValue::Object(properties) = values.get(exception) else {
+        panic!("expected a fake exception object");
+    };
+    let message_cell = properties
+        .iter()
+        .find(|(name, _)| name == "message")
+        .map(|(_, value)| *value)
+        .expect("a message property must be set");
+    match values.get(message_cell) {
+        FakeValue::String(message) => message,
+        other => panic!("expected a fake string message, got {other:?}"),
+    }
+}
+
+/// Item 8 (WP-B, curl punch list): a libcurl escape failure must throw a catchable
+/// `\RuntimeException` with AOT's exact message
+/// (`crate::curl_prelude::curl_escape`'s own `throw new \RuntimeException("curl_escape():
+/// libcurl could not URL-encode the string")`), not silently answer `false` the way this
+/// used to. `crate::curl_ffi`'s `cfg(test)` stub always reports `elephc_curl_easy_str_op`
+/// failure (produced = 0), so calling the values-dispatch entry point directly against a
+/// real (fake-table) handle deterministically exercises this path.
+#[test]
+fn curl_escape_failure_throws_a_catchable_runtime_exception() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let table_id = context.stream_resources_mut().open_curl_easy_handle(42);
+    let handle = values.curl_handle(table_id).expect("box the fake handle");
+    let string = values.string("hello world").expect("fake string cell");
+
+    let result = eval_curl_escape_values_result(&[handle, string], &mut context, &mut values);
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+
+    let exception = context
+        .take_pending_throw()
+        .expect("a throwable must be scheduled");
+    assert_eq!(
+        values.object_class_name(exception).ok().map(|cell| values.get(cell)),
+        Some(FakeValue::String("RuntimeException".to_string()))
+    );
+    assert_eq!(
+        fake_exception_message(&mut values, exception),
+        "curl_escape(): libcurl could not URL-encode the string"
+    );
+}
+
+/// Same as `curl_escape_failure_throws_a_catchable_runtime_exception`, for
+/// `curl_unescape()`'s matching AOT message.
+#[test]
+fn curl_unescape_failure_throws_a_catchable_runtime_exception() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let table_id = context.stream_resources_mut().open_curl_easy_handle(42);
+    let handle = values.curl_handle(table_id).expect("box the fake handle");
+    let string = values.string("hello%20world").expect("fake string cell");
+
+    let result = eval_curl_unescape_values_result(&[handle, string], &mut context, &mut values);
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+
+    let exception = context
+        .take_pending_throw()
+        .expect("a throwable must be scheduled");
+    assert_eq!(
+        fake_exception_message(&mut values, exception),
+        "curl_unescape(): libcurl could not URL-decode the string"
+    );
+}
+
+/// Item 9 (WP-B, curl punch list): `curl_close()` on a non-`CurlHandle` value must throw a
+/// catchable `\TypeError`, matching real PHP 8.4.20's own wording for the same misuse
+/// (verified: `curl_close("x")` -> `TypeError: curl_close(): Argument #1 ($handle) must be
+/// of type CurlHandle, string given`) — it used to accept literally anything.
+#[test]
+fn curl_close_on_a_non_handle_value_throws_a_catchable_type_error() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let not_a_handle = values.string("not a handle").expect("fake string cell");
+
+    let result = eval_curl_close_values_result(&[not_a_handle], &mut context, &mut values);
+    assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+
+    let exception = context
+        .take_pending_throw()
+        .expect("a throwable must be scheduled");
+    assert_eq!(
+        values.object_class_name(exception).ok().map(|cell| values.get(cell)),
+        Some(FakeValue::String("TypeError".to_string()))
+    );
+    assert_eq!(
+        fake_exception_message(&mut values, exception),
+        "curl_close(): Argument #1 ($handle) must be of type CurlHandle, string given"
+    );
 }

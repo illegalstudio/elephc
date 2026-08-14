@@ -459,7 +459,7 @@ interpreter ships a **narrower** surface than compiled code:
 constants, with `curl_setopt()`'s full table-driven option dispatch — every
 LONG / STRING / SLIST / OFF_T / PHP-layer option works, not a hand-picked subset.
 
-**Not available in `eval()`:**
+**Not available in `eval()` — the easy interface only, deliberately:**
 
 - The multi interface (`curl_multi_*`) and the share interface (`curl_share_*`).
 - `CURLFile` / `CURLStringFile` / `curl_file_create()`, and with them the array
@@ -469,6 +469,63 @@ LONG / STRING / SLIST / OFF_T / PHP-layer option works, not a hand-picked subset
   (`CURLOPT_FILE`, `CURLOPT_WRITEHEADER`, `CURLOPT_INFILE`/`CURLOPT_READDATA`,
   `CURLOPT_STDERR`) — rejected with the same `false` + warning path a genuinely
   unsupported option uses. Compiled code implements all four; `eval()` does not.
+
+**Why easy-only.** This is an intentional scope decision, not an oversight, for
+three independent reasons:
+
+1. **Object-model mismatch.** `eval()`'s curl handles are resource-like cells
+   (see below), not real objects — the same shape `hash_init()`'s `HashContext`
+   already uses in eval. The multi and share interfaces are fundamentally
+   *object-identity* APIs: `curl_multi_add_handle()` attaches a handle by
+   object identity, `curl_multi_info_read()` hands back the *same* `CurlHandle`
+   object instance that was attached, and `CURLOPT_SHARE` reads a
+   `CurlShareHandle` object out of a scalar-shaped `curl_setopt()` call. None of
+   that has a home in a resource-cell world without inventing a parallel
+   object-identity map inside the interpreter.
+2. **Callbacks need a runtime callable invoker eval does not have.**
+   `CURLOPT_WRITEFUNCTION` and friends are decomposed into a descriptor pointer
+   plus a generated-assembly adapter address at the AOT layer
+   (`src/codegen/runtime_callable_invoker.rs`) so libcurl's C trampoline can
+   call back into a PHP callable. A pure Rust interpreter has no generated
+   assembly to hand libcurl the address of — invoking a PHP callable from a C
+   callback requires exactly the machinery this interpreter does not have.
+3. **Pay-for-use.** Every one of these is reachable-but-rare from inside
+   `eval()` specifically (as opposed to compiled code, where they are common).
+   Shipping them would mean carrying object-identity and callback-invocation
+   machinery for a code path most programs that use `eval()` at all never
+   exercise.
+
+**Roadmap.** None of the three reasons above is permanent in principle, but (2)
+is the hard one: it needs eval-callable invocation from a C trampoline, which
+does not exist yet anywhere in this interpreter (not just for curl). No
+committed timeline exists.
+
+**What happens if you try.** Calling `curl_multi_init()`, any other
+`curl_multi_*`/`curl_share_*` function, `curl_file_create()`, or constructing
+`new CURLFile(...)`/`new CURLStringFile(...)` from inside `eval()` is
+**intercepted and rejected honestly** — the same "eval() fragment uses an
+unsupported construct" fatal any other undefined-in-eval name already
+produces, not a working object:
+
+```php
+curl_version(); // links elephc_curl into this program at all
+eval('curl_multi_init();');
+// Fatal error: eval() fragment uses an unsupported construct
+```
+
+This is deliberately **not** a silent, confusing failure. Before this
+interception existed, an unrecognized-by-eval name like `curl_multi_init`
+fell through to `context.native_function()` — the interpreter's escape hatch
+for calling AOT-compiled functions by name. Whenever the host program also
+linked `elephc_curl` (which a top-level `curl_version()` call, or any other
+non-`eval()` curl usage, causes), that fallthrough resolved to the *real*
+compiled `curl_multi_init()` and handed back a genuine AOT `CurlMultiHandle`
+object. The call looked like it worked — until that object was mixed with an
+eval-owned easy handle (`curl_multi_add_handle($mh, $evalCreatedHandle)`),
+which then failed confusingly because the two object spaces do not
+interoperate (see "Handles cannot cross the eval boundary" below). The fix
+checks these names explicitly before the native-function fallback and turns
+that into the same honest, immediate rejection every other deferred name gets.
 
 Further differences inside `eval()`:
 
@@ -480,19 +537,46 @@ Further differences inside `eval()`:
   to compiled code is an opaque cell with no `CurlHandle` class instance behind
   it, and an AOT `CurlHandle` passed into an `eval()` string is not accepted by
   eval's curl functions.
-- **An invalid option number is a fatal, not a `ValueError`.** The
-  [Options](#options) section above promises a catchable `ValueError` for an
-  option number that is not a cURL option; inside `eval()` the same call is a
-  **non-catchable runtime fatal** that ends the program. The interpreter's
-  internals have no path for raising a catchable PHP exception, so this is a hard
-  fault — the same tradeoff `hash_final()` on an already-finalized context makes.
-  `try`/`catch` around the `eval()` will not save you.
-- **A non-array value for a `CURLOPT_*` string-list option returns `false`
-  silently.** Compiled code raises `TypeError: curl_setopt(): Argument #3
-  ($value) must be of type array, … given`; eval returns `false` with no warning
-  and no exception. Check the return value of `curl_setopt()` inside `eval()`.
 - **`--with-curl` is required** when curl appears *only* inside an `eval()`
   string, because usage detection reads the compiled source, not the string.
+
+**Aligned with AOT (previously diverged):**
+
+- **A non-`CurlHandle` value passed to any curl handle function throws.**
+  `curl_close()`, `curl_escape()`, `curl_setopt()`, and every other function
+  that takes `$handle` first throw a catchable `TypeError` for a value that
+  is not a live curl easy handle — `curl_close()` used to accept literally
+  anything with no check at all:
+  ```php
+  eval('curl_close("not a handle");');
+  // TypeError: curl_close(): Argument #1 ($handle) must be of type CurlHandle, string given
+  ```
+  The "given" type name matches AOT's own `gettype()`-based wording exactly
+  (including AOT's own pre-existing divergence from real php-src: `gettype()`
+  says `"integer"`, not php-src's newer `"int"` — eval mirrors *AOT*, not
+  php-src, here).
+- **An invalid option number throws a catchable `ValueError`, not a fatal.**
+  Matches the [Options](#options) section above:
+  ```php
+  eval('curl_setopt($ch, 987654, 1);');
+  // ValueError: curl_setopt(): Argument #2 ($option) is not a valid cURL option
+  ```
+- **`CURLOPT_SAFE_UPLOAD` set falsy throws a catchable `ValueError`,** matching
+  AOT's `"curl_setopt(): Disabling safe uploads is no longer supported"`.
+- **A non-scalar `$value` for an ordinary option throws a catchable
+  `TypeError`,** matching AOT's `"curl_setopt(): Argument #3 ($value) must be
+  of type string|int|float|bool, … given"`.
+- **A non-array value for a `CURLOPT_*` string-list option throws a catchable
+  `TypeError`** (`"...Argument #3 ($value) must be of type array, … given"`),
+  and **a non-scalar item inside the array also throws** (`"...must be an
+  array of strings for this option"`) instead of being silently
+  `(string)`-cast. Compiled code has always thrown both; eval used to answer
+  `false` for the first and cast the second.
+- **`curl_escape()`/`curl_unescape()` throw a catchable `RuntimeException` on
+  a genuine libcurl encode/decode failure,** matching AOT's
+  `"curl_escape(): libcurl could not URL-encode the string"` /
+  `"curl_unescape(): libcurl could not URL-decode the string"` — eval used to
+  answer `false` instead.
 
 ## Differences from PHP
 

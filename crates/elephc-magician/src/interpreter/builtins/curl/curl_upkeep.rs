@@ -47,6 +47,6 @@ fn eval_curl_upkeep_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let raw = eval_curl_easy_raw(handle, context, values)?;
+    let raw = eval_curl_easy_raw("curl_upkeep", handle, context, values)?;
     values.bool_value(ffi::easy_upkeep(raw))
 }
