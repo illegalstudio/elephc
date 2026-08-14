@@ -1255,7 +1255,7 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             | PhpType::False
             | PhpType::Void
             | PhpType::Mixed
-    ) || checker.is_union_with_mixed_int_dispatch(ty)
+    ) || checker.is_union_with_mixed_numeric_dispatch(ty)
 }
 
 /// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders

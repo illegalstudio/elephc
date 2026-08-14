@@ -8023,7 +8023,7 @@ fn test_eval_dispatches_disk_space_builtin_calls() {
 eval('echo disk_free_space(".") > 0 ? "free" : "bad"; echo ":";
 echo disk_total_space(directory: ".") > 0 ? "total" : "bad"; echo ":";
 echo disk_total_space(".") >= disk_free_space(".") ? "ordered" : "bad"; echo ":";
-echo disk_free_space("no/such/path/elephc-magician") === 0.0 ? "missing" : "bad"; echo ":";
+echo disk_free_space("no/such/path/elephc-magician") === false ? "missing" : "bad"; echo ":";
 echo call_user_func("disk_free_space", ".") > 0 ? "call" : "bad"; echo ":";
 echo call_user_func_array("disk_total_space", ["directory" => "."]) > 0 ? "spread" : "bad";
 echo ":"; echo function_exists("disk_free_space"); echo function_exists("disk_total_space");');

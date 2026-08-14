@@ -45,6 +45,7 @@ pub(super) fn lower_disk_space(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_disk_space");
+    box_float_or_false_result(ctx);
     store_if_result(ctx, inst)
 }
 

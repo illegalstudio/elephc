@@ -53,7 +53,12 @@ pub(in crate::interpreter) fn eval_builtin_disk_space(
     eval_disk_space_result(name, directory, values)
 }
 
-/// Reports available or total filesystem bytes as a PHP float, or 0.0 on failure.
+/// Reports available or total filesystem bytes as a PHP float, or `false` on failure.
+///
+/// Both failure exits used to answer `0.0` — and said so in this very doc comment. `0.0` is a
+/// legitimate byte count: a full filesystem reports zero bytes available, so a caller could not
+/// tell "out of space" from "this path does not exist", and `=== false` never matched. PHP
+/// returns `false`, and the compiled path now does too.
 pub(in crate::interpreter) fn eval_disk_space_result(
     name: &str,
     directory: RuntimeCellHandle,
@@ -61,7 +66,7 @@ pub(in crate::interpreter) fn eval_disk_space_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let bytes = values.string_bytes(directory)?;
     let Ok(path) = CString::new(bytes) else {
-        return values.float(0.0);
+        return values.bool_value(false);
     };
     let mut stats = std::mem::MaybeUninit::<libc::statvfs>::zeroed();
     let status = unsafe {
@@ -69,7 +74,7 @@ pub(in crate::interpreter) fn eval_disk_space_result(
         libc::statvfs(path.as_ptr(), stats.as_mut_ptr())
     };
     if status != 0 {
-        return values.float(0.0);
+        return values.bool_value(false);
     }
     let stats = unsafe {
         // `statvfs` succeeded, so libc initialized the full stat buffer.

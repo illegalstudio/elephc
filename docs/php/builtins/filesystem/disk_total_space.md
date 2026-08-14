@@ -8,7 +8,7 @@ sidebar:
 ## disk_total_space()
 
 ```php
-function disk_total_space(string $directory): float
+function disk_total_space(string $directory): mixed
 ```
 
 Returns the total size of a filesystem or disk partition.
@@ -16,7 +16,7 @@ Returns the total size of a filesystem or disk partition.
 **Parameters**:
 - `$directory` (`string`)
 
-**Returns**: `float`
+**Returns**: `mixed`
 
 ## Availability
 

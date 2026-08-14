@@ -297,6 +297,51 @@ pub(super) fn box_owned_pathinfo_array_as_mixed(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Boxes a raw floating-point payload into PHP `float|false` Mixed form.
+///
+/// The float counterpart of `box_stat_int_or_false_result`. The payload arrives in the FLOAT
+/// result register (`d0`/`xmm0`) and the success flag in the INT one (`x0`/`rax`), which is why
+/// this reads a different register pair than its integer sibling — the two never contend.
+///
+/// `0.0` is a legitimate byte count (a full filesystem reports zero bytes available), so a
+/// helper that signalled failure by returning `0.0` could not be told apart from success. The
+/// flag is what makes PHP's `false` reachable at all.
+pub(super) fn box_float_or_false_result(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("float_false");
+    let done_label = ctx.next_label("float_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // box PHP false when the runtime success flag is unset
+            ctx.emitter.instruction("fmov x1, d0");                             // pass the double's bit pattern as the Mixed low payload word
+            ctx.emitter.instruction("mov x2, xzr");                             // float Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #2");                              // select runtime tag 2 for a floating-point Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the float Mixed result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("mov x2, #0");                              // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test whether the runtime success flag is set
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // box PHP false when the disk-space helper failed
+            ctx.emitter.instruction("movq rdi, xmm0");                          // pass the double's bit pattern as the Mixed low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // float Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 2");                              // select runtime tag 2 for a floating-point Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the float Mixed result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for the Mixed bool box
+            ctx.emitter.instruction("xor esi, esi");                            // clear the unused high payload word for bool Mixed boxes
+            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for a boolean false Mixed value
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
 /// Boxes the raw stat integer payload into PHP `int|false` Mixed form.
 pub(super) fn box_stat_int_or_false_result(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("stat_int_false");

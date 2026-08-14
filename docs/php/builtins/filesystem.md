@@ -17,8 +17,8 @@ sidebar:
 | [`clearstatcache()`](./filesystem/clearstatcache.md) | `(bool $clear_realpath_cache = false, string $filename = ''): void` | `void` | ✓ | ✓ |
 | [`copy()`](./filesystem/copy.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
 | [`dirname()`](./filesystem/dirname.md) | `(string $path, int $levels = 1): string` | `string` | ✓ | ✓ |
-| [`disk_free_space()`](./filesystem/disk_free_space.md) | `(string $directory): float` | `float` | ✓ | ✓ |
-| [`disk_total_space()`](./filesystem/disk_total_space.md) | `(string $directory): float` | `float` | ✓ | ✓ |
+| [`disk_free_space()`](./filesystem/disk_free_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
+| [`disk_total_space()`](./filesystem/disk_total_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
 | [`file_exists()`](./filesystem/file_exists.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`fileatime()`](./filesystem/fileatime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filectime()`](./filesystem/filectime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |

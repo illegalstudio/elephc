@@ -357,8 +357,8 @@ wrappers are documented in [Streams](streams.md).
 | `is_writable()` | `is_writable($filename): bool` | Is writable |
 | `filesize()` | `filesize($filename): int` | File size in bytes |
 | `filemtime()` | `filemtime($filename): int` | Modification time |
-| `disk_free_space()` | `disk_free_space($directory): float` | Free bytes of the filesystem holding `$directory`; `0.0` on failure |
-| `disk_total_space()` | `disk_total_space($directory): float` | Total bytes of the filesystem holding `$directory`; `0.0` on failure |
+| `disk_free_space()` | `disk_free_space($directory): float\|false` | Free bytes of the filesystem holding `$directory`; `false` when it cannot be stat.ed. A full filesystem reports `0.0`, which is a success |
+| `disk_total_space()` | `disk_total_space($directory): float\|false` | Total bytes of the filesystem holding `$directory`; `false` when it cannot be stat.ed |
 | `copy()` | `copy($source, $dest): bool` | Copy file |
 | `rename()` | `rename($old, $new): bool` | Rename/move |
 | `unlink()` | `unlink($filename): bool` | Delete file |

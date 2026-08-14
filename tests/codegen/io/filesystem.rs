@@ -244,9 +244,45 @@ echo $total >= $free ? "o" : "O";
     assert_eq!(out, "fto");
 }
 
-/// Verifies compiled PHP output for disk free space invalid path returns zero.
+/// Verifies `disk_free_space()` and `disk_total_space()` return strict `false` for a path that
+/// cannot be stat'ed, as PHP does.
+///
+/// This test was named `..._returns_zero` and asserted `float(0)` — the name pinned the defect.
+/// `0.0` is a legitimate byte count: a full filesystem reports zero bytes available, so
+/// answering it on failure made "out of space" and "no such directory" the same value and
+/// `=== false` could never match. Both functions share one runtime helper and one lowering, so
+/// both are asserted here: a change that reached only one of them would leave a single helper
+/// feeding a boxed caller and a raw one.
 #[test]
-fn test_disk_free_space_invalid_path_returns_zero() {
-    let out = compile_and_run(r#"<?php var_dump(disk_free_space("/no/such/path/xyz123"));"#);
-    assert_eq!(out, "float(0)\n");
+fn test_disk_space_invalid_path_is_strict_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(disk_free_space("/no/such/path/xyz123"));
+var_dump(disk_total_space("/no/such/path/xyz123"));
+echo disk_free_space("/no/such/path/xyz123") === false ? "strict" : "!";
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nstrict");
+}
+
+/// Verifies a successful `disk_free_space()` still behaves as a float after the return type
+/// widened to `float|false`.
+///
+/// Declaring a union changes how a SUCCESSFUL value is carried, not just what it can be, so the
+/// success side needs its own guard: `is_float()`, an arithmetic use, and the ordering against
+/// `disk_total_space()` that any real caller depends on.
+#[test]
+fn test_disk_space_success_still_behaves_as_a_float() {
+    let out = compile_and_run(
+        r#"<?php
+$free = disk_free_space(".");
+$total = disk_total_space(".");
+echo is_float($free) ? "f" : "!";
+echo is_float($total) ? "t" : "!";
+echo $free > 0 ? "p" : "!";
+echo $total >= $free ? "o" : "!";
+echo ($free + 1.0) > $free ? "a" : "!";
+"#,
+    );
+    assert_eq!(out, "ftpoa");
 }

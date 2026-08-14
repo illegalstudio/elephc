@@ -19500,7 +19500,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "disk_free_space"
       ],
@@ -19511,7 +19511,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -19524,7 +19525,7 @@
           "type": "string"
         }
       ],
-      "return_type": "float",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "disk_free_space",
@@ -19635,7 +19636,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "disk_total_space"
       ],
@@ -19646,7 +19647,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -19659,7 +19661,7 @@
           "type": "string"
         }
       ],
-      "return_type": "float",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "disk_total_space",
