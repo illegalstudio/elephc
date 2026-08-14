@@ -1108,6 +1108,7 @@ statics, and static class properties all reset between requests). Run it with
 - [ ] The same surface inside `eval()` (magician) — **partial**: the easy interface (16 functions) and the full constant table are in; the multi and share interfaces, `CURLFile`/`CURLStringFile`, and callback options are not, and are honestly rejected
 - [ ] A bundled CA trust store — the managed curl build inherits the build machine's CA path, so HTTPS clients must set `CURLOPT_CAINFO` to be portable
 - [ ] HTTP/2, HTTP/3, and the disabled protocol set (SSH/SFTP, SMTP, IMAP, LDAP, MQTT, …)
+- [ ] The 136+ `tests/codegen/curl/*` fixture suite running in CI — it self-skips unless `~/.cache/elephc/native` already has curl/openssl/zlib materialized (`tests/codegen/support/curl_native.rs`); `managed-native-smoke` now builds and smoke-tests the bridge on every run, but the ordinary sharded `codegen-tests-*` jobs don't share that cache, so the fixtures themselves still don't execute in CI. Needs either a cache mount for the docker-based Linux jobs or a dedicated job that materializes curl before running the `codegen_tests curl::` subset
 
 
 ## Deferred ideas
