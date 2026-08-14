@@ -188,7 +188,7 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),
         "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
         // Every `CURLOPT_*`/`CURLINFO_*`/`CURLE_*`/`CURL_*` name falls through to the
-        // 683-entry generated table rather than growing this hand-written match by 683
+        // 689-entry generated table rather than growing this hand-written match by 689
         // arms. Table-driven, not gated behind the `curl` Cargo feature: see
         // `super::curl_constants`'s header for why a bare numeric constant carries no
         // ABI-linkage cost.
@@ -243,7 +243,7 @@ mod curl_constant_fallback_tests {
     /// `CURLOPT_URL`/`CURLOPT_RETURNTRANSFER` resolve through the same predefined-constant
     /// path `JSON_PRETTY_PRINT` etc. use, table-driven through
     /// `crate::interpreter::curl_constants::EVAL_CURL_INT_CONSTANTS` rather than a
-    /// 683-arm hand-written match — this is a pure-data lookup, so it needs no bridge, no
+    /// 689-arm hand-written match — this is a pure-data lookup, so it needs no bridge, no
     /// feature flag, and no linked libcurl to verify (`crate::interpreter::curl_constants`'s
     /// own header explains why the table is unconditional).
     #[test]

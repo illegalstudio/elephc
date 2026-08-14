@@ -5,7 +5,7 @@ sidebar:
   order: 18
 ---
 
-elephc implements PHP's `ext/curl` — all 35 functions, all 6 classes, and all 683
+elephc implements PHP's `ext/curl` — all 35 functions, all 6 classes, and all 689
 constants — on top of a **statically pinned libcurl 8.21.0** built by elephc's own
 managed-native-package system. There is no dependency on a system, Homebrew, or
 distro libcurl: the archive is compiled from a checksum-pinned tarball, linked
@@ -220,6 +220,15 @@ so compiling with `--php-version 8.4` (or 8.3/8.2) leaves them **undeclared**,
 and calling one fails as an undefined function — exactly as it would on that
 runtime. Everything else is identical across the four profiles.
 
+**Constants are not version-fenced.** Only functions and classes are. Every one of
+the 689 `CURLOPT_*` / `CURLINFO_*` / `CURLE_*` / `CURL_*` names is declared at every
+target version, the same way `JSON_*` is — including the PHP 8.5 additions
+(`CURLINFO_CONN_ID`, `CURLINFO_QUEUE_TIME_T`, `CURLINFO_USED_PROXY`,
+`CURLINFO_HTTPAUTH_USED`, `CURLINFO_PROXYAUTH_USED`,
+`CURLOPT_SSL_SIGNATURE_ALGORITHMS`, `CURLFOLLOW_*`, `CURLOPT_INFILESIZE_LARGE`).
+Their values are frozen from the pinned libcurl 8.21.0 headers, which understands
+all of them at every profile, so `--php-version 8.4` still resolves them.
+
 `curl_share_init_persistent()` deserves one note: the native share it creates is
 **process-lifetime**. elephc has no PHP-FPM-worker-restart boundary to key a
 shorter lifetime off, so the share is never freed.
@@ -228,7 +237,7 @@ shorter lifetime off, so the share is never freed.
 
 `curl_setopt()` classifies every option number against a frozen table generated
 from the pinned libcurl headers, then reads the PHP value according to that
-option's real C type. **259 of PHP's 270 `CURLOPT_*` names are implemented.**
+option's real C type. **260 of PHP's 271 `CURLOPT_*` names are implemented.**
 
 An option this build cannot carry returns `false` and emits PHP's warning — never
 an inert `true`:
@@ -340,11 +349,16 @@ with php's messages. `null` is accepted and clears the option.
 ## `curl_getinfo()`
 
 Called without an option, `curl_getinfo()` returns PHP's associative array. This
-build reports 40 keys, in PHP's own key order, including `url`, `http_code`,
-`content_type`, `total_time`, `redirect_count`, `primary_ip`, `scheme`,
-`protocol`, `http_version` and the microsecond timers. Keys for features that are
-not compiled in are omitted rather than faked; PHP 8.4 also reports
-`posttransfer_time_us`, which this build does not yet.
+build reports all 41 keys PHP 8.4 does, in PHP's own key order — `url`,
+`http_code`, `content_type`, `total_time`, `redirect_count`, `primary_ip`,
+`scheme`, `protocol`, `http_version` and the microsecond timers, ending with
+`effective_method`, `capath`, `cainfo`. Keys for features that are not compiled in
+are omitted rather than faked.
+
+`http_connectcode`, `num_connects` and `appconnect_time` are **not** in that array
+— php does not put them there either. Read them through the option form:
+`curl_getinfo($ch, CURLINFO_HTTP_CONNECTCODE)`, `CURLINFO_NUM_CONNECTS`,
+`CURLINFO_APPCONNECT_TIME`.
 
 Called with a `CURLINFO_*` option, the read dispatches on the option's type mask
 (string / long / double / slist / off_t), exactly as php-src does. Three options
@@ -439,7 +453,7 @@ standard warning.
 `eval()` reaches the same pinned libcurl through the same C ABI, but the
 interpreter ships a **narrower** surface than compiled code:
 
-**Available in `eval()`:** the complete easy interface (16 functions) and all 683
+**Available in `eval()`:** the complete easy interface (16 functions) and all 689
 constants, with `curl_setopt()`'s full table-driven option dispatch — every
 LONG / STRING / SLIST / OFF_T / PHP-layer option works, not a hand-picked subset.
 

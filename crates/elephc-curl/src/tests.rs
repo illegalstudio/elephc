@@ -278,9 +278,9 @@ mod option_table {
              docs/php/curl.md to match before changing this test"
         );
 
-        // The headline the doc quotes: 270 PHP `CURLOPT_*` names, 11 rejected.
+        // The headline the doc quotes: 271 PHP `CURLOPT_*` names, 11 rejected.
         let total = constants.keys().filter(|n| n.starts_with("CURLOPT_")).count();
-        assert_eq!(total, 270, "the frozen CURLOPT_* name count changed");
+        assert_eq!(total, 271, "the frozen CURLOPT_* name count changed");
         assert_eq!(rejected.len(), 11, "the rejected CURLOPT_* name count changed");
     }
 }

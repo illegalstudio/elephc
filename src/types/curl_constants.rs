@@ -18,9 +18,21 @@
 //!   therefore never link the `elephc_curl` bridge or require native curl. The VALUE
 //!   comes from this frozen table at compile time, never from libcurl at runtime.
 //! - DO NOT HAND-EDIT this table. It is generated from `scripts/docs/curl_surface.json`
-//!   (683 entries at generation time); the `curl_constants_match_frozen_surface` test
+//!   (689 entries at generation time); the `curl_constants_match_frozen_surface` test
 //!   below re-parses that JSON and asserts an exact match (count + every name/value),
 //!   so drift between the two is a test failure, not a silent skew.
+//! - CONSTANTS ARE NOT VERSION-FENCED, and that is deliberate. `--php-version` gates
+//!   FUNCTIONS and CLASSES (`curl_multi_get_handles`, `CurlSharePersistentHandle`), but
+//!   every name here is registered unconditionally, exactly like `JSON_*`. Six of them
+//!   (`CURLINFO_CONN_ID`, `CURLINFO_QUEUE_TIME_T`, `CURLINFO_USED_PROXY`,
+//!   `CURLINFO_HTTPAUTH_USED`, `CURLINFO_PROXYAUTH_USED`,
+//!   `CURLOPT_SSL_SIGNATURE_ALGORITHMS`) plus `CURLFOLLOW_*` and
+//!   `CURLOPT_INFILESIZE_LARGE` are PHP 8.5 additions that PHP 8.4 does not define, so a
+//!   program compiled for 8.4 still sees them here. Fencing them would buy nothing —
+//!   the value is frozen data that the pinned libcurl 8.21.0 understands at every target
+//!   version — and would cost the one thing this table guarantees, that a `CURLINFO_*`
+//!   name always resolves to the number libcurl means by it. Recorded for users in
+//!   `docs/php/curl.md`.
 
 /// Tuple of `(name, value)` pairs for every `ext/curl` integer constant. Generated from
 /// `scripts/docs/curl_surface.json` (`constants` map); see the module doc comment.
@@ -154,6 +166,7 @@ pub(crate) const CURL_INT_CONSTANTS: &[(&str, i64)] = &[
     ("CURLINFO_CONDITION_UNMET", 2097187),
     ("CURLINFO_CONNECT_TIME", 3145733),
     ("CURLINFO_CONNECT_TIME_T", 6291508),
+    ("CURLINFO_CONN_ID", 6291520),
     ("CURLINFO_CONTENT_LENGTH_DOWNLOAD", 3145743),
     ("CURLINFO_CONTENT_LENGTH_DOWNLOAD_T", 6291471),
     ("CURLINFO_CONTENT_LENGTH_UPLOAD", 3145744),
@@ -171,6 +184,7 @@ pub(crate) const CURL_INT_CONSTANTS: &[(&str, i64)] = &[
     ("CURLINFO_HEADER_OUT", 2),
     ("CURLINFO_HEADER_SIZE", 2097163),
     ("CURLINFO_HTTPAUTH_AVAIL", 2097175),
+    ("CURLINFO_HTTPAUTH_USED", 2097221),
     ("CURLINFO_HTTP_CODE", 2097154),
     ("CURLINFO_HTTP_CONNECTCODE", 2097174),
     ("CURLINFO_HTTP_VERSION", 2097198),
@@ -189,8 +203,10 @@ pub(crate) const CURL_INT_CONSTANTS: &[(&str, i64)] = &[
     ("CURLINFO_PRIVATE", 1048597),
     ("CURLINFO_PROTOCOL", 2097200),
     ("CURLINFO_PROXYAUTH_AVAIL", 2097176),
+    ("CURLINFO_PROXYAUTH_USED", 2097222),
     ("CURLINFO_PROXY_ERROR", 2097211),
     ("CURLINFO_PROXY_SSL_VERIFYRESULT", 2097199),
+    ("CURLINFO_QUEUE_TIME_T", 6291521),
     ("CURLINFO_REDIRECT_COUNT", 2097172),
     ("CURLINFO_REDIRECT_TIME", 3145747),
     ("CURLINFO_REDIRECT_TIME_T", 6291511),
@@ -221,6 +237,7 @@ pub(crate) const CURL_INT_CONSTANTS: &[(&str, i64)] = &[
     ("CURLINFO_TEXT", 0),
     ("CURLINFO_TOTAL_TIME", 3145731),
     ("CURLINFO_TOTAL_TIME_T", 6291506),
+    ("CURLINFO_USED_PROXY", 2097218),
     ("CURLKHMATCH_LAST", 3),
     ("CURLKHMATCH_MISMATCH", 1),
     ("CURLKHMATCH_MISSING", 2),
@@ -470,6 +487,7 @@ pub(crate) const CURL_INT_CONSTANTS: &[(&str, i64)] = &[
     ("CURLOPT_SSL_FALSESTART", 233),
     ("CURLOPT_SSL_OPTIONS", 216),
     ("CURLOPT_SSL_SESSIONID_CACHE", 150),
+    ("CURLOPT_SSL_SIGNATURE_ALGORITHMS", 10328),
     ("CURLOPT_SSL_VERIFYHOST", 81),
     ("CURLOPT_SSL_VERIFYPEER", 64),
     ("CURLOPT_SSL_VERIFYSTATUS", 232),

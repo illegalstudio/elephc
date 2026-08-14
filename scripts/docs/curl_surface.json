@@ -33,7 +33,7 @@
         "8.2": "not installed locally; skipped (no PHP-8.2-only names known to exist)",
         "8.3": "not installed locally; skipped (no PHP-8.3-only names known to exist)",
         "8.4": "8.4.20 (installed at /Users/nahime/Library/Application Support/Herd/bin/php; bundled libcurl 8.19.0; live source for functions/classes/constants)",
-        "8.5": "not installed locally; curl_multi_get_handles, curl_share_init_persistent, CurlSharePersistentHandle, CURLFOLLOW_*, and CURLOPT_INFILESIZE_LARGE hand-added from php.net docs / curl.h, marked source \"php-8.5 (plan/docs)\""
+        "8.5": "not installed locally; curl_multi_get_handles, curl_share_init_persistent, CurlSharePersistentHandle, CURLFOLLOW_*, and CURLOPT_INFILESIZE_LARGE hand-added from php.net docs / curl.h, marked source \"php-8.5 (plan/docs)\". CURLINFO_CONN_ID, CURLINFO_QUEUE_TIME_T, CURLINFO_USED_PROXY, CURLINFO_HTTPAUTH_USED, CURLINFO_PROXYAUTH_USED and CURLOPT_SSL_SIGNATURE_ALGORITHMS hand-added with values read from the PINNED curl-8.21.0 include/curl/curl.h (each CURLINFO_* carries its type mask: CURLINFO_LONG 0x200000 / CURLINFO_OFF_T 0x600000 plus the enum offset, so typed curl_getinfo() dispatch is the header's own; CURLOPT_SSL_SIGNATURE_ALGORITHMS is CURLOPT(name, CURLOPTTYPE_STRINGPOINT, 328) = 10328), marked source \"php-8.5 (curl.h-verified)\". CURLINFO_POSTTRANSFER_TIME_T is deliberately NOT in that group: PHP 8.4.20 already defines it (6291523) and it has been in `constants` since the original freeze."
     },
     "functions": {
         "curl_close": {
@@ -360,6 +360,7 @@
         "CURLINFO_CONDITION_UNMET": 2097187,
         "CURLINFO_CONNECT_TIME": 3145733,
         "CURLINFO_CONNECT_TIME_T": 6291508,
+        "CURLINFO_CONN_ID": 6291520,
         "CURLINFO_CONTENT_LENGTH_DOWNLOAD": 3145743,
         "CURLINFO_CONTENT_LENGTH_DOWNLOAD_T": 6291471,
         "CURLINFO_CONTENT_LENGTH_UPLOAD": 3145744,
@@ -377,6 +378,7 @@
         "CURLINFO_HEADER_OUT": 2,
         "CURLINFO_HEADER_SIZE": 2097163,
         "CURLINFO_HTTPAUTH_AVAIL": 2097175,
+        "CURLINFO_HTTPAUTH_USED": 2097221,
         "CURLINFO_HTTP_CODE": 2097154,
         "CURLINFO_HTTP_CONNECTCODE": 2097174,
         "CURLINFO_HTTP_VERSION": 2097198,
@@ -395,8 +397,10 @@
         "CURLINFO_PRIVATE": 1048597,
         "CURLINFO_PROTOCOL": 2097200,
         "CURLINFO_PROXYAUTH_AVAIL": 2097176,
+        "CURLINFO_PROXYAUTH_USED": 2097222,
         "CURLINFO_PROXY_ERROR": 2097211,
         "CURLINFO_PROXY_SSL_VERIFYRESULT": 2097199,
+        "CURLINFO_QUEUE_TIME_T": 6291521,
         "CURLINFO_REDIRECT_COUNT": 2097172,
         "CURLINFO_REDIRECT_TIME": 3145747,
         "CURLINFO_REDIRECT_TIME_T": 6291511,
@@ -427,6 +431,7 @@
         "CURLINFO_TEXT": 0,
         "CURLINFO_TOTAL_TIME": 3145731,
         "CURLINFO_TOTAL_TIME_T": 6291506,
+        "CURLINFO_USED_PROXY": 2097218,
         "CURLKHMATCH_LAST": 3,
         "CURLKHMATCH_MISMATCH": 1,
         "CURLKHMATCH_MISSING": 2,
@@ -676,6 +681,7 @@
         "CURLOPT_SSL_FALSESTART": 233,
         "CURLOPT_SSL_OPTIONS": 216,
         "CURLOPT_SSL_SESSIONID_CACHE": 150,
+        "CURLOPT_SSL_SIGNATURE_ALGORITHMS": 10328,
         "CURLOPT_SSL_VERIFYHOST": 81,
         "CURLOPT_SSL_VERIFYPEER": 64,
         "CURLOPT_SSL_VERIFYSTATUS": 232,
@@ -1166,6 +1172,7 @@
         "CURLOPT_SSL_FALSESTART": "long",
         "CURLOPT_SSL_OPTIONS": "long",
         "CURLOPT_SSL_SESSIONID_CACHE": "long",
+        "CURLOPT_SSL_SIGNATURE_ALGORITHMS": "string",
         "CURLOPT_SSL_VERIFYHOST": "long",
         "CURLOPT_SSL_VERIFYPEER": "long",
         "CURLOPT_SSL_VERIFYSTATUS": "long",
@@ -1227,14 +1234,14 @@
     },
     "constant_verification": {
         "method": "Every curl_-family constant PHP exposes is classified into exactly one bucket: (a) a curl_setopt/curl_multi_setopt OPTION, cross-checked via the precise CURLOPT(name,type,num) macro table (see option_kinds / value_cross_check_mismatches above); a curl_share_setopt OPTION (CURLSHOPT_*) is cross-checked the same way but against the general symbol table instead, since curl.h declares CURLSHOPT_* as a plain `typedef enum { CURLSHOPT_NONE, ... } CURLSHoption;` rather than via the CURLOPT() macro, (b) a non-option constant verified against the same general #define + enum symbol table built from the pinned headers, (c) explicitly exempt (header expression uses bitwise-NOT or references an unresolvable identifier -- PHP's probed value is kept, never guessed), or (d) genuinely not present in the pinned headers at all (the 3 PHP-invented pseudo-options, listed here, not silently dropped).",
-        "total_constants": 683,
-        "options_verified_against_pinned_curlopt_table": 279,
+        "total_constants": 689,
+        "options_verified_against_pinned_curlopt_table": 280,
         "options_php_only_no_libcurl_equivalent": [
             "CURLOPT_BINARYTRANSFER",
             "CURLOPT_RETURNTRANSFER",
             "CURLOPT_SAFE_UPLOAD"
         ],
-        "non_option_constants_verified_against_pinned_header": 399,
+        "non_option_constants_verified_against_pinned_header": 404,
         "non_option_constants_exempt": {
             "CURLAUTH_ANY": {
                 "reason": "tilde",
@@ -1249,7 +1256,25 @@
                 "php_value_kept": 4294967278
             }
         },
-        "non_option_constants_not_found_in_pinned_header": []
+        "non_option_constants_not_found_in_pinned_header": [],
+        "php_8_5_only_constants_hand_added": {
+            "source": "php-8.5 (curl.h-verified)",
+            "reason": "PHP 8.4.20 -- the live extraction source for this surface -- does not define these; they are PHP 8.5 additions. The values are neither guessed nor probed from a PHP build: each is transcribed from the pinned curl-8.21.0 headers, which is also where every other constant's value in this file is cross-checked against.",
+            "names": {
+                "CURLINFO_CONN_ID": 6291520,
+                "CURLINFO_HTTPAUTH_USED": 2097221,
+                "CURLINFO_PROXYAUTH_USED": 2097222,
+                "CURLINFO_QUEUE_TIME_T": 6291521,
+                "CURLINFO_USED_PROXY": 2097218,
+                "CURLOPT_SSL_SIGNATURE_ALGORITHMS": 10328
+            },
+            "previously_hand_added_php_8_5_names": [
+                "CURLFOLLOW_ALL",
+                "CURLFOLLOW_FIRSTONLY",
+                "CURLFOLLOW_OBEYCODE",
+                "CURLOPT_INFILESIZE_LARGE"
+            ]
+        }
     },
     "libcurl": {
         "version": "8.21.0",

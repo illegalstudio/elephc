@@ -2085,7 +2085,7 @@ mod version_tests {
 /// - FUNCTIONS and CLASSES — here. Declared by the prelude, and reachable by
 ///   `detect::program_uses_curl` so the declaration is actually injected.
 /// - CONSTANTS — `crate::types::curl_constants`
-///   (`curl_constants_match_frozen_surface`, both directions, 683 names) and the eval
+///   (`curl_constants_match_frozen_surface`, both directions, 689 names) and the eval
 ///   fork in `elephc_magician::interpreter::curl_constants`.
 /// - `CURLOPT_*` BEHAVIOUR — `elephc_curl::tests`
 ///   (`every_frozen_curlopt_is_classified` proves none is silently unknown;

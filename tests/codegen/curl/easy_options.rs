@@ -606,9 +606,14 @@ fn wave_c_getinfo_array_uses_php_key_names() {
 /// it the decoded array came back byte-sorted (`appconnect_time_us` first), which no
 /// `foreach` over a real `ext/curl` result ever produces.
 ///
-/// `posttransfer_time_us` sits between `starttransfer_time_us` and `total_time_us` in
-/// php's list and is absent here — a MISSING KEY, tracked separately; this fixture pins the
-/// order of the keys this build does report.
+/// THE KEY SET IS NOW COMPLETE AGAINST PHP 8.4.20 — all 41 keys, same order.
+/// `posttransfer_time_us` (between `starttransfer_time_us` and `total_time_us`) was the
+/// last gap and is filled. Re-measured across plain HTTP, HTTPS, a refused connection and
+/// a handle that never executed: php's key set is a FIXED 41 in every case, so this
+/// fixture pins a complete list rather than a subset. `http_connectcode`, `num_connects`
+/// and `appconnect_time` are deliberately NOT here — php-src does not put them in the
+/// no-`$option` array either, only in the `$option` form (covered by
+/// `getinfo_option_form_answers_keys_absent_from_the_array`).
 ///
 /// IT ALSO PINS THAT EACH `*_us` KEY REALLY IS ITS OWN TIMER. The first run of this fixture
 /// caught five scrambled `CURLINFO_*_T` numbers in `crates/elephc-curl/src/info.rs`:
@@ -653,9 +658,108 @@ fn getinfo_array_keys_are_in_php_s_order() {
          upload_content_length,starttransfer_time,redirect_time,redirect_url,primary_ip,\
          certinfo,primary_port,local_ip,local_port,http_version,protocol,ssl_verifyresult,\
          scheme,appconnect_time_us,connect_time_us,namelookup_time_us,pretransfer_time_us,\
-         redirect_time_us,starttransfer_time_us,total_time_us,effective_method,capath,cainfo\n\
+         redirect_time_us,starttransfer_time_us,posttransfer_time_us,total_time_us,\
+         effective_method,capath,cainfo\n\
          total_time=ok namelookup_time=ok connect_time=ok pretransfer_time=ok \
          starttransfer_time=ok redirect_time=ok \n"
+    );
+}
+
+/// THE THREE KEYS THE AUDIT ASKED FOR ARE REACHABLE — through the `$option` form, which is
+/// the ONLY place php-src exposes them too.
+///
+/// `http_connectcode`, `num_connects` and `appconnect_time` were reported as missing from
+/// `curl_getinfo()`'s array. They are missing from PHP's array as well: measured on PHP
+/// 8.4.20, the no-`$option` array is a fixed 41 keys and contains none of the three, across
+/// plain HTTP, HTTPS, a refused connection and a never-executed handle. What php DOES offer
+/// is `curl_getinfo($ch, CURLINFO_HTTP_CONNECTCODE)` and friends, so THAT is what this
+/// pins — together with the array's exact size, so a future "helpful" addition to the array
+/// fails here instead of silently diverging from php.
+///
+/// `appconnect_time` is the DOUBLE (seconds) and is a different key from
+/// `appconnect_time_us`, the integer microsecond field the array does carry; both are
+/// checked so the two cannot collapse into one.
+#[test]
+fn getinfo_option_form_answers_keys_absent_from_the_array() {
+    if skip_without_curl_native("getinfo_option_form_answers_keys_absent_from_the_array") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($ch);
+        $info = curl_getinfo($ch);
+        echo count($info), "\n";
+        foreach (["http_connectcode", "num_connects", "appconnect_time"] as $absent) {{
+            echo array_key_exists($absent, $info) ? "in-array " : "not-in-array ";
+        }}
+        echo "\n";
+        $connectcode = curl_getinfo($ch, CURLINFO_HTTP_CONNECTCODE);
+        echo is_int($connectcode) ? "int " : "not-int ";
+        echo $connectcode, "\n";
+        $connects = curl_getinfo($ch, CURLINFO_NUM_CONNECTS);
+        echo is_int($connects) ? "int " : "not-int ";
+        echo $connects >= 1 ? "connected\n" : "no-connection\n";
+        $appconnect = curl_getinfo($ch, CURLINFO_APPCONNECT_TIME);
+        echo is_float($appconnect) ? "float " : "not-float ";
+        // Plaintext HTTP never runs a TLS handshake, so php reports 0.0 here.
+        echo $appconnect == 0.0 ? "zero\n" : "nonzero\n";
+        // The array's microsecond sibling is a DIFFERENT key and stays an int.
+        echo is_int($info["appconnect_time_us"]) ? "us-int\n" : "us-not-int\n";
+        echo is_int($info["posttransfer_time_us"]) ? "posttransfer-int\n" : "posttransfer-bad\n";
+        "#
+    ));
+    assert_eq!(
+        out,
+        "41\nnot-in-array not-in-array not-in-array \nint 0\nint connected\nfloat zero\n\
+         us-int\nposttransfer-int\n"
+    );
+}
+
+/// The PHP 8.5 constants added to the frozen surface resolve to their pinned-`curl.h`
+/// numbers and, for the `CURLINFO_*` five, dispatch through typed `curl_getinfo()` on
+/// their own type mask — `CURLINFO_LONG` answers an int, `CURLINFO_OFF_T` answers an int.
+///
+/// They are NOT version-fenced: this program compiles at the default target and at 8.4
+/// alike, because curl constants are registered unconditionally (see
+/// `src/types/curl_constants.rs`'s module doc). A `CURLINFO_*` this build's libcurl can
+/// answer returns a value; one it cannot returns `false`, never an invented number.
+#[test]
+fn php_85_curl_constants_resolve_and_dispatch_by_type_mask() {
+    if skip_without_curl_native("php_85_curl_constants_resolve_and_dispatch_by_type_mask") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        // Values frozen from the pinned curl-8.21.0 include/curl/curl.h.
+        echo CURLINFO_CONN_ID, " ", CURLINFO_QUEUE_TIME_T, " ", CURLINFO_USED_PROXY, " ",
+             CURLINFO_HTTPAUTH_USED, " ", CURLINFO_PROXYAUTH_USED, " ",
+             CURLOPT_SSL_SIGNATURE_ALGORITHMS, "\n";
+        $ch = curl_init("{url}");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_exec($ch);
+        $connId = curl_getinfo($ch, CURLINFO_CONN_ID);
+        echo is_int($connId) && $connId >= 0 ? "conn-id-int\n" : "conn-id-bad\n";
+        $queue = curl_getinfo($ch, CURLINFO_QUEUE_TIME_T);
+        echo is_int($queue) ? "queue-int\n" : "queue-bad\n";
+        // No proxy was configured, so libcurl reports 0.
+        echo var_export(curl_getinfo($ch, CURLINFO_USED_PROXY), true), "\n";
+        echo is_int(curl_getinfo($ch, CURLINFO_HTTPAUTH_USED)) ? "httpauth-int\n" : "httpauth-bad\n";
+        echo is_int(curl_getinfo($ch, CURLINFO_PROXYAUTH_USED)) ? "proxyauth-int\n" : "proxyauth-bad\n";
+        // CURLOPT_SSL_SIGNATURE_ALGORITHMS is a plain string option; it reaches libcurl
+        // through setopt_str like every other CURLOPTTYPE_STRINGPOINT row.
+        var_dump(curl_setopt($ch, CURLOPT_SSL_SIGNATURE_ALGORITHMS, "ECDSA+SHA256"));
+        "#
+    ));
+    assert_eq!(
+        out,
+        "6291520 6291521 2097218 2097221 2097222 10328\n\
+         conn-id-int\nqueue-int\n0\nhttpauth-int\nproxyauth-int\nbool(true)\n"
     );
 }
 

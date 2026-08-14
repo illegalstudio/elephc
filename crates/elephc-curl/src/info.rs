@@ -18,6 +18,15 @@
 //!   answer for is OMITTED, exactly as php-src omits it — never filled in with a
 //!   fabricated zero. `request_header` is absent for a different reason, recorded at its
 //!   place below.
+//! - THE ARRAY IS COMPLETE AGAINST PHP 8.4.20: 41 keys, the same 41 in the same order.
+//!   Measured with `array_keys(curl_getinfo($ch))` after a real transfer, and re-measured
+//!   across plain HTTP, HTTPS, a refused connection and a handle that never ran — php's
+//!   key set is FIXED at 41 in every one of those, so there is no conditional key left to
+//!   chase. `http_connectcode`, `num_connects` and `appconnect_time` are NOT in it (they
+//!   are reachable only through the `$option` form, as `CURLINFO_HTTP_CONNECTCODE`,
+//!   `CURLINFO_NUM_CONNECTS` and `CURLINFO_APPCONNECT_TIME`, which this build answers);
+//!   adding them here would be a DIVERGENCE from php, not a fix. The one key that really
+//!   was missing, `posttransfer_time_us`, is now emitted in php's own position.
 //! - SIX KEYS READ THE `_T` (`curl_off_t`) FIELD AND REPORT A FLOAT. php-src does the
 //!   same: `size_upload`/`size_download`/`speed_*`/`*_content_length` were `double`
 //!   fields in libcurl 7.x, so php-src reads the modern `_T` field and re-widens it to a
@@ -130,6 +139,11 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
         pub(super) const STARTTRANSFER_TIME_T: i32 = 0x60_0000 + 54;
         pub(super) const REDIRECT_TIME_T: i32 = 0x60_0000 + 55;
         pub(super) const APPCONNECT_TIME_T: i32 = 0x60_0000 + 56;
+        /// `CURLINFO_POSTTRANSFER_TIME_T` (`CURLINFO_OFF_T + 67`, pinned libcurl 8.21.0
+        /// `include/curl/curl.h:2994`). NOT part of the contiguous 50..=56 block above —
+        /// libcurl added it later, at 67, next to `CURLINFO_QUEUE_TIME_T` (65) rather
+        /// than beside the other timers.
+        pub(super) const POSTTRANSFER_TIME_T: i32 = 0x60_0000 + 67;
     }
 
     let mut map = serde_json::Map::new();
@@ -261,6 +275,10 @@ pub(crate) unsafe fn getinfo_all_json(curl: *mut CURL) -> Vec<u8> {
     off_t_key(&mut map, "pretransfer_time_us", info::PRETRANSFER_TIME_T);
     off_t_key(&mut map, "redirect_time_us", info::REDIRECT_TIME_T);
     off_t_key(&mut map, "starttransfer_time_us", info::STARTTRANSFER_TIME_T);
+    // BETWEEN `starttransfer_time_us` AND `total_time_us`, which is where php-src emits
+    // it — measured with `array_keys(curl_getinfo($ch))` on PHP 8.4.20 (index 36 of 41).
+    // The key was missing entirely until now, the ONE gap between this array and php's.
+    off_t_key(&mut map, "posttransfer_time_us", info::POSTTRANSFER_TIME_T);
     off_t_key(&mut map, "total_time_us", info::TOTAL_TIME_T);
 
     string_key(&mut map, "effective_method", info::EFFECTIVE_METHOD);
