@@ -1203,9 +1203,9 @@ fn curl_copy_handle_preserves_stdout_mode_over_a_rooted_write_callback() {
     assert_eq!(out, "hello-curl|TRUE|SILENT");
 }
 
-/// The callback options this wave deliberately did NOT implement stay honestly rejected:
+/// The callback options this build does NOT implement stay honestly rejected:
 /// `curl_setopt()` answers `false` and emits PHP's unsupported-option warning rather than
-/// an inert `true` (locked decision 7).
+/// an inert `true`.
 #[test]
 fn curl_remaining_callback_options_stay_rejected() {
     if skip_without_curl_native("curl_remaining_callback_options_stay_rejected") {

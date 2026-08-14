@@ -267,7 +267,7 @@ pub(crate) fn collect_constants(
     }
     // `ext/curl` constants materialize from the frozen `CURL_INT_CONSTANTS` table
     // unconditionally — like JSON_*, their value is a compile-time literal that needs no
-    // libcurl link, even in a program that never mentions curl (Task 6).
+    // libcurl link, even in a program that never mentions curl.
     for (name, value) in CURL_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),

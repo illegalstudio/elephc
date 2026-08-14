@@ -458,12 +458,11 @@ mod native {
         handles::lock_recover(handles::handles()).contains_key(&id)
     }
 
-    /// TDD Step 1: `elephc_curl_easy_init`/`elephc_curl_easy_free` leave the
+    /// `elephc_curl_easy_init`/`elephc_curl_easy_free` leave the
     /// handle table balanced, hand out unique, monotonically increasing ids,
     /// and never reuse a freed id. Written before `abi.rs`/`handles.rs`
-    /// existed; task-3-report.md records the RED run against the
-    /// not-yet-implemented crate and a second RED run against a
-    /// deliberately reintroduced bug, both followed by GREEN.
+    /// existed, as a RED test against the not-yet-implemented crate, then kept
+    /// as a regression guard.
     #[test]
     fn init_and_free_balance_the_handle_table() {
         let a = elephc_curl_easy_init();

@@ -299,8 +299,8 @@ function resolve_curlopt_aliases(string $headerSource, array $table): array
 // ---------------------------------------------------------------------
 // General cross-check for every PHP-visible curl_-family constant that is
 // NOT a curl_setopt/curl_multi_setopt/curl_share_setopt option (those are
-// handled above via the precise CURLOPT() macro table). Locked decision #1
-// requires ALL constant numeric values to come from the pinned libcurl,
+// handled above via the precise CURLOPT() macro table). Every constant
+// numeric value must come from the pinned libcurl,
 // not from `php -r` on whatever libcurl the local PHP happens to be linked
 // against. This walks curl.h/multi.h source order once, resolving both
 // plain `#define NAME EXPR` macros and `typedef enum { ... } Name;` bodies
@@ -917,7 +917,7 @@ function main(array $argv): void
         if (isset($headerTable[$name])) {
             $expected = TYPE_BASE[$headerTable[$name]['type']] + $headerTable[$name]['value'];
             if ($expected !== $value) {
-                // Locked decision #1: the pinned header wins.
+                // The pinned header wins over whatever the local `php -r` probe reported.
                 $valueCrossCheckMismatches[$name] = [
                     'php' => $value,
                     'curl_h' => $expected,

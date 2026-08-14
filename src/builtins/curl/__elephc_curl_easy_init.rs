@@ -13,7 +13,7 @@
 //!   `crate::curl_prelude`, and a prelude function cannot shadow a builtin of the same
 //!   name (`Cannot redeclare built-in function`). Renaming the raw entry point frees
 //!   `curl_init` for the prelude wrapper.
-//! - IT TAKES NO `$url`, unlike PHP's `curl_init(?string $url = null)`. The Task-3 C ABI
+//! - IT TAKES NO `$url`, unlike PHP's `curl_init(?string $url = null)`. The bridge's C ABI
 //!   allocates and sets the URL through two separate entry points
 //!   (`elephc_curl_easy_init` / `elephc_curl_easy_set_url`), and the prelude wrapper
 //!   already has to branch on `$url === null` to reproduce PHP's "no URL set at all"

@@ -260,11 +260,11 @@ fn test_rawurldecode() {
 /// and one bug. If a future change makes the targets diverge, THIS comment's claim — not
 /// the earlier one — is the one to correct alongside it.)
 ///
-/// PRE-EXISTING, NOT INTRODUCED BY curl. Ledgered during the `CURLFile`/`CURLStringFile`
-/// (Task 11) review as a shared-builtin bug outside that task's scope to fix — first
-/// documented (without a pin) in Task 8's own report, which built a SELF-CONTAINED
-/// encoder specifically to route around it for the POSTFIELDS array-to-urlencoded path
-/// that Task 11 has since replaced with real `multipart/form-data`. Pinned HERE, in the
+/// PRE-EXISTING, NOT INTRODUCED BY curl. Found during `CURLFile`/`CURLStringFile`
+/// review as a shared-builtin bug outside curl's own scope to fix — the curl
+/// `CURLOPT_POSTFIELDS` array path once built a SELF-CONTAINED
+/// encoder specifically to route around it for an array-to-urlencoded form that
+/// has since been replaced with real `multipart/form-data`. Pinned HERE, in the
 /// strings area where the bug actually lives, rather than in `tests/codegen/curl/` —
 /// `crate::curl_prelude`'s multipart array walker never calls `urlencode()`/
 /// `rawurlencode()` at all (binary-safe `multipart/form-data` parts need no percent

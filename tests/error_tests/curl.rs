@@ -141,7 +141,7 @@ fn curl_multi_add_handle_requires_both_arguments() {
     );
 }
 
-/// `curl_multi_get_handles()` is PHP 8.5 SURFACE ONLY (locked decision 8): compiled for
+/// `curl_multi_get_handles()` is PHP 8.5 SURFACE ONLY: compiled for
 /// 8.4 the prelude must not declare it, so the call is an ordinary "undefined function"
 /// error — exactly what that runtime reports — while 8.5 accepts it.
 #[test]
@@ -201,8 +201,8 @@ fn curl_share_errno_rejects_wrong_arity() {
     );
 }
 
-/// `curl_share_init_persistent()` / `CurlSharePersistentHandle` are PHP 8.5 SURFACE ONLY
-/// (locked decision 8), the same gate `curl_multi_get_handles()` has: compiled for 8.4
+/// `curl_share_init_persistent()` / `CurlSharePersistentHandle` are PHP 8.5 SURFACE ONLY,
+/// the same gate `curl_multi_get_handles()` has: compiled for 8.4
 /// the prelude must not declare either, so each reference is an ordinary "undefined
 /// function"/"undefined class" error, while 8.5 accepts both.
 #[test]
@@ -234,7 +234,7 @@ fn curl_share_init_persistent_is_undefined_before_php_85() {
     );
 }
 
-/// TASK 11: `CURLFile`'s `$filename` is required, so a bare `new CURLFile()` is an arity
+/// `CURLFile`'s `$filename` is required, so a bare `new CURLFile()` is an arity
 /// error — unlike `CurlHandle`/`CurlMultiHandle`/`CurlShareHandle`, `CURLFile` is an
 /// ORDINARY, user-constructible class, so this is a plain constructor-arity diagnostic,
 /// not a "private constructor" one.

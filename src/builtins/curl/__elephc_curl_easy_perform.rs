@@ -10,7 +10,7 @@
 //! - See `__elephc_curl_easy_init` for why the curl builtins are internal.
 //! - PHP's `curl_exec()` has THREE return shapes (`false` on failure, the body `string`
 //!   under `CURLOPT_RETURNTRANSFER`, `true` otherwise), and which of the two success
-//!   shapes applies depends on an option the Task-3 C ABI exposes no getter for. This
+//!   shapes applies depends on an option the bridge's C ABI exposes no getter for. This
 //!   builtin therefore answers only "did the transfer succeed"; the prelude wrapper
 //!   picks the success shape from the `CurlHandle` object's own record of
 //!   `CURLOPT_RETURNTRANSFER` and calls `__elephc_curl_easy_body` when it applies.

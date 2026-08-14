@@ -192,8 +192,8 @@ it, and dynamic eval without the capability leaves regex builtins unavailable
 at runtime.
 
 `curl` is the first ordinary bridge crate that ALSO needs a managed native
-package: `--with-curl` (or, once the Task 5 prelude lands, ordinary detection
-of a `curl_*` call) force-links `elephc_curl`, and `src/pipeline/backend.rs`
+package: `--with-curl` (or ordinary detection
+of a `curl_*` call, via `src/curl_prelude/detect.rs`) force-links `elephc_curl`, and `src/pipeline/backend.rs`
 mirrors that into `NativeRequirement::package("curl")` so the final link also
 resolves the managed `curl` package's `libcurl.a`, plus the `openssl`/`zlib`
 archives it declares as dependencies, in the fixed order

@@ -16,7 +16,7 @@
 //! - Returns whether the option was accepted. `CURLOPT_RETURNTRANSFER` is a PHP-only
 //!   pseudo-option handled inside the bridge (`crates/elephc-curl/src/php_layer.rs`) and
 //!   never reaches libcurl; every other option is forwarded unchanged, so a value
-//!   libcurl rejects answers `false` rather than an inert `true` (locked decision 7).
+//!   libcurl rejects answers `false` rather than an inert `true`.
 
 builtin! {
     name: "__elephc_curl_easy_setopt_long",

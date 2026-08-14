@@ -8,7 +8,7 @@
 //!
 //! Key details:
 //! - THESE ARE THE PROOF THAT TLS IS WIRED, not just that an option was accepted. The
-//!   managed libcurl is built against the managed OpenSSL (locked decision 2); until
+//!   managed libcurl is built against the managed OpenSSL; until
 //!   something actually completes a handshake, nothing distinguishes "HTTPS works" from
 //!   "HTTPS fails in a way no test looks at". The success case reads a body back over the
 //!   socket; the failure case gets libcurl's own certificate `CURLcode`.

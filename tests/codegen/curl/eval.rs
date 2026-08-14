@@ -18,15 +18,15 @@
 //!   curl builtin) together, which is exactly the combination
 //!   `tests/codegen/support/runner.rs`'s `ensure_magician_curl_staticlib`/
 //!   `magician_curl_aware_plan` build and link the curl-aware magician archive for.
-//! - Mirrors the manual end-to-end verification recorded in the Task 13 report,
-//!   automated: this is the first codegen test that actually links BOTH `elephc_magician`
-//!   built `--features curl` AND `elephc_curl` together.
+//! - This is the first codegen test that actually links BOTH `elephc_magician`
+//!   built `--features curl` AND `elephc_curl` together, automating what was originally
+//!   verified by hand.
 
 use super::http_fixture::LocalHttpServer;
 use crate::support::*;
 
-/// `eval('return curl_version();')['version']` equals the AOT `curl_version()['version']`
-/// — Task 13's Step 1 acceptance criterion, run through the real compiled pipeline rather
+/// `eval('return curl_version();')['version']` equals the AOT `curl_version()['version']`,
+/// run through the real compiled pipeline rather
 /// than verified by hand.
 #[test]
 fn eval_curl_version_matches_aot_curl_version() {

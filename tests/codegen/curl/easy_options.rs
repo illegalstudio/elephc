@@ -497,9 +497,9 @@ fn wave_b_postfields_are_binary_safe() {
     assert_eq!(out, "len\n");
 }
 
-/// TASK 11: an array `CURLOPT_POSTFIELDS` holding a `CURLFile`/`CURLStringFile` now
-/// UPLOADS it as a real mime part (see `multipart.rs`) instead of being refused — this
-/// test now covers the one object shape that is STILL refused: any OTHER object class.
+/// An array `CURLOPT_POSTFIELDS` holding a `CURLFile`/`CURLStringFile`
+/// UPLOADS it as a real mime part (see `multipart.rs`); this
+/// test covers the one object shape that is STILL refused: any OTHER object class.
 /// Real php-src would attempt `(string) $value` here (accepting a `Stringable` object,
 /// raising a catchable `\Error` otherwise); elephc's own object-to-string cast for a class
 /// with no `__toString()` is an UNCATCHABLE process exit, so `__elephc_curl_build_multipart`

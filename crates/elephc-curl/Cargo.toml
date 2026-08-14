@@ -8,7 +8,7 @@ publish = false
 
 # Built as a C-callable staticlib (linked into compiled PHP programs that use
 # curl_*, supplied by the PHP-program linker together with the real
-# libcurl.a/libssl.a/libcrypto.a/libz.a from Task 4 onward) and an rlib (so
+# libcurl.a/libssl.a/libcrypto.a/libz.a from a managed native package) and an rlib (so
 # the bridge is unit-tested via `cargo test -p elephc-curl`). Mirrors
 # crates/elephc-tls / elephc-pdo / elephc-crypto.
 #

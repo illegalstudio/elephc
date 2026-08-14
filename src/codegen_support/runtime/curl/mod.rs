@@ -88,7 +88,8 @@ mod tests {
     //! - These are assembly-text assertions rather than execution tests deliberately: the
     //!   two Linux targets cannot be RUN from a macOS developer machine, and "was it
     //!   emitted for linux-x86_64 at all" is exactly the failure an aarch64-only test
-    //!   would miss (locked decision 11 requires all three targets in the same change).
+    //!   would miss — every target-specific change here must land for all three
+    //!   supported targets together, never one at a time.
     //! - The no-`elephc_curl_*`-symbol assertion is the pay-for-use invariant in its most
     //!   direct form: the runtime object is built once and linked into EVERY program, so a
     //!   single direct reference there would make every compiled binary demand libcurl.

@@ -11,7 +11,8 @@
 //! - THE PUBLISH IS WHAT PULLS THE BRIDGE IN. This code appears only in a program that
 //!   lowered a curl builtin, so a curl-free binary never references an `elephc_curl_*`
 //!   symbol, never links `-lelephc_curl`, and never needs the managed native `curl`
-//!   package (locked decision 4). Mirrors
+//!   package — the pay-for-use guarantee this crate holds for every optional native
+//!   surface. Mirrors
 //!   `crate::codegen_support::hash_crypto::publish_elephc_crypto_function_pointers`.
 //! - ALL SLOTS ARE PUBLISHED TOGETHER, at every curl call site, rather than one slot per
 //!   builtin. The alternative — publishing only what the current lowering calls — would

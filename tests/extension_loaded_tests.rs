@@ -16,7 +16,7 @@
 //!   staticlib (curl) never does.
 //! - THE CURL ASSERTIONS BELOW ARE THE NEGATIVE HALF, and they stay `false` on purpose:
 //!   none of these programs mentions a `curl_*` name or passes `--with-curl`, so the
-//!   bridge is not linked and `extension_loaded('curl')` must say so. Task 5's positive
+//!   bridge is not linked and `extension_loaded('curl')` must say so. The positive
 //!   half — a program that calls `curl_init()` and reports curl LOADED — lives in
 //!   `tests/codegen/curl/easy_handle.rs` rather than here, because compiling a curl
 //!   program through this file's CLI subprocess would additionally require a managed

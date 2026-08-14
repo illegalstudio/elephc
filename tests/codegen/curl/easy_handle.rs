@@ -11,7 +11,7 @@
 //! - No fixture here touches the network. `curl_version()` reads
 //!   `curl_version_info(CURLVERSION_NOW)` out of the linked library; everything else is
 //!   object identity and declaration checks.
-//! - The asserted version is elephc's PINNED libcurl (8.21.0, locked decision 1), never
+//! - The asserted version is elephc's PINNED libcurl (8.21.0), never
 //!   the developer's system curl — that is the whole point of the managed native
 //!   package, so this assertion is the pin's end-to-end proof.
 //! - `CurlHandle` being `final` and not user-constructible is a COMPILE-TIME diagnostic,
@@ -410,7 +410,7 @@ fn failed_transfer_reports_curl_error() {
 /// A complete transfer round-trips through the whole chain — `curl_setopt` →
 /// `curl_exec` → captured body — over the `file://` protocol, so the assertion covers
 /// perform, the RETURNTRANSFER capture, and the borrowed-buffer copy without touching a
-/// socket. `file` is in the first landing's protocol matrix (locked decision 6).
+/// socket. `file` is one of the protocols this build's libcurl recipe enables.
 #[test]
 fn file_protocol_transfer_returns_the_body() {
     if skip_without_curl_native("file_protocol_transfer_returns_the_body") {

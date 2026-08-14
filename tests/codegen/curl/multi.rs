@@ -349,7 +349,7 @@ fn multi_errno_and_strerror_report_the_multi_code_space() {
 }
 
 /// `curl_multi_setopt()` applies a real `CURLMOPT_*` long, refuses the callback option
-/// this build cannot carry with `false` plus PHP's warning (locked decision 7), and raises
+/// this build cannot carry with `false` plus PHP's warning, and raises
 /// php-src's `ValueError` for a number that is not a multi option at all.
 #[test]
 fn multi_setopt_applies_longs_and_refuses_the_rest() {
@@ -376,7 +376,7 @@ fn multi_setopt_applies_longs_and_refuses_the_rest() {
 
 /// The `CURLMOPT_PUSHFUNCTION` refusal is its own fixture because it must ALSO print PHP's
 /// warning, not merely answer `false` — an inert `true` (or a silent `false`) is exactly
-/// what locked decision 7 forbids.
+/// what this build's unsupported-option contract forbids.
 #[test]
 fn multi_setopt_pushfunction_warns_and_returns_false() {
     if skip_without_curl_native("multi_setopt_pushfunction_warns_and_returns_false") {
@@ -401,7 +401,7 @@ fn multi_setopt_pushfunction_warns_and_returns_false() {
 /// PUNCH-LIST ITEM 7: `curl_multi_setopt()` CLASSIFIES THE OPTION BEFORE IT TYPE-CHECKS
 /// THE VALUE, the order php-src uses (one `switch (option)`) and the order `curl_setopt()`
 /// already used. A closure on `CURLMOPT_PUSHFUNCTION` is therefore the ordinary
-/// "unsupported by this build" answer — `false` plus PHP's warning, locked decision 7 —
+/// "unsupported by this build" answer — `false` plus PHP's warning —
 /// not a `TypeError` about scalar types, and a closure on an option number that is not a
 /// multi option at all is php-src's `ValueError`. Measured on PHP 8.4.20:
 /// `curl_multi_setopt($mh, 999999, function () {})` raises `ValueError`, and a non-callable

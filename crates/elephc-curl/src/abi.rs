@@ -307,7 +307,7 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_slist(
     })
 }
 
-/// TASK 11 — `multipart/form-data` uploads. Starts a fresh `curl_mime` builder for handle
+/// `multipart/form-data` uploads. Starts a fresh `curl_mime` builder for handle
 /// `id`, discarding any earlier PENDING (never-posted) one. Does not touch whatever mime is
 /// already ATTACHED via `CURLOPT_MIMEPOST` from an earlier successful call — see
 /// `crate::mime`'s module doc for the whole pending/attached split. `0` for an unknown id
@@ -940,7 +940,7 @@ pub extern "C" fn elephc_curl_easy_upkeep(id: i64) -> i32 {
 /// two entries owning one list, hence a double free. Rebuilding is the only
 /// shape where each handle owns exactly what it points at.
 ///
-/// TASK 11: THE MIME PART NEEDS NO REBUILD, UNLIKE SLISTS — it is in the OTHER bucket
+/// THE MIME PART NEEDS NO REBUILD, UNLIKE SLISTS — it is in the OTHER bucket
 /// `dupset` re-duplicates (alongside the strings, the blobs and `CURLOPT_COPYPOSTFIELDS`),
 /// so the copy already has its own independent `curl_mime` structure the moment
 /// `easy::duphandle` returns, before any Rust code here runs. The new `EasyEntry` below

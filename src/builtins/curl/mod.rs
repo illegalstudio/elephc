@@ -13,7 +13,7 @@
 //!   cannot shadow a builtin of the same name. Keeping the raw entry points internal
 //!   also keeps them out of the builtin catalog, out of `function_exists()`, out of the
 //!   generated docs, and out of the elephc/magician parity snapshots.
-//! - HOME FILES MUST NOT IMPORT `crate::codegen` (locked decision 12): they name a typed
+//! - HOME FILES MUST NOT IMPORT `crate::codegen`: they name a typed
 //!   `RuntimeFnId` and nothing else, so the backend stays reachable only through the
 //!   typed dispatch tables.
 

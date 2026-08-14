@@ -821,7 +821,7 @@ function __elephc_curl_sync_read_slot(CurlHandle $handle): bool {
     });
 }
 
-// TASK 11: `CURLFile` / `CURLStringFile`. Pure PHP data classes — neither wraps a native
+// `CURLFile` / `CURLStringFile`: pure PHP data classes — neither wraps a native
 // handle, so neither needs `$__elephc_handle`, a private constructor, or a factory the way
 // every OTHER curl class in this file does. Property names, defaults and constructor
 // signatures are php-src's own (`ext/curl/curl_file.stub.php`): `CURLFile`'s constructor

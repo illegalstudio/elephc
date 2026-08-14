@@ -1,7 +1,7 @@
 //! Purpose:
 //! Home of the internal `__elephc_curl_setopt_unsupported_warning` builtin: raises PHP's
 //! warning for a real `CURLOPT_*` option this build cannot apply safely, on the `false`
-//! path locked decision 7 prescribes.
+//! path such an option always answers.
 //!
 //! Called from:
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.

@@ -305,7 +305,7 @@ pub(crate) fn compile(config: CliConfig) {
     // the hash prelude (both are order-independent declaration-only preludes) and before
     // name resolution so a namespaced caller resolves to it. `--with-curl` forces the
     // injection for a program that only reaches curl dynamically. The version selects the
-    // curl SURFACE too: `curl_multi_get_handles()` is 8.5-only (locked decision 8).
+    // curl SURFACE too: `curl_multi_get_handles()` is 8.5-only.
     crate::progress::phase("curl-prelude");
     let phase_started = Instant::now();
     let ast = if php_version == crate::php_version::PhpVersion::default() {
