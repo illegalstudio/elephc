@@ -413,9 +413,15 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
         if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}:
             errors.append(f"{record['name']}: undeclared non-registry AOT route")
 
+    # The optional `{` matches a BLOCK-BODIED match arm. rustfmt wraps an arm whose
+    # symbol name does not fit on one line into `Variant => { "name" }`, and without
+    # this the arm is invisible here — which reads as "builtin semantics reference an
+    # unknown runtime function" for a variant that is perfectly well mapped
+    # (measured on RuntimeFnId::CurlSetoptUnsupportedWarning and
+    # RuntimeFnId::CurlMultiSetoptUnsupportedWarning).
     target_source = read(REPO / "src" / "ir" / "runtime_fn.rs")
     builtin_target_variants = dict(
-        re.findall(r'RuntimeFnId::([A-Za-z0-9_]+)\s*=>\s*"([^"]+)"', target_source)
+        re.findall(r'RuntimeFnId::([A-Za-z0-9_]+)\s*=>\s*\{?\s*"([^"]+)"', target_source)
     )
     builtin_variant_by_name = {name: variant for variant, name in builtin_target_variants.items()}
     builtin_backend_source = "\n".join(
@@ -426,7 +432,7 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
     )
     unary_source = read(REPO / "src" / "ir" / "runtime_call.rs")
     unary_variants = dict(
-        re.findall(r'UnaryStringRuntime::([A-Za-z0-9_]+)\s*=>\s*"([^"]+)"', unary_source)
+        re.findall(r'UnaryStringRuntime::([A-Za-z0-9_]+)\s*=>\s*\{?\s*"([^"]+)"', unary_source)
     )
     unary_variant_by_name = {name: variant for variant, name in unary_variants.items()}
     unary_backend_source = read(REPO / "src" / "codegen" / "lower_inst" / "runtime_calls.rs")
