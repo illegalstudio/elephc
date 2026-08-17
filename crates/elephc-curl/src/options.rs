@@ -346,9 +346,12 @@ pub(crate) const OPTION_KINDS: &[(i32, i32)] = &[
     (20094, KIND_CALLBACK), // CURLOPT_DEBUGFUNCTION
     // STILL REJECTED (a deliberate second wave, not an oversight): each of these needs
     // machinery the first wave does not build. FNMATCH/PREREQ/SSH_HOSTKEY/TRAILER/
-    // HSTS read+write need protocols or transfer phases outside the landed matrix, and
+    // HSTS read+write need transfer phases outside the landed callback matrix, and
     // SSL_CTX_FUNCTION/OPENSOCKET/SOCKOPT hand PHP a raw native pointer (an
     // `SSL_CTX *`, a socket) that this build has no PHP-visible type for.
+    // NOTE ON SSH_HOSTKEY: it is the CALLBACK that is unbuilt, not the protocol — since
+    // curl recipe revision 2 this build carries libssh2, so `scp://`/`sftp://` and the
+    // whole `CURLOPT_SSH_*` option family below are live.
     (20200, KIND_UNSUPPORTED), // CURLOPT_FNMATCH_FUNCTION
     (20219, KIND_CALLBACK), // CURLOPT_XFERINFOFUNCTION
     (20312, KIND_UNSUPPORTED), // CURLOPT_PREREQFUNCTION

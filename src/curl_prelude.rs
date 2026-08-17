@@ -1683,8 +1683,10 @@ function curl_multi_getcontent(mixed $handle): ?string {
 //   curl_multi_setopt($mh, 999999, function () {})  -> ValueError (not TypeError)
 //   curl_multi_setopt($mh, 999999, [1])             -> ValueError
 //   curl_multi_setopt($mh, 20014,  null)            -> TypeError about a CALLBACK
-// This build cannot carry `CURLMOPT_PUSHFUNCTION` at all (an HTTP/2 server-push hook, and
-// HTTP/2 is not built in), so its answer is `false` plus PHP's unsupported-option warning — for ANY
+// This build cannot carry `CURLMOPT_PUSHFUNCTION` at all — it is a CALLBACK on the multi
+// handle, and the callback machinery is easy-handle-only; HTTP/2 itself IS built in, so the
+// hook it installs is the only missing half — so its answer is `false` plus PHP's
+// unsupported-option warning — for ANY
 // value, a closure included. Checking `is_int()` first (as this function used to) made a
 // closure on `CURLMOPT_PUSHFUNCTION` a `TypeError` about scalar types, which is both a
 // worse diagnostic and the one shape php-src never produces for it.

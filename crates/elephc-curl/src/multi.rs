@@ -211,8 +211,11 @@ pub(crate) fn multi_option_kind(opt: i64) -> i32 {
         3 | 6 | 7 | 8 | 13 | 16 => MULTI_OPTION_LONG,
         30_009 | 30_010 => MULTI_OPTION_OFF_T,
         // A callback option php-src really does support, through machinery this
-        // build does not have (an HTTP/2 server-push hook, and HTTP/2 is not built
-        // in). `false` plus a warning, matching every other unsupported option here
+        // build does not have: it is a CALLBACK on the MULTI handle, and the
+        // callback machinery is easy-handle-only. HTTP/2 itself has been built in
+        // since curl recipe revision 2, so the server-push hook is the only half
+        // that is missing. `false` plus a warning, matching every other
+        // unsupported option here
         // — never an inert `true` and never a wild function pointer.
         20_014 => MULTI_OPTION_UNSUPPORTED,
         _ => MULTI_OPTION_INVALID,
