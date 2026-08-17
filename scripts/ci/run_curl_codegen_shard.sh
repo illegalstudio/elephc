@@ -12,6 +12,15 @@
 # profile) hides captured stdout/stderr for passing tests, so running under nextest would
 # hide the very message this script greps for. Invoking the extracted test binary's plain
 # libtest CLI directly, as this script does, sidesteps that.
+#
+# WHAT IS MATCHED IS A STABLE TOKEN, NOT PROSE. `skip_gate_marker` below is
+# `curl_native::SKIP_GATE_MARKER` verbatim, and the Rust side prints it as a fixed prefix
+# ahead of the human-readable half. This script used to grep the readable half instead
+# ("managed native curl/openssl/zlib are not installed"), which named the packages -- so
+# when libssh2 and nghttp2 joined the set and the message was correctly updated, the grep
+# went on matching nothing and THE GATE WAS DEAD: a shard with an incomplete cache would
+# skip every fixture, pass, and report green with zero curl coverage. A gate whose pattern
+# tracks something that is supposed to change is not a gate.
 
 set -euo pipefail
 
@@ -59,9 +68,14 @@ trap 'rm -f "$output_log"' EXIT
 
 "$test_binary" codegen::curl "${skipped[@]}" --test-threads 4 --nocapture 2>&1 | tee "$output_log"
 
-if grep -q 'managed native curl/openssl/zlib are not installed' "$output_log"; then
-    echo "error: curl fixtures hit the managed-native skip gate -- the curl/openssl/zlib" >&2
-    echo "archives were not linked, so this shard did not really exercise ext/curl." >&2
+# Keep in sync with `curl_native::SKIP_GATE_MARKER` (the only place that spelling is
+# allowed to live besides this line).
+skip_gate_marker='ELEPHC_CURL_NATIVE_SKIP_GATE'
+
+if grep -q "$skip_gate_marker" "$output_log"; then
+    echo "error: curl fixtures hit the managed-native skip gate -- the managed" >&2
+    echo "curl/libssh2/nghttp2/openssl/zlib archives were not linked, so this shard did" >&2
+    echo "not really exercise ext/curl." >&2
     echo "See tests/codegen/support/curl_native.rs::skip_without_curl_native." >&2
     exit 1
 fi

@@ -82,18 +82,31 @@ pub(crate) fn available() -> bool {
     curl_native_packages().is_some()
 }
 
+/// THE STABLE TOKEN `scripts/ci/run_curl_codegen_shard.sh` GREPS FOR. It is a made-up
+/// identifier rather than a phrase out of the message below, and that is the whole point:
+/// the human-readable half of the message names the packages, so it changes whenever the
+/// package set does — which is exactly what happened when `libssh2`/`nghttp2` joined and
+/// left the CI gate matching a string nothing prints any more. A gate that greps prose is
+/// a gate that dies silently the next time the prose is right.
+///
+/// If this constant is ever renamed, `run_curl_codegen_shard.sh` must be updated in the
+/// same commit; nothing else in the tree may depend on its spelling.
+pub(crate) const SKIP_GATE_MARKER: &str = "ELEPHC_CURL_NATIVE_SKIP_GATE";
+
 /// Reports a skip for `test_name` and returns whether the caller should return early.
 ///
 /// Printing (rather than silently returning `true`) keeps a skipped curl suite visible in
 /// `cargo test -- --nocapture` and in CI logs, so "all green" on a machine without the
-/// packages cannot be mistaken for "curl is covered here".
+/// packages cannot be mistaken for "curl is covered here". The CI shard script turns that
+/// visibility into a hard failure by grepping [`SKIP_GATE_MARKER`] out of the log.
 pub(crate) fn skip_without_curl_native(test_name: &str) -> bool {
     if available() {
         return false;
     }
     eprintln!(
-        "skipping {test_name}: managed native curl/libssh2/nghttp2/openssl/zlib are not \
-         installed for {} (run: elephc native add curl --target {})",
+        "{SKIP_GATE_MARKER} skipping {test_name}: managed native \
+         curl/libssh2/nghttp2/openssl/zlib are not installed for {} \
+         (run: elephc native add curl --target {})",
         target().as_str(),
         target().as_str()
     );
@@ -140,21 +153,27 @@ fn native_cache_artifacts_root() -> Option<PathBuf> {
 }
 
 /// Walks `artifacts/<package>/<version>/r<recipe>/<source-sha>/<target>/<abi>/<toolchain>`
-/// and returns the HIGHEST-recipe-revision `lib/` directory that contains every expected
-/// archive for the harness target.
+/// and returns the NEWEST — highest `(version, recipe revision)` — `lib/` directory that
+/// contains every expected archive for the harness target.
 ///
 /// The version/recipe/source/abi/toolchain components are content-addressed and vary per
 /// machine, so they are enumerated rather than reconstructed; the TARGET component is
 /// matched exactly, so a macOS cache can never satisfy a Linux fixture.
 ///
-/// HIGHEST REVISION WINS, and that is load-bearing rather than tidy. A recipe revision
-/// bump changes the artifact path but does NOT delete the artifact the previous revision
-/// built (`elephc native prune` does, on request) — so from the day `curl` went to
-/// revision 2 (HTTP/2 + SCP/SFTP + the full protocol set), a developer's cache holds both
-/// `r1/` and `r2/`. `read_dir` order is unspecified, so taking the first match found would
-/// link the HTTP/1.1-only archive on some runs and the current one on others, and a
-/// fixture asserting a revision-2 protocol would fail for a reason nothing in its own
-/// output explains. Sorting descending pins the newest build a checkout can have produced.
+/// NEWEST WINS, AND THAT IS LOAD-BEARING RATHER THAN TIDY. Neither a catalog version bump
+/// nor a recipe revision bump deletes the artifact the previous one built (`elephc native
+/// prune` does, on request), so a developer's cache accumulates them: the day `curl` went
+/// to revision 2 (HTTP/2 + SCP/SFTP + the full protocol set), every existing cache held
+/// both `8.21.0/r1/` and `8.21.0/r2/`. `read_dir` order is unspecified, so taking the
+/// first match found would link the HTTP/1.1-only archive on some runs and the current one
+/// on others, and a fixture asserting a revision-2 protocol would fail for a reason nothing
+/// in its own output explains.
+///
+/// BOTH AXES MATTER, not just the revision. `8.21.0/r2` and a future `8.22.0/r1` are
+/// siblings under the same package, and ordering on the revision alone would pick the
+/// STALE `r2` of the old version — the identical silent-staleness bug one directory level
+/// up. Versions therefore compare as dotted numeric tuples (so `8.22.0 > 8.21.0`, and
+/// `10.47 > 9.x` rather than sorting as text), with the revision as the tiebreak.
 fn find_package_library_dir(
     artifacts: &Path,
     package: &str,
@@ -183,11 +202,12 @@ fn find_package_library_dir(
         }
         level = next;
     }
-    // Descending by recipe revision first, then by the whole path, so the choice is both
-    // current and reproducible across runs on one machine.
+    // Descending by (version, recipe revision), then by the whole path, so the choice is
+    // both current and reproducible across runs on one machine.
+    let package_root = artifacts.join(package);
     level.sort_by(|left, right| {
-        recipe_revision_of(right, artifacts, package)
-            .cmp(&recipe_revision_of(left, artifacts, package))
+        version_and_revision_of(right, &package_root)
+            .cmp(&version_and_revision_of(left, &package_root))
             .then_with(|| right.cmp(left))
     });
     level.into_iter().find_map(|dir| {
@@ -199,19 +219,31 @@ fn find_package_library_dir(
     })
 }
 
-/// Reads the `r<N>` recipe-revision component out of one enumerated artifact directory.
+/// Reads the `<version>` and `r<N>` recipe-revision components out of one enumerated
+/// artifact directory, as a sort key.
 ///
-/// Returns `None` for a path that does not have the expected shape, which sorts it below
-/// every well-formed candidate rather than letting an unparseable directory win.
-fn recipe_revision_of(dir: &Path, artifacts: &Path, package: &str) -> Option<u32> {
-    dir.strip_prefix(artifacts.join(package))
-        .ok()?
-        // `<version>/r<recipe>/<source-sha>/<target>/<abi>/<toolchain>`
-        .components()
-        .nth(1)?
-        .as_os_str()
-        .to_str()?
-        .strip_prefix('r')?
-        .parse()
-        .ok()
+/// Returns `None` for either half of a path that does not have the expected shape, which
+/// sorts it below every well-formed candidate rather than letting an unparseable directory
+/// win. The version is a `Vec<u64>` of its dot-separated parts so it compares numerically
+/// (`8.9.0 < 8.21.0`, which byte order gets backwards); a part that is not a plain number
+/// makes the whole version unusable rather than silently comparing as `0`.
+fn version_and_revision_of(
+    dir: &Path,
+    package_root: &Path,
+) -> (Option<Vec<u64>>, Option<u32>) {
+    let Ok(relative) = dir.strip_prefix(package_root) else {
+        return (None, None);
+    };
+    // `<version>/r<recipe>/<source-sha>/<target>/<abi>/<toolchain>`
+    let mut components = relative.components();
+    let version = components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .and_then(|text| text.split('.').map(|part| part.parse().ok()).collect());
+    let revision = components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .and_then(|text| text.strip_prefix('r'))
+        .and_then(|text| text.parse().ok());
+    (version, revision)
 }
