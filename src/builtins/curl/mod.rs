@@ -6,13 +6,16 @@
 //! - `crate::builtins` (registry collection via `inventory`).
 //!
 //! Key details:
-//! - One home per builtin, no logic here — the registry is populated by each leaf
-//!   file's `builtin!` submission.
+//! - One home per builtin, no logic here — each leaf file joins compiler semantics to
+//!   its shared contract in `elephc_builtin_contract::catalog_data`, which owns the
+//!   PHP-visible name, parameters, return type, and `internal` flag.
 //! - Every builtin in this area is INTERNAL: the PHP-visible `curl_*` names are
 //!   elephc-PHP wrappers declared by `crate::curl_prelude`, and a prelude function
-//!   cannot shadow a builtin of the same name. Keeping the raw entry points internal
-//!   also keeps them out of the builtin catalog, out of `function_exists()`, out of the
-//!   generated docs, and out of the elephc/magician parity snapshots.
+//!   cannot shadow a builtin of the same name. `internal: true` keeps the raw entry
+//!   points out of the PHP builtin catalog (`docs/php/builtins`), out of
+//!   `function_exists()`, and out of the elephc/magician parity snapshots — the shared
+//!   contract routes them to `UnsupportedReason::InternalCompilerSurface` on the eval
+//!   side. They still get a `docs/internals/builtins/_internal` page.
 //! - HOME FILES MUST NOT IMPORT `crate::codegen`: they name a typed
 //!   `RuntimeFnId` and nothing else, so the backend stays reachable only through the
 //!   typed dispatch tables.
