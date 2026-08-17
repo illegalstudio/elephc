@@ -30,13 +30,18 @@
 //!   first `curl_init()`, so a `putenv()` from inside the program would be a race against
 //!   the very thing under test; and mutating the test harness's own environment would leak
 //!   into every other fixture running in parallel in the same binary.
-//! - NOTHING HERE DEPENDS ON THIS MACHINE'S CA LAYOUT, which is what keeps the suite
-//!   hermetic: the only fixture that runs with no `$CURL_CA_BUNDLE` at all asserts the
-//!   property that holds on ANY machine with a working trust store (`60`, not `77`), and
-//!   the ordered probe-list logic is unit-tested against an injected existence predicate
-//!   in `crates/elephc-curl/src/tests.rs`'s `ca_discovery` instead, because the branch that
-//!   matters — the baked-in path is MISSING — is by definition unreachable on the machine
-//!   that baked it.
+//! - WHAT THESE DEPEND ON, PRECISELY. Every fixture that sets `$CURL_CA_BUNDLE` pins the
+//!   discovered bundle to a path that exists nowhere, so its assertion holds on any
+//!   machine regardless of CA layout. The ONE fixture that runs with no environment at all
+//!   (`a_verified_transfer_has_a_readable_ca_store_without_any_configuration`) does depend
+//!   on the runner having SOME readable trust store — which is the property it exists to
+//!   assert, and which holds on every developer machine and every CI image here. What no
+//!   fixture depends on is WHICH store that is, or whether it is the baked-in one.
+//! - THE ORDERED PROBE LIST IS NOT COVERED HERE, deliberately: the branch that matters —
+//!   the baked-in path is MISSING — is by definition unreachable on the machine that baked
+//!   it. It is unit-tested against an injected existence predicate in
+//!   `crates/elephc-curl/src/tests.rs`'s `ca_discovery` instead, and the fixtures below
+//!   cover the other half, that a decision once made really reaches the TLS backend.
 //! - No fixture here reaches the public internet; every URL is the loopback fixture's own
 //!   `127.0.0.1` port.
 
@@ -52,8 +57,8 @@ const MISSING_BUNDLE: &str = "/nonexistent-elephc-runtime-ca-discovery.pem";
 /// An existing but EMPTY directory, for the `CURLOPT_CAPATH` fixture. A capath is a
 /// directory of hash-named certificates; an empty one is accepted by OpenSSL's `by_dir`
 /// lookup (which records the directory rather than scanning it) and vouches for nothing,
-/// which is exactly the "readable store that rejects the fixture" shape the `60` assertion
-/// needs.
+/// so it contributes a real-but-useless store without introducing a second trust anchor
+/// that could confuse the assertion.
 fn empty_capath_dir() -> std::path::PathBuf {
     use std::sync::OnceLock;
     static PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -156,18 +161,33 @@ fn an_explicit_cainfo_overrides_discovery() {
     assert_eq!(out, "F60\n");
 }
 
-/// `CURLOPT_CAPATH` ALSO RETIRES THE DISCOVERED BUNDLE, and this is the fixture for the
-/// one case that needs real bookkeeping rather than plain option assignment: a capath is a
-/// DIFFERENT option slot, so without the bridge's own cleanup a program that configures a
-/// directory store would silently be verifying against its capath UNION the bundle
-/// discovery installed at `curl_init()` — a wider trust set than it asked for.
+/// `CURLOPT_CAPATH` COMPOSES WITH THE DISCOVERED BUNDLE INSTEAD OF REPLACING IT, exactly
+/// as a capath composes with libcurl's own baked-in bundle in a stock build. A capath is a
+/// different option slot from `CURLOPT_CAINFO`, and libcurl loads both when both are set,
+/// so the trust store here is `discovered ∪ capath` — `77`, because the discovered bundle
+/// is the missing file `$CURL_CA_BUNDLE` names and libcurl gives up on an unreadable CA
+/// FILE before it ever loads the CApath.
 ///
-/// `77` here would mean the discovered (missing) bundle was still set alongside the
-/// capath, since libcurl loads the CA FILE first and gives up when it cannot be read.
-/// `60` means only the program's own store was consulted.
+/// AN EARLIER REVISION OF THE BRIDGE CLEARED THE DISCOVERED BUNDLE HERE and this fixture
+/// asserted `60`. Both were wrong, and libcurl's own verbose trace is what showed it:
+/// `curl_easy_setopt(CURLOPT_CAINFO, NULL)` resets `custom_cafile`, which is the exact
+/// condition under which libcurl RE-INJECTS its compile-time default, so the retire
+/// sequence produced
+///
+/// ```text
+/// *   CAfile: /etc/ssl/cert.pem        <- the BAKED default, back again
+/// *   CApath: /tmp/…/empty-capath
+/// ```
+///
+/// — never "capath alone", and on a machine where that baked path does not exist it would
+/// have turned a perfectly good capath into a hard `77`. See
+/// `crates/elephc-curl/src/abi.rs`'s `apply_discovered_cainfo` for the full measurement.
+///
+/// `60` here would mean the discovered bundle had been taken back out and libcurl had
+/// re-injected the baked default, which on this machine is readable.
 #[test]
-fn setting_capath_retires_the_discovered_bundle() {
-    if skip_without_curl_native("setting_capath_retires_the_discovered_bundle") {
+fn setting_capath_keeps_the_discovered_bundle() {
+    if skip_without_curl_native("setting_capath_keeps_the_discovered_bundle") {
         return;
     }
     let server = LocalHttpsServer::spawn();
@@ -185,7 +205,7 @@ fn setting_capath_retires_the_discovered_bundle() {
         ),
         &[("CURL_CA_BUNDLE", OsStr::new(MISSING_BUNDLE))],
     );
-    assert_eq!(out, "F60\n");
+    assert_eq!(out, "F77\n");
 }
 
 /// `curl_reset()` RE-RUNS DISCOVERY. `curl_easy_reset` restores libcurl's own defaults,
@@ -306,3 +326,4 @@ fn eval_handles_get_the_same_discovered_bundle() {
     );
     assert_eq!(out, "F77\n");
 }
+

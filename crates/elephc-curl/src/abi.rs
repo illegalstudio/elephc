@@ -110,7 +110,7 @@ pub extern "C" fn elephc_curl_easy_init() -> i64 {
                 entry.error_buf.as_mut_ptr() as *mut c_void,
             );
         }
-        apply_discovered_cainfo(&mut entry);
+        apply_discovered_cainfo(curl);
         handles::lock_recover(handles::handles()).insert(id, entry);
         id
     })
@@ -126,50 +126,51 @@ pub extern "C" fn elephc_curl_easy_init() -> i64 {
 /// system. Only a machine whose CA store lives somewhere else — or a cross-compiled
 /// libcurl, which has no baked-in default at all — reaches the `setopt` below.
 ///
-/// CALLED WHILE THE ENTRY IS STILL UNSHARED (before `elephc_curl_easy_init` inserts it in
-/// the table) or under the table lock (`elephc_curl_easy_reset`); it touches nothing but
-/// this one handle, so there is no ordering hazard with any other entry point.
+/// CALLED WHILE THE HANDLE IS STILL UNSHARED (before `elephc_curl_easy_init` inserts its
+/// entry in the table) or under the table lock (`elephc_curl_easy_reset`); it touches
+/// nothing but this one handle, so there is no ordering hazard with any other entry point.
 ///
 /// THE VALUE GOES THROUGH PLAIN `curl_easy_setopt(CURLOPT_CAINFO, …)`, deliberately, and
 /// not through any private door: that is what makes a later `curl_setopt($ch,
 /// CURLOPT_CAINFO, …)` from PHP overwrite it by ordinary option assignment, and it is also
 /// what sets libcurl's own `ssl.custom_cafile` bit so `Curl_ssl_easy_config_complete`
-/// stops applying the dead baked-in default (pinned libcurl 8.21.0,
+/// stops applying the baked-in default (pinned libcurl 8.21.0,
 /// `lib/vtls/vtls_config.c:280`).
-fn apply_discovered_cainfo(entry: &mut EasyEntry) {
+///
+/// NOTHING EVER TAKES THE BUNDLE BACK OUT, and an earlier revision of this file was wrong
+/// to try. It retired the discovered bundle when a program set `CURLOPT_CAPATH`, on the
+/// theory that a directory store should not be silently widened by a bundle the program
+/// never asked for. MEASURED against this exact archive, that theory does not survive
+/// contact with libcurl: `curl_easy_setopt(CURLOPT_CAINFO, NULL)` sets `custom_cafile`
+/// back to FALSE (`lib/setopt.c:1906`), which is precisely the condition
+/// `Curl_ssl_easy_config_complete` re-injects the compile-time `CURL_CA_BUNDLE` under
+/// (`lib/vtls/vtls_config.c:279-284`). libcurl's own verbose trace for the retire sequence,
+/// with `$CURL_CA_BUNDLE` pointed at a missing file and a user capath set:
+///
+/// ```text
+/// *   CAfile: /etc/ssl/cert.pem      <- the BAKED default, re-injected
+/// *   CApath: /tmp/…/empty-capath
+/// ```
+///
+/// So the retire never produced "the program's capath alone" — it produced "capath UNION
+/// the BAKED bundle", the very union it was meant to prevent, just against a store chosen
+/// by the build machine instead of by discovery. Worse, on the machine that actually
+/// matters — one where the baked path does NOT exist — that re-injected `CAfile` is
+/// unreadable and `ossl_populate_x509_store` aborts with `CURLE_SSL_CACERT_BADFILE`
+/// BEFORE it ever loads the `CApath`, so a program that set a perfectly good capath would
+/// fail outright. Leaving the discovered bundle in place gives "discovered UNION capath",
+/// which is the same shape stock libcurl gives ("baked UNION capath") and the only variant
+/// that stays portable. `tests/codegen/curl/easy_ca.rs`'s
+/// `setting_capath_keeps_the_discovered_bundle` pins it.
+fn apply_discovered_cainfo(curl: *mut easy::CURL) {
     let Some(path) = ca::discovered_cainfo() else {
         return;
     };
-    let code = unsafe { easy::setopt_str(entry.curl, ca::CURLOPT_CAINFO, path.as_ptr()) };
-    // A refusal leaves the handle exactly as libcurl configured it, which is the same
-    // "never turn a working configuration into a broken one" rule the whole module
-    // follows — and leaves the flag false, so nothing later tries to take it back out.
-    entry.discovered_cainfo = code == easy::CURLE_OK;
-}
-
-/// Steps runtime CA discovery back out of the way once the PHP program configures trust
-/// itself, called after a successful `curl_setopt($ch, CURLOPT_CAINFO|CURLOPT_CAPATH, …)`.
-///
-/// `CURLOPT_CAINFO` needs nothing but the bookkeeping: the program's own value has just
-/// replaced the discovered one in the same option slot.
-///
-/// `CURLOPT_CAPATH` IS THE CASE THIS FUNCTION EXISTS FOR. It is a DIFFERENT option slot,
-/// so a program that configures a directory store and never mentions `CURLOPT_CAINFO`
-/// would otherwise verify against its own capath UNION the bundle discovery installed at
-/// `curl_init()` — libcurl loads both when both are set (`lib/vtls/openssl.c`'s
-/// `X509_STORE_load_file` + `X509_STORE_load_path` pair). Widening the trust set beyond
-/// what the program asked for is exactly the kind of surprise this feature must not
-/// create, so the discovered bundle is cleared here. Setting a `CURLOPTTYPE_STRINGPOINT`
-/// option to NULL is libcurl's own documented way to unset it (`Curl_setstropt` frees the
-/// stored copy and stores NULL).
-fn forget_discovered_cainfo(entry: &mut EasyEntry, opt: i32) {
-    if !entry.discovered_cainfo {
-        return;
-    }
-    if opt == ca::CURLOPT_CAPATH {
-        unsafe { easy::setopt_ptr(entry.curl, ca::CURLOPT_CAINFO, std::ptr::null_mut()) };
-    }
-    entry.discovered_cainfo = false;
+    // A refusal leaves the handle exactly as libcurl configured it — the same "never turn
+    // a working configuration into a broken one" rule the whole feature follows — so the
+    // return value is deliberately not propagated: there is no caller who could do
+    // anything better than carry on with libcurl's own default.
+    unsafe { easy::setopt_str(curl, ca::CURLOPT_CAINFO, path.as_ptr()) };
 }
 
 /// Sets `CURLOPT_URL` on handle `id` from a raw byte string (not required to
@@ -296,16 +297,13 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
         let Some(entry) = guard.get_mut(&id) else {
             return 0;
         };
+        // NO CA-SPECIFIC HANDLING HERE, AND THAT IS THE DESIGN, not an omission.
+        // `CURLOPT_CAINFO` replaces the discovered bundle in its own option slot, and
+        // `CURLOPT_CAPATH` is deliberately allowed to compose with it — see
+        // [`apply_discovered_cainfo`] for the measurement that ruled out taking the
+        // discovered bundle back out.
         let code = unsafe { easy::setopt_str(entry.curl, opt as c_int, value.as_ptr()) };
-        if code != easy::CURLE_OK {
-            return 0;
-        }
-        // Only AFTER libcurl accepted the value: a refused `curl_setopt()` changed nothing
-        // on the handle, so it must not retire the discovered bundle either.
-        if opt == ca::CURLOPT_CAINFO || opt == ca::CURLOPT_CAPATH {
-            forget_discovered_cainfo(entry, opt);
-        }
-        1
+        (code == easy::CURLE_OK) as i32
     })
 }
 
@@ -906,11 +904,8 @@ pub extern "C" fn elephc_curl_easy_reset(id: i64) -> i32 {
         // the dead baked-in `CURL_CA_BUNDLE` path a handle running on a foreign machine
         // must not be left with. php-src documents `curl_reset()` as giving back a handle
         // "as if freshly created", and a freshly created handle here carries the
-        // discovered bundle. `curl_easy_reset` cleared the option itself, so clearing the
-        // flag alongside it decides again from scratch exactly as
-        // `elephc_curl_easy_init` does.
-        entry.discovered_cainfo = false;
-        apply_discovered_cainfo(entry);
+        // discovered bundle.
+        apply_discovered_cainfo(entry.curl);
         1
     })
 }
@@ -1038,7 +1033,7 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
         // so the rebuild below never reads the source's memory again. The
         // source's `body`/`last_errno`/`last_error` are deliberately NOT among
         // them — see this function's doc comment for the measurement.
-        let (copied, return_transfer, discovered_cainfo, slist_items) = {
+        let (copied, return_transfer, slist_items) = {
             let Some(source) = guard.get(&id) else {
                 return 0;
             };
@@ -1051,21 +1046,19 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
             if copied.is_null() {
                 return 0;
             }
-            (copied, source.return_transfer, source.discovered_cainfo, slist_items)
+            (copied, source.return_transfer, slist_items)
         };
 
         let new_id = handles::next_id();
         let mut entry = EasyEntry::new(copied, new_id);
         entry.return_transfer = return_transfer;
-        // NO DISCOVERY RUNS FOR THE COPY, and none is needed: `curl_easy_duphandle` copies
-        // every string option, so whatever CA file the source carried — user-set or
+        // NO CA DISCOVERY RUNS FOR THE COPY, and none is needed: `curl_easy_duphandle`
+        // copies every string option, so whatever CA file the source carried — user-set or
         // discovered — is already on the copy as its own independent allocation
         // (`dupset`'s `Curl_setstropt` loop, pinned libcurl 8.21.0 `lib/easy.c:891`).
         // Re-running discovery here would be actively WRONG: a copy of a handle whose PHP
         // program had set `CURLOPT_CAINFO` itself would have that value overwritten by
-        // this bridge's guess. Carrying the flag instead keeps the copy's answer to a
-        // later `CURLOPT_CAPATH` identical to the source's.
-        entry.discovered_cainfo = discovered_cainfo;
+        // this bridge's guess.
         unsafe {
             php_layer::install_write_callback(copied, new_id);
             crate::callbacks::install_read_callback(copied, new_id);

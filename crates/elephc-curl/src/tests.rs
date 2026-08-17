@@ -439,13 +439,19 @@ mod share_option_table {
 /// - EXISTENCE IS INJECTED, never `stat`ed. A test that asserted against this machine's
 ///   real `/etc/ssl/...` layout would pass or fail for reasons that have nothing to do
 ///   with the code under test.
+/// - [`decide`] KEEPS THE TABLE READABLE while `resolve` itself works in raw path bytes;
+///   `an_undecodable_environment_override_is_honored_verbatim` is the one test that goes
+///   around it, because it is the one case a `&str` helper could not express.
 #[cfg(test)]
 mod ca_discovery {
     use crate::ca::{resolve, CANDIDATE_CA_FILES};
 
-    /// An existence predicate that answers `true` for exactly the listed paths.
-    fn only<'a>(present: &'a [&'static str]) -> impl Fn(&str) -> bool + 'a {
-        move |path: &str| present.contains(&path)
+    /// Runs the decision table over text paths, so each test below reads as the rule it
+    /// pins. `present` is the exact set of paths that exist.
+    fn decide(baked: Option<&str>, env: Option<&str>, present: &[&str]) -> Option<String> {
+        let exists = |path: &[u8]| present.iter().any(|entry| entry.as_bytes() == path);
+        resolve(baked.map(str::as_bytes), env.map(str::as_bytes), &exists)
+            .map(|bytes| String::from_utf8(bytes).expect("text fixtures decode"))
     }
 
     /// BRANCH 1, THE NO-OP: a binary running where its baked-in CA bundle exists — its own
@@ -453,8 +459,10 @@ mod ca_discovery {
     /// feature cannot change the behavior of a deployment that already worked.
     #[test]
     fn an_existing_baked_bundle_is_left_alone() {
-        let decision = resolve(Some("/etc/ssl/cert.pem"), None, &only(&["/etc/ssl/cert.pem"]));
-        assert_eq!(decision, None);
+        assert_eq!(
+            decide(Some("/etc/ssl/cert.pem"), None, &["/etc/ssl/cert.pem"]),
+            None
+        );
     }
 
     /// The no-op holds even when the machine ALSO has a higher-priority store from the
@@ -463,12 +471,14 @@ mod ca_discovery {
     /// trusts.
     #[test]
     fn an_existing_baked_bundle_wins_over_the_probe_list() {
-        let decision = resolve(
-            Some("/etc/ssl/cert.pem"),
-            None,
-            &only(&["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"]),
+        assert_eq!(
+            decide(
+                Some("/etc/ssl/cert.pem"),
+                None,
+                &["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"],
+            ),
+            None
         );
-        assert_eq!(decision, None);
     }
 
     /// BRANCH 2, THE WHOLE POINT: a macOS-built binary run on Debian, where the baked
@@ -477,12 +487,15 @@ mod ca_discovery {
     /// `CURLE_SSL_CACERT_BADFILE`.
     #[test]
     fn a_missing_baked_bundle_falls_through_to_the_probe_list() {
-        let decision = resolve(
-            Some("/etc/ssl/cert.pem"),
-            None,
-            &only(&["/etc/ssl/certs/ca-certificates.crt"]),
+        assert_eq!(
+            decide(
+                Some("/etc/ssl/cert.pem"),
+                None,
+                &["/etc/ssl/certs/ca-certificates.crt"],
+            )
+            .as_deref(),
+            Some("/etc/ssl/certs/ca-certificates.crt")
         );
-        assert_eq!(decision.as_deref(), Some("/etc/ssl/certs/ca-certificates.crt"));
     }
 
     /// A CROSS-COMPILED libcurl has NO baked-in bundle at all (`CURL_CHECK_CA_BUNDLE`
@@ -491,8 +504,10 @@ mod ca_discovery {
     /// there has ever been.
     #[test]
     fn a_build_with_no_baked_bundle_uses_the_probe_list() {
-        let decision = resolve(None, None, &only(&["/etc/pki/tls/certs/ca-bundle.crt"]));
-        assert_eq!(decision.as_deref(), Some("/etc/pki/tls/certs/ca-bundle.crt"));
+        assert_eq!(
+            decide(None, None, &["/etc/pki/tls/certs/ca-bundle.crt"]).as_deref(),
+            Some("/etc/pki/tls/certs/ca-bundle.crt")
+        );
     }
 
     /// The probe list is ordered, and the FIRST existing entry wins: a machine carrying
@@ -500,16 +515,19 @@ mod ca_discovery {
     /// whichever `stat` happened to be cheapest.
     #[test]
     fn the_first_existing_candidate_wins() {
-        let decision = resolve(
-            Some("/nonexistent/baked.pem"),
-            None,
-            &only(&[
-                "/etc/pki/tls/certs/ca-bundle.crt",
-                "/etc/ssl/certs/ca-certificates.crt",
-                "/etc/ssl/cert.pem",
-            ]),
+        assert_eq!(
+            decide(
+                Some("/nonexistent/baked.pem"),
+                None,
+                &[
+                    "/etc/pki/tls/certs/ca-bundle.crt",
+                    "/etc/ssl/certs/ca-certificates.crt",
+                    "/etc/ssl/cert.pem",
+                ],
+            )
+            .as_deref(),
+            Some("/etc/ssl/certs/ca-certificates.crt")
         );
-        assert_eq!(decision.as_deref(), Some("/etc/ssl/certs/ca-certificates.crt"));
     }
 
     /// Every candidate is reachable on its own, which is what keeps the list from
@@ -517,8 +535,10 @@ mod ca_discovery {
     #[test]
     fn every_candidate_is_selectable_on_its_own() {
         for candidate in CANDIDATE_CA_FILES {
-            let decision = resolve(Some("/nonexistent/baked.pem"), None, &only(&[candidate]));
-            assert_eq!(decision.as_deref(), Some(*candidate));
+            assert_eq!(
+                decide(Some("/nonexistent/baked.pem"), None, &[candidate]).as_deref(),
+                Some(*candidate)
+            );
         }
     }
 
@@ -527,20 +547,25 @@ mod ca_discovery {
     /// never relaxes verification to make a transfer succeed.
     #[test]
     fn no_store_anywhere_changes_nothing() {
-        let decision = resolve(Some("/nonexistent/baked.pem"), None, &only(&[]));
-        assert_eq!(decision, None);
+        assert_eq!(decide(Some("/nonexistent/baked.pem"), None, &[]), None);
     }
 
     /// `$CURL_CA_BUNDLE` outranks BOTH the baked-in default and the probe list: an
-    /// operator naming a bundle is an instruction, not a hint.
+    /// operator naming a bundle is an instruction, not a hint. This is the ranking that
+    /// makes the variable useful on a machine whose baked path exists but points at the
+    /// wrong store, and it is also the ranking that lets a stale value break an otherwise
+    /// working deployment — a documented trade-off, not an accident.
     #[test]
     fn the_environment_override_outranks_everything() {
-        let decision = resolve(
-            Some("/etc/ssl/cert.pem"),
-            Some("/opt/app/ca-bundle.pem"),
-            &only(&["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"]),
+        assert_eq!(
+            decide(
+                Some("/etc/ssl/cert.pem"),
+                Some("/opt/app/ca-bundle.pem"),
+                &["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"],
+            )
+            .as_deref(),
+            Some("/opt/app/ca-bundle.pem")
         );
-        assert_eq!(decision.as_deref(), Some("/opt/app/ca-bundle.pem"));
     }
 
     /// The override is NOT existence-checked, on purpose: a wrong value must fail closed
@@ -549,12 +574,44 @@ mod ca_discovery {
     /// they did not choose and never told about it.
     #[test]
     fn a_missing_environment_override_is_still_honored() {
-        let decision = resolve(
-            Some("/etc/ssl/cert.pem"),
-            Some("/opt/app/typo.pem"),
-            &only(&["/etc/ssl/cert.pem"]),
+        assert_eq!(
+            decide(
+                Some("/etc/ssl/cert.pem"),
+                Some("/opt/app/typo.pem"),
+                &["/etc/ssl/cert.pem"],
+            )
+            .as_deref(),
+            Some("/opt/app/typo.pem")
         );
-        assert_eq!(decision.as_deref(), Some("/opt/app/typo.pem"));
+    }
+
+    /// AN UNDECODABLE OVERRIDE IS HONORED VERBATIM, byte for byte. A Unix path is a
+    /// NUL-free byte string, not text, so an operator whose bundle lives at a path that is
+    /// not valid UTF-8 gets exactly that path handed to libcurl. Decoding lossily would
+    /// point verification at a DIFFERENT file, and treating the value as unset would
+    /// silently substitute a guess from the probe list — the two failure modes the
+    /// fail-closed posture exists to rule out. This is why `resolve` speaks bytes.
+    #[test]
+    fn an_undecodable_environment_override_is_honored_verbatim() {
+        // `\xff\xfe` is not valid UTF-8 — rustc's own `invalid_from_utf8` lint proves it
+        // at compile time, so no runtime assertion is needed (and adding one warns).
+        let raw: &[u8] = b"/opt/app/\xff\xfe-ca.pem";
+        let decision = resolve(
+            Some(b"/etc/ssl/cert.pem"),
+            Some(raw),
+            &|path| path == b"/etc/ssl/cert.pem",
+        );
+        assert_eq!(decision.as_deref(), Some(raw));
+    }
+
+    /// A BAKED PATH IS COMPARED AS BYTES TOO, so an undecodable one is still
+    /// existence-checked rather than mistaken for "this build has no default" — which
+    /// would send a working deployment off to the probe list for a different store.
+    #[test]
+    fn an_undecodable_baked_path_is_still_existence_checked() {
+        // Undecodable by construction; see the sibling test for why that is not asserted.
+        let raw: &[u8] = b"/opt/\xff/cert.pem";
+        assert_eq!(resolve(Some(raw), None, &|path| path == raw), None);
     }
 
     /// A RELATIVE override is refused — a CA store resolved against the process's working
@@ -565,13 +622,13 @@ mod ca_discovery {
     #[test]
     fn unusable_environment_overrides_fall_through() {
         for value in ["", "ca-bundle.pem", "./ca.pem", "../ca.pem", "/opt/ca\0.pem"] {
-            let decision = resolve(
-                Some("/nonexistent/baked.pem"),
-                Some(value),
-                &only(&["/etc/ssl/certs/ca-certificates.crt"]),
-            );
             assert_eq!(
-                decision.as_deref(),
+                decide(
+                    Some("/nonexistent/baked.pem"),
+                    Some(value),
+                    &["/etc/ssl/certs/ca-certificates.crt"],
+                )
+                .as_deref(),
                 Some("/etc/ssl/certs/ca-certificates.crt"),
                 "{value:?} is not a usable CURL_CA_BUNDLE and must not stop discovery"
             );
@@ -582,19 +639,37 @@ mod ca_discovery {
     /// either: the two rules compose, and the answer is still "leave the handle alone".
     #[test]
     fn an_unusable_override_with_nothing_installed_changes_nothing() {
-        let decision = resolve(Some("/nonexistent/baked.pem"), Some("relative.pem"), &only(&[]));
-        assert_eq!(decision, None);
+        assert_eq!(
+            decide(Some("/nonexistent/baked.pem"), Some("relative.pem"), &[]),
+            None
+        );
     }
 
     /// Every probed path is absolute. The whole security argument for this module is that
-    /// it only ever looks at fixed, root-owned-by-convention locations; a relative entry
-    /// would make the trust store depend on the working directory.
+    /// it only ever looks at fixed, root-owned locations; a relative entry would make the
+    /// trust store depend on the working directory.
     #[test]
     fn every_candidate_is_an_absolute_path() {
         for candidate in CANDIDATE_CA_FILES {
             assert!(
                 candidate.starts_with('/'),
                 "{candidate} must be an absolute path"
+            );
+        }
+    }
+
+    /// NO CANDIDATE LIVES UNDER A PACKAGE-MANAGER PREFIX. `/usr/local` is Homebrew's
+    /// prefix on Intel macOS and is left admin-writable there, so a probe under it would
+    /// let anything that can write a Homebrew prefix choose a process's trust anchors —
+    /// which is why curl's own `/usr/local/share/certs/ca-root-nss.crt` is deliberately
+    /// absent from this list (see `crate::ca::CANDIDATE_CA_FILES`). This test is what
+    /// stops it being added back without that argument being made again.
+    #[test]
+    fn no_candidate_lives_under_a_writable_prefix() {
+        for candidate in CANDIDATE_CA_FILES {
+            assert!(
+                !candidate.starts_with("/usr/local/") && !candidate.starts_with("/opt/"),
+                "{candidate} lives under a prefix package managers make writable"
             );
         }
     }
