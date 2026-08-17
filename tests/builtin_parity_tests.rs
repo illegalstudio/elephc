@@ -12,8 +12,9 @@
 use std::collections::BTreeSet;
 
 use elephc_builtin_contract::{
-    aot_signature_profile, aot_support, contracts, eval_signature, eval_support,
-    AotSignatureOverrideReason, BackendImplementation, BackendSupport, BuiltinSignature,
+    aot_signature_profile, aot_support, contracts, eval_signature, eval_support, Area,
+    AotSignatureOverrideReason, BackendImplementation, BackendSupport, BuiltinContract,
+    BuiltinSignature,
 };
 
 /// Verifies all contract surfaces outside the ordinary AOT registry have typed routes.
@@ -28,6 +29,30 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             )
         })
         .collect::<Vec<_>>();
+
+    // `elephc-builtin-contract` publishes the thirty-four prelude-provided `curl_*`
+    // contracts only under its own `curl` feature (see that crate's `catalog_curl`
+    // module doc), and no root feature relays it today — so every runnable
+    // configuration of this test sees zero of them. Partitioning rather than
+    // `cfg!`-ing keeps each assertion below at full strength while surviving the
+    // first root `curl` relay somebody adds on the `pdo-*` precedent: this test
+    // would otherwise fail with an off-by-thirty-four the moment that lands.
+    let (curl_surface, exceptional): (Vec<&BuiltinContract>, Vec<&BuiltinContract>) = exceptional
+        .into_iter()
+        .partition(|contract| matches!(contract.area, Area::Curl));
+    assert!(
+        curl_surface.is_empty() || curl_surface.len() == 34,
+        "the curl PHP surface is published all-or-nothing, saw {}",
+        curl_surface.len()
+    );
+    for contract in &curl_surface {
+        assert_eq!(
+            aot_support(contract),
+            BackendSupport::Implemented(BackendImplementation::Prelude),
+            "{} must reach AOT through the curl prelude",
+            contract.name
+        );
+    }
     assert_eq!(exceptional.len(), 13);
 
     let mut language_constructs = 0;
