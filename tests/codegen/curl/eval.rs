@@ -1310,3 +1310,278 @@ fn eval_curl_setopt_rejects_an_invalid_callback_catchably() {
         |alive"
     );
 }
+
+
+/// FIX ROUND 1 (a): `curl_pause($h, CURLPAUSE_CONT)` FROM INSIDE THE WRITE CALLBACK of the
+/// very transfer it resumes — the documented idiom for unpausing, and the shape that a
+/// nesting-refusing callback frame turned into an uncatchable fatal.
+///
+/// Measured against real PHP 8.4.20 before this was written:
+///
+/// ```text
+/// $paused = curl_pause($h, CURLPAUSE_CONT);   // inside CURLOPT_WRITEFUNCTION
+/// -> int(0);  body=hello-curl  exec=true  errno=0
+/// ```
+///
+/// `0` is `CURLE_OK`. The eval frame machinery therefore has to TOLERATE nesting (save the
+/// outer frame, publish the inner one, restore on the way out) rather than refuse it — see
+/// `crates/elephc-magician/src/interpreter/builtins/curl/callbacks.rs`'s `ActiveFrameGuard`.
+#[test]
+fn eval_curl_pause_from_inside_a_write_callback_matches_php() {
+    if skip_without_curl_native("eval_curl_pause_from_inside_a_write_callback_matches_php") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init("{url}");
+            $body = "";
+            $paused = null;
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($h, $chunk) use (&$body, &$paused) {{
+                $body .= $chunk;
+                $paused = curl_pause($h, CURLPAUSE_CONT);
+                return strlen($chunk);
+            }});
+            $result = curl_exec($ch);
+            return implode("|", [
+                (string) $paused,
+                $body,
+                $result === true ? "true" : "not-true",
+                (string) curl_errno($ch),
+            ]);
+        ');
+        echo $r;
+        "#
+    ));
+    assert_eq!(out, "0|hello-curl|true|0");
+}
+
+/// FIX ROUND 1 (b): a NESTED `curl_exec()` on a DIFFERENT handle from inside a callback.
+///
+/// `crates/elephc-curl/src/callbacks.rs` explicitly drops its table lock before every PHP
+/// call so that "PHP code running inside the callback is free to call `curl_setopt()` /
+/// `curl_exec()` on OTHER handles" — refusing the shape contradicted the bridge's own
+/// documented contract.
+///
+/// Measured against real PHP 8.4.20:
+///
+/// ```text
+/// outer=hello-curl  inner='sub-body'  exec=true  outerErrno=0  innerErrno=0
+/// ```
+#[test]
+fn eval_curl_nested_exec_on_another_handle_inside_a_callback_matches_php() {
+    if skip_without_curl_native(
+        "eval_curl_nested_exec_on_another_handle_inside_a_callback_matches_php",
+    ) {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let outer_url = server.url("/hello");
+    let inner_url = server.url("/a");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $outer = curl_init("{outer_url}");
+            $inner = curl_init("{inner_url}");
+            curl_setopt($inner, CURLOPT_RETURNTRANSFER, true);
+            $outerBody = "";
+            $innerBody = null;
+            curl_setopt($outer, CURLOPT_WRITEFUNCTION, function ($h, $chunk) use (&$outerBody, &$innerBody, $inner) {{
+                $outerBody .= $chunk;
+                $innerBody = curl_exec($inner);
+                return strlen($chunk);
+            }});
+            $result = curl_exec($outer);
+            return implode("|", [
+                $outerBody,
+                (string) $innerBody,
+                $result === true ? "true" : "not-true",
+                (string) curl_errno($outer),
+                (string) curl_errno($inner),
+            ]);
+        ');
+        echo $r;
+        "#
+    ));
+    assert_eq!(out, "hello-curl|body-a|true|0|0");
+}
+
+/// FIX ROUND 1 (c): an INNER callback that THROWS while the OUTER transfer is still in
+/// flight. Both php answers are pinned, because they are different and both matter.
+///
+/// Measured against real PHP 8.4.20:
+///
+/// ```text
+/// caught inside the outer callback:
+///   inner-caught:RuntimeException:inner boom | outer-ok:true | outerErrno=0 | innerErrno=0
+/// NOT caught:
+///   outer-threw:RuntimeException:inner boom uncaught | outerErrno=0 | innerErrno=0
+/// ```
+///
+/// Both fall out of the design rather than being special-cased: the inner throw resumes as
+/// an ordinary `Err` from the INNER `curl_exec()`, so a `try`/`catch` in the outer callback
+/// simply consumes it and the outer transfer continues, while an uncaught one propagates out
+/// of the callable, is parked on the OUTER frame, and aborts the outer transfer. Both errnos
+/// stay `0` because each abort was an exception rather than a `CURLcode`.
+///
+/// THE PARKED THROW MUST TRAVEL WITH ITS OWN FRAME for this to work. A single shared slot
+/// would let the inner throw be picked up at the outer level even in the caught case.
+#[test]
+fn eval_curl_inner_callback_throw_during_an_outer_transfer_matches_php() {
+    if skip_without_curl_native(
+        "eval_curl_inner_callback_throw_during_an_outer_transfer_matches_php",
+    ) {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let outer_url = server.url("/hello");
+    let inner_url = server.url("/a");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $caught = eval('
+            $outer = curl_init("{outer_url}");
+            $inner = curl_init("{inner_url}");
+            curl_setopt($inner, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($inner, CURLOPT_WRITEFUNCTION, function ($h, $c) {{
+                throw new \RuntimeException("inner boom");
+            }});
+            $log = [];
+            curl_setopt($outer, CURLOPT_WRITEFUNCTION, function ($h, $chunk) use (&$log, $inner) {{
+                try {{
+                    curl_exec($inner);
+                    $log[] = "inner-no-throw";
+                }} catch (\Throwable $e) {{
+                    $log[] = "inner-caught:" . get_class($e) . ":" . $e->getMessage();
+                }}
+                return strlen($chunk);
+            }});
+            try {{
+                $r = curl_exec($outer);
+                $log[] = "outer-ok:" . ($r === true ? "true" : "not-true");
+            }} catch (\Throwable $e) {{
+                $log[] = "outer-threw:" . get_class($e) . ":" . $e->getMessage();
+            }}
+            $log[] = "outerErrno=" . curl_errno($outer);
+            $log[] = "innerErrno=" . curl_errno($inner);
+            return implode(" | ", $log);
+        ');
+        echo $caught, "\n";
+        $uncaught = eval('
+            $outer = curl_init("{outer_url}");
+            $inner = curl_init("{inner_url}");
+            curl_setopt($inner, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($inner, CURLOPT_WRITEFUNCTION, function ($h, $c) {{
+                throw new \RuntimeException("inner boom uncaught");
+            }});
+            $log = [];
+            curl_setopt($outer, CURLOPT_WRITEFUNCTION, function ($h, $chunk) use ($inner) {{
+                curl_exec($inner);
+                return strlen($chunk);
+            }});
+            try {{
+                $r = curl_exec($outer);
+                $log[] = "outer-ok:" . ($r === true ? "true" : "not-true");
+            }} catch (\Throwable $e) {{
+                $log[] = "outer-threw:" . get_class($e) . ":" . $e->getMessage();
+            }}
+            $log[] = "outerErrno=" . curl_errno($outer);
+            $log[] = "innerErrno=" . curl_errno($inner);
+            return implode(" | ", $log);
+        ');
+        echo $uncaught;
+        "#
+    ));
+    assert_eq!(
+        out,
+        "inner-caught:RuntimeException:inner boom | outer-ok:true | outerErrno=0 | innerErrno=0\n\
+         outer-threw:RuntimeException:inner boom uncaught | outerErrno=0 | innerErrno=0"
+    );
+}
+
+/// FIX ROUND 1 (d), NEGATIVE CONTROL: nesting tolerance must not turn a genuine libcurl
+/// refusal into a success, and the frame must be properly RESTORED rather than left
+/// published — the two ways "just allow nesting" could go wrong quietly.
+///
+/// - `curl_pause()` on an IDLE handle (one that has never performed) is a real libcurl
+///   rejection. Measured on PHP 8.4.20: `curl_pause($ch, CURLPAUSE_CONT)` answers `43`
+///   (`CURLE_BAD_FUNCTION_ARGUMENT`), not `0`. If the eval path ever started reporting
+///   success here, this fails.
+/// - After a nested transfer has come and gone, the OUTER handle's own callbacks must still
+///   fire — which they only do if `ActiveFrameGuard` restored the outer frame instead of
+///   clearing the slot to null. The outer write callback runs once per chunk, so a lost
+///   outer frame shows up as a truncated body.
+#[test]
+fn eval_curl_nesting_preserves_refusals_and_restores_the_outer_frame() {
+    if skip_without_curl_native("eval_curl_nesting_preserves_refusals_and_restores_the_outer_frame")
+    {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let outer_url = server.url("/hello");
+    let inner_url = server.url("/a");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $idle = curl_init("{outer_url}");
+            $idlePause = curl_pause($idle, CURLPAUSE_CONT);
+
+            $outer = curl_init("{outer_url}");
+            $inner = curl_init("{inner_url}");
+            curl_setopt($inner, CURLOPT_RETURNTRANSFER, true);
+            $chunks = 0;
+            $outerBody = "";
+            curl_setopt($outer, CURLOPT_HEADERFUNCTION, function ($h, $line) use (&$chunks) {{
+                $chunks++;
+                return strlen($line);
+            }});
+            curl_setopt($outer, CURLOPT_WRITEFUNCTION, function ($h, $chunk) use (&$outerBody, $inner) {{
+                // The nested transfer happens BEFORE the outer body is recorded, so a frame
+                // that was cleared rather than restored would lose the rest of this callback
+                // and every later one.
+                curl_exec($inner);
+                $outerBody .= $chunk;
+                return strlen($chunk);
+            }});
+            curl_exec($outer);
+            return implode("|", [
+                (string) $idlePause,
+                $outerBody,
+                $chunks > 0 ? "headers-ran" : "headers-lost",
+            ]);
+        ');
+        echo $r;
+        "#
+    ));
+    assert_eq!(out, "43|hello-curl|headers-ran");
+}
+
+// FIX ROUND 1, MINOR 5 — COVERAGE NOTE, deliberately a note rather than a fixture here.
+//
+// The two PHP 8.5-only curl names (`curl_multi_get_handles`, `curl_share_init_persistent`)
+// are now hidden from `function_exists()` on an older compatibility profile, matching AOT
+// (`crate::interpreter::builtins::registry::names::eval_builtin_hidden_by_php_version`).
+// An end-to-end fixture for it was written and then withdrawn, because
+// `compile_and_run_with_php_version` CANNOT express the scenario: it threads the requested
+// version into prelude injection (so the AOT declaration really is stripped and
+// `function_exists()` really does answer `false` on the AOT side) but never reaches
+// `codegen::set_compile_profile`, which only `src/pipeline.rs` calls. The compiled profile
+// therefore stays at the default, and the harness's own `PHP_VERSION` reports `8.5.0` under
+// `PhpVersion::Php84` — measured directly while writing this. Since `mark_eval_php_version`
+// publishes THAT profile to the interpreter, no eval-side version gate can be observed
+// through this helper at all.
+//
+// That is a PRE-EXISTING HARNESS GAP affecting the AOT side identically, not something the
+// eval work introduced, and closing it would mean changing a shared helper every
+// `compile_and_run_with_php_version` fixture depends on (the PDO surface tests assert on
+// version-sensitive constants). The eval half is covered precisely and deterministically
+// instead by `crate::interpreter::tests::builtins_curl`'s
+// `php_85_only_curl_names_are_hidden_from_introspection_below_85` and
+// `..._are_visible_on_85` (magician unit tests, `--features curl`), which drive the profile
+// directly through `eval_php_profile::scoped_profile`. The AOT half already has its own
+// coverage in `tests/error_tests/curl.rs`.

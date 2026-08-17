@@ -122,13 +122,13 @@ fn eval_curl_multi_exec_perform(
         .stream_resources()
         .curl_multi_attached(multi_id)
         .unwrap_or_default();
-    let (running, code) =
+    let ((running, code), parked) =
         eval_curl_with_callback_frame(&attached, context, values, || ffi::multi_perform(raw))?;
     // Consumed HERE rather than at the end of the driving loop, matching the AOT runtime's
     // own re-raise point (`__rt_curl_multi_exec`): the throwable belongs to the
     // `curl_multi_exec()` call that ran the callback, and a program that never loops again
     // must still see it.
-    eval_curl_rethrow_pending_callback_throw()?;
+    eval_curl_resume_callback_throw(parked)?;
     Ok((running, code))
 }
 

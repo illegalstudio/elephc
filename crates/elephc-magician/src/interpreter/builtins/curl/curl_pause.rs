@@ -63,9 +63,17 @@ fn eval_curl_pause_result(
     // `__rt_curl_easy_pause` is one of the three sites that calls
     // `__rt_curl_rethrow_pending` afterwards (`src/codegen_support/runtime/curl/callbacks.rs`),
     // which only makes sense because a callback can genuinely throw during a pause.
-    let code = eval_curl_with_callback_frame(&[table_id], context, values, || {
+    //
+    // THE COMMON CASE IS THE NESTED ONE, and it is why the frame machinery has to tolerate
+    // nesting rather than refuse it: `curl_pause($h, CURLPAUSE_CONT)` is normally called
+    // FROM INSIDE the write callback of the very transfer it resumes. Measured on real PHP
+    // 8.4.20, that returns `0` and the transfer completes with the body intact. A frame that
+    // refused to nest turned exactly that idiom into an uncatchable fatal; publishing a
+    // nested frame here is harmless — it carries the same handle and the same slots as the
+    // one already published, and the guard restores the outer frame on the way out.
+    let (code, parked) = eval_curl_with_callback_frame(&[table_id], context, values, || {
         ffi::easy_pause(raw, bitmask)
     })?;
-    eval_curl_rethrow_pending_callback_throw()?;
+    eval_curl_resume_callback_throw(parked)?;
     values.int(i64::from(code))
 }

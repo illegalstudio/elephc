@@ -58,10 +58,10 @@ fn eval_curl_exec_result(
     // is decided: a callback that threw aborted the transfer, so `easy_perform` answers
     // `false` for a reason that is a PHP exception rather than a `CURLcode`. Reporting
     // `false` first would swallow the throwable.
-    let performed = eval_curl_with_callback_frame(&[table_id], context, values, || {
+    let (performed, parked) = eval_curl_with_callback_frame(&[table_id], context, values, || {
         ffi::easy_perform(raw)
     })?;
-    eval_curl_rethrow_pending_callback_throw()?;
+    eval_curl_resume_callback_throw(parked)?;
     if !performed {
         return values.bool_value(false);
     }
