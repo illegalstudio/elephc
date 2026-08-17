@@ -83,7 +83,8 @@ jobs:
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
-        # libcurl/libssl/libcrypto/libz, see managed-native-smoke). Build
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -156,7 +157,8 @@ jobs:
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
-        # libcurl/libssl/libcrypto/libz, see managed-native-smoke). Build
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -224,7 +226,8 @@ jobs:
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
-        # libcurl/libssl/libcrypto/libz, see managed-native-smoke). Build
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -667,7 +670,8 @@ jobs:
             "$pdo_test_binary" "${{ matrix.shard }}" 4
 
   # curl fixtures each link the elephc_curl bridge against a real, managed
-  # libcurl/openssl/zlib build (see tests/codegen/support/curl_native.rs) that the
+  # libcurl/libssh2/nghttp2/openssl/zlib build (see
+  # tests/codegen/support/curl_native.rs) that the
   # ordinary shards' machines don't provision, so give them their own jobs that
   # materialize that native cache first, cached across runs by an actions/cache keyed
   # on the committed lock plus the recipe sources that decide what gets built. Three
@@ -679,8 +683,9 @@ jobs:
   #   (b) the eval+curl duplicate-symbol link shape (elephc_magician and elephc_curl
   #       both linked into one program, exercised by codegen::curl::eval) is
   #       unverified on the Linux container's toolchain/ld.
-  #   (c) this is also the first time `elephc native install` fetches curl/openssl/zlib
-  #       source over the network and builds it from scratch *inside* the elephc-ci
+  #   (c) this is also the first time `elephc native install` fetches
+  #       curl/libssh2/nghttp2/openssl/zlib source over the network and builds it
+  #       from scratch *inside* the elephc-ci
   #       container image on Linux -- managed-native-smoke only proves those recipes
   #       on the bare ubuntu-24.04(-arm) runner images (no `container:` there).
   #       openssl's Configure needs `perl`, but that part is not actually at risk:
@@ -708,7 +713,7 @@ jobs:
       - name: Install test-only native providers
         run: brew install pcre2
 
-      - name: Cache managed native curl/openssl/zlib
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Deliberately the shared default path (unlike managed-native-smoke, which
         # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
         # from-empty install): here we *want* one warm, reusable cache root that
@@ -718,7 +723,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
-          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             curl-native-macos-aarch64-
 
@@ -742,9 +747,10 @@ jobs:
             --extract-overwrite --no-run \
             -E 'binary(codegen_tests)'
 
-      - name: Materialize managed native curl (curl, openssl, zlib)
+      - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
-        # examples/curl-get/elephc.lock (curl 8.21.0, openssl 3.5.7, zlib 1.3.2) --
+        # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
+        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
@@ -784,7 +790,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache managed native curl/openssl/zlib
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Deliberately the shared default path (unlike managed-native-smoke, which
         # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
         # from-empty install): here we *want* one warm, reusable cache root that
@@ -794,7 +800,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
-          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             curl-native-linux-x86_64-
 
@@ -818,9 +824,10 @@ jobs:
             --extract-overwrite --no-run \
             -E 'binary(codegen_tests)'
 
-      - name: Materialize managed native curl (curl, openssl, zlib)
+      - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
-        # examples/curl-get/elephc.lock (curl 8.21.0, openssl 3.5.7, zlib 1.3.2) --
+        # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
+        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
@@ -860,7 +867,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache managed native curl/openssl/zlib
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Deliberately the shared default path (unlike managed-native-smoke, which
         # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
         # from-empty install): here we *want* one warm, reusable cache root that
@@ -870,7 +877,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
-          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             curl-native-linux-aarch64-
 
@@ -894,9 +901,10 @@ jobs:
             --extract-overwrite --no-run \
             -E 'binary(codegen_tests)'
 
-      - name: Materialize managed native curl (curl, openssl, zlib)
+      - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
-        # examples/curl-get/elephc.lock (curl 8.21.0, openssl 3.5.7, zlib 1.3.2) --
+        # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
+        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
         # more deterministic for a test job than `add`, which resolves against the
         # manifest and can rewrite the lock. Artifacts are content-addressed by
         # (recipe, source sha, target, toolchain fingerprint) under the cache
@@ -1193,16 +1201,17 @@ jobs:
             --target "${{ matrix.target }}" \
             --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
 
-      - name: Materialize catalog curl (and its openssl/zlib dependencies) from verified source
-        # curl's recipe declares openssl and zlib as dependencies (see
+      - name: Materialize catalog curl (and its libssh2/nghttp2/openssl/zlib dependencies) from verified source
+        # curl's recipe declares libssh2, nghttp2, openssl and zlib as
+        # dependencies, and libssh2 declares openssl and zlib in turn (see
         # src/native_deps/catalog.rs), so this one `native add` also
-        # materializes both from verified source. A cold build of all three
-        # measured ~4.5 minutes on a fast local machine, comfortably inside
+        # materializes all four from verified source. A cold build of the whole
+        # chain measured ~6 minutes on a fast local machine, comfortably inside
         # this job's timeout; see `crates/elephc-curl/build.rs` for why the
         # elephc_curl BRIDGE staticlib (built via BRIDGE_CRATES elsewhere)
-        # still needs these raw libcurl/libssl/libcrypto/libz archives at
-        # PHP-program link time even though `cargo build -p elephc-curl`
-        # itself does not.
+        # still needs these raw libcurl/libssh2/libssl/libcrypto/libz/libnghttp2
+        # archives at PHP-program link time even though `cargo build -p
+        # elephc-curl` itself does not.
         shell: bash
         run: |
           ./target/debug/elephc native add curl \
