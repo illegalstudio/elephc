@@ -19,13 +19,8 @@
 //!   already produced its output by the time this returns.
 
 builtin! {
-    name: "__elephc_curl_easy_perform",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_easy_perform",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyPerform,
     ),
-    summary: "Runs a libcurl transfer to completion for the curl prelude.",
-    internal: true,
 }

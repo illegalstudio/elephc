@@ -7,9 +7,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_multi_errno",
+    contract: "curl_multi_errno",
     area: Curl,
-    params: [multi_handle],
     direct: Curl,
     values: Curl,
 }

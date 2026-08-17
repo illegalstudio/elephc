@@ -13,12 +13,9 @@
 
 use crate::curl_ffi as ffi;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "curl_multi_select",
+    contract: "curl_multi_select",
     area: Curl,
-    params: [multi_handle, timeout = EvalBuiltinDefaultValue::Float(1.0)],
     direct: Curl,
     values: Curl,
 }

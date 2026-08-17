@@ -7,9 +7,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_reset",
+    contract: "curl_reset",
     area: Curl,
-    params: [handle],
     direct: Curl,
     values: Curl,
 }

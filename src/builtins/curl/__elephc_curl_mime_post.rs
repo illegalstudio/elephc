@@ -15,13 +15,8 @@
 //!   any) is left untouched.
 
 builtin! {
-    name: "__elephc_curl_mime_post",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_mime_post",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMimePost,
     ),
-    summary: "Attaches the pending curl_mime builder via CURLOPT_MIMEPOST for the curl prelude.",
-    internal: true,
 }

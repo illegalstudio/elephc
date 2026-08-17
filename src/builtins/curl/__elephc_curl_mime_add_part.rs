@@ -13,13 +13,8 @@
 //! - Fails when `__elephc_curl_mime_new` was never called for this handle.
 
 builtin! {
-    name: "__elephc_curl_mime_add_part",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_mime_add_part",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMimeAddPart,
     ),
-    summary: "Appends a fresh part to the pending curl_mime builder for the curl prelude.",
-    internal: true,
 }

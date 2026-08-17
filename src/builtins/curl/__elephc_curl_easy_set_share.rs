@@ -28,13 +28,8 @@
 //!   `CurlHandle` to `CurlShareHandle` is needed on top of it.
 
 builtin! {
-    name: "__elephc_curl_easy_set_share",
-    area: Curl,
-    params: [handle: Mixed, share: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_easy_set_share",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasySetShare,
     ),
-    summary: "Attaches a libcurl easy handle to a share handle for curl_setopt()'s CURLOPT_SHARE.",
-    internal: true,
 }

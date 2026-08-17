@@ -19,13 +19,8 @@
 //!   libcurl rejects answers `false` rather than an inert `true`.
 
 builtin! {
-    name: "__elephc_curl_easy_setopt_long",
-    area: Curl,
-    params: [handle: Mixed, option: Int, value: Int],
-    returns: Bool,
+    contract: "__elephc_curl_easy_setopt_long",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasySetoptLong,
     ),
-    summary: "Applies an integer-valued libcurl option for the curl prelude.",
-    internal: true,
 }

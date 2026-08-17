@@ -18,13 +18,8 @@
 //!   `false`, so returning one would be a signature it does not have.
 
 builtin! {
-    name: "__elephc_curl_multi_init",
-    area: Curl,
-    params: [],
-    returns: Mixed,
+    contract: "__elephc_curl_multi_init",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiInit,
     ),
-    summary: "Allocates a libcurl multi handle for the curl prelude's curl_multi_init().",
-    internal: true,
 }

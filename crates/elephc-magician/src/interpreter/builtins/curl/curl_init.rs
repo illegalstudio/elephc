@@ -6,12 +6,9 @@
 
 use crate::curl_ffi as ffi;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "curl_init",
+    contract: "curl_init",
     area: Curl,
-    params: [url = EvalBuiltinDefaultValue::Null],
     direct: Curl,
     values: Curl,
 }

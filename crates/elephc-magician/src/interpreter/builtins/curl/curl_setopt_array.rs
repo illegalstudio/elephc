@@ -5,9 +5,8 @@
 //! - `crate::interpreter::builtins::curl` dispatch.
 
 eval_builtin! {
-    name: "curl_setopt_array",
+    contract: "curl_setopt_array",
     area: Curl,
-    params: [handle, options],
     direct: Curl,
     values: Curl,
 }

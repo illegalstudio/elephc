@@ -22,13 +22,8 @@
 //!   probe failed); the prelude turns that into PHP's `false`.
 
 builtin! {
-    name: "__elephc_curl_version",
-    area: Curl,
-    params: [],
-    returns: Str,
+    contract: "__elephc_curl_version",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlVersion,
     ),
-    summary: "Reports the linked libcurl's version info as JSON for the curl prelude.",
-    internal: true,
 }

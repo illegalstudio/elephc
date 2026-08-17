@@ -18,13 +18,8 @@
 //!   error) alongside libcurl's own options; the prelude copies the object-side mirrors.
 
 builtin! {
-    name: "__elephc_curl_easy_copy",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Mixed,
+    contract: "__elephc_curl_easy_copy",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyCopy,
     ),
-    summary: "Duplicates a libcurl easy handle for the curl prelude.",
-    internal: true,
 }

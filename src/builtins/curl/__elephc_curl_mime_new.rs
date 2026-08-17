@@ -14,13 +14,8 @@
 //!   whatever mime is already ATTACHED from an earlier successful call.
 
 builtin! {
-    name: "__elephc_curl_mime_new",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_mime_new",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMimeNew,
     ),
-    summary: "Starts a fresh curl_mime builder for the curl prelude's multipart POSTFIELDS walker.",
-    internal: true,
 }

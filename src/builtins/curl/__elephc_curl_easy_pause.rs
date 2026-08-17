@@ -18,13 +18,8 @@
 //!   PHP behaves the same, not because this build can pause a blocking `curl_exec()`.
 
 builtin! {
-    name: "__elephc_curl_easy_pause",
-    area: Curl,
-    params: [handle: Mixed, flags: Int],
-    returns: Int,
+    contract: "__elephc_curl_easy_pause",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyPause,
     ),
-    summary: "Applies a CURLPAUSE bitmask to a libcurl easy handle for the curl prelude.",
-    internal: true,
 }

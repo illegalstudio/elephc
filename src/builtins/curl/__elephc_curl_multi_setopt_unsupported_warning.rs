@@ -17,13 +17,8 @@
 //!   it formats a string through `__rt_diag_warning` and never touches libcurl.
 
 builtin! {
-    name: "__elephc_curl_multi_setopt_unsupported_warning",
-    area: Curl,
-    params: [option: Int],
-    returns: Void,
+    contract: "__elephc_curl_multi_setopt_unsupported_warning",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiSetoptUnsupportedWarning,
     ),
-    summary: "Warns that a curl multi option is unsupported by this build, for the curl prelude.",
-    internal: true,
 }

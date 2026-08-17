@@ -17,9 +17,8 @@
 //!   at compile time instead).
 
 eval_builtin! {
-    name: "curl_close",
+    contract: "curl_close",
     area: Curl,
-    params: [handle],
     direct: Curl,
     values: Curl,
 }

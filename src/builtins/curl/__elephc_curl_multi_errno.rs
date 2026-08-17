@@ -13,13 +13,8 @@
 //!   the two must never be formatted through each other's `strerror`.
 
 builtin! {
-    name: "__elephc_curl_multi_errno",
-    area: Curl,
-    params: [multi: Mixed],
-    returns: Int,
+    contract: "__elephc_curl_multi_errno",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiErrno,
     ),
-    summary: "Reports a libcurl multi handle's last CURLMcode for the curl prelude.",
-    internal: true,
 }

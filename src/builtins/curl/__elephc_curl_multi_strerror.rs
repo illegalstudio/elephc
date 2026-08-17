@@ -15,13 +15,8 @@
 //! - Takes NO handle, like its easy sibling: a code's text depends on nothing else.
 
 builtin! {
-    name: "__elephc_curl_multi_strerror",
-    area: Curl,
-    params: [error_code: Int],
-    returns: Str,
+    contract: "__elephc_curl_multi_strerror",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiStrerror,
     ),
-    summary: "Reports libcurl's message for a CURLMcode for the curl prelude.",
-    internal: true,
 }

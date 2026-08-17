@@ -27,13 +27,8 @@
 //!   documents, turned into a thrown `RuntimeException` by the prelude.
 
 builtin! {
-    name: "__elephc_curl_share_init_persistent",
-    area: Curl,
-    params: [lock_data_csv: Str],
-    returns: Mixed,
+    contract: "__elephc_curl_share_init_persistent",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlShareInitPersistent,
     ),
-    summary: "Builds or finds the process-lifetime share for curl_share_init_persistent() (PHP 8.5).",
-    internal: true,
 }

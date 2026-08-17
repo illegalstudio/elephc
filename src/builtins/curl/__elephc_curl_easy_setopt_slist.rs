@@ -22,13 +22,8 @@
 //!   or teardown.
 
 builtin! {
-    name: "__elephc_curl_easy_setopt_slist",
-    area: Curl,
-    params: [handle: Mixed, option: Int, items: Str],
-    returns: Bool,
+    contract: "__elephc_curl_easy_setopt_slist",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasySetoptSlist,
     ),
-    summary: "Applies a string-list libcurl option for the curl prelude.",
-    internal: true,
 }

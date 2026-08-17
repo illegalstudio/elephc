@@ -15,13 +15,8 @@
 //!   which is PHP's own contract; the runtime helper sign-extends so `-1` stays `-1`.
 
 builtin! {
-    name: "__elephc_curl_multi_select",
-    area: Curl,
-    params: [multi: Mixed, timeout_ms: Int],
-    returns: Int,
+    contract: "__elephc_curl_multi_select",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiSelect,
     ),
-    summary: "Waits for a libcurl multi handle's transfers to be ready, for the curl prelude.",
-    internal: true,
 }

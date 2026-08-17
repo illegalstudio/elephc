@@ -12,9 +12,8 @@
 //!   freed.
 
 eval_builtin! {
-    name: "curl_multi_close",
+    contract: "curl_multi_close",
     area: Curl,
-    params: [multi_handle],
     direct: Curl,
     values: Curl,
 }

@@ -15,13 +15,8 @@
 //!   silently truncating at the NUL.
 
 builtin! {
-    name: "__elephc_curl_easy_setopt_str",
-    area: Curl,
-    params: [handle: Mixed, option: Int, value: Str],
-    returns: Bool,
+    contract: "__elephc_curl_easy_setopt_str",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasySetoptStr,
     ),
-    summary: "Applies a string-valued libcurl option for the curl prelude.",
-    internal: true,
 }

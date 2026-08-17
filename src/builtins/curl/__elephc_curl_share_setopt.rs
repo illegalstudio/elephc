@@ -19,13 +19,8 @@
 //!   `curl_setopt()`/`curl_multi_setopt()`'s tables are: `curl_share_setopt` is variadic.
 
 builtin! {
-    name: "__elephc_curl_share_setopt",
-    area: Curl,
-    params: [share: Mixed, option: Int, value: Int],
-    returns: Int,
+    contract: "__elephc_curl_share_setopt",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlShareSetopt,
     ),
-    summary: "Applies an integer-valued CURLSHOPT option to a share handle for the curl prelude.",
-    internal: true,
 }

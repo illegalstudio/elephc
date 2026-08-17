@@ -27,9 +27,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_share_init_persistent",
+    contract: "curl_share_init_persistent",
     area: Curl,
-    params: [share_options],
     direct: Curl,
     values: Curl,
 }

@@ -14,13 +14,8 @@
 //!   never be formatted through each other's `strerror`.
 
 builtin! {
-    name: "__elephc_curl_share_errno",
-    area: Curl,
-    params: [share: Mixed],
-    returns: Int,
+    contract: "__elephc_curl_share_errno",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlShareErrno,
     ),
-    summary: "Reports a libcurl share handle's last CURLSHcode for the curl prelude.",
-    internal: true,
 }

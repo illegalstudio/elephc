@@ -21,13 +21,8 @@
 //!   `__elephc_curl_easy_set_callback`, which does.
 
 builtin! {
-    name: "__elephc_curl_adapter_addr",
-    area: Curl,
-    params: [],
-    returns: Mixed,
+    contract: "__elephc_curl_adapter_addr",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlAdapterAddr,
     ),
-    summary: "Reports the address of the codegen libcurl-callback adapter.",
-    internal: true,
 }

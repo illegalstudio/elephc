@@ -15,13 +15,8 @@
 //!   not a status query.
 
 builtin! {
-    name: "__elephc_curl_mime_abort",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_mime_abort",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMimeAbort,
     ),
-    summary: "Discards the pending curl_mime builder without attaching it for the curl prelude.",
-    internal: true,
 }

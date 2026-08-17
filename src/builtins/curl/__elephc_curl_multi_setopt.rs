@@ -18,13 +18,8 @@
 //!   function pointer. Same memory-safety boundary `curl_setopt()`'s option table is.
 
 builtin! {
-    name: "__elephc_curl_multi_setopt",
-    area: Curl,
-    params: [multi: Mixed, option: Int, value: Int],
-    returns: Int,
+    contract: "__elephc_curl_multi_setopt",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiSetopt,
     ),
-    summary: "Applies an integer-valued CURLMOPT option to a multi handle for the curl prelude.",
-    internal: true,
 }

@@ -20,7 +20,10 @@ crate-type = ["staticlib", "rlib"]
 # including every existing eval codegen test, keeps building the exact same
 # curl-free archive this crate has always produced.
 [features]
-curl = []
+# Also publishes the shared catalog's PHP-visible `curl_*` contracts: the
+# eval homes below bind to them by ID, and the catalog's backend-coverage
+# audit requires the contract set and the binding set to move together.
+curl = ["elephc-builtin-contract/curl"]
 
 [dependencies]
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }

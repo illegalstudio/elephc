@@ -7,9 +7,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_version",
+    contract: "curl_version",
     area: Curl,
-    params: [],
     direct: Curl,
     values: Curl,
 }

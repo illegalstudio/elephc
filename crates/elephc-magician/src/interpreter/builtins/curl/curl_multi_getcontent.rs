@@ -17,9 +17,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_multi_getcontent",
+    contract: "curl_multi_getcontent",
     area: Curl,
-    params: [handle],
     direct: Curl,
     values: Curl,
 }

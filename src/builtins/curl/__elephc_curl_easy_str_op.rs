@@ -24,13 +24,8 @@
 //!   prelude's `=== false` checks work without special-casing.
 
 builtin! {
-    name: "__elephc_curl_easy_str_op",
-    area: Curl,
-    params: [handle: Mixed, op: Int, text: Str, number: Int],
-    returns: Mixed,
+    contract: "__elephc_curl_easy_str_op",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyStrOp,
     ),
-    summary: "Runs a string-producing libcurl easy-handle operation for the curl prelude.",
-    internal: true,
 }

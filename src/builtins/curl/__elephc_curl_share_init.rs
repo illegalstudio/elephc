@@ -21,13 +21,8 @@
 //!   arm to answer through, the same divergence `curl_multi_init()` already documents.
 
 builtin! {
-    name: "__elephc_curl_share_init",
-    area: Curl,
-    params: [],
-    returns: Mixed,
+    contract: "__elephc_curl_share_init",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlShareInit,
     ),
-    summary: "Allocates a libcurl share handle for the curl prelude's curl_share_init().",
-    internal: true,
 }

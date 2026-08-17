@@ -25,13 +25,8 @@
 //!   surrounding `fopen()` streams.
 
 builtin! {
-    name: "__elephc_curl_easy_init",
-    area: Curl,
-    params: [],
-    returns: Mixed,
+    contract: "__elephc_curl_easy_init",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyInit,
     ),
-    summary: "Allocates a raw libcurl easy handle for the curl prelude.",
-    internal: true,
 }

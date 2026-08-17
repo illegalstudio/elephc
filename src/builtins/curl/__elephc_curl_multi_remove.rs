@@ -14,13 +14,8 @@
 //!   so nothing about this call touches the ownership chain.
 
 builtin! {
-    name: "__elephc_curl_multi_remove",
-    area: Curl,
-    params: [multi: Mixed, handle: Mixed],
-    returns: Int,
+    contract: "__elephc_curl_multi_remove",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiRemove,
     ),
-    summary: "Detaches a libcurl easy handle from a multi handle for the curl prelude.",
-    internal: true,
 }

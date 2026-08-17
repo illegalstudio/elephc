@@ -16,13 +16,8 @@
 //!   relies on, and comfortably above every message libcurl ships.
 
 builtin! {
-    name: "__elephc_curl_strerror",
-    area: Curl,
-    params: [code: Int],
-    returns: Str,
+    contract: "__elephc_curl_strerror",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlStrerror,
     ),
-    summary: "Reports libcurl's message for a CURLcode for the curl prelude.",
-    internal: true,
 }

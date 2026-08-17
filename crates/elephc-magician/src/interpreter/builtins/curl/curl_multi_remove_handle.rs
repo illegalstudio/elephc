@@ -12,9 +12,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_multi_remove_handle",
+    contract: "curl_multi_remove_handle",
     area: Curl,
-    params: [multi_handle, handle],
     direct: Curl,
     values: Curl,
 }

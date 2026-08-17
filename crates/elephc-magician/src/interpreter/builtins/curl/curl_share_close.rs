@@ -13,9 +13,8 @@
 //!   teardown-order comment in `crate::stream_resources::types`.
 
 eval_builtin! {
-    name: "curl_share_close",
+    contract: "curl_share_close",
     area: Curl,
-    params: [share_handle],
     direct: Curl,
     values: Curl,
 }

@@ -16,13 +16,8 @@
 //!   object-side `RETURNTRANSFER` and `CURLOPT_PRIVATE` mirrors.
 
 builtin! {
-    name: "__elephc_curl_easy_reset",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_easy_reset",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyReset,
     ),
-    summary: "Resets a libcurl easy handle's options for the curl prelude.",
-    internal: true,
 }

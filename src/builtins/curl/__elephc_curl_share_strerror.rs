@@ -16,13 +16,8 @@
 //! - Takes NO handle, like its easy/multi siblings: a code's text depends on nothing else.
 
 builtin! {
-    name: "__elephc_curl_share_strerror",
-    area: Curl,
-    params: [error_code: Int],
-    returns: Str,
+    contract: "__elephc_curl_share_strerror",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlShareStrerror,
     ),
-    summary: "Reports libcurl's message for a CURLSHcode for the curl prelude.",
-    internal: true,
 }

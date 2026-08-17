@@ -7,9 +7,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_share_init",
+    contract: "curl_share_init",
     area: Curl,
-    params: [],
     direct: Curl,
     values: Curl,
 }

@@ -36,6 +36,8 @@ pub fn contracts() -> &'static [BuiltinContract] {
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
+            #[cfg(feature = "curl")]
+            contracts.extend_from_slice(crate::catalog_curl::CURL_CONTRACTS);
             for contract in &mut contracts {
                 contract.requirements = crate::requirements::fixed_requirements(contract.id);
             }
@@ -134,7 +136,10 @@ mod tests {
     /// Verifies the shared catalog validates and exposes every compiler/eval surface.
     #[test]
     fn catalog_is_valid_and_complete_for_all_contract_surfaces() {
-        assert_eq!(contracts().len(), 544);
+        // The PHP-visible `curl_*` surface is published only with the `curl`
+        // feature; see `crate::catalog_curl`'s module doc.
+        let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
+        assert_eq!(contracts().len(), 587 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

@@ -27,13 +27,8 @@
 //!   entry point stays one fixed-shape C call.
 
 builtin! {
-    name: "__elephc_curl_easy_set_callback",
-    area: Curl,
-    params: [handle: Mixed, slot: Int, descriptor: Mixed, self: Mixed, adapter: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_easy_set_callback",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasySetCallback,
     ),
-    summary: "Installs or clears a PHP callable on a libcurl callback option.",
-    internal: true,
 }

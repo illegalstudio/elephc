@@ -14,13 +14,8 @@
 //!   sibling documents.
 
 builtin! {
-    name: "__elephc_curl_easy_getinfo_double",
-    area: Curl,
-    params: [handle: Mixed, info: Int],
-    returns: Mixed,
+    contract: "__elephc_curl_easy_getinfo_double",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyGetinfoDouble,
     ),
-    summary: "Reads a double-typed CURLINFO field for the curl prelude.",
-    internal: true,
 }

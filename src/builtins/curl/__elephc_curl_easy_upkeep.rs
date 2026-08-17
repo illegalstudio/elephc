@@ -12,13 +12,8 @@
 //!   comparison, so this builtin's answer is already a clean `0`/`1`.
 
 builtin! {
-    name: "__elephc_curl_easy_upkeep",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Bool,
+    contract: "__elephc_curl_easy_upkeep",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyUpkeep,
     ),
-    summary: "Runs libcurl connection upkeep on an easy handle for the curl prelude.",
-    internal: true,
 }

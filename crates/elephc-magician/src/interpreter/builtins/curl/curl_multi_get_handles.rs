@@ -19,9 +19,8 @@
 //!   id would double-free it.
 
 eval_builtin! {
-    name: "curl_multi_get_handles",
+    contract: "curl_multi_get_handles",
     area: Curl,
-    params: [multi_handle],
     direct: Curl,
     values: Curl,
 }

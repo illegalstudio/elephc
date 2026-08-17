@@ -21,9 +21,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_multi_setopt",
+    contract: "curl_multi_setopt",
     area: Curl,
-    params: [multi_handle, option, value],
     direct: Curl,
     values: Curl,
 }

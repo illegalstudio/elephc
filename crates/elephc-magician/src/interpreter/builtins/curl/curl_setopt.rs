@@ -11,9 +11,8 @@
 //!   and what is deferred.
 
 eval_builtin! {
-    name: "curl_setopt",
+    contract: "curl_setopt",
     area: Curl,
-    params: [handle, option, value],
     direct: Curl,
     values: Curl,
 }

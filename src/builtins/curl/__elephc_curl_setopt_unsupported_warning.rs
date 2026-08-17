@@ -20,13 +20,8 @@
 //!   means a `CurlHandle` already exists, which already pulled the bridge in.
 
 builtin! {
-    name: "__elephc_curl_setopt_unsupported_warning",
-    area: Curl,
-    params: [option: Int],
-    returns: Void,
+    contract: "__elephc_curl_setopt_unsupported_warning",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlSetoptUnsupportedWarning,
     ),
-    summary: "Warns that a curl option is unsupported by this build, for the curl prelude.",
-    internal: true,
 }

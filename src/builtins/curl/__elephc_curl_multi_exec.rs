@@ -19,13 +19,8 @@
 //!   and sign- or zero-extending it would destroy the high half.
 
 builtin! {
-    name: "__elephc_curl_multi_exec",
-    area: Curl,
-    params: [multi: Mixed],
-    returns: Int,
+    contract: "__elephc_curl_multi_exec",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiExec,
     ),
-    summary: "Runs a libcurl multi handle's attached transfers for the curl prelude.",
-    internal: true,
 }

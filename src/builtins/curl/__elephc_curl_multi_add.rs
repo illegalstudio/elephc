@@ -15,13 +15,8 @@
 //!   `_php_curl_cleanup_handle` on the same call; see `crates/elephc-curl/src/multi.rs`.
 
 builtin! {
-    name: "__elephc_curl_multi_add",
-    area: Curl,
-    params: [multi: Mixed, handle: Mixed],
-    returns: Int,
+    contract: "__elephc_curl_multi_add",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiAdd,
     ),
-    summary: "Attaches a libcurl easy handle to a multi handle for the curl prelude.",
-    internal: true,
 }

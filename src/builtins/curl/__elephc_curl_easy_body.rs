@@ -19,13 +19,8 @@
 //!   captured body really is `""`.
 
 builtin! {
-    name: "__elephc_curl_easy_body",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Str,
+    contract: "__elephc_curl_easy_body",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyBody,
     ),
-    summary: "Takes the captured response body from a libcurl handle for the curl prelude.",
-    internal: true,
 }

@@ -22,13 +22,8 @@
 //!   consults lives in the bridge.
 
 builtin! {
-    name: "__elephc_curl_option_kind",
-    area: Curl,
-    params: [option: Int],
-    returns: Int,
+    contract: "__elephc_curl_option_kind",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlOptionKind,
     ),
-    summary: "Classifies a curl_setopt() option number for the curl prelude.",
-    internal: true,
 }

@@ -16,13 +16,8 @@
 //!   previous failure's text can never be reported as a later success's.
 
 builtin! {
-    name: "__elephc_curl_easy_error",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Str,
+    contract: "__elephc_curl_easy_error",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyError,
     ),
-    summary: "Reports the last libcurl error message for the curl prelude.",
-    internal: true,
 }

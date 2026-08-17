@@ -23,13 +23,9 @@
 
 use crate::curl_ffi as ffi;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "curl_multi_info_read",
+    contract: "curl_multi_info_read",
     area: Curl,
-    params: [multi_handle, queued_messages: by_ref = EvalBuiltinDefaultValue::Null],
-    by_ref: [queued_messages],
     direct: Curl,
     values: Curl,
 }

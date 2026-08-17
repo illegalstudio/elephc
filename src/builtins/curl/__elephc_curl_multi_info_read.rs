@@ -18,13 +18,8 @@
 //!   helper. `crates/elephc-curl/src/multi.rs` documents the field codes.
 
 builtin! {
-    name: "__elephc_curl_multi_info_read",
-    area: Curl,
-    params: [multi: Mixed, field: Int],
-    returns: Int,
+    contract: "__elephc_curl_multi_info_read",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMultiInfoRead,
     ),
-    summary: "Reads one field of a libcurl multi handle's completion queue for the curl prelude.",
-    internal: true,
 }

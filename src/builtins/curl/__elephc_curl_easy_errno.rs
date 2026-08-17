@@ -14,13 +14,8 @@
 //!   (`CURLE_OK`), matching PHP's initial state for a fresh handle.
 
 builtin! {
-    name: "__elephc_curl_easy_errno",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Int,
+    contract: "__elephc_curl_easy_errno",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyErrno,
     ),
-    summary: "Reports the last libcurl error code for the curl prelude.",
-    internal: true,
 }

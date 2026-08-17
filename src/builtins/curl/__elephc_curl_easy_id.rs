@@ -20,13 +20,8 @@
 //!   lowering is the unbox and nothing else — no bridge entry point, no allocation.
 
 builtin! {
-    name: "__elephc_curl_easy_id",
-    area: Curl,
-    params: [handle: Mixed],
-    returns: Int,
+    contract: "__elephc_curl_easy_id",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyId,
     ),
-    summary: "Reads a libcurl easy handle's bridge id for the curl prelude's identity map.",
-    internal: true,
 }

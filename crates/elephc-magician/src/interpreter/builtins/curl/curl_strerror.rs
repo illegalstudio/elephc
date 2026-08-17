@@ -14,9 +14,8 @@
 use crate::curl_ffi as ffi;
 
 eval_builtin! {
-    name: "curl_strerror",
+    contract: "curl_strerror",
     area: Curl,
-    params: [error_code],
     direct: Curl,
     values: Curl,
 }

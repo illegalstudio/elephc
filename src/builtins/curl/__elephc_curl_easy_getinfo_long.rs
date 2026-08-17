@@ -22,13 +22,8 @@
 //!   an array, so the risk is smaller, but there is no need to invite it.
 
 builtin! {
-    name: "__elephc_curl_easy_getinfo_long",
-    area: Curl,
-    params: [handle: Mixed, info: Int],
-    returns: Mixed,
+    contract: "__elephc_curl_easy_getinfo_long",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlEasyGetinfoLong,
     ),
-    summary: "Reads a long-typed CURLINFO field for the curl prelude.",
-    internal: true,
 }

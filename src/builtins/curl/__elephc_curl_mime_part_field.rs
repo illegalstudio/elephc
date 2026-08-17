@@ -20,13 +20,8 @@
 //!   has for every other string option.
 
 builtin! {
-    name: "__elephc_curl_mime_part_field",
-    area: Curl,
-    params: [handle: Mixed, kind: Int, value: Str],
-    returns: Bool,
+    contract: "__elephc_curl_mime_part_field",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CurlMimePartField,
     ),
-    summary: "Sets one field on the pending curl_mime builder's current part for the curl prelude.",
-    internal: true,
 }
