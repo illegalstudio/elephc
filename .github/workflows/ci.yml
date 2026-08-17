@@ -1276,6 +1276,9 @@ jobs:
       - curl-codegen-tests-macos-aarch64
       - curl-codegen-tests-linux-x86_64
       - curl-codegen-tests-linux-aarch64
+      - eval-codegen-tests-macos-aarch64
+      - eval-codegen-tests-linux-x86_64
+      - eval-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
       - managed-native-smoke
@@ -1301,6 +1304,9 @@ jobs:
           test "${{ needs.curl-codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.curl-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.curl-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"
