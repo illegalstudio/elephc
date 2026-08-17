@@ -4,8 +4,8 @@ schema = 1
 [[package]]
 name = "curl"
 version = "8.21.0"
-recipe = 1
-dependencies = ["openssl", "zlib"]
+recipe = 2
+dependencies = ["libssh2", "nghttp2", "openssl", "zlib"]
 provides = ["curl"]
 
 [package.source]
@@ -28,6 +28,66 @@ frameworks = []
 [[package.target]]
 name = "linux-x86_64"
 archives = ["lib/libcurl.a"]
+system_libraries = []
+frameworks = []
+
+[[package]]
+name = "libssh2"
+version = "1.11.1"
+recipe = 1
+dependencies = ["openssl", "zlib"]
+provides = ["libssh2"]
+
+[package.source]
+url = "https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.gz"
+sha256 = "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7"
+size = 1093012
+
+[[package.target]]
+name = "macos-aarch64"
+archives = ["lib/libssh2.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "linux-aarch64"
+archives = ["lib/libssh2.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "linux-x86_64"
+archives = ["lib/libssh2.a"]
+system_libraries = []
+frameworks = []
+
+[[package]]
+name = "nghttp2"
+version = "1.70.0"
+recipe = 1
+dependencies = []
+provides = ["nghttp2"]
+
+[package.source]
+url = "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.gz"
+sha256 = "aa317e2cf9dca6afa0aed68f8fad6ff303ec6982e25a78c75c0b65e2b9b3ded5"
+size = 3104002
+
+[[package.target]]
+name = "macos-aarch64"
+archives = ["lib/libnghttp2.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "linux-aarch64"
+archives = ["lib/libnghttp2.a"]
+system_libraries = []
+frameworks = []
+
+[[package.target]]
+name = "linux-x86_64"
+archives = ["lib/libnghttp2.a"]
 system_libraries = []
 frameworks = []
 

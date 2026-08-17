@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, openssl, pcre2, zlib};
+use super::recipes::{curl, libssh2, nghttp2, openssl, pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -45,6 +45,8 @@ enum BuiltInRecipe {
     Pcre2,
     Zlib,
     Openssl,
+    Nghttp2,
+    Libssh2,
     Curl,
 }
 
@@ -54,7 +56,9 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("pcre2", 2) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
-        ("curl", 1) => Some(BuiltInRecipe::Curl),
+        ("nghttp2", 1) => Some(BuiltInRecipe::Nghttp2),
+        ("libssh2", 1) => Some(BuiltInRecipe::Libssh2),
+        ("curl", 2) => Some(BuiltInRecipe::Curl),
         _ => None,
     }
 }
@@ -66,6 +70,8 @@ impl RecipeRunner for CuratedRecipes {
             Some(BuiltInRecipe::Pcre2) => pcre2::build(request),
             Some(BuiltInRecipe::Zlib) => zlib::build(request),
             Some(BuiltInRecipe::Openssl) => openssl::build(request),
+            Some(BuiltInRecipe::Nghttp2) => nghttp2::build(request),
+            Some(BuiltInRecipe::Libssh2) => libssh2::build(request),
             Some(BuiltInRecipe::Curl) => curl::build(request),
             None => Err(NativeError::new(
                 NativeErrorKind::Build,
@@ -103,18 +109,33 @@ mod tests {
         assert!(built_in_recipe("pcre2", 1).is_none());
     }
 
-    /// Verifies the dispatcher recognizes curl and its OpenSSL TLS-backend dependency by exact
-    /// catalog recipe revision, independent of `current_catalog_recipe_revisions_have_dispatchers`
+    /// Verifies the dispatcher recognizes curl and every library it links by exact catalog
+    /// recipe revision, independent of `current_catalog_recipe_revisions_have_dispatchers`
     /// so this fails closed even if the catalog entries are ever added without their recipes.
     #[test]
-    fn curl_and_openssl_recipe_revisions_have_dispatchers() {
+    fn curl_and_its_dependency_recipe_revisions_have_dispatchers() {
         assert!(
             built_in_recipe("openssl", 1).is_some(),
             "missing built-in recipe for openssl revision 1"
         );
         assert!(
-            built_in_recipe("curl", 1).is_some(),
-            "missing built-in recipe for curl revision 1"
+            built_in_recipe("nghttp2", 1).is_some(),
+            "missing built-in recipe for nghttp2 revision 1"
         );
+        assert!(
+            built_in_recipe("libssh2", 1).is_some(),
+            "missing built-in recipe for libssh2 revision 1"
+        );
+        assert!(
+            built_in_recipe("curl", 2).is_some(),
+            "missing built-in recipe for curl revision 2"
+        );
+    }
+
+    /// Verifies the HTTP/1.1-only curl build (revision 1, no nghttp2/libssh2 and a wall of
+    /// `--disable-*` protocol flags) is not reused under revision 2's artifact identity.
+    #[test]
+    fn previous_curl_recipe_revision_is_not_dispatched() {
+        assert!(built_in_recipe("curl", 1).is_none());
     }
 }

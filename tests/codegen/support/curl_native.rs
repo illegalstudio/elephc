@@ -1,7 +1,7 @@
 //! Purpose:
-//! Locates this machine's managed native `curl` / `openssl` / `zlib` archives so a
-//! codegen fixture that links the `elephc_curl` bridge can resolve libcurl's symbols,
-//! and reports whether they are installed at all.
+//! Locates this machine's managed native `curl` / `libssh2` / `nghttp2` / `openssl` /
+//! `zlib` archives so a codegen fixture that links the `elephc_curl` bridge can resolve
+//! libcurl's symbols, and reports whether they are installed at all.
 //!
 //! Called from:
 //! - `super::runner::test_link_plan` when a fixture's link plan names `elephc_curl`.
@@ -35,12 +35,20 @@ use super::target;
 
 /// The managed native packages a linked `elephc_curl` needs, paired with the archive
 /// filename that proves the directory really is that package's `lib/`. libcurl links
-/// against OpenSSL (TLS) and zlib (transfer encodings); both are separate catalog
-/// packages with unrelated content-hashed paths, so each is discovered on its own.
+/// against libssh2 (SCP/SFTP), OpenSSL (TLS), zlib (transfer encodings) and nghttp2
+/// (HTTP/2); each is a separate catalog package with an unrelated content-hashed path,
+/// so each is discovered on its own.
+///
+/// THE ORDER IS THE STATIC LINK ORDER, and it mirrors what
+/// `src/native_deps/catalog.rs`' `CURL_VERSIONS.dependencies` resolves to for the
+/// production link: `libssh2.a` has to precede the OpenSSL and zlib archives that
+/// satisfy it, and `libnghttp2.a` (which needs nothing further) trails.
 const CURL_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
     ("curl", &["libcurl.a"]),
+    ("libssh2", &["libssh2.a"]),
     ("openssl", &["libssl.a", "libcrypto.a"]),
     ("zlib", &["libz.a"]),
+    ("nghttp2", &["libnghttp2.a"]),
 ];
 
 /// The macOS system frameworks a statically linked libcurl needs for its native
@@ -53,7 +61,7 @@ pub(crate) const CURL_MACOS_FRAMEWORKS: &[&str] =
     &["Security", "CoreFoundation", "SystemConfiguration"];
 
 /// One discovered package: the `lib/` directory plus the `-l` names it provides, in
-/// libcurl's own dependency order (curl -> ssl -> crypto -> z).
+/// libcurl's own dependency order (curl -> ssh2 -> ssl -> crypto -> z -> nghttp2).
 #[derive(Clone, Debug)]
 pub(crate) struct CurlNativePackage {
     pub(crate) library_dir: PathBuf,
@@ -84,15 +92,15 @@ pub(crate) fn skip_without_curl_native(test_name: &str) -> bool {
         return false;
     }
     eprintln!(
-        "skipping {test_name}: managed native curl/openssl/zlib are not installed for {} \
-         (run: elephc native add curl --target {})",
+        "skipping {test_name}: managed native curl/libssh2/nghttp2/openssl/zlib are not \
+         installed for {} (run: elephc native add curl --target {})",
         target().as_str(),
         target().as_str()
     );
     true
 }
 
-/// Discovers all three packages, returning `None` unless every one of them is present.
+/// Discovers every package, returning `None` unless all of them are present.
 fn discover_packages() -> Option<Vec<CurlNativePackage>> {
     let artifacts = native_cache_artifacts_root()?;
     let mut packages = Vec::new();
@@ -132,12 +140,21 @@ fn native_cache_artifacts_root() -> Option<PathBuf> {
 }
 
 /// Walks `artifacts/<package>/<version>/r<recipe>/<source-sha>/<target>/<abi>/<toolchain>`
-/// and returns the first `lib/` directory that contains every expected archive for the
-/// harness target.
+/// and returns the HIGHEST-recipe-revision `lib/` directory that contains every expected
+/// archive for the harness target.
 ///
 /// The version/recipe/source/abi/toolchain components are content-addressed and vary per
 /// machine, so they are enumerated rather than reconstructed; the TARGET component is
 /// matched exactly, so a macOS cache can never satisfy a Linux fixture.
+///
+/// HIGHEST REVISION WINS, and that is load-bearing rather than tidy. A recipe revision
+/// bump changes the artifact path but does NOT delete the artifact the previous revision
+/// built (`elephc native prune` does, on request) — so from the day `curl` went to
+/// revision 2 (HTTP/2 + SCP/SFTP + the full protocol set), a developer's cache holds both
+/// `r1/` and `r2/`. `read_dir` order is unspecified, so taking the first match found would
+/// link the HTTP/1.1-only archive on some runs and the current one on others, and a
+/// fixture asserting a revision-2 protocol would fail for a reason nothing in its own
+/// output explains. Sorting descending pins the newest build a checkout can have produced.
 fn find_package_library_dir(
     artifacts: &Path,
     package: &str,
@@ -166,6 +183,13 @@ fn find_package_library_dir(
         }
         level = next;
     }
+    // Descending by recipe revision first, then by the whole path, so the choice is both
+    // current and reproducible across runs on one machine.
+    level.sort_by(|left, right| {
+        recipe_revision_of(right, artifacts, package)
+            .cmp(&recipe_revision_of(left, artifacts, package))
+            .then_with(|| right.cmp(left))
+    });
     level.into_iter().find_map(|dir| {
         let lib = dir.join("lib");
         archives
@@ -173,4 +197,21 @@ fn find_package_library_dir(
             .all(|archive| lib.join(archive).is_file())
             .then_some(lib)
     })
+}
+
+/// Reads the `r<N>` recipe-revision component out of one enumerated artifact directory.
+///
+/// Returns `None` for a path that does not have the expected shape, which sorts it below
+/// every well-formed candidate rather than letting an unparseable directory win.
+fn recipe_revision_of(dir: &Path, artifacts: &Path, package: &str) -> Option<u32> {
+    dir.strip_prefix(artifacts.join(package))
+        .ok()?
+        // `<version>/r<recipe>/<source-sha>/<target>/<abi>/<toolchain>`
+        .components()
+        .nth(1)?
+        .as_os_str()
+        .to_str()?
+        .strip_prefix('r')?
+        .parse()
+        .ok()
 }

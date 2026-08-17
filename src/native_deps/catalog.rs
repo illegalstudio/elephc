@@ -93,6 +93,19 @@ const OPENSSL_HEADERS: &[&str] = &[
     "include/openssl/x509_acert.h", "include/openssl/x509_vfy.h", "include/openssl/x509.h", "include/openssl/x509err.h",
     "include/openssl/x509v3.h", "include/openssl/x509v3err.h",
 ];
+const NGHTTP2_ARCHIVES: &[&str] = &["lib/libnghttp2.a"];
+const NGHTTP2_HEADERS: &[&str] =
+    &["include/nghttp2/nghttp2.h", "include/nghttp2/nghttp2ver.h"];
+const LIBSSH2_ARCHIVES: &[&str] = &["lib/libssh2.a"];
+/// libssh2's three public headers. `libssh2.h` and `libssh2_sftp.h` are what curl's
+/// `lib/vssh/libssh2.c` includes; `libssh2_publickey.h` is retained because `libssh2.h`
+/// documents it as part of the installed interface and a header set that is a subset of
+/// the upstream install is a trap for the next consumer.
+const LIBSSH2_HEADERS: &[&str] = &[
+    "include/libssh2.h",
+    "include/libssh2_publickey.h",
+    "include/libssh2_sftp.h",
+];
 const CURL_ARCHIVES: &[&str] = &["lib/libcurl.a"];
 const CURL_HEADERS: &[&str] = &[
     "include/curl/curl.h",
@@ -157,8 +170,54 @@ const OPENSSL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: OPENSSL_HEADERS,
     provides: &["openssl"],
 }];
+/// libcurl's HTTP/2 framing library. Built `--enable-lib-only`, which is why it has no
+/// dependencies of its own: only nghttp2's *applications* need zlib/OpenSSL/libev/c-ares.
+const NGHTTP2_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "1.70.0",
+    source: SourceArchive {
+        https_url:
+            "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.gz",
+        sha256: "aa317e2cf9dca6afa0aed68f8fad6ff303ec6982e25a78c75c0b65e2b9b3ded5",
+        exact_size: 3_104_002,
+        body_limit: 32 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &[],
+    supported_targets: TARGETS,
+    ordered_link_outputs: NGHTTP2_ARCHIVES,
+    retained_headers: NGHTTP2_HEADERS,
+    provides: &["nghttp2"],
+}];
+/// libcurl's SSH transport, backing the `scp://` and `sftp://` protocol handlers. Built
+/// against the managed `openssl` (crypto backend) and `zlib` (SSH channel compression),
+/// so it is the second catalog package with a non-empty `dependencies` list.
+const LIBSSH2_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "1.11.1",
+    source: SourceArchive {
+        https_url:
+            "https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.gz",
+        sha256: "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7",
+        exact_size: 1_093_012,
+        body_limit: 16 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &["openssl", "zlib"],
+    supported_targets: TARGETS,
+    ordered_link_outputs: LIBSSH2_ARCHIVES,
+    retained_headers: LIBSSH2_HEADERS,
+    provides: &["libssh2"],
+}];
 /// Frozen source identity copied verbatim from `scripts/docs/curl_surface.json`. Statically
-/// linked against the managed `openssl` and `zlib` packages; never a system libcurl/OpenSSL.
+/// linked against the managed `openssl`, `zlib`, `nghttp2` and `libssh2` packages; never a
+/// system libcurl/OpenSSL.
+///
+/// DEPENDENCY ORDER IS LINK ORDER. `resolver::resolve_for_compilation_with` walks this list
+/// depth-first and splices each package's own dependencies in right behind it, so
+/// `["libssh2", "nghttp2", "openssl", "zlib"]` resolves to
+/// `curl, libssh2, openssl, zlib, nghttp2` — exactly the one-pass static link order the
+/// archives require (`libcurl.a` needs libssh2 and nghttp2 symbols, `libssh2.a` needs
+/// OpenSSL's and zlib's). Putting `openssl` first, as revision 1 did when nothing depended
+/// on it, would leave `libssh2.a` after the archives that satisfy it.
 const CURL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     version: "8.21.0",
     source: SourceArchive {
@@ -167,8 +226,8 @@ const CURL_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 4_298_225,
         body_limit: 32 * 1024 * 1024,
     },
-    recipe_revision: 1,
-    dependencies: &["openssl", "zlib"],
+    recipe_revision: 2,
+    dependencies: &["libssh2", "nghttp2", "openssl", "zlib"],
     supported_targets: TARGETS,
     ordered_link_outputs: CURL_ARCHIVES,
     retained_headers: CURL_HEADERS,
@@ -189,6 +248,16 @@ const PACKAGES: &[PackageSpec] = &[
         name: "openssl",
         default_version: "3.5.7",
         versions: OPENSSL_VERSIONS,
+    },
+    PackageSpec {
+        name: "nghttp2",
+        default_version: "1.70.0",
+        versions: NGHTTP2_VERSIONS,
+    },
+    PackageSpec {
+        name: "libssh2",
+        default_version: "1.11.1",
+        versions: LIBSSH2_VERSIONS,
     },
     PackageSpec {
         name: "curl",
@@ -278,7 +347,7 @@ mod tests {
         assert!(package("libfoo")
             .unwrap_err()
             .to_string()
-            .contains("known packages: pcre2, zlib, openssl, curl"));
+            .contains("known packages: pcre2, zlib, openssl, nghttp2, libssh2, curl"));
         assert!(version("pcre2", Some("10.46")).is_err());
     }
 
@@ -302,8 +371,49 @@ mod tests {
         assert_eq!(version.supported_targets, TARGETS);
     }
 
+    /// Verifies the official nghttp2 source identity and its dependency-free static contract:
+    /// the `--enable-lib-only` build links nothing, so an `openssl`/`zlib` entry appearing here
+    /// would mean the recipe started building the applications too.
+    #[test]
+    fn nghttp2_catalog_snapshot_is_exact() {
+        let version = version("nghttp2", None).expect("catalogue entry");
+        assert_eq!(version.version, "1.70.0");
+        assert_eq!(version.source.exact_size, 3_104_002);
+        assert_eq!(
+            version.source.sha256,
+            "aa317e2cf9dca6afa0aed68f8fad6ff303ec6982e25a78c75c0b65e2b9b3ded5"
+        );
+        assert_eq!(version.ordered_link_outputs, &["lib/libnghttp2.a"]);
+        assert_eq!(
+            version.retained_headers,
+            &["include/nghttp2/nghttp2.h", "include/nghttp2/nghttp2ver.h"]
+        );
+        assert!(version.dependencies.is_empty());
+        assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// Verifies the official libssh2 source identity, static archive contract, and that it
+    /// declares the same managed crypto/compression chain curl does — libssh2 is compiled
+    /// `--with-crypto=openssl`, so a missing dependency here would mean a system OpenSSL.
+    #[test]
+    fn libssh2_catalog_snapshot_is_exact() {
+        let version = version("libssh2", None).expect("catalogue entry");
+        assert_eq!(version.version, "1.11.1");
+        assert_eq!(version.source.exact_size, 1_093_012);
+        assert_eq!(
+            version.source.sha256,
+            "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7"
+        );
+        assert_eq!(version.ordered_link_outputs, &["lib/libssh2.a"]);
+        assert_eq!(version.retained_headers, LIBSSH2_HEADERS);
+        assert_eq!(version.dependencies, &["openssl", "zlib"]);
+        assert_eq!(version.supported_targets, TARGETS);
+    }
+
     /// Verifies the official curl source identity, static archive contract, and the transitive
-    /// `openssl`/`zlib` dependency declaration that `elephc native add curl` must materialize.
+    /// dependency declaration that `elephc native add curl` must materialize. THE ORDER OF
+    /// `dependencies` IS THE STATIC LINK ORDER (see the constant's own doc comment), so this
+    /// asserts the sequence, not just the set.
     #[test]
     fn curl_catalog_snapshot_is_exact() {
         let version = version("curl", None).expect("catalogue entry");
@@ -316,7 +426,8 @@ mod tests {
         assert_eq!(version.ordered_link_outputs, CURL_ARCHIVES);
         assert_eq!(version.ordered_link_outputs, &["lib/libcurl.a"]);
         assert_eq!(version.retained_headers, CURL_HEADERS);
-        assert_eq!(version.dependencies, &["openssl", "zlib"]);
+        assert_eq!(version.dependencies, &["libssh2", "nghttp2", "openssl", "zlib"]);
+        assert_eq!(version.recipe_revision, 2);
         assert_eq!(version.supported_targets, TARGETS);
     }
 }

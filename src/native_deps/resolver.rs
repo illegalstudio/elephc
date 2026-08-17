@@ -471,19 +471,21 @@ mod tests {
     }
 
     /// Verifies a single top-level `curl` requirement resolves its full catalog-declared
-    /// transitive chain (`openssl`, `zlib` — `curl` is the first catalog package with
-    /// non-empty `PackageVersion::dependencies`) without the caller ever naming them, in
-    /// exactly the dependent-before-dependency order libcurl's own static link requires:
-    /// `libcurl.a -> libssl.a -> libcrypto.a -> libz.a`. Before this test, `resolve_for_
+    /// transitive chain (`libssh2`, `nghttp2`, `openssl`, `zlib`) without the caller ever
+    /// naming them, in exactly the dependent-before-dependency order libcurl's own static
+    /// link requires: `libcurl.a -> libssh2.a -> libssl.a -> libcrypto.a -> libz.a ->
+    /// libnghttp2.a`. That sequence is NOT the catalog's declaration order — `libssh2`
+    /// declares `openssl`/`zlib` itself, so the walk splices them in behind `libssh2` and
+    /// `nghttp2` (which needs nothing) lands last. Before this test, `resolve_for_
     /// compilation_with` only ever iterated the exact `requirements` slice a caller passed
     /// in, so a lone `NativeRequirement::package("curl")` (what `crate::pipeline::backend`
-    /// emits) resolved `curl`'s own archive only, silently dropping `libssl.a`/`libcrypto.a`/
-    /// `libz.a` from the final link plan.
+    /// emits) resolved `curl`'s own archive only, silently dropping every archive that
+    /// satisfies it from the final link plan.
     #[test]
     fn curl_requirement_resolves_its_transitive_native_chain() {
         let root = project_fixture(
             "curl-transitive",
-            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\nopenssl = \"3.5.7\"\nzlib = \"1.3.2\"\n",
+            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\nlibssh2 = \"1.11.1\"\nnghttp2 = \"1.70.0\"\nopenssl = \"3.5.7\"\nzlib = \"1.3.2\"\n",
             true,
         );
         let cache = CacheLayout::from_values(
@@ -495,7 +497,7 @@ mod tests {
         .unwrap();
         let target = Target::detect_host();
         let toolchain = FixedToolchains.resolve(target).expect("fixed toolchain");
-        for package in ["curl", "openssl", "zlib"] {
+        for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib"] {
             fabricate_artifact(&cache, package, &toolchain, target);
         }
 
@@ -511,7 +513,7 @@ mod tests {
         let names: Vec<&str> = resolved.iter().map(|package| package.package.as_str()).collect();
         assert_eq!(
             names,
-            vec!["curl", "openssl", "zlib"],
+            vec!["curl", "libssh2", "openssl", "zlib", "nghttp2"],
             "curl's own dependency order must be preserved, not re-sorted alphabetically"
         );
         let archive_filenames: Vec<String> = resolved
@@ -521,7 +523,7 @@ mod tests {
             .collect();
         assert_eq!(
             archive_filenames,
-            vec!["libcurl.a", "libssl.a", "libcrypto.a", "libz.a"],
+            vec!["libcurl.a", "libssh2.a", "libssl.a", "libcrypto.a", "libz.a", "libnghttp2.a"],
             "final link order must match libcurl's own dependency order"
         );
 

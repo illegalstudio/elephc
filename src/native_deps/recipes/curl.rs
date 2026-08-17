@@ -1,14 +1,31 @@
 //! Purpose:
-//! Builds a static libcurl 8.21.0 archive (HTTP/HTTPS/FILE/FTP/FTPS) against the already
-//! materialized `openssl` and `zlib` native packages.
+//! Builds a static libcurl 8.21.0 archive carrying every protocol this pin can reach without
+//! an unpinnable dependency, against the already materialized `openssl`, `zlib`, `nghttp2`
+//! and `libssh2` native packages.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for curl recipe revision 1.
+//! - `crate::native_deps::recipe::CuratedRecipes` for curl recipe revision 2.
 //!
 //! Key details:
 //! - `curl` is the first catalog package with non-empty `dependencies`; its recipe never probes
-//!   the system for OpenSSL/zlib and only trusts the prefixes materialization already built and
-//!   passed through `RecipeRequest::dependency_prefixes`.
+//!   the system for OpenSSL/zlib/nghttp2/libssh2 and only trusts the prefixes materialization
+//!   already built and passed through `RecipeRequest::dependency_prefixes`.
+//! - THE PROTOCOL SET IS DELIBERATE, AND MOSTLY MADE OF FLAGS THAT ARE *NOT* HERE. curl's
+//!   own configure defaults everything except LDAP(S), SMB and NTLM to enabled, so revision 2
+//!   drops the `--disable-{rtsp,dict,telnet,tftp,pop3,imap,smtp,gopher,mqtt}` wall revision 1
+//!   carried and adds only the three opt-ins. MEASURED against the pinned `configure.ac`:
+//!   `--enable-smb` and `--enable-ntlm` are opt-IN (`AC_ARG_ENABLE(smb, ..., AC_MSG_RESULT(no))`
+//!   — the *default* branch answers no), which is why revision 1's `--disable-smb` was a no-op
+//!   and why SMB needs NTLM's DES-based session key to exist at all
+//!   (`lib/smb.c`: `#if defined(CURL_ENABLE_SMB) && defined(USE_CURL_NTLM_CORE)`).
+//! - WHAT IS STILL OFF, AND WHY: LDAP(S) needs OpenLDAP, which is not in the catalog (see
+//!   `.superpowers/sdd/curl-punchlist/r3-protocols-report.md` for the measured cost); HTTP/3
+//!   needs ngtcp2 + nghttp3 (curl 8.21.0 has NO standalone `openssl-quic` backend — the only
+//!   non-experimental QUIC path in this pin is `--with-ngtcp2 --with-nghttp3`); RTMP needs the
+//!   abandoned librtmp; brotli/zstd/libpsl/libidn2 are content/name features, not protocols.
+//!   Every one of those stays an explicit `--without-*`/`--disable-*` so a build machine that
+//!   happens to have the library installed cannot quietly change what this artifact contains.
+//! - NO `--with-ca-bundle`/`--with-ca-path` IS PASSED, DELIBERATELY (see below).
 //! - NO `--with-ca-bundle`/`--with-ca-path` IS PASSED, DELIBERATELY, and the resulting build is
 //!   NOT hermetic in that one respect: `configure`'s own `CURL_CHECK_CA_BUNDLE` probes this
 //!   BUILD machine and bakes whatever absolute path it finds in as `CURL_CA_BUNDLE` (and bakes
@@ -42,6 +59,8 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
 
     let openssl_prefix = dependency_prefix(request, "openssl")?;
     let zlib_prefix = dependency_prefix(request, "zlib")?;
+    let nghttp2_prefix = dependency_prefix(request, "nghttp2")?;
+    let libssh2_prefix = dependency_prefix(request, "libssh2")?;
 
     let configure = request.source.join("configure");
     require_regular("curl", &configure)?;
@@ -52,28 +71,32 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     ]);
     command.arg(format!("--with-openssl={}", openssl_prefix.display()));
     command.arg(format!("--with-zlib={}", zlib_prefix.display()));
+    // Both take a PREFIX, and both reach the same `-I<prefix>/include -L<prefix>/lib` branch
+    // of curl's configure on every machine: the pkg-config branch each one tries first is
+    // scoped to `<prefix>/lib/pkgconfig` (`CURL_EXPORT_PCDIR` exports `PKG_CONFIG_LIBDIR`,
+    // which OVERRIDES the system search path rather than adding to it), and these recipes
+    // retain no `.pc` files, so pkg-config always answers "not found" whether or not the
+    // build machine has one installed. A `.pc` would be actively wrong here anyway: recipes
+    // build into a staging directory that is renamed to its content-addressed home
+    // afterwards, so any absolute prefix baked in at build time would name a path that no
+    // longer exists.
+    command.arg(format!("--with-nghttp2={}", nghttp2_prefix.display()));
+    command.arg(format!("--with-libssh2={}", libssh2_prefix.display()));
     command.args([
+        "--enable-smb",
+        "--enable-ntlm",
         "--disable-ldap",
         "--disable-ldaps",
-        "--disable-rtsp",
-        "--disable-dict",
-        "--disable-telnet",
-        "--disable-tftp",
-        "--disable-pop3",
-        "--disable-imap",
-        "--disable-smb",
-        "--disable-smtp",
-        "--disable-gopher",
-        "--disable-mqtt",
         "--disable-manual",
         "--disable-docs",
         "--without-libpsl",
-        "--without-libssh2",
-        "--without-nghttp2",
         "--without-brotli",
         "--without-zstd",
         "--without-librtmp",
         "--without-libidn2",
+        "--without-ngtcp2",
+        "--without-nghttp3",
+        "--without-quiche",
     ]);
     if request.target != Target::detect_host() {
         command.arg(format!("--host={}", request.toolchain.target_tuple));

@@ -1,8 +1,8 @@
 //! Purpose:
 //! Adds native link-search/lib directives for `elephc-curl`'s own test binary,
 //! and ONLY for that binary, so `cargo test -p elephc-curl` can link real
-//! libcurl/libssl/libcrypto/libz static archives from an installed `elephc
-//! native` package when a developer asks for it.
+//! libcurl/libssh2/libssl/libcrypto/libz/libnghttp2 static archives from an
+//! installed `elephc native` package when a developer asks for it.
 //!
 //! Called from:
 //! - Cargo, automatically, before compiling any target of this crate
@@ -24,13 +24,17 @@
 //!   build, so the linker's dead-stripping drops them) and the test binary
 //!   links cleanly, running a single test that prints a clear skip message.
 //! - `ELEPHC_CURL_LIB_DIR` must point at curl's OWN `lib/` directory
-//!   (containing `libcurl.a`). `ELEPHC_CURL_OPENSSL_LIB_DIR` /
-//!   `ELEPHC_CURL_ZLIB_LIB_DIR` point at the sibling OpenSSL/zlib `lib/`
-//!   directories — these are separate `elephc native` packages with
-//!   unrelated content-hashed paths, so no single directory covers all four
-//!   archives. Link order mirrors libcurl's own dependency order: curl -> ssl
-//!   -> crypto -> z, plus this file's own empirical `SystemConfiguration` fix
-//!   below for the macOS system frameworks curl's TLS/resolver backend needs.
+//!   (containing `libcurl.a`). `ELEPHC_CURL_LIBSSH2_LIB_DIR` /
+//!   `ELEPHC_CURL_NGHTTP2_LIB_DIR` / `ELEPHC_CURL_OPENSSL_LIB_DIR` /
+//!   `ELEPHC_CURL_ZLIB_LIB_DIR` point at the sibling libssh2/nghttp2/OpenSSL/zlib
+//!   `lib/` directories — these are separate `elephc native` packages with
+//!   unrelated content-hashed paths, so no single directory covers all six
+//!   archives. Link order mirrors libcurl's own dependency order: curl -> ssh2
+//!   -> ssl -> crypto -> z -> nghttp2 (libssh2 needs OpenSSL and zlib, so it has
+//!   to precede them; nghttp2 needs nothing, so it can trail), which is the same
+//!   sequence `src/native_deps/catalog.rs`' `CURL_VERSIONS.dependencies` produces
+//!   for the production link. Plus this file's own empirical `SystemConfiguration`
+//!   fix below for the macOS system frameworks curl's TLS/resolver backend needs.
 //! - `ELEPHC_CURL_LIB_DIR` NAMES THE SAME ENV VAR AS `src/linker/bridges.rs`'s
 //!   `BRIDGES` table entry for `elephc_curl`, but for a DIFFERENT purpose there:
 //!   the production compiler reads it as an override for the directory
@@ -61,6 +65,8 @@ fn main() {
     declare_check_cfg();
 
     println!("cargo:rerun-if-env-changed=ELEPHC_CURL_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=ELEPHC_CURL_LIBSSH2_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=ELEPHC_CURL_NGHTTP2_LIB_DIR");
     println!("cargo:rerun-if-env-changed=ELEPHC_CURL_OPENSSL_LIB_DIR");
     println!("cargo:rerun-if-env-changed=ELEPHC_CURL_ZLIB_LIB_DIR");
 
@@ -73,10 +79,15 @@ fn main() {
     };
 
     // Real native artifacts requested: wire up libcurl's own dependency link
-    // order (curl -> ssl -> crypto -> z), plus the
+    // order (curl -> ssh2 -> ssl -> crypto -> z -> nghttp2), plus the
     // macOS frameworks curl's OpenSSL/resolver backend needs there.
     add_search_path(&curl_lib_dir);
     println!("cargo:rustc-link-lib=static=curl");
+
+    if let Some(ssh2_lib_dir) = env::var_os("ELEPHC_CURL_LIBSSH2_LIB_DIR") {
+        add_search_path(&ssh2_lib_dir);
+    }
+    println!("cargo:rustc-link-lib=static=ssh2");
 
     if let Some(ssl_lib_dir) = env::var_os("ELEPHC_CURL_OPENSSL_LIB_DIR") {
         add_search_path(&ssl_lib_dir);
@@ -88,6 +99,13 @@ fn main() {
         add_search_path(&z_lib_dir);
     }
     println!("cargo:rustc-link-lib=static=z");
+
+    // Last on purpose: nothing in the chain above resolves nghttp2's symbols, and
+    // nghttp2 itself pulls in nothing further.
+    if let Some(nghttp2_lib_dir) = env::var_os("ELEPHC_CURL_NGHTTP2_LIB_DIR") {
+        add_search_path(&nghttp2_lib_dir);
+    }
+    println!("cargo:rustc-link-lib=static=nghttp2");
 
     if env::var_os("CARGO_CFG_TARGET_OS").as_deref() == Some(std::ffi::OsStr::new("macos")) {
         // `Security`/`CoreFoundation` satisfy OpenSSL's keychain-backed trust

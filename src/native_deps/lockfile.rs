@@ -193,8 +193,10 @@ mod tests {
         ManifestDocument::parse("[native]\nschema = 1\n[native.dependencies]\npcre2 = \"10.47\"\n").unwrap()
     }
 
-    /// Verifies declaring only `curl` transitively materializes `openssl` and `zlib` onto the
-    /// manifest, so `elephc native add curl` never requires the caller to hand-list either.
+    /// Verifies declaring only `curl` transitively materializes every library it links onto
+    /// the manifest, so `elephc native add curl` never requires the caller to hand-list any
+    /// of them. The walk is a real closure, not one level: `libssh2`'s own `openssl`/`zlib`
+    /// dependencies are reached through `libssh2`, not through `curl`.
     #[test]
     fn declares_curl_transitive_dependencies_onto_manifest() {
         let mut manifest = ManifestDocument::parse(
@@ -202,11 +204,15 @@ mod tests {
         )
         .unwrap();
         declare_transitive_dependencies(&mut manifest).unwrap();
+        assert_eq!(manifest.dependencies().get("libssh2").map(String::as_str), Some("1.11.1"));
+        assert_eq!(manifest.dependencies().get("nghttp2").map(String::as_str), Some("1.70.0"));
         assert_eq!(manifest.dependencies().get("openssl").map(String::as_str), Some("3.5.7"));
         assert_eq!(manifest.dependencies().get("zlib").map(String::as_str), Some("1.3.2"));
         // The now fully-declared manifest locks without failing closed.
         let lock = NativeLock::from_manifest(&manifest).unwrap();
-        assert_eq!(lock.package.len(), 3);
+        assert_eq!(lock.package.len(), 5);
+        assert!(lock.package("libssh2").is_some());
+        assert!(lock.package("nghttp2").is_some());
         assert!(lock.package("openssl").is_some());
         assert!(lock.package("zlib").is_some());
     }
@@ -221,7 +227,7 @@ mod tests {
         .unwrap();
         declare_transitive_dependencies(&mut manifest).unwrap();
         declare_transitive_dependencies(&mut manifest).unwrap();
-        assert_eq!(manifest.dependencies().len(), 3);
+        assert_eq!(manifest.dependencies().len(), 5);
         assert_eq!(manifest.dependencies().get("openssl").map(String::as_str), Some("3.5.7"));
     }
 
