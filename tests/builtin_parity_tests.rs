@@ -119,20 +119,33 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
 /// - the AOT route (`Prelude`) with no deliberate signature divergence;
 /// - the eval route (`Registry`) with no deliberate signature divergence, plus the
 ///   documented `EvalExecution` classification each contract must carry;
-/// - signature agreement between the catalog and Magician's real binding — parameter
-///   names, required and default counts, variadic name, by-reference markers;
+/// - that Magician actually EXPOSES a binding whose metadata is the contract's signature
+///   — see the note below on what that can and cannot prove;
 /// - both backends' public name sets: a prelude-routed name is deliberately absent from
 ///   the compiler's registry-derived name set and present in Magician's.
+///
+/// WHAT THE EVAL SIGNATURE COMPARISON IS, PRECISELY. It is an existence-and-derivation
+/// check, NOT a drift detector, and calling it the latter would overstate this suite.
+/// `eval_builtin!` submits only a contract ID, and `EvalBuiltinSpec::from_binding`
+/// builds params, by-reference markers, required count and variadic name straight out of
+/// `eval_signature(contract)` — so `assert_signature_shape` compares the contract with
+/// itself, and a catalog signature change moves both sides together. That is main's
+/// single-source-of-truth architecture working as designed, not a hole: it makes eval
+/// signature drift unrepresentable rather than merely detected. What the comparison still
+/// proves is that a binding exists for the name, resolves its contract, and survives
+/// `from_binding`'s own audits.
 ///
 /// STRUCTURALLY INAPPLICABLE, and why. There is no AOT *registry* signature to compare
 /// against: a prelude-provided contract has no `builtin!` binding by definition, so
 /// `elephc::builtin_metadata::builtin_signature_metadata` answers `None`. This is not a
 /// curl exemption — `backend_signature_shapes_derive_from_shared_contracts` skips the
 /// four `hash_*` prelude contracts for exactly the same reason, and has since the
-/// shared-contract migration. The compiler-side signature these contracts DO have is the
-/// PHP function declaration inside the injected prelude, and that is compared against the
-/// catalog by `builtins::parity_tests::prelude_contracts_match_their_injected_signatures`
-/// — a lib test rather than one here, because the prelude sources are `pub(crate)`.
+/// shared-contract migration. It also means the substantive signature parity for this
+/// surface is NOT here: the compiler side of a prelude contract is the PHP function the
+/// prelude injects, which is genuinely written by hand and can genuinely drift, and it is
+/// compared against the catalog — names, types, by-reference markers and DEFAULT VALUES —
+/// by `builtins::parity_tests::prelude_contracts_match_their_injected_signatures`, a lib
+/// test rather than one here because the prelude sources are `pub(crate)`.
 #[test]
 fn curl_php_surface_is_a_full_parity_citizen() {
     let curl_surface = contracts()
@@ -217,11 +230,11 @@ fn curl_php_surface_is_a_full_parity_citizen() {
         .iter()
         .filter(|contract| contract.params.iter().any(|param| param.by_ref))
         .map(|contract| contract.name)
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
     let expected_by_ref = if CURL_SURFACE_LEN == 0 {
-        Vec::new()
+        BTreeSet::new()
     } else {
-        CURL_BY_REF_CONTRACTS.to_vec()
+        CURL_BY_REF_CONTRACTS.iter().copied().collect::<BTreeSet<_>>()
     };
     assert_eq!(by_ref_seen, expected_by_ref, "curl by-reference surface");
 

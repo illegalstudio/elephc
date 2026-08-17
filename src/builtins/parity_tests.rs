@@ -12,7 +12,7 @@
 use crate::builtins::registry;
 use elephc_builtin_contract::{
     aot_signature_profile, aot_support, Area, BackendImplementation, BackendSupport,
-    BuiltinContract,
+    BuiltinContract, DefaultSpec, TypeSpec,
 };
 
 /// Returns the PHP-visible extension builtins a prelude must never call directly.
@@ -41,6 +41,37 @@ const PRELUDE_SOURCES: &[(&str, &str)] = &[
     ("image_prelude", crate::image_prelude::IMAGE_PRELUDE_SRC),
     ("web_prelude", crate::web_prelude::WEB_PRELUDE_SRC),
 ];
+
+/// The preludes whose PHP-visible surface the shared builtin catalog claims, each with
+/// whether this build's catalog actually publishes that surface.
+///
+/// The curl slice is feature-gated (`catalog_curl.rs`), so with the root `curl` feature
+/// off the catalog does not claim the curl prelude's PHP surface AT ALL and
+/// "declared implies contracted" is simply not an invariant of that configuration —
+/// asserting it there would fail on all thirty-four names for no defect. See
+/// `catalog_hosted_preludes_declare_no_uncontracted_php_function` for why the other five
+/// preludes in `PRELUDE_SOURCES` are not in this list in any configuration.
+const CATALOG_HOSTED_PRELUDES: &[(&str, &str, bool)] = &[
+    ("hash_prelude", crate::hash_prelude::HASH_PRELUDE_SRC, true),
+    (
+        "curl_prelude",
+        crate::curl_prelude::CURL_PRELUDE_SRC,
+        cfg!(feature = "curl"),
+    ),
+];
+
+/// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
+/// with the reason each exclusion is correct rather than an oversight.
+const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
+    "curl_file_create",
+    "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
+     is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
+     resolves through the native-class fallback, see elephc-magician's \
+     interpreter::builtins::curl module doc. A contract would need an eval binding that \
+     does not exist, or an EvalImplementationPending label that would be false because \
+     eval() can already call it. Consequence, accepted: the PHP comparison page counts \
+     the curl module 32/33 rather than 33/33.",
+)];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///
@@ -169,10 +200,14 @@ fn extension_builtin_set_matches_shared_contracts() {
 struct PreludeParam {
     /// Variable name without the leading `$`.
     name: String,
+    /// Declared PHP type, `?` included; empty when the parameter is untyped.
+    php_type: String,
     /// Declared `&$name`.
     by_ref: bool,
-    /// Carries a PHP default expression.
-    optional: bool,
+    /// Declared `...$name`.
+    variadic: bool,
+    /// PHP source text of the default expression, when one is written.
+    default: Option<String>,
 }
 
 /// Verifies every prelude-provided contract matches its injected PHP declaration.
@@ -184,6 +219,15 @@ struct PreludeParam {
 /// declaration and compares it with the catalog (through `aot_signature_profile`, so a
 /// documented subset like `hash_init`'s is honoured), closing the one structural hole in
 /// prelude parity.
+///
+/// WHY DEFAULT VALUES AND DECLARED TYPES ARE COMPARED, not just names and arity: these are
+/// the fields where prelude drift changes behaviour silently and NOTHING else would catch
+/// it. Compiled code executes the PHP default the prelude writes; `eval()` executes the
+/// catalog's. A prelude `float $timeout = 5.0` against a catalog `Float(1.0)` leaves both
+/// backends' registries, both coverage audits and the generated docs green while
+/// `curl_multi_select($mh)` waits five seconds in one backend and one in the other. The
+/// catalog side has the committed `builtin_registry.json` as a review backstop; the
+/// prelude side has none but this test.
 ///
 /// Covers the four `hash_*` contracts in every configuration and the thirty-four `curl_*`
 /// contracts whenever the root `curl` feature publishes them.
@@ -213,29 +257,62 @@ fn prelude_contracts_match_their_injected_signatures() {
             contract.name
         );
 
-        let (prelude, actual) = &found[0];
+        let (prelude, declared) = &found[0];
+        let name = contract.name;
         let signature = aot_signature_profile(contract).signature;
-        let expected = signature
+        let expected_names = signature
             .params
             .iter()
-            .map(|param| PreludeParam {
-                name: param.name.to_string(),
-                by_ref: param.by_ref,
-                optional: param.default.is_some(),
-            })
-            .chain(signature.variadic.map(|name| PreludeParam {
-                name: name.to_string(),
-                by_ref: false,
-                optional: true,
-            }))
+            .map(|param| param.name)
+            .chain(signature.variadic)
+            .collect::<Vec<_>>();
+        let declared_names = declared
+            .iter()
+            .map(|param| param.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(
-            *actual, expected,
-            "{} signature drifted from {prelude}",
-            contract.name
+            declared_names, expected_names,
+            "{name} parameter names drifted from {prelude}"
         );
 
-        checked.push(contract.name);
+        for (param, actual) in signature.params.iter().zip(declared) {
+            let at = format!("{name}(${}) in {prelude}", param.name);
+            assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
+            assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
+            assert!(
+                php_type_matches(param.ty, &actual.php_type),
+                "{at}: declared type `{}` is not the contract's {:?}",
+                actual.php_type,
+                param.ty
+            );
+            match (param.default, actual.default.as_deref()) {
+                (None, None) => {}
+                (Some(expected), Some(text)) => assert!(
+                    default_matches(&expected, text),
+                    "{at}: default `{text}` is not the contract's `{}`",
+                    default_text(&expected)
+                ),
+                (Some(expected), None) => panic!(
+                    "{at}: contract has default `{}`, the prelude declares none",
+                    default_text(&expected)
+                ),
+                (None, Some(text)) => {
+                    panic!("{at}: prelude declares default `{text}`, the contract has none")
+                }
+            }
+        }
+
+        // A PHP variadic is spelled `...$rest` and never carries `= default`, so it is
+        // checked here rather than folded into the fixed-parameter loop above.
+        if let Some(variadic) = signature.variadic {
+            let actual = declared.last().expect("names matched, so a tail exists");
+            let at = format!("{name}(...${variadic}) in {prelude}");
+            assert!(actual.variadic, "{at}: must be declared `...${variadic}`");
+            assert!(!actual.by_ref, "{at}: contract has no by-reference variadic");
+            assert_eq!(actual.default, None, "{at}: a variadic takes no default");
+        }
+
+        checked.push(name);
         if matches!(contract.area, Area::Curl) {
             curl_checked += 1;
         }
@@ -312,22 +389,268 @@ fn parse_prelude_declaration(source: &str, name: &str) -> Option<Vec<PreludePara
         raw_params.push(current);
     }
 
-    Some(
-        raw_params
-            .iter()
-            .map(|raw| {
-                let dollar = raw
-                    .find('$')
-                    .unwrap_or_else(|| panic!("prelude parameter {raw:?} of {name} has no variable"));
-                PreludeParam {
-                    name: raw[dollar + 1..]
-                        .chars()
-                        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-                        .collect(),
-                    by_ref: raw[..dollar].trim_end().ends_with('&'),
-                    optional: raw[dollar..].contains('='),
-                }
-            })
-            .collect(),
-    )
+    Some(raw_params.iter().map(|raw| parse_prelude_param(raw, name)).collect())
+}
+
+/// Parses one `type &...$name = default` parameter out of a prelude declaration.
+fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
+    let dollar = raw
+        .find('$')
+        .unwrap_or_else(|| panic!("prelude parameter {raw:?} of {function} has no variable"));
+
+    // Strip the passing markers off the end of the type, in either PHP order
+    // (`int &...$rest` and `int ...$rest` both occur; `int ...&$rest` does not).
+    let mut head = raw[..dollar].trim();
+    let mut by_ref = false;
+    let mut variadic = false;
+    loop {
+        if let Some(rest) = head.strip_suffix("...") {
+            variadic = true;
+            head = rest.trim_end();
+        } else if let Some(rest) = head.strip_suffix('&') {
+            by_ref = true;
+            head = rest.trim_end();
+        } else {
+            break;
+        }
+    }
+
+    let tail = &raw[dollar + 1..];
+    let identifier_len = tail
+        .find(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .unwrap_or(tail.len());
+    let after = tail[identifier_len..].trim_start();
+
+    PreludeParam {
+        name: tail[..identifier_len].to_string(),
+        php_type: head.to_string(),
+        by_ref,
+        variadic,
+        default: after
+            .strip_prefix('=')
+            .map(|value| value.trim().to_string()),
+    }
+}
+
+/// Returns whether a prelude's declared PHP type is the contract's neutral type.
+///
+/// `TypeSpec` has no object, array or union vocabulary, so every non-scalar surface is
+/// spelled `Mixed` in the catalog and the prelude is free to declare `CurlHandle`,
+/// `array`, `mixed` or a union for it. The check is therefore compatibility, not
+/// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared as a
+/// scalar in the prelude, because a scalar is precisely what the catalog can express and
+/// deliberately did not. A leading `?` is stripped: nullability is carried by the
+/// parameter's default, which is compared separately.
+fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
+    let declared = declared.trim().trim_start_matches('?').trim();
+    let scalar = match expected {
+        TypeSpec::Int => "int",
+        TypeSpec::Float => "float",
+        TypeSpec::Str => "string",
+        TypeSpec::Bool => "bool",
+        TypeSpec::Void => "void",
+        TypeSpec::Mixed => {
+            return !matches!(declared, "int" | "float" | "string" | "bool");
+        }
+    };
+    declared == scalar
+}
+
+/// Returns whether a prelude's default expression is the contract's default value.
+fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
+    let declared = declared.trim();
+    match expected {
+        DefaultSpec::Null => declared.eq_ignore_ascii_case("null"),
+        DefaultSpec::Bool(value) => {
+            declared.eq_ignore_ascii_case(if *value { "true" } else { "false" })
+        }
+        // Parsed rather than string-compared so `1.0`, `1.00` and `1e0` all agree with
+        // `Float(1.0)` while `5.0` does not.
+        DefaultSpec::Float(value) => declared.parse::<f64>() == Ok(*value),
+        DefaultSpec::Int(value) => declared.parse::<i64>() == Ok(*value),
+        DefaultSpec::Str(value) => {
+            declared == format!("\"{value}\"") || declared == format!("'{value}'")
+        }
+        DefaultSpec::IntMax => declared == "PHP_INT_MAX",
+        DefaultSpec::EmptyArray => declared == "[]" || declared.replace(' ', "") == "array()",
+    }
+}
+
+/// Renders a contract default the way PHP source spells it, for failure messages.
+fn default_text(default: &DefaultSpec) -> String {
+    match default {
+        DefaultSpec::Null => "null".to_string(),
+        DefaultSpec::Bool(value) => value.to_string(),
+        DefaultSpec::Int(value) => value.to_string(),
+        DefaultSpec::Float(value) => format!("{value:?}"),
+        DefaultSpec::Str(value) => format!("\"{value}\""),
+        DefaultSpec::IntMax => "PHP_INT_MAX".to_string(),
+        DefaultSpec::EmptyArray => "[]".to_string(),
+    }
+}
+
+/// Verifies no PHP-visible declaration in a catalog-hosted prelude escapes the catalog.
+///
+/// `prelude_contracts_match_their_injected_signatures` audits contract -> prelude. This is
+/// the inverse: a function the prelude declares but the catalog does not carry is
+/// invisible to BOTH parity suites and to the generated documentation, because every one
+/// of them iterates `contracts()`. Without this test that omission is silent.
+///
+/// SCOPE. Only the preludes whose PHP surface the shared catalog claims IN THIS BUILD are
+/// audited (see `CATALOG_HOSTED_PRELUDES`). `pdo_prelude`, `tz_prelude`,
+/// `var_export_prelude`, `image_prelude` and `web_prelude` ship PHP-visible functions that
+/// have no shared contracts AT ALL by design (`var_export`, `imagecreate`, `setcookie`,
+/// `session_*`, `pdo_drivers`, `timezone_*` — verified: none of them appears in
+/// `contracts()`), so "declared implies contracted" is simply not their invariant and
+/// asserting it here would be wrong rather than strict.
+#[test]
+fn catalog_hosted_preludes_declare_no_uncontracted_php_function() {
+    let mut audited = 0usize;
+    for (prelude, source, published) in CATALOG_HOSTED_PRELUDES {
+        if !published {
+            continue;
+        }
+        audited += 1;
+        for name in php_visible_declarations(source) {
+            if let Some(reason) = UNCONTRACTED_PRELUDE_DECLARATIONS
+                .iter()
+                .find(|(allowed, _)| *allowed == name)
+                .map(|(_, reason)| *reason)
+            {
+                assert!(
+                    elephc_builtin_contract::lookup(&name).is_none(),
+                    "{name} now has a shared contract; drop it from \
+                     UNCONTRACTED_PRELUDE_DECLARATIONS (recorded reason: {reason})"
+                );
+                continue;
+            }
+            let contract = elephc_builtin_contract::lookup(&name).unwrap_or_else(|| {
+                panic!(
+                    "{prelude} declares PHP-visible {name}() with no shared contract, so no \
+                     parity suite and no generated page can see it — add a contract, or add \
+                     it to UNCONTRACTED_PRELUDE_DECLARATIONS with the reason"
+                )
+            });
+            assert_eq!(
+                aot_support(contract),
+                BackendSupport::Implemented(BackendImplementation::Prelude),
+                "{name} is declared by {prelude} but its contract claims another AOT route"
+            );
+        }
+    }
+    assert_eq!(
+        audited,
+        if cfg!(feature = "curl") { 2 } else { 1 },
+        "the hash prelude is always audited; the curl prelude whenever its catalog slice \
+         is published"
+    );
+}
+
+/// Verifies the prelude parameter parser reads every PHP passing form it may meet.
+///
+/// The catalog has no variadic prelude contract today, so the variadic and by-reference
+/// variadic arms cannot be exercised by real data — and a parser that silently mis-reads
+/// `int &...$rest` as a fixed `$rest` would make the first such contract fail for a
+/// confusing reason instead of a real one. These are the forms PHP can spell.
+#[test]
+fn prelude_parameters_parse_every_php_passing_form() {
+    let cases: &[(&str, PreludeParam)] = &[
+        (
+            "CurlHandle $handle",
+            PreludeParam {
+                name: "handle".to_string(),
+                php_type: "CurlHandle".to_string(),
+                by_ref: false,
+                variadic: false,
+                default: None,
+            },
+        ),
+        (
+            " ?int $option = null ",
+            PreludeParam {
+                name: "option".to_string(),
+                php_type: "?int".to_string(),
+                by_ref: false,
+                variadic: false,
+                default: Some("null".to_string()),
+            },
+        ),
+        (
+            "int &$still_running",
+            PreludeParam {
+                name: "still_running".to_string(),
+                php_type: "int".to_string(),
+                by_ref: true,
+                variadic: false,
+                default: None,
+            },
+        ),
+        (
+            "float $timeout = 1.0",
+            PreludeParam {
+                name: "timeout".to_string(),
+                php_type: "float".to_string(),
+                by_ref: false,
+                variadic: false,
+                default: Some("1.0".to_string()),
+            },
+        ),
+        (
+            "mixed ...$values",
+            PreludeParam {
+                name: "values".to_string(),
+                php_type: "mixed".to_string(),
+                by_ref: false,
+                variadic: true,
+                default: None,
+            },
+        ),
+        (
+            "array &...$rest",
+            PreludeParam {
+                name: "rest".to_string(),
+                php_type: "array".to_string(),
+                by_ref: true,
+                variadic: true,
+                default: None,
+            },
+        ),
+        (
+            "$untyped = []",
+            PreludeParam {
+                name: "untyped".to_string(),
+                php_type: String::new(),
+                by_ref: false,
+                variadic: false,
+                default: Some("[]".to_string()),
+            },
+        ),
+    ];
+    for (raw, expected) in cases {
+        assert_eq!(&parse_prelude_param(raw, "fixture"), expected, "parsing {raw:?}");
+    }
+
+    assert!(php_type_matches(TypeSpec::Mixed, "CurlHandle"));
+    assert!(php_type_matches(TypeSpec::Int, "?int"));
+    assert!(!php_type_matches(TypeSpec::Mixed, "int"));
+    assert!(!php_type_matches(TypeSpec::Float, "int"));
+    assert!(default_matches(&DefaultSpec::Float(1.0), "1.00"));
+    assert!(!default_matches(&DefaultSpec::Float(1.0), "5.0"));
+    assert!(default_matches(&DefaultSpec::Null, "NULL"));
+    assert!(!default_matches(&DefaultSpec::Bool(false), "true"));
+}
+
+/// Returns the PHP-visible function names one prelude source declares at top level.
+///
+/// `__elephc_`-prefixed helpers are the preludes' own internals — they are not PHP
+/// surface and carry no contract by design.
+fn php_visible_declarations(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .filter_map(|line| line.strip_prefix("function "))
+        .filter_map(|rest| rest.split('(').next())
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !name.starts_with("__elephc_"))
+        .map(str::to_string)
+        .collect()
 }
