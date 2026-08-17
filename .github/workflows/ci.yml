@@ -679,12 +679,17 @@ jobs:
   #   (b) the eval+curl duplicate-symbol link shape (elephc_magician and elephc_curl
   #       both linked into one program, exercised by codegen::curl::eval) is
   #       unverified on the Linux container's toolchain/ld.
-  #   (c) this is also the first time `elephc native install` builds openssl/curl/zlib
-  #       from source *inside* the elephc-ci container image on Linux --
-  #       managed-native-smoke only proves those recipes on the bare
-  #       ubuntu-24.04(-arm) runner images. openssl's Configure needs `perl`; Debian's
-  #       perl-base (required-priority, present in the `ubuntu:24.04` base image) is
-  #       expected to be enough, but that has not been exercised here before.
+  #   (c) this is also the first time `elephc native install` fetches curl/openssl/zlib
+  #       source over the network and builds it from scratch *inside* the elephc-ci
+  #       container image on Linux -- managed-native-smoke only proves those recipes
+  #       on the bare ubuntu-24.04(-arm) runner images (no `container:` there).
+  #       openssl's Configure needs `perl`, but that part is not actually at risk:
+  #       .github/docker/ci.Dockerfile installs build-essential, which hard-Depends on
+  #       dpkg-dev, which hard-Depends on the full `perl` package (Depends install
+  #       unconditionally, --no-install-recommends notwithstanding), so perl with every
+  #       module Configure needs is already guaranteed present. The genuine unknown is
+  #       everything else about a from-source build reaching out over the network from
+  #       inside this specific minimal container for the first time.
   curl-codegen-tests-macos-aarch64:
     name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
     needs: build-archive-macos-aarch64
@@ -704,6 +709,12 @@ jobs:
         run: brew install pcre2
 
       - name: Cache managed native curl/openssl/zlib
+        # Deliberately the shared default path (unlike managed-native-smoke, which
+        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
+        # from-empty install): here we *want* one warm, reusable cache root that
+        # persists across runs via the key below, and it must also be the path
+        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
+        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
@@ -774,6 +785,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Cache managed native curl/openssl/zlib
+        # Deliberately the shared default path (unlike managed-native-smoke, which
+        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
+        # from-empty install): here we *want* one warm, reusable cache root that
+        # persists across runs via the key below, and it must also be the path
+        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
+        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
@@ -844,6 +861,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Cache managed native curl/openssl/zlib
+        # Deliberately the shared default path (unlike managed-native-smoke, which
+        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
+        # from-empty install): here we *want* one warm, reusable cache root that
+        # persists across runs via the key below, and it must also be the path
+        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
+        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
         uses: actions/cache@v4
         with:
           path: ~/.cache/elephc/native
