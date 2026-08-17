@@ -13,9 +13,10 @@
 //!   "HTTPS fails in a way no test looks at". The success case reads a body back over the
 //!   socket; the failure case gets libcurl's own certificate `CURLcode`.
 //! - NO SYSTEM CA STORE IS INVOLVED, on purpose. The success case turns verification off
-//!   and the failure case expects a rejection, so neither depends on what the BUILD
-//!   machine had installed — which matters because the curl recipe's CA autodetection is
-//!   not hermetic yet (recorded for the plan's final review, not fixed here).
+//!   and the failure case supplies its own bundle, so neither depends on what the BUILD
+//!   machine (or the running machine) had installed. Which store a transfer that
+//!   configures NOTHING ends up using is a separate question, answered by runtime CA
+//!   discovery and covered by `easy_ca.rs`.
 //! - BOTH `CURLOPT_SSL_VERIFYPEER` AND `CURLOPT_SSL_VERIFYHOST` HAVE TO GO for the success
 //!   case. They are independent checks in libcurl: with only the peer check off, the
 //!   default `VERIFYHOST=2` still rejects the fixture, whose certificate carries

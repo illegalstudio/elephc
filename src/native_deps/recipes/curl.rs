@@ -9,6 +9,14 @@
 //! - `curl` is the first catalog package with non-empty `dependencies`; its recipe never probes
 //!   the system for OpenSSL/zlib and only trusts the prefixes materialization already built and
 //!   passed through `RecipeRequest::dependency_prefixes`.
+//! - NO `--with-ca-bundle`/`--with-ca-path` IS PASSED, DELIBERATELY, and the resulting build is
+//!   NOT hermetic in that one respect: `configure`'s own `CURL_CHECK_CA_BUNDLE` probes this
+//!   BUILD machine and bakes whatever absolute path it finds in as `CURL_CA_BUNDLE` (and bakes
+//!   nothing at all when the `--host=` branch below makes it cross-compile). Pinning a path here
+//!   would not help — a build-time constant is a build-time constant either way — so
+//!   PORTABILITY IS SOLVED AT RUN TIME INSTEAD, in `crates/elephc-curl/src/ca.rs`, which checks
+//!   whether the baked path exists on the machine actually running the binary and falls back to
+//!   a fixed list of distribution root stores when it does not.
 
 use std::fs;
 use std::path::{Path, PathBuf};

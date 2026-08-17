@@ -157,38 +157,94 @@ Note that these are **elephc's** pinned versions. They will differ from
 `php -r "print_r(curl_version());"` on the same machine, which reports whatever
 libcurl the host PHP was built against.
 
-### The CA trust store caveat
+### The CA trust store
 
-**This is the one thing to check before shipping an HTTPS client.** The managed
-curl recipe does not bundle a CA certificate store and does not pass
-`--with-ca-bundle` / `--with-ca-path`. libcurl's `configure` therefore autodetects
-a CA path on the **build machine** and bakes that absolute path into the archive.
-On a macOS build host, for instance:
+**HTTPS verifies out of the box, including on a machine other than the one that
+compiled the binary.** That is not something libcurl does on its own, so it is
+worth knowing how it works.
+
+The managed curl recipe passes no `--with-ca-bundle` / `--with-ca-path`, so
+libcurl's `configure` autodetects a CA bundle on the **build machine** and bakes
+that absolute path into the archive (`/etc/ssl/cert.pem` on a macOS build host,
+`/etc/ssl/certs/ca-certificates.crt` on a Debian one — and *nothing at all* when
+the recipe cross-compiles, because `configure` skips the detection entirely in
+that case). Left alone, a binary shipped anywhere else fails every verified HTTPS
+transfer with `CURLE_SSL_CACERT_BADFILE` (`77`).
+
+elephc's curl bridge therefore resolves a CA bundle at **run** time and sets it
+as an ordinary `CURLOPT_CAINFO` on each handle. The order, applied once per
+process at the first `curl_init()`:
+
+1. **`$CURL_CA_BUNDLE`**, if it names an absolute path. Not checked for
+   existence — naming a bundle is an instruction, and a wrong one fails loudly
+   rather than being silently replaced by a guess.
+2. **Nothing at all**, if the baked-in path exists on this machine. A binary
+   running on its own build host, or on any system with the same layout, behaves
+   exactly as it did before this feature existed.
+3. **The first of these that exists**, otherwise:
+   `/etc/ssl/certs/ca-certificates.crt` (Debian, Ubuntu, Arch, Alpine, NixOS) ·
+   `/etc/pki/tls/certs/ca-bundle.crt` (Fedora, RHEL 6) ·
+   `/etc/ssl/ca-bundle.pem` (openSUSE) · `/etc/pki/tls/cacert.pem` ·
+   `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` (RHEL 7+) ·
+   `/etc/ssl/cert.pem` (macOS, Alpine, FreeBSD/OpenBSD) ·
+   `/usr/share/ssl/certs/ca-bundle.crt` · `/usr/local/share/certs/ca-root-nss.crt`
+   (FreeBSD).
+4. **Nothing**, if none of them exists. The handle is left exactly as libcurl
+   configured it and libcurl reports its own error. Discovery never relaxes
+   verification to make a transfer succeed.
+
+The list is fixed, absolute, and made of locations a distribution's own
+`ca-certificates` package owns. Nothing is derived from the working directory,
+`$HOME`, or `$PATH`, and no certificate is ever downloaded.
+
+**Your own configuration always wins.** Setting either CA option on a handle
+retires the discovered bundle for that handle:
 
 ```php
-$info = curl_getinfo(curl_init());
-echo $info["cainfo"];   // /etc/ssl/cert.pem   — a path from the BUILD machine
-```
-
-That path travels into every binary built from that cache. If the machine
-*running* the binary has no file there, HTTPS certificate verification fails with
-`CURLE_SSL_CACERT_BADFILE` (`77`) even though the transfer itself is fine. Two
-ways to make this deterministic:
-
-```php
-// 1. Point at a bundle you ship with the application.
+// A bundle you ship with the application.
 curl_setopt($ch, CURLOPT_CAINFO, __DIR__ . "/ca-bundle.pem");
 
-// 2. Or a directory of hashed certificates.
+// Or a directory of hashed certificates. This also removes the discovered
+// bundle, so you verify against your directory and nothing else.
 curl_setopt($ch, CURLOPT_CAPATH, "/etc/ssl/certs");
 ```
 
-Both options reach libcurl directly and are honored. Disabling verification with
-`CURLOPT_SSL_VERIFYPEER => false` also "works" and is, as always, a bad idea.
+`curl_reset($ch)` puts the discovered bundle back (it restores libcurl's own
+defaults, which would otherwise mean the dead baked-in path), and
+`curl_copy_handle($ch)` carries whichever bundle the original had. Disabling
+verification with `CURLOPT_SSL_VERIFYPEER => false` also "works" and is, as
+always, a bad idea.
 
-A bundled, hermetic CA story is a follow-up; until it lands, treat
-`CURLOPT_CAINFO` as required configuration for any HTTPS client that has to run
-on a machine other than the one that built it.
+#### Where this differs from php
+
+| | php 8.4 | elephc |
+|---|---|---|
+| Portability comes from | the distro's own libcurl, built for that distro | runtime discovery, above |
+| `curl.cainfo` / `openssl.cafile` php.ini | honored | **not implemented** — elephc has no php.ini for curl |
+| `$CURL_CA_BUNDLE` | ignored | **honored** (parity with the `curl` command-line tool, which reads the same variable) |
+| `$SSL_CERT_FILE` / `$SSL_CERT_DIR` | ignored | ignored — this build has no OpenSSL default-verify-paths fallback compiled in, so they were never consulted |
+
+Honoring `$CURL_CA_BUNDLE` is the deliberate part: it is the only process-wide
+escape hatch available when the handles are created by library code you do not
+control, which is exactly the situation `curl.cainfo` exists to solve in php. It
+can only redirect verification, never weaken it.
+
+Two things discovery does **not** do. It never picks a `CURLOPT_CAPATH`
+directory — a hashed-certificate directory needs an OpenSSL `c_rehash` layout
+that a filesystem check cannot confirm — and it does not touch
+`CURLOPT_PROXY_CAINFO`, so verifying the certificate of an **HTTPS proxy** still
+uses libcurl's baked-in path. Set `CURLOPT_PROXY_CAINFO` explicitly if you tunnel
+through one.
+
+```php
+// This reports the path libcurl was BUILT with, not the one in force.
+$info = curl_getinfo(curl_init());
+echo $info["cainfo"];   // /etc/ssl/cert.pem
+```
+
+That is not an elephc quirk: libcurl answers `CURLINFO_CAINFO` from a
+compile-time constant, so it is unchanged by `curl_setopt($ch, CURLOPT_CAINFO,
+…)` too, in php exactly as here.
 
 ## The function and class surface
 

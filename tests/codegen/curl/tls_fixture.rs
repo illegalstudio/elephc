@@ -27,7 +27,9 @@
 //! - NO SYSTEM CA STORE IS INVOLVED ON EITHER SIDE. The success case turns verification OFF and
 //!   the failure case leaves it ON and expects rejection, so these fixtures run
 //!   identically on a machine with no system trust store — which is what keeps them
-//!   independent of the managed curl build's (currently non-hermetic) CA autodetection.
+//!   independent of both the managed curl build's build-time CA autodetection and the
+//!   bridge's runtime CA discovery (`crates/elephc-curl/src/ca.rs`). `easy_ca.rs` is the
+//!   file that DOES depend on those, and it reuses this same server and bundle.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;

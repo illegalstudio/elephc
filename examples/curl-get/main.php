@@ -6,12 +6,12 @@
 // it still compiles and reports why nothing was fetched when the network is unavailable,
 // rather than crashing.
 //
-// https:// works too, but the managed curl/OpenSSL recipe does not bundle a CA trust store
-// (no --with-ca-bundle/--with-ca-path), so verification depends on whatever CA path the
-// BUILD machine's libcurl configure autodetected and baked into the archive. A portable
-// HTTPS client sets CURLOPT_CAINFO explicitly. The headline request below therefore stays
-// on plain http:// on purpose. See docs/php/curl.md for the full CA-trust-store caveat and
-// the protocol matrix.
+// https:// works too, and verifies out of the box: the managed curl/OpenSSL recipe bakes
+// the BUILD machine's CA path into the archive, so the bridge discovers a real trust store
+// at RUN time and sets CURLOPT_CAINFO itself when that baked path is not there. Set
+// CURLOPT_CAINFO (or $CURL_CA_BUNDLE) when you want to pin a specific bundle. The headline
+// request below stays on plain http:// only so the example needs nothing but a socket. See
+// docs/php/curl.md for the resolution order and the protocol matrix.
 
 $ch = curl_init("http://example.com/");
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
