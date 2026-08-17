@@ -11,7 +11,8 @@
 
 use crate::builtins::registry;
 use elephc_builtin_contract::{
-    aot_support, BackendImplementation, BackendSupport, BuiltinContract,
+    aot_signature_profile, aot_support, Area, BackendImplementation, BackendSupport,
+    BuiltinContract,
 };
 
 /// Returns the PHP-visible extension builtins a prelude must never call directly.
@@ -25,6 +26,21 @@ fn php_visible_extension_builtins() -> Vec<String> {
     }
     names
 }
+
+/// Every injected prelude that can declare a PHP-visible builtin, by name.
+///
+/// `prelude_contracts_match_their_injected_signatures` requires each
+/// `BackendImplementation::Prelude` contract to be declared by exactly one of these,
+/// so a second prelude quietly redeclaring a name is a failure, not a coin toss.
+const PRELUDE_SOURCES: &[(&str, &str)] = &[
+    ("hash_prelude", crate::hash_prelude::HASH_PRELUDE_SRC),
+    ("curl_prelude", crate::curl_prelude::CURL_PRELUDE_SRC),
+    ("pdo_prelude", crate::pdo_prelude::PDO_PRELUDE_SRC),
+    ("tz_prelude", crate::tz_prelude::TZ_PRELUDE_SRC),
+    ("var_export_prelude", crate::var_export_prelude::VAR_EXPORT_PRELUDE_SRC),
+    ("image_prelude", crate::image_prelude::IMAGE_PRELUDE_SRC),
+    ("web_prelude", crate::web_prelude::WEB_PRELUDE_SRC),
+];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///
@@ -146,4 +162,170 @@ fn extension_builtin_set_matches_shared_contracts() {
         .map(|contract| contract.name)
         .collect::<Vec<_>>();
     assert_eq!(tagged, expected, "AOT extension contract join drifted");
+}
+
+/// One PHP parameter exactly as an injected prelude declares it.
+#[derive(Debug, PartialEq, Eq)]
+struct PreludeParam {
+    /// Variable name without the leading `$`.
+    name: String,
+    /// Declared `&$name`.
+    by_ref: bool,
+    /// Carries a PHP default expression.
+    optional: bool,
+}
+
+/// Verifies every prelude-provided contract matches its injected PHP declaration.
+///
+/// A `BuiltinKind::PreludeProvided` contract deliberately has NO `builtin!` binding, so
+/// the cross-backend audit in `tests/builtin_parity_tests.rs` has no AOT registry
+/// metadata to compare its catalog signature against — the compiler-side signature such
+/// a contract really has is the PHP function its prelude injects. This test reads that
+/// declaration and compares it with the catalog (through `aot_signature_profile`, so a
+/// documented subset like `hash_init`'s is honoured), closing the one structural hole in
+/// prelude parity.
+///
+/// Covers the four `hash_*` contracts in every configuration and the thirty-four `curl_*`
+/// contracts whenever the root `curl` feature publishes them.
+#[test]
+fn prelude_contracts_match_their_injected_signatures() {
+    let mut checked: Vec<&str> = Vec::new();
+    let mut curl_checked = 0usize;
+    for contract in elephc_builtin_contract::contracts() {
+        if !matches!(
+            aot_support(contract),
+            BackendSupport::Implemented(BackendImplementation::Prelude)
+        ) {
+            continue;
+        }
+
+        let found = PRELUDE_SOURCES
+            .iter()
+            .filter_map(|(prelude, source)| {
+                parse_prelude_declaration(source, contract.name).map(|params| (*prelude, params))
+            })
+            .collect::<Vec<_>>();
+        let sources = found.iter().map(|(prelude, _)| *prelude).collect::<Vec<_>>();
+        assert_eq!(
+            found.len(),
+            1,
+            "{} must be declared by exactly one prelude, found {sources:?}",
+            contract.name
+        );
+
+        let (prelude, actual) = &found[0];
+        let signature = aot_signature_profile(contract).signature;
+        let expected = signature
+            .params
+            .iter()
+            .map(|param| PreludeParam {
+                name: param.name.to_string(),
+                by_ref: param.by_ref,
+                optional: param.default.is_some(),
+            })
+            .chain(signature.variadic.map(|name| PreludeParam {
+                name: name.to_string(),
+                by_ref: false,
+                optional: true,
+            }))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            *actual, expected,
+            "{} signature drifted from {prelude}",
+            contract.name
+        );
+
+        checked.push(contract.name);
+        if matches!(contract.area, Area::Curl) {
+            curl_checked += 1;
+        }
+    }
+
+    assert!(
+        ["hash_copy", "hash_final", "hash_init", "hash_update"]
+            .iter()
+            .all(|name| checked.contains(name)),
+        "the hash prelude contracts must always be audited, saw {checked:?}"
+    );
+    // The root `curl` feature (see `Cargo.toml`) is what relays
+    // `elephc-builtin-contract/curl`; publishing that catalog slice any other way is
+    // not a supported configuration.
+    assert_eq!(
+        curl_checked,
+        if cfg!(feature = "curl") { 34 } else { 0 },
+        "curl prelude contracts audited"
+    );
+}
+
+/// Returns the parameters of `function <name>(...)` declared in one prelude source.
+///
+/// Returns `None` when the prelude does not declare the function at all. Only
+/// top-level declarations count: the leading-character check keeps
+/// `__elephc_curl_easy_body(` from matching the contract name `curl_easy_body`.
+fn parse_prelude_declaration(source: &str, name: &str) -> Option<Vec<PreludeParam>> {
+    let needle = format!("function {name}(");
+    let start = source
+        .match_indices(&needle)
+        .find(|(index, _)| {
+            matches!(source[..*index].chars().next_back(), None | Some('\n') | Some(' '))
+        })?
+        .0;
+    let open = start + needle.len();
+
+    let mut depth = 1usize;
+    let mut close = None;
+    for (offset, ch) in source[open..].char_indices() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let list = &source[open..close.expect("prelude declaration must close its parameter list")];
+
+    let mut raw_params: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    for ch in list.chars() {
+        match ch {
+            '(' | '[' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' | ']' => {
+                depth -= 1;
+                current.push(ch);
+            }
+            ',' if depth == 0 => raw_params.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    if !current.trim().is_empty() {
+        raw_params.push(current);
+    }
+
+    Some(
+        raw_params
+            .iter()
+            .map(|raw| {
+                let dollar = raw
+                    .find('$')
+                    .unwrap_or_else(|| panic!("prelude parameter {raw:?} of {name} has no variable"));
+                PreludeParam {
+                    name: raw[dollar + 1..]
+                        .chars()
+                        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                        .collect(),
+                    by_ref: raw[..dollar].trim_end().ends_with('&'),
+                    optional: raw[dollar..].contains('='),
+                }
+            })
+            .collect(),
+    )
 }

@@ -12,10 +12,28 @@
 use std::collections::BTreeSet;
 
 use elephc_builtin_contract::{
-    aot_signature_profile, aot_support, contracts, eval_signature, eval_support, Area,
-    AotSignatureOverrideReason, BackendImplementation, BackendSupport, BuiltinContract,
-    BuiltinSignature,
+    aot_signature_profile, aot_support, contracts, eval_execution, eval_signature,
+    eval_signature_profile, eval_support, Area, AotSignatureOverrideReason,
+    BackendImplementation, BackendSupport, BuiltinContract, BuiltinKind, BuiltinSignature,
+    EvalAdapterReason, EvalExecution,
 };
+
+/// PHP-visible `curl_*` contracts the shared catalog publishes in this configuration.
+///
+/// `elephc-builtin-contract` compiles `catalog_curl.rs` only under its own `curl`
+/// feature, and the root package's `curl` feature is the relay that turns it on for
+/// this test binary together with Magician's `ext/curl` eval bindings (see the root
+/// `Cargo.toml`). Feature-off the number is zero and every assertion below reduces to
+/// "the surface is absent"; feature-on it is the complete surface, and the curl
+/// contracts are audited by exactly the same machinery as every other builtin.
+const CURL_SURFACE_LEN: usize = if cfg!(feature = "curl") { 34 } else { 0 };
+
+/// The two curl contracts whose eval route needs caller-addressable storage.
+///
+/// `curl_multi_exec` writes its running-transfer count and `curl_multi_info_read` its
+/// queue depth back through a by-reference parameter; every other curl contract is an
+/// ordinary prelude-provided surface.
+const CURL_BY_REF_CONTRACTS: &[&str] = &["curl_multi_exec", "curl_multi_info_read"];
 
 /// Verifies all contract surfaces outside the ordinary AOT registry have typed routes.
 #[test]
@@ -30,20 +48,16 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         })
         .collect::<Vec<_>>();
 
-    // `elephc-builtin-contract` publishes the thirty-four prelude-provided `curl_*`
-    // contracts only under its own `curl` feature (see that crate's `catalog_curl`
-    // module doc), and no root feature relays it today — so every runnable
-    // configuration of this test sees zero of them. Partitioning rather than
-    // `cfg!`-ing keeps each assertion below at full strength while surviving the
-    // first root `curl` relay somebody adds on the `pdo-*` precedent: this test
-    // would otherwise fail with an off-by-thirty-four the moment that lands.
+    // The prelude-provided `curl_*` contracts are counted separately so the fixed
+    // totals below stay about the non-curl surface in both configurations; the curl
+    // surface's own per-contract audit is `curl_php_surface_is_a_full_parity_citizen`.
     let (curl_surface, exceptional): (Vec<&BuiltinContract>, Vec<&BuiltinContract>) = exceptional
         .into_iter()
         .partition(|contract| matches!(contract.area, Area::Curl));
-    assert!(
-        curl_surface.is_empty() || curl_surface.len() == 34,
-        "the curl PHP surface is published all-or-nothing, saw {}",
-        curl_surface.len()
+    assert_eq!(
+        curl_surface.len(),
+        CURL_SURFACE_LEN,
+        "the curl PHP surface is published all-or-nothing by the `curl` feature"
     );
     for contract in &curl_surface {
         assert_eq!(
@@ -91,6 +105,133 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     assert_eq!(
         profile.override_reason,
         Some(AotSignatureOverrideReason::PreludeSignatureSubset)
+    );
+}
+
+/// Verifies the PHP-visible curl surface is audited like every other builtin.
+///
+/// Feature-off this proves the surface is wholly absent — no `curl_*` contract and no
+/// Magician binding claiming one. Feature-on it applies, per contract, every check the
+/// shared machinery can express for a `PreludeProvided` entry:
+///
+/// - catalog classification: `Area::Curl`, `BuiltinKind::PreludeProvided`, neither
+///   `internal` nor `extension`, and a `curl_` PHP name;
+/// - the AOT route (`Prelude`) with no deliberate signature divergence;
+/// - the eval route (`Registry`) with no deliberate signature divergence, plus the
+///   documented `EvalExecution` classification each contract must carry;
+/// - signature agreement between the catalog and Magician's real binding — parameter
+///   names, required and default counts, variadic name, by-reference markers;
+/// - both backends' public name sets: a prelude-routed name is deliberately absent from
+///   the compiler's registry-derived name set and present in Magician's.
+///
+/// STRUCTURALLY INAPPLICABLE, and why. There is no AOT *registry* signature to compare
+/// against: a prelude-provided contract has no `builtin!` binding by definition, so
+/// `elephc::builtin_metadata::builtin_signature_metadata` answers `None`. This is not a
+/// curl exemption — `backend_signature_shapes_derive_from_shared_contracts` skips the
+/// four `hash_*` prelude contracts for exactly the same reason, and has since the
+/// shared-contract migration. The compiler-side signature these contracts DO have is the
+/// PHP function declaration inside the injected prelude, and that is compared against the
+/// catalog by `builtins::parity_tests::prelude_contracts_match_their_injected_signatures`
+/// — a lib test rather than one here, because the prelude sources are `pub(crate)`.
+#[test]
+fn curl_php_surface_is_a_full_parity_citizen() {
+    let curl_surface = contracts()
+        .iter()
+        .filter(|contract| matches!(contract.area, Area::Curl) && !contract.internal)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        curl_surface.len(),
+        CURL_SURFACE_LEN,
+        "PHP-visible curl contract count"
+    );
+
+    let aot_names = elephc::builtin_metadata::php_visible_builtin_names()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let eval_names = elephc_magician::builtin_metadata::php_visible_builtin_names()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    for contract in &curl_surface {
+        let name = contract.name;
+        assert!(name.starts_with("curl_"), "{name} is not a curl PHP name");
+        assert_eq!(contract.kind, BuiltinKind::PreludeProvided, "{name} kind");
+        assert!(!contract.extension, "{name} is not a strict-PHP extension");
+        assert_eq!(
+            aot_support(contract),
+            BackendSupport::Implemented(BackendImplementation::Prelude),
+            "{name} AOT route"
+        );
+        assert_eq!(
+            aot_signature_profile(contract).override_reason,
+            None,
+            "{name} must not diverge from the canonical AOT signature"
+        );
+        assert_eq!(
+            eval_support(contract),
+            BackendSupport::Implemented(BackendImplementation::Registry),
+            "{name} eval route"
+        );
+        assert_eq!(
+            eval_signature_profile(contract).override_reason,
+            None,
+            "{name} must not diverge from the canonical eval signature"
+        );
+
+        let expected_reason = if CURL_BY_REF_CONTRACTS.contains(&name) {
+            EvalAdapterReason::ByReferenceOrLvalue
+        } else {
+            EvalAdapterReason::DynamicLanguageSurface
+        };
+        assert_eq!(
+            eval_execution(contract),
+            Some(EvalExecution::Adapter {
+                runtime_builtin: None,
+                reason: expected_reason,
+            }),
+            "{name} eval execution route"
+        );
+
+        let actual = elephc_magician::builtin_metadata::builtin_signature_metadata(name)
+            .unwrap_or_else(|| panic!("missing eval signature for {name}"));
+        assert_signature_shape(
+            name,
+            eval_signature(contract),
+            &actual.params,
+            actual.required_param_count,
+            actual.default_param_count,
+            actual.variadic.as_deref(),
+            &actual.by_ref_params,
+        );
+
+        assert!(
+            !aot_names.contains(name),
+            "{name} reaches AOT through the prelude, not the builtin registry"
+        );
+        assert!(eval_names.contains(name), "{name} missing from Magician");
+    }
+
+    let by_ref_seen = curl_surface
+        .iter()
+        .filter(|contract| contract.params.iter().any(|param| param.by_ref))
+        .map(|contract| contract.name)
+        .collect::<Vec<_>>();
+    let expected_by_ref = if CURL_SURFACE_LEN == 0 {
+        Vec::new()
+    } else {
+        CURL_BY_REF_CONTRACTS.to_vec()
+    };
+    assert_eq!(by_ref_seen, expected_by_ref, "curl by-reference surface");
+
+    let stray = eval_names
+        .iter()
+        .filter(|name| name.starts_with("curl_"))
+        .count();
+    assert_eq!(
+        stray, CURL_SURFACE_LEN,
+        "Magician must expose exactly the curl contracts the catalog publishes"
     );
 }
 
