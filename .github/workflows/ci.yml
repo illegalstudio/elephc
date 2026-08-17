@@ -1232,13 +1232,13 @@ jobs:
           grep -F "Unicode letters detected" "$RUNNER_TEMP/date-json-regex.out"
 
       - name: Compile and run curl through the production resolver
-        # Exercises the full chain the 136+ curl codegen fixtures also need but
+        # Exercises the full chain the 194 curl codegen fixtures also need but
         # cannot assume in ordinary CI (see tests/codegen/support/curl_native.rs):
         # the elephc_curl bridge staticlib linked against a real, managed
-        # libcurl/libssl/libcrypto/libz. The GET to example.com may or may not
-        # reach the network on a given runner, so only network-independent
-        # output is asserted — the compiled binary always reaches real
-        # curl_exec()/curl_errno()/curl_error() either way.
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2. The GET to
+        # example.com may or may not reach the network on a given runner, so
+        # only network-independent output is asserted — the compiled binary
+        # always reaches real curl_exec()/curl_errno()/curl_error() either way.
         shell: bash
         run: |
           ./target/debug/elephc \

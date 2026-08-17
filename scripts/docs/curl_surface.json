@@ -1300,7 +1300,7 @@
         "exact_size": 3104002,
         "sha256": "aa317e2cf9dca6afa0aed68f8fad6ff303ec6982e25a78c75c0b65e2b9b3ded5",
         "role": "libcurl's HTTP/2 framing library (--with-nghttp2). Built --enable-lib-only, so it links nothing itself.",
-        "checksum_cross_check": "nghttp2 publishes no standalone checksum file and GitHub Releases is its only distribution point, so the sha256 and the 3104002-byte size are the release asset's own, read from `gh api repos/nghttp2/nghttp2/releases/latest` for tag v1.70.0 and re-hashed locally after download."
+        "checksum_cross_check": "Matches the published checksums.txt asset on the v1.70.0 release (https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/checksums.txt), which lists `aa317e2cf9dca6afa0aed68f8fad6ff303ec6982e25a78c75c0b65e2b9b3ded5  nghttp2-1.70.0.tar.gz`, and the locally re-hashed download. The release also ships a detached PGP signature (nghttp2-1.70.0.tar.gz.asc) for a stronger check against the maintainer key if ever wanted."
     },
     "libssh2": {
         "version": "1.11.1",

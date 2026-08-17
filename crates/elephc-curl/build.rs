@@ -57,6 +57,16 @@ fn declare_check_cfg() {
 /// Adds a native search path for `dir` when it exists, so a missing/typo'd
 /// override directory fails at link time with a clear "symbol not found"
 /// instead of a silently-ignored search path.
+///
+/// Every `rustc-link-lib=static=…` below is emitted UNCONDITIONALLY, even when
+/// its directory variable is unset — deliberately, and the asymmetry is the
+/// point. Dropping the `-l` too would hand the linker a build with no libssh2
+/// (say) at all, which surfaces as a wall of undefined `libssh2_*` symbols
+/// referenced from `libcurl.a` and reads like a libcurl problem. Keeping the
+/// `-l` makes the same mistake fail as `library not found for -lssh2`, which
+/// names the thing that is actually missing. The one variable that IS required
+/// is `ELEPHC_CURL_LIB_DIR`: without it `main` returns early and none of these
+/// directives are emitted, so the gated tests are not compiled in either.
 fn add_search_path(dir: &std::ffi::OsStr) {
     println!("cargo:rustc-link-search=native={}", Path::new(dir).display());
 }

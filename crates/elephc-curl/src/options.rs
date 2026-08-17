@@ -351,7 +351,9 @@ pub(crate) const OPTION_KINDS: &[(i32, i32)] = &[
     // `SSL_CTX *`, a socket) that this build has no PHP-visible type for.
     // NOTE ON SSH_HOSTKEY: it is the CALLBACK that is unbuilt, not the protocol — since
     // curl recipe revision 2 this build carries libssh2, so `scp://`/`sftp://` and the
-    // whole `CURLOPT_SSH_*` option family below are live.
+    // whole `CURLOPT_SSH_*` option family listed ABOVE (AUTH_TYPES 151, COMPRESSION 268,
+    // PUBLIC_KEYFILE 10152, PRIVATE_KEYFILE 10153, HOST_PUBLIC_KEY_MD5 10162, KNOWNHOSTS
+    // 10183, HOST_PUBLIC_KEY_SHA256 10311) are live.
     (20200, KIND_UNSUPPORTED), // CURLOPT_FNMATCH_FUNCTION
     (20219, KIND_CALLBACK), // CURLOPT_XFERINFOFUNCTION
     (20312, KIND_UNSUPPORTED), // CURLOPT_PREREQFUNCTION

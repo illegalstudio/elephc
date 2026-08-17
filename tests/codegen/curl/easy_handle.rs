@@ -68,13 +68,14 @@ fn curl_version_reports_pinned_libcurl() {
 /// protocol matrix in `docs/php/curl.md` a checked claim rather than a comment: it pins
 /// the whole list, in libcurl's own order, for curl recipe revision 2.
 ///
-/// This is deliberately NOT a php-parity assertion. A distro's libcurl carries `ldap`,
-/// `ldaps` and (where librtmp survives) `rtmp*` that this build does not, and typically
-/// lacks nothing this build has; comparing our list to the one a system `php` prints
-/// would be comparing two build configurations, not two implementations. What must match
-/// php is the SHAPE — a list of lowercase scheme strings in libcurl's order — and that is
-/// what `curl_version_exposes_php_key_shape` and `curl_version_keys_are_in_phps_order`
-/// cover.
+/// This is deliberately NOT a php-parity assertion, and the lists genuinely differ in
+/// BOTH directions. A distro php's libcurl typically carries `ldap`/`ldaps`, which this
+/// build does not; and this build carries schemes a given distro php may not — measured
+/// on this machine, php 8.4.20's libcurl 8.19.0 has no `scp`/`sftp` at all. Comparing the
+/// two lists would be comparing two build configurations, not two implementations. What
+/// must match php is the SHAPE — a list of lowercase scheme strings in libcurl's own
+/// order — and that is what `curl_version_exposes_php_key_shape` and
+/// `curl_version_keys_are_in_php_s_order` cover.
 ///
 /// `ipfs`/`ipns` are absent on purpose: curl's configure summary reports them as enabled,
 /// but they are a feature of the curl TOOL (which rewrites an IPFS URL to an HTTP gateway
@@ -132,15 +133,22 @@ fn curl_version_reports_http2_and_the_ssh_library() {
 /// distinguishable — which is what makes a scheme's status observable from PHP without a
 /// network:
 ///
-/// - a built-in scheme gets as far as CONNECTING (`sftp://` to a closed local port fails
-///   with `CURLE_COULDNT_CONNECT`, 7, proving libcurl knows the scheme);
+/// - a built-in scheme gets as far as CONNECTING (`sftp://` to a closed local port),
+///   proving libcurl knows the scheme;
 /// - a scheme libcurl knows but was built without says `is disabled` (`ldap`, which needs
 ///   an OpenLDAP this catalog does not pin);
-/// - a scheme libcurl has no handler for at all says `not supported` (`rtmp`, whose
-///   librtmp is abandoned upstream).
+/// - a scheme libcurl has no handler for at all says `not supported` (`rtmp`, which curl
+///   8.20.0 removed outright — see `docs/DEPRECATE.md` in the pinned tarball).
 ///
-/// All three are errno 1 vs 7 — never a fabricated success. The `sftp` half is the only
-/// socket this file opens, and it opens it against `127.0.0.1:1` with a 200 ms cap, so it
+/// THE CONNECT HALF ACCEPTS TWO ERRNOS, ON PURPOSE. A closed loopback port normally
+/// REJECTs, giving `CURLE_COULDNT_CONNECT` (7); somewhere that DROPs instead, the 200 ms
+/// cap expires first and libcurl reports `CURLE_OPERATION_TIMEDOUT` (28). Pinning 7 alone
+/// would make this fixture flake on hardened hosts for a reason unrelated to what it
+/// tests, so the PHP below folds both into one token. The distinction that MATTERS is
+/// still exact: either value proves libcurl accepted the scheme and opened a socket,
+/// while a build without SFTP would answer errno 1 and never reach the network stack.
+///
+/// That socket is the only one this file opens — `127.0.0.1:1`, capped at 200 ms — so it
 /// resolves nothing and reaches no network.
 #[test]
 fn built_in_disabled_and_unknown_schemes_stay_distinguishable() {
@@ -152,7 +160,10 @@ fn built_in_disabled_and_unknown_schemes_stay_distinguishable() {
         $sftp = curl_init("sftp://127.0.0.1:1/x");
         curl_setopt($sftp, CURLOPT_CONNECTTIMEOUT_MS, 200);
         curl_exec($sftp);
-        echo curl_errno($sftp), "\n";
+        // 7 = CURLE_COULDNT_CONNECT (port refused), 28 = CURLE_OPERATION_TIMEDOUT
+        // (port dropped, cap expired). Both mean "scheme accepted, socket opened".
+        $reached = in_array(curl_errno($sftp), [7, 28], true);
+        echo $reached ? "connected\n" : ("unreached:" . curl_errno($sftp) . "\n");
         $ldap = curl_init("ldap://127.0.0.1:1/x");
         curl_exec($ldap);
         echo curl_errno($ldap), " ", curl_error($ldap), "\n";
@@ -163,7 +174,7 @@ fn built_in_disabled_and_unknown_schemes_stay_distinguishable() {
     );
     assert_eq!(
         out,
-        "7\n1 Protocol \"ldap\" is disabled\n1 Protocol \"rtmp\" not supported\n"
+        "connected\n1 Protocol \"ldap\" is disabled\n1 Protocol \"rtmp\" not supported\n"
     );
 }
 

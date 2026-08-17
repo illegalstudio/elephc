@@ -75,8 +75,8 @@ never disagree about it.
 ## Protocol matrix
 
 The pinned libcurl carries 25 schemes — everything a stock distribution libcurl
-offers except LDAP and RTMP. `curl_version()['protocols']` on this build reports
-exactly:
+of this vintage offers except LDAP. `curl_version()['protocols']` on this build
+reports exactly:
 
 ```
 dict file ftp ftps gopher gophers http https imap imaps mqtt mqtts pop3 pop3s
@@ -118,8 +118,11 @@ echo curl_error($ch);   // Protocol "rtmp" not supported        (errno 1)
 
 `ldap` and `ldaps` are the only *disabled* schemes. `rtmp`, `rtmps`, `rtmpe` —
 and any string that is not a cURL scheme at all, like `xyzzy://` — report
-`not supported`, because librtmp was never linked and libcurl therefore does not
-know those schemes rather than knowing them and refusing.
+`not supported`, because **curl removed RTMP entirely in 8.20.0** (see
+`docs/DEPRECATE.md` in the tarball). It is not a build choice elephc makes and
+not a library elephc declined to link: there is no RTMP code in libcurl 8.21.0
+to enable, so libcurl does not know those schemes rather than knowing them and
+refusing.
 
 ### What is deliberately not built in
 
@@ -136,7 +139,8 @@ know those schemes rather than knowing them and refusing.
   `ngtcp2_crypto_ossl` build; until they are taken, `CURLOPT_HTTP_VERSION`
   returns `false` for `CURL_HTTP_VERSION_3` and `CURL_HTTP_VERSION_3ONLY`, and
   `curl_version()['feature_list']['HTTP3']` is `false`.
-- **RTMP.** librtmp is abandoned upstream.
+- **RTMP.** Removed from curl itself in 8.20.0, so it is not available in this pin
+  at any build setting.
 - **Brotli and zstd** content encodings. gzip and deflate work through zlib.
 - **libpsl** (public-suffix cookie checks) and **libidn2** (IDN host names).
 
