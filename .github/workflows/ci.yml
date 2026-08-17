@@ -1126,6 +1126,45 @@ jobs:
             exit 1
           fi
 
+  curl-feature-contract:
+    name: Curl feature contract coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-curl-feature-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-curl-feature-
+
+      # Every other job builds the workspace with default features, and the
+      # nextest archive is no exception, so nothing else in CI ever compiles
+      # `elephc-builtin-contract`'s `curl` feature with its tests attached. The
+      # gated curl jobs do reach it, but only through the inner `cargo build`
+      # in src/linker/bridges.rs, which is compile-only. Without the two steps
+      # below, adding a `curl_*` eval home with no matching shared contract
+      # keeps all of CI green and first fails as a `validate_shared_eval_coverage`
+      # panic inside a compiled user program's `eval()`.
+      #
+      # Neither step needs a native libcurl: `crate::curl_ffi`'s `elephc_curl_*`
+      # externs stay unresolved until the final PHP-program link, so the unit
+      # tests build and run against the same curl-free toolchain as every other
+      # job here.
+      - name: Catalog coverage with the curl surface published
+        run: cargo test -p elephc-builtin-contract --features curl
+
+      - name: Magician eval bindings with the curl surface published
+        run: cargo test -p elephc-magician --features curl
+
   managed-native-smoke:
     name: Managed Native Packages (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
