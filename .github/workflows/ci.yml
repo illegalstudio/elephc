@@ -1085,7 +1085,15 @@ jobs:
         # The exporter joins the shared contract to the AOT `builtin!` and
         # Magician `eval_builtin!` bindings. `extract.py` prefers this prebuilt
         # debug binary, so compile it before any documentation checks.
-        run: cargo build --example gen_builtins
+        #
+        # `--features curl` is THE CANONICAL DOCUMENTATION CONFIGURATION, and this
+        # job is both the generator and the drift gate, so the two can never
+        # diverge. It is the only configuration in which the exporter can see the
+        # PHP-visible `curl_*` contracts (feature-gated in the shared catalog) and
+        # Magician's matching eval bindings; a default-feature build documents 34
+        # fewer functions than the compiler supports. `extract.py` fails loudly
+        # rather than regenerate the smaller catalog if this flag is ever dropped.
+        run: cargo build --example gen_builtins --features curl
 
       - name: Enforce builtin target architecture
         run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
@@ -1150,20 +1158,35 @@ jobs:
       # nextest archive is no exception, so nothing else in CI ever compiles
       # `elephc-builtin-contract`'s `curl` feature with its tests attached. The
       # gated curl jobs do reach it, but only through the inner `cargo build`
-      # in src/linker/bridges.rs, which is compile-only. Without the two steps
+      # in src/linker/bridges.rs, which is compile-only. Without the steps
       # below, adding a `curl_*` eval home with no matching shared contract
       # keeps all of CI green and first fails as a `validate_shared_eval_coverage`
       # panic inside a compiled user program's `eval()`.
       #
-      # Neither step needs a native libcurl: `crate::curl_ffi`'s `elephc_curl_*`
-      # externs stay unresolved until the final PHP-program link, so the unit
-      # tests build and run against the same curl-free toolchain as every other
-      # job here.
+      # NO STEP HERE NEEDS A NATIVE libcurl, which is what keeps this job cheap
+      # enough to be always-on. The crate-level steps satisfy `curl_ffi`'s
+      # `elephc_curl_*` externs from its own `#[cfg(test)] mod test_stubs`; the
+      # root-level steps never reach Magician's eval dispatch table at all (they
+      # read builtin metadata only), so the linker drops every reference to it.
       - name: Catalog coverage with the curl surface published
         run: cargo test -p elephc-builtin-contract --features curl
 
       - name: Magician eval bindings with the curl surface published
         run: cargo test -p elephc-magician --features curl
+
+      # The root `curl` feature (Cargo.toml) relays both edges, which is what puts
+      # the shared catalog's curl contracts and Magician's eval bindings in ONE
+      # process. Only then can the cross-backend parity suite apply its full
+      # per-contract assertions — name sets, signature shapes, eval coverage — to
+      # the thirty-four `curl_*` surfaces instead of counting them and moving on.
+      - name: Cross-backend parity with the curl surface published
+        run: cargo test --features curl --test builtin_parity_tests
+
+      # The compiler-side half: `builtins::parity_tests` compares every
+      # prelude-provided contract with the PHP declaration its injected prelude
+      # actually ships, which is the only AOT signature a prelude route has.
+      - name: Compiler prelude parity with the curl surface published
+        run: cargo test -p elephc --lib --features curl builtins::parity_tests
 
   managed-native-smoke:
     name: Managed Native Packages (${{ matrix.target }})
