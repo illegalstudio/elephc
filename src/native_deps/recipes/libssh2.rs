@@ -18,6 +18,14 @@
 //! - Only `make -C src` runs. libssh2's top-level `Makefile` also descends into `tests/`
 //!   and `docs/`, and its test suite would try to reach a local `sshd`; the library
 //!   itself is entirely under `src/`.
+//! - THE MANAGED PREFIXES ARE ASSERTED, NOT ASSUMED. `--with-crypto=openssl` and
+//!   `--with-libz` fail closed on ABSENCE but not on SUBSTITUTION: if the managed archives
+//!   were ever missing or mis-pathed, `AC_LIB_HAVE_LINKFLAGS` would fall through to the
+//!   system search path and configure would SUCCEED against a distro OpenSSL/zlib — and
+//!   nothing downstream could reveal it, because `curl_version()['ssl_version']` reports
+//!   the version curl's own `--with-openssl` prefix supplied, not libssh2's. So the recipe
+//!   reads back the `LIBSSL`/`LIBZ` that configure actually resolved and requires both to
+//!   live under the dependency prefixes this run was handed.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,6 +68,7 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         command.arg(format!("--host={}", request.toolchain.target_tuple));
     }
     run_checked(&mut command, "configure trusted libssh2 recipe")?;
+    require_configured_against(&build, openssl_prefix, zlib_prefix)?;
 
     let mut make = request.toolchain.command(Path::new("make"));
     make.current_dir(&build).args(["-C", "src"]);
@@ -79,6 +88,46 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
     run_checked(&mut inspect, "validate trusted libssh2 static archive")?;
     fs::remove_dir_all(&build)
         .map_err(|error| NativeError::io("remove trusted libssh2 build tree", &build, error))?;
+    Ok(())
+}
+
+/// Fails the build unless configure resolved OpenSSL and zlib to the managed prefixes.
+///
+/// `configure` writes what it actually found into the generated `src/Makefile` as the
+/// `LIBSSL` and `LIBZ` substitutions (absolute archive paths for a static prefix hit). A
+/// system fallback would put `/usr/lib/...` or `-lssl` there instead, which is precisely
+/// the substitution the `--with-*-prefix` options cannot rule out on their own.
+fn require_configured_against(
+    build: &Path,
+    openssl_prefix: &Path,
+    zlib_prefix: &Path,
+) -> Result<(), NativeError> {
+    let makefile = build.join("src/Makefile");
+    require_regular("libssh2", &makefile)?;
+    let text = fs::read_to_string(&makefile)
+        .map_err(|error| NativeError::io("read configured libssh2 makefile", &makefile, error))?;
+    for (variable, prefix) in [("LIBSSL", openssl_prefix), ("LIBZ", zlib_prefix)] {
+        let line = text
+            .lines()
+            .find(|line| line.starts_with(&format!("{variable} = ")))
+            .ok_or_else(|| {
+                NativeError::new(
+                    NativeErrorKind::Build,
+                    format!("configured libssh2 makefile declares no {variable}"),
+                )
+                .with_path(&makefile)
+            })?;
+        if !line.contains(&prefix.display().to_string()) {
+            return Err(NativeError::new(
+                NativeErrorKind::Build,
+                format!(
+                    "libssh2 configure resolved {variable} to a library outside the managed prefix '{}'; it found a system library instead of the one this recipe was handed. Configured as: {line}",
+                    prefix.display()
+                ),
+            )
+            .with_path(&makefile));
+        }
+    }
     Ok(())
 }
 

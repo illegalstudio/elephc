@@ -20,12 +20,17 @@
 //!   (`lib/smb.c`: `#if defined(CURL_ENABLE_SMB) && defined(USE_CURL_NTLM_CORE)`).
 //! - WHAT IS STILL OFF, AND WHY: LDAP(S) needs OpenLDAP, which is not in the catalog (see
 //!   `.superpowers/sdd/curl-punchlist/r3-protocols-report.md` for the measured cost); HTTP/3
-//!   needs ngtcp2 + nghttp3 (curl 8.21.0 has NO standalone `openssl-quic` backend — the only
-//!   non-experimental QUIC path in this pin is `--with-ngtcp2 --with-nghttp3`); RTMP needs the
-//!   abandoned librtmp; brotli/zstd/libpsl/libidn2 are content/name features, not protocols.
-//!   Every one of those stays an explicit `--without-*`/`--disable-*` so a build machine that
-//!   happens to have the library installed cannot quietly change what this artifact contains.
-//! - NO `--with-ca-bundle`/`--with-ca-path` IS PASSED, DELIBERATELY (see below).
+//!   needs ngtcp2 + nghttp3 (`docs/DEPRECATE.md:80`: "OpenSSL-QUIC (removed in 8.19.0)", so
+//!   the only non-experimental QUIC path left in this pin is `--with-ngtcp2 --with-nghttp3`);
+//!   brotli/zstd/libpsl/libidn2 are content/name features, not protocols. Each of those stays
+//!   an explicit `--without-*`/`--disable-*` so a build machine that happens to have the
+//!   library installed cannot quietly change what this artifact contains.
+//! - RTMP IS NOT IN THAT LIST, AND NEEDS NO FLAG: `docs/DEPRECATE.md:82` records "RTMP
+//!   (removed in 8.20.0)", and the pinned tree has no RTMP code left to enable — the sole
+//!   surviving mention is a `NULL /* rtmp version */` slot in `lib/version.c`. Revision 1's
+//!   `--without-librtmp` was already dead by this pin (configure answers `unrecognized
+//!   options: --without-librtmp`), so revision 2 drops it rather than implying a defense it
+//!   does not provide.
 //! - NO `--with-ca-bundle`/`--with-ca-path` IS PASSED, DELIBERATELY, and the resulting build is
 //!   NOT hermetic in that one respect: `configure`'s own `CURL_CHECK_CA_BUNDLE` probes this
 //!   BUILD machine and bakes whatever absolute path it finds in as `CURL_CA_BUNDLE` (and bakes
@@ -92,7 +97,6 @@ pub fn build(request: &RecipeRequest<'_>) -> Result<(), NativeError> {
         "--without-libpsl",
         "--without-brotli",
         "--without-zstd",
-        "--without-librtmp",
         "--without-libidn2",
         "--without-ngtcp2",
         "--without-nghttp3",
