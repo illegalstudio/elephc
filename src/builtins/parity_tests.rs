@@ -259,15 +259,17 @@ fn prelude_contracts_match_their_injected_signatures() {
 
 /// Returns the parameters of `function <name>(...)` declared in one prelude source.
 ///
-/// Returns `None` when the prelude does not declare the function at all. Only
-/// top-level declarations count: the leading-character check keeps
-/// `__elephc_curl_easy_body(` from matching the contract name `curl_easy_body`.
+/// Returns `None` when the prelude does not declare the function at all. A match
+/// counts only when nothing but whitespace precedes it on its line, which rejects
+/// both a longer identifier (`__elephc_curl_easy_body(` for the contract name
+/// `curl_easy_body`) and a prose mention inside a `//` or `*` comment line.
 fn parse_prelude_declaration(source: &str, name: &str) -> Option<Vec<PreludeParam>> {
     let needle = format!("function {name}(");
     let start = source
         .match_indices(&needle)
         .find(|(index, _)| {
-            matches!(source[..*index].chars().next_back(), None | Some('\n') | Some(' '))
+            let line_start = source[..*index].rfind('\n').map_or(0, |offset| offset + 1);
+            source[line_start..*index].chars().all(char::is_whitespace)
         })?
         .0;
     let open = start + needle.len();
