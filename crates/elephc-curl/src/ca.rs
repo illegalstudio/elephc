@@ -58,6 +58,12 @@
 //!   and nothing here ever disables or relaxes verification: when no store is found, the
 //!   handle is left EXACTLY as libcurl configured it and libcurl reports its own error.
 //!   Discovery is only ever allowed to turn a broken configuration into a working one.
+//! - THE HTTPS-PROXY HOP GETS THE SAME BUNDLE. libcurl keeps an entirely separate CA
+//!   configuration for the TLS connection to a proxy, and injects the same compile-time
+//!   `CURL_CA_BUNDLE` into it (`lib/vtls/vtls_config.c:337-355`), so a binary on a foreign
+//!   machine failed proxy verification for exactly the same reason it failed origin
+//!   verification. [`CURLOPT_PROXY_CAINFO`] is therefore set from the SAME resolution —
+//!   one probe, one answer, both hops. See `crate::abi::apply_discovered_cainfo`.
 //! - DIRECTORY STORES (`CURLOPT_CAPATH`) ARE NEVER DISCOVERED, only files. The pinned
 //!   `configure` will bake a `CURL_CA_PATH` when `/etc/ssl/certs` holds hash-named
 //!   certificates (it did not on this build: `->capath` is NULL), and a capath needs an
@@ -82,6 +88,14 @@ use crate::easy;
 
 /// `CURLOPT_CAINFO`: the PEM bundle FILE libcurl verifies server certificates against.
 pub(crate) const CURLOPT_CAINFO: i32 = 10065;
+
+/// `CURLOPT_PROXY_CAINFO`: the same thing for the TLS connection to an **HTTPS PROXY**,
+/// which libcurl configures from a completely separate set of options
+/// (`data->set.proxy_ssl` / `STRING_SSL_CAFILE_PROXY`) and a separate baked-in-default
+/// injection (pinned libcurl 8.21.0, `lib/vtls/vtls_config.c:337-355`). It gets the SAME
+/// discovered bundle: the reason the baked path is unusable — this machine is not the
+/// build machine — has nothing to do with which hop of the connection is being verified.
+pub(crate) const CURLOPT_PROXY_CAINFO: i32 = 10246;
 
 /// The environment variable an operator can point at a CA bundle to override discovery
 /// process-wide. Named for parity with the `curl` command-line tool, which reads the same

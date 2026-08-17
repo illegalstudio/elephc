@@ -326,3 +326,98 @@ fn eval_handles_get_the_same_discovered_bundle() {
     );
     assert_eq!(out, "F77\n");
 }
+
+/// DISCOVERY REACHES THE HTTPS-PROXY HOP, which libcurl verifies against a completely
+/// separate CA configuration (`data->set.proxy_ssl`) with its own injection of the same
+/// baked-in `CURL_CA_BUNDLE`. Setting only `CURLOPT_CAINFO` would have left
+/// `curl_setopt($ch, CURLOPT_PROXY, "https://…")` failing on every machine the binary was
+/// not built on, for exactly the reason the origin hop used to fail.
+///
+/// The origin here is plain `http://`, so the ONLY TLS handshake in the transfer is the one
+/// to the proxy — which makes the `CURLcode` unambiguously about proxy trust. MEASURED
+/// before the proxy option was set: this same program answered `60` (the readable BAKED
+/// bundle was still in force on the proxy hop) while the origin hop already answered `77`.
+///
+/// The loopback TLS fixture stands in for the proxy: it is not an HTTP proxy and would
+/// never answer a `CONNECT`, but the handshake fails first and that is the whole assertion.
+/// No network is involved.
+#[test]
+fn discovery_reaches_the_https_proxy_hop() {
+    if skip_without_curl_native("discovery_reaches_the_https_proxy_hop") {
+        return;
+    }
+    let server = LocalHttpsServer::spawn();
+    let proxy = server.url("");
+    let out = compile_and_run_with_env(
+        &format!(
+            r#"<?php
+        $ch = curl_init("http://127.0.0.1:1/nope");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_PROXY, "{proxy}");
+        {REPORT_ERRNO}"#
+        ),
+        &[("CURL_CA_BUNDLE", OsStr::new(MISSING_BUNDLE))],
+    );
+    assert_eq!(out, "F77\n");
+}
+
+/// AN EXPLICIT `CURLOPT_PROXY_CAINFO` OVERRIDES DISCOVERY on the proxy hop, by the same
+/// plain option assignment that makes `CURLOPT_CAINFO` win on the origin hop: the program's
+/// readable bundle is what libcurl verifies the proxy against, so the answer is `60`
+/// (the proxy's certificate is not in it) rather than the `77` above.
+#[test]
+fn an_explicit_proxy_cainfo_overrides_discovery() {
+    if skip_without_curl_native("an_explicit_proxy_cainfo_overrides_discovery") {
+        return;
+    }
+    let server = LocalHttpsServer::spawn();
+    let proxy = server.url("");
+    let bundle = unrelated_ca_bundle();
+    let bundle_path = bundle.display();
+    let out = compile_and_run_with_env(
+        &format!(
+            r#"<?php
+        $ch = curl_init("http://127.0.0.1:1/nope");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_PROXY, "{proxy}");
+        curl_setopt($ch, CURLOPT_PROXY_CAINFO, "{bundle_path}");
+        {REPORT_ERRNO}"#
+        ),
+        &[("CURL_CA_BUNDLE", OsStr::new(MISSING_BUNDLE))],
+    );
+    assert_eq!(out, "F60\n");
+}
+
+/// `CURLOPT_PROXY_CAPATH` COMPOSES WITH THE DISCOVERED BUNDLE, exactly as its non-proxy
+/// twin does. The symmetry is not assumed: `lib/setopt.c:1770` sets
+/// `proxy_ssl.custom_cafile` from `STRING_SSL_CAFILE_PROXY` in the same shape as the
+/// non-proxy case at 1906, and `lib/vtls/vtls_config.c:337-355` re-injects the baked-in
+/// `CURL_CA_BUNDLE` under the identical `!custom_cafile && !str[…]` condition — so clearing
+/// the discovered proxy bundle here would resurrect the dead baked path just as harmfully.
+///
+/// `60` would mean the discovered proxy bundle had been taken back out and libcurl had
+/// re-injected the baked default, which on this machine is readable. This fixture is what
+/// stops a proxy-side "retire" being added later on the symmetry argument that already
+/// failed once on the origin side (see `setting_capath_keeps_the_discovered_bundle`).
+#[test]
+fn setting_proxy_capath_keeps_the_discovered_bundle() {
+    if skip_without_curl_native("setting_proxy_capath_keeps_the_discovered_bundle") {
+        return;
+    }
+    let server = LocalHttpsServer::spawn();
+    let proxy = server.url("");
+    let capath = empty_capath_dir();
+    let capath_path = capath.display();
+    let out = compile_and_run_with_env(
+        &format!(
+            r#"<?php
+        $ch = curl_init("http://127.0.0.1:1/nope");
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_PROXY, "{proxy}");
+        curl_setopt($ch, CURLOPT_PROXY_CAPATH, "{capath_path}");
+        {REPORT_ERRNO}"#
+        ),
+        &[("CURL_CA_BUNDLE", OsStr::new(MISSING_BUNDLE))],
+    );
+    assert_eq!(out, "F77\n");
+}

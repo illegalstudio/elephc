@@ -137,6 +137,30 @@ pub extern "C" fn elephc_curl_easy_init() -> i64 {
 /// stops applying the baked-in default (pinned libcurl 8.21.0,
 /// `lib/vtls/vtls_config.c:280`).
 ///
+/// BOTH HOPS GET THE SAME BUNDLE. libcurl verifies the TLS connection to an HTTPS PROXY
+/// against an entirely separate CA configuration (`data->set.proxy_ssl`,
+/// `STRING_SSL_CAFILE_PROXY`) with its own injection of the same compile-time
+/// `CURL_CA_BUNDLE` (`lib/vtls/vtls_config.c:337-355`), so a binary on a foreign machine
+/// failed proxy verification for exactly the reason it failed origin verification, and
+/// setting only `CURLOPT_CAINFO` would have left `curl_setopt($ch, CURLOPT_PROXY,
+/// "https://…")` broken. MEASURED before this was added: with `$CURL_CA_BUNDLE` pointing
+/// at a missing file, a transfer through a local HTTPS proxy still answered `60`
+/// (the readable BAKED bundle was in force on the proxy hop) rather than the `77` the
+/// origin hop already gave. `CURLOPT_PROXY_CAINFO` is set from the SAME resolution —
+/// there is no second probe and no second decision, because the reason the baked path is
+/// unusable is a property of the MACHINE, not of the hop.
+///
+/// THE PROXY SIDE IS EXACTLY SYMMETRIC, verified rather than assumed. `lib/setopt.c:1770`
+/// is `s->proxy_ssl.custom_cafile = !!s->str[STRING_SSL_CAFILE_PROXY];` — the same shape as
+/// its non-proxy twin at 1906, including the NULL-resets-the-flag behavior — and the
+/// `vtls_config.c` proxy block re-injects `CURL_CA_BUNDLE` under the identical
+/// `!custom_cafile && !str[…]` condition. So every rule below transfers: a user
+/// `CURLOPT_PROXY_CAINFO` replaces this value, a user `CURLOPT_PROXY_CAPATH` composes with
+/// it, and clearing it would re-inject the baked path just as harmfully.
+/// `CURLOPT_PROXY_CAINFO_BLOB` would take precedence in libcurl, but it is
+/// `KIND_UNSUPPORTED` in `crate::options` and unreachable from PHP, exactly like its
+/// non-proxy twin.
+///
 /// NOTHING EVER TAKES THE BUNDLE BACK OUT, and an earlier revision of this file was wrong
 /// to try. It retired the discovered bundle when a program set `CURLOPT_CAPATH`, on the
 /// theory that a directory store should not be silently widened by a bundle the program
@@ -167,10 +191,17 @@ fn apply_discovered_cainfo(curl: *mut easy::CURL) {
         return;
     };
     // A refusal leaves the handle exactly as libcurl configured it — the same "never turn
-    // a working configuration into a broken one" rule the whole feature follows — so the
-    // return value is deliberately not propagated: there is no caller who could do
-    // anything better than carry on with libcurl's own default.
-    unsafe { easy::setopt_str(curl, ca::CURLOPT_CAINFO, path.as_ptr()) };
+    // a working configuration into a broken one" rule the whole feature follows — so
+    // neither return value is propagated: there is no caller who could do anything better
+    // than carry on with libcurl's own default. That also makes the proxy line safe on a
+    // hypothetical `CURL_DISABLE_PROXY` build, where it would simply answer
+    // `CURLE_UNKNOWN_OPTION` and change nothing. (Not this build: the recipe passes no
+    // `--disable-proxy`, and `curl_setopt($ch, CURLOPT_PROXY_CAINFO, …)` is measured to
+    // return true here.)
+    unsafe {
+        easy::setopt_str(curl, ca::CURLOPT_CAINFO, path.as_ptr());
+        easy::setopt_str(curl, ca::CURLOPT_PROXY_CAINFO, path.as_ptr());
+    }
 }
 
 /// Sets `CURLOPT_URL` on handle `id` from a raw byte string (not required to
@@ -1059,6 +1090,14 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
         // Re-running discovery here would be actively WRONG: a copy of a handle whose PHP
         // program had set `CURLOPT_CAINFO` itself would have that value overwritten by
         // this bridge's guess.
+        //
+        // THE PROXY BUNDLE TRAVELS BY THE SAME MECHANISM. `CURLOPT_PROXY_CAINFO` lives at
+        // `STRING_SSL_CAFILE_PROXY`, which is an ordinary entry in the SAME
+        // `0..STRING_LASTZEROTERMINATED` range `dupset`'s loop walks, so the copy gets its
+        // own `strdup` of it exactly like the non-proxy one. Nothing hop-specific has to be
+        // rebuilt here; the shallow `dst->set = src->set` even carries libcurl's own
+        // `proxy_ssl.custom_cafile` bit across, so the copy answers a later
+        // `CURLOPT_PROXY_CAPATH` the same way the source would.
         unsafe {
             php_layer::install_write_callback(copied, new_id);
             crate::callbacks::install_read_callback(copied, new_id);
