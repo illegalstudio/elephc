@@ -177,10 +177,12 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
         Mixed,
         "Returns the cURL handles currently attached to a cURL multi handle."
     ),
+    // `?string` in the prelude; the catalog spells nullable string returns `Mixed`,
+    // as `fgets`, `file_get_contents`, `readline` and `realpath` already do.
     curl_surface!(
         "curl_multi_getcontent",
         [param!("handle", Mixed)],
-        Str,
+        Mixed,
         "Returns the content of a cURL handle if CURLOPT_RETURNTRANSFER is set."
     ),
     curl_surface!(

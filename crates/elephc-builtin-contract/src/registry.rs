@@ -30,9 +30,14 @@ pub fn contracts() -> &'static [BuiltinContract] {
     static CONTRACTS: OnceLock<Vec<BuiltinContract>> = OnceLock::new();
     CONTRACTS
         .get_or_init(|| {
+            #[cfg(feature = "curl")]
+            let curl_capacity = crate::catalog_curl::CURL_CONTRACTS.len();
+            #[cfg(not(feature = "curl"))]
+            let curl_capacity = 0;
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
-                    + crate::catalog_surfaces::SURFACE_CONTRACTS.len(),
+                    + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
+                    + curl_capacity,
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
