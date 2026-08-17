@@ -2,7 +2,7 @@
 title: "__elephc_phar_list_entries() — internals"
 description: "Compiler internals for __elephc_phar_list_entries(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 576
+  order: 610
 ---
 
 ## `__elephc_phar_list_entries()` — internals

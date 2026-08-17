@@ -2,7 +2,7 @@
 title: "__elephc_curl_option_kind() — internals"
 description: "Compiler internals for __elephc_curl_option_kind(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 542
+  order: 576
 ---
 
 ## `__elephc_curl_option_kind()` — internals

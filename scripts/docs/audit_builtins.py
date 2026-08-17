@@ -8,7 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 13 non-registry contract routes remain coherent.
+6. Backend availability and all 47 non-registry contract routes remain coherent.
 7. User-facing pages contain no runs of multiple blank lines.
 8. No override table in ``registry.py`` declares the same builtin twice.
 
@@ -137,11 +137,14 @@ def _check_backend_contracts(
     expected_counts = {
         "language-construct": 5,
         "dedicated-syntax": 1,
-        "prelude": 4,
+        # Four hash_* plus the 34 PHP-visible curl_*, all injected-prelude routes.
+        # The curl half exists only because the canonical documentation
+        # configuration is `--features curl` (see elephc_builtins/extract.py).
+        "prelude": 38,
         "none": 3,
     }
-    if len(non_registry) != 13:
-        errors.append(f"expected 13 non-registry contracts, found {len(non_registry)}")
+    if len(non_registry) != 47:
+        errors.append(f"expected 47 non-registry contracts, found {len(non_registry)}")
     if dict(route_counts) != expected_counts:
         errors.append(
             f"non-registry AOT route counts differ: expected {expected_counts}, "
@@ -159,6 +162,23 @@ def _check_backend_contracts(
             errors.append(f"{name} must be AOT-supported through the prelude route")
         if record.get("eval_only"):
             errors.append(f"{name} is incorrectly marked eval-only")
+
+    # The PHP-visible curl surface must document BOTH backends honestly: AOT through
+    # the injected curl prelude (never "eval-only", which is what a default-feature
+    # docs build used to imply by omitting it entirely) and eval through Magician's
+    # own registry bindings.
+    curl_names = sorted(name for name in by_name if name.startswith("curl_"))
+    if len(curl_names) != 34:
+        errors.append(f"expected 34 PHP-visible curl contracts, found {len(curl_names)}")
+    for name in curl_names:
+        record = by_name[name]
+        aot = record.get("aot") or {}
+        if not aot.get("supported") or aot.get("kind") != "prelude":
+            errors.append(f"{name} must be AOT-supported through the curl prelude")
+        if record.get("eval_only"):
+            errors.append(f"{name} is incorrectly marked eval-only")
+        if (record.get("eval") or {}).get("kind") != "registry":
+            errors.append(f"{name} must be eval-supported by a Magician registry binding")
 
     hash_init = by_name.get("hash_init") or {}
     if (hash_init.get("aot") or {}).get("signature_override_reason") != "prelude-signature-subset":

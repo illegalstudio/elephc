@@ -2,7 +2,7 @@
 title: "__elephc_curl_mime_add_part() — internals"
 description: "Compiler internals for __elephc_curl_mime_add_part(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 528
+  order: 562
 ---
 
 ## `__elephc_curl_mime_add_part()` — internals

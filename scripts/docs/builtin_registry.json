@@ -25825,6 +25825,3058 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_close",
+    "description": "Closes a cURL session.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_close.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_close",
+      "codegen_line": 1171,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_close",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "curl_close",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_copy_handle",
+    "description": "Copies a cURL handle along with all of its preferences.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_copy_handle.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_copy_handle",
+      "codegen_line": 1307,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_copy_handle",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        }
+      ],
+      "return_type": "CurlHandle",
+      "variadic": null
+    },
+    "slug": "curl_copy_handle",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_errno",
+    "description": "Returns the last error number for a cURL session.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_errno.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_errno",
+      "codegen_line": 1144,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_errno",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "curl_errno",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_error",
+    "description": "Returns a string describing the last cURL error.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_error.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_error",
+      "codegen_line": 1154,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_error",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "curl_error",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_escape",
+    "description": "URL-encodes a string with the given cURL handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_escape.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_escape",
+      "codegen_line": 1379,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_escape",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "curl_escape",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_exec",
+    "description": "Performs a cURL session.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_exec.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_exec",
+      "codegen_line": 1129,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_exec",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        }
+      ],
+      "return_type": "string|bool",
+      "variadic": null
+    },
+    "slug": "curl_exec",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_getinfo",
+    "description": "Gets information about the last transfer.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_getinfo.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "option",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_getinfo",
+      "codegen_line": 1186,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_getinfo",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "option",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "curl_getinfo",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "url",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_init",
+    "description": "Initializes a cURL session.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_init.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "url",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_init",
+      "codegen_line": 223,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_init",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "url",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "CurlHandle",
+      "variadic": null
+    },
+    "slug": "curl_init",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_add_handle",
+    "description": "Adds a normal cURL handle to a cURL multi handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_add_handle.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_add_handle",
+      "codegen_line": 1546,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_add_handle",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "curl_multi_add_handle",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_close",
+    "description": "Closes a set of cURL handles.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_close.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_close",
+      "codegen_line": 1645,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_close",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "curl_multi_close",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_errno",
+    "description": "Returns the last multi curl error number.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_errno.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_errno",
+      "codegen_line": 1731,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_errno",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "curl_multi_errno",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "still_running",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_exec",
+    "description": "Runs the sub-connections of the current cURL handle.",
+    "eval": {
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_exec.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "still_running",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_exec",
+      "codegen_line": 1585,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_exec",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "still_running",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "curl_multi_exec",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_get_handles",
+    "description": "Returns the cURL handles currently attached to a cURL multi handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_get_handles.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_get_handles",
+      "codegen_line": 1858,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_get_handles",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "slug": "curl_multi_get_handles",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_getcontent",
+    "description": "Returns the content of a cURL handle if CURLOPT_RETURNTRANSFER is set.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_getcontent.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_getcontent",
+      "codegen_line": 1656,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_getcontent",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "?string",
+      "variadic": null
+    },
+    "slug": "curl_multi_getcontent",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "queued_messages",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_info_read",
+    "description": "Gets information about the current transfers.",
+    "eval": {
+      "adapter_reason": "by-reference-or-lvalue",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_info_read.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "queued_messages",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_info_read",
+      "codegen_line": 1625,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_info_read",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "queued_messages",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "curl_multi_info_read",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_init",
+    "description": "Returns a new cURL multi handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_init.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_init",
+      "codegen_line": 1535,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_init",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "CurlMultiHandle",
+      "variadic": null
+    },
+    "slug": "curl_multi_init",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_remove_handle",
+    "description": "Removes a multi handle from a set of cURL handles.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_remove_handle.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_remove_handle",
+      "codegen_line": 1561,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_remove_handle",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "curl_multi_remove_handle",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": 1.0,
+          "name": "timeout",
+          "optional": true,
+          "type": "float"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_select",
+    "description": "Waits until there is activity on any cURL multi connection.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_select.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "1.0",
+          "name": "timeout",
+          "optional": true,
+          "type": "float"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_select",
+      "codegen_line": 1599,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_select",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        },
+        {
+          "by_ref": false,
+          "default": "1.0",
+          "name": "timeout",
+          "optional": true,
+          "type": "float"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "curl_multi_select",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_setopt",
+    "description": "Sets an option on a cURL multi handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_setopt.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_setopt",
+      "codegen_line": 1699,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_setopt",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "multi_handle",
+          "optional": false,
+          "type": "CurlMultiHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "curl_multi_setopt",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_multi_strerror",
+    "description": "Returns string describing error code.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_strerror.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_multi_strerror",
+      "codegen_line": 1740,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_multi_strerror",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "curl_multi_strerror",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "flags",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_pause",
+    "description": "Pauses and unpauses a connection.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_pause.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "flags",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_pause",
+      "codegen_line": 1401,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_pause",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "flags",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "curl_pause",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_reset",
+    "description": "Resets all options of a libcurl session handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_reset.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_reset",
+      "codegen_line": 1271,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_reset",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "curl_reset",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_setopt",
+    "description": "Sets an option for a cURL transfer.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_setopt.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_setopt",
+      "codegen_line": 271,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_setopt",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "curl_setopt",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "options",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_setopt_array",
+    "description": "Sets multiple options for a cURL transfer.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_setopt_array.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "options",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_setopt_array",
+      "codegen_line": 1120,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_setopt_array",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "options",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "curl_setopt_array",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_share_close",
+    "description": "Closes a cURL share handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_share_close.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_share_close",
+      "codegen_line": 1836,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_share_close",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "CurlShareHandle"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "curl_share_close",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_share_errno",
+    "description": "Returns the last share curl error number.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_share_errno.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_share_errno",
+      "codegen_line": 1838,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_share_errno",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "CurlShareHandle"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "curl_share_errno",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_share_init",
+    "description": "Initializes a cURL share handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_share_init.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_share_init",
+      "codegen_line": 1797,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_share_init",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "CurlShareHandle",
+      "variadic": null
+    },
+    "slug": "curl_share_init",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_options",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_share_init_persistent",
+    "description": "Initializes a persistent cURL share handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_share_init_persistent.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_options",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_share_init_persistent",
+      "codegen_line": 1920,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_share_init_persistent",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_options",
+          "optional": false,
+          "type": "array"
+        }
+      ],
+      "return_type": "CurlSharePersistentHandle",
+      "variadic": null
+    },
+    "slug": "curl_share_init_persistent",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_share_setopt",
+    "description": "Sets an option for a cURL share handle.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_share_setopt.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_share_setopt",
+      "codegen_line": 1819,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_share_setopt",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "share_handle",
+          "optional": false,
+          "type": "CurlShareHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "option",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "curl_share_setopt",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_share_strerror",
+    "description": "Returns string describing the given error code.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_share_strerror.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_share_strerror",
+      "codegen_line": 1846,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_share_strerror",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "curl_share_strerror",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_strerror",
+    "description": "Returns string describing the given error code.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_strerror.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_strerror",
+      "codegen_line": 1417,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_strerror",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_code",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "curl_strerror",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_unescape",
+    "description": "Decodes the given URL-encoded string.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_unescape.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_unescape",
+      "codegen_line": 1388,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_unescape",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "curl_unescape",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_upkeep",
+    "description": "Performs any connection upkeep checks.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_upkeep.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_upkeep",
+      "codegen_line": 1406,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_upkeep",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "handle",
+          "optional": false,
+          "type": "CurlHandle"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "curl_upkeep",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Network",
+    "canonical_name": "curl_version",
+    "description": "Gets cURL version information.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "curl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/curl/curl_version.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/curl_prelude.rs",
+      "codegen_function": "curl_version",
+      "codegen_line": 1430,
+      "notes": [
+        "Implemented by the compiler-injected curl prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_curl.rs",
+      "sig_line": null
+    },
+    "name": "curl_version",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "curl_version",
+    "sub_area": "Network"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {

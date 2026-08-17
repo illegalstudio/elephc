@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_reset() — internals"
 description: "Compiler internals for __elephc_curl_easy_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 519
+  order: 553
 ---
 
 ## `__elephc_curl_easy_reset()` — internals

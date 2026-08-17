@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **473 / 2030** (23%).
+Overall builtin coverage: **505 / 2030** (25%).
 
 ## Builtin coverage by PHP module
 
@@ -21,7 +21,7 @@ Overall builtin coverage: **473 / 2030** (23%).
 | `calendar`† | 0 / 18 | 0% | 0 | 0 |
 | `core` | 32 / 59 | 54% | 29 | 30 |
 | `ctype` | 4 / 11 | 36% | 4 | 4 |
-| `curl`† | 0 / 33 | 0% | 0 | 0 |
+| `curl`† | 32 / 33 | 97% | 32 | 32 |
 | `date`† | 11 / 48 | 23% | 11 | 11 |
 | `dba` | 0 / 15 | 0% | 0 | 0 |
 | `dom` | 0 / 2 | 0% | 0 | 0 |
@@ -74,6 +74,8 @@ The remaining 10 baseline extensions expose classes but no procedural functions,
 
 In addition, elephc implements 3 PHP language constructs that PHP does not count as functions: `empty()`, `isset()`, `unset()`.
 
+elephc also implements 2 function(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `curl_multi_get_handles()` (PHP 8.5), `curl_share_init_persistent()` (PHP 8.5).
+
 ## Language constructs
 
 | Feature | Status | Notes |
@@ -112,7 +114,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 | [DateTime](./datetime.md) ([PHP](https://www.php.net/manual/en/book.datetime.php)) | 🟡 Partial |  |
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
-| [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() ships the easy interface only. |
+| [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 32 shared-contract functions this baseline knows; curl_multi_get_handles()/curl_share_init_persistent() are PHP 8.5 additions counted separately above, and curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
 

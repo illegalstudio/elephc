@@ -70,6 +70,16 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     blocks. Prefers a prebuilt binary under ``target/{release,debug}/examples/``
     when present (fast path for CI, which builds it first); otherwise falls back
     to ``cargo run``.
+
+    THE CANONICAL DOCUMENTATION CONFIGURATION IS ``--features curl`` (the root
+    package's relay; see ``Cargo.toml``). The PHP-visible ``curl_*`` contracts live
+    in ``elephc-builtin-contract``'s feature-gated ``catalog_curl`` module and
+    Magician's matching ``eval_builtin!`` homes behind its own ``curl`` feature, so
+    a default-feature exporter simply cannot see that surface — it would silently
+    emit a catalog thirty-four functions short. The committed registry and pages are
+    generated feature-on, and :func:`_require_canonical_configuration` below refuses
+    to continue against a default-feature build rather than let a stale prebuilt
+    binary regenerate a different, smaller catalog.
     """
     cmd: list[str]
     source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
@@ -88,19 +98,44 @@ def run_gen_builtins(repo: Path) -> list[dict]:
             break
     else:
         cmd = [
-            "cargo", "run", "--quiet", "--example", "gen_builtins", "--",
+            "cargo", "run", "--quiet", "--features", "curl", "--example", "gen_builtins", "--",
             "--include-internal",
         ]
     proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
     if proc.returncode != 0:
         sys.exit(
-            "gen_builtins failed (build it with `cargo build --example gen_builtins`):\n"
+            "gen_builtins failed "
+            "(build it with `cargo build --example gen_builtins --features curl`):\n"
             + proc.stderr
         )
     try:
-        return json.loads(proc.stdout)
+        entries = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive
         sys.exit(f"gen_builtins produced invalid JSON: {exc}")
+    _require_canonical_configuration(entries)
+    return entries
+
+
+# Every PHP-visible surface the canonical documentation configuration must contain,
+# as (predicate name, matcher, expected count). Feature-gated catalog slices are the
+# only way the exporter can come back short without failing outright, so each one is
+# pinned here: a mismatch means the exporter was built in the wrong configuration.
+_REQUIRED_SURFACES = (
+    ("PHP-visible curl_* (`--features curl`)", lambda entry: entry["name"].startswith("curl_"), 34),
+)
+
+
+def _require_canonical_configuration(entries: list[dict]) -> None:
+    """Fail unless the exporter was built in the canonical documentation configuration."""
+    for label, matches, expected in _REQUIRED_SURFACES:
+        found = sum(1 for entry in entries if matches(entry))
+        if found != expected:
+            sys.exit(
+                f"gen_builtins exported {found} {label} entries, expected {expected}.\n"
+                "The committed docs are generated in ONE canonical configuration; rebuild\n"
+                "the exporter with `cargo build --example gen_builtins --features curl`\n"
+                "(a stale default-feature binary under target/*/examples/ is the usual cause)."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +499,20 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # Orchestration
 # ---------------------------------------------------------------------------
 
+# Which injected prelude declares a ``prelude`` route, by the contract's own area.
+# Each value is (source file under src/, human name used in the page note). The
+# contract crate keeps the curl surface in its own feature-gated catalog module, so
+# curl entries also carry a different `sig_file` than the always-on surfaces.
+PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
+    "curl": (
+        "curl_prelude.rs",
+        "curl",
+        "crates/elephc-builtin-contract/src/catalog_curl.rs",
+    ),
+}
+DEFAULT_PRELUDE = ("hash_prelude.rs", "hash", "crates/elephc-builtin-contract/src/catalog_surfaces.rs")
+
+
 def resolve_non_registry_lowering(
     repo: Path,
     read,
@@ -471,6 +520,7 @@ def resolve_non_registry_lowering(
     lowering_dir: Path,
     canonical: str,
     aot_support: dict,
+    area: str,
 ) -> LoweringInfo:
     """Describe a compiler route that intentionally has no ``builtin!`` home."""
     contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
@@ -483,12 +533,14 @@ def resolve_non_registry_lowering(
     lowering = LoweringInfo(sig_file=contract_file)
     kind = aot_support.get("kind")
     if kind == "prelude":
-        prelude = repo / "src" / "hash_prelude.rs"
+        source, label, sig_file = PRELUDE_SOURCES.get(area, DEFAULT_PRELUDE)
+        lowering.sig_file = sig_file
+        prelude = repo / "src" / source
         match = re.search(rf"^function\s+{re.escape(canonical)}\s*\(", read(prelude), re.MULTILINE)
         lowering.codegen_file = str(prelude.relative_to(repo))
         lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1 if match else 1
         lowering.codegen_function = canonical
-        lowering.notes.append("Implemented by the compiler-injected hash prelude.")
+        lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
     elif kind == "language-construct":
         lowering.notes.append("Lowered through the compiler's dedicated language-construct path.")
     elif kind == "dedicated-syntax":
@@ -571,7 +623,7 @@ def build_registry(repo: Path) -> list[Builtin]:
             lowering = resolve_registry_lowering(repo, read, entry, home_rel)
         else:
             lowering = resolve_non_registry_lowering(
-                repo, read, dispatch, lowering_dir, canonical, aot_support
+                repo, read, dispatch, lowering_dir, canonical, aot_support, entry["area"]
             )
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]

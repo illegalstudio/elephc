@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_info_read() — internals"
 description: "Compiler internals for __elephc_curl_multi_info_read(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 535
+  order: 569
 ---
 
 ## `__elephc_curl_multi_info_read()` — internals
