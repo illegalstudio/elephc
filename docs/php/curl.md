@@ -187,33 +187,47 @@ process at the first `curl_init()`:
    `/etc/ssl/ca-bundle.pem` (openSUSE) · `/etc/pki/tls/cacert.pem` ·
    `/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem` (RHEL 7+) ·
    `/etc/ssl/cert.pem` (macOS, Alpine, FreeBSD/OpenBSD) ·
-   `/usr/share/ssl/certs/ca-bundle.crt` · `/usr/local/share/certs/ca-root-nss.crt`
-   (FreeBSD).
+   `/usr/share/ssl/certs/ca-bundle.crt`.
 4. **Nothing**, if none of them exists. The handle is left exactly as libcurl
    configured it and libcurl reports its own error. Discovery never relaxes
    verification to make a transfer succeed.
 
-The list is fixed, absolute, and made of locations a distribution's own
-`ca-certificates` package owns. Nothing is derived from the working directory,
-`$HOME`, or `$PATH`, and no certificate is ever downloaded.
+The list is fixed, absolute, and made of root-owned locations a distribution's
+own `ca-certificates` package installs. Nothing is derived from the working
+directory, `$HOME`, or `$PATH`, and no certificate is ever downloaded. curl's own
+`configure` also probes `/usr/local/share/certs/ca-root-nss.crt`; elephc
+deliberately does not, because `/usr/local` is the Homebrew prefix on Intel macOS
+and is left admin-writable there. On a FreeBSD host that has only that file, set
+`CURLOPT_CAINFO` or `$CURL_CA_BUNDLE` explicitly.
 
-**Your own configuration always wins.** Setting either CA option on a handle
-retires the discovered bundle for that handle:
+**`CURLOPT_CAINFO` always wins.** Setting it replaces the discovered bundle on
+that handle, exactly as it would replace libcurl's baked-in default:
 
 ```php
-// A bundle you ship with the application.
 curl_setopt($ch, CURLOPT_CAINFO, __DIR__ . "/ca-bundle.pem");
+```
 
-// Or a directory of hashed certificates. This also removes the discovered
-// bundle, so you verify against your directory and nothing else.
+**`CURLOPT_CAPATH` composes with it** rather than replacing it, so the handle
+verifies against *your directory plus the discovered bundle*:
+
+```php
 curl_setopt($ch, CURLOPT_CAPATH, "/etc/ssl/certs");
 ```
 
+That is the same shape a stock libcurl gives — there, a capath composes with the
+*baked-in* bundle — and it is not a choice elephc could avoid: clearing
+`CURLOPT_CAINFO` makes libcurl re-inject its compile-time default, which on a
+machine where that path does not exist fails the whole transfer with `77` before
+your capath is ever read. Set `CURLOPT_CAINFO` to your own bundle alongside the
+capath if you need the trust set to be exactly yours.
+
 `curl_reset($ch)` puts the discovered bundle back (it restores libcurl's own
 defaults, which would otherwise mean the dead baked-in path), and
-`curl_copy_handle($ch)` carries whichever bundle the original had. Disabling
-verification with `CURLOPT_SSL_VERIFYPEER => false` also "works" and is, as
-always, a bad idea.
+`curl_copy_handle($ch)` carries whichever bundle the original had. Share handles
+and the multi interface do not interact with any of this: `CURLOPT_CAINFO` is a
+per-handle option, and a `CurlShareHandle` shares DNS, SSL sessions, cookies and
+connections — never options. Disabling verification with
+`CURLOPT_SSL_VERIFYPEER => false` also "works" and is, as always, a bad idea.
 
 #### Where this differs from php
 
@@ -225,9 +239,32 @@ always, a bad idea.
 | `$SSL_CERT_FILE` / `$SSL_CERT_DIR` | ignored | ignored — this build has no OpenSSL default-verify-paths fallback compiled in, so they were never consulted |
 
 Honoring `$CURL_CA_BUNDLE` is the deliberate part: it is the only process-wide
-escape hatch available when the handles are created by library code you do not
-control, which is exactly the situation `curl.cainfo` exists to solve in php. It
-can only redirect verification, never weaken it.
+hook available when the handles are created by library code you do not control,
+which is exactly the situation `curl.cainfo` exists to solve in php — and for an
+AOT-compiled binary the alternative is recompiling. The `curl` command-line tool
+resolves it the same way, ahead of its own baked-in default.
+
+**What that costs, stated plainly.** `$CURL_CA_BUNDLE` never disables
+verification — there is no value of it that turns peer verification off, and an
+unreadable one fails closed with `77` — **but it does decide which roots you
+trust**, and it is ranked above a baked-in path that works. Two consequences
+worth designing around:
+
+- **A stale value breaks a working deployment.** A `CURL_CA_BUNDLE` left in a CI
+  image, a base container, or a shell profile applies to every elephc binary that
+  inherits it. If it points somewhere that does not exist on *this* host, every
+  HTTPS transfer in the process fails with `77` rather than the variable being
+  quietly ignored. That is deliberate — silently substituting a different trust
+  store for the one an operator named is worse — but it means the variable should
+  be set per-service, not exported globally.
+- **Anyone who can set the process environment chooses the trust anchors.** In a
+  deployment where the environment is less trusted than the binary (a shared
+  runner, a `Passenger`/CGI-style spawner whose environment is assembled from
+  configuration you do not own), that is a real capability. It is the same
+  capability `curl`, `git` (`GIT_SSL_CAINFO`) and OpenSSL (`SSL_CERT_FILE`) hand
+  out, and it is strictly weaker than the ability to replace the binary or
+  preload a library — but if your threat model excludes it, `unset CURL_CA_BUNDLE`
+  in the service's launcher and set `CURLOPT_CAINFO` in code instead.
 
 Two things discovery does **not** do. It never picks a `CURLOPT_CAPATH`
 directory — a hashed-certificate directory needs an OpenSSL `c_rehash` layout
