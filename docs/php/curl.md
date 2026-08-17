@@ -571,80 +571,86 @@ standard warning.
 
 ## curl inside `eval()`
 
-`eval()` reaches the same pinned libcurl through the same C ABI, but the
-interpreter ships a **narrower** surface than compiled code:
+`eval()` reaches the same pinned libcurl through the same C ABI, and — as of the
+R3-C work — ships **almost the whole compiled surface**:
 
-**Available in `eval()`:** the complete easy interface (16 functions) and all 689
-constants, with `curl_setopt()`'s full table-driven option dispatch — every
-LONG / STRING / SLIST / OFF_T / PHP-layer option works, not a hand-picked subset.
+**Available in `eval()`:**
 
-**Not available in `eval()` — the easy interface only, deliberately:**
-
-- The multi interface (`curl_multi_*`) and the share interface (`curl_share_*`).
+- The complete **easy** interface (16 functions) and all 689 constants, with
+  `curl_setopt()`'s full table-driven option dispatch — every LONG / STRING /
+  SLIST / OFF_T / PHP-layer option works, not a hand-picked subset.
+- The **multi** interface: `curl_multi_init`, `_add_handle`, `_remove_handle`,
+  `_exec` (including its by-reference `$still_running`), `_select`,
+  `_info_read` (including its by-reference `$queued_messages`), `_getcontent`,
+  `_setopt`, `_errno`, `_strerror`, `_close`, plus PHP 8.5's
+  `curl_multi_get_handles`.
+- The **share** interface: `curl_share_init`, `_setopt`, `_errno`, `_strerror`,
+  `_close`, plus PHP 8.5's `curl_share_init_persistent` — and
+  `curl_setopt($ch, CURLOPT_SHARE, $sh)`.
 - `CURLFile` / `CURLStringFile` / `curl_file_create()`, and with them the array
-  (`multipart/form-data`) form of `CURLOPT_POSTFIELDS`. A **string**
-  `CURLOPT_POSTFIELDS` body works.
-- Callback options, `CURLOPT_SHARE`, and the four **stream** options
-  (`CURLOPT_FILE`, `CURLOPT_WRITEHEADER`, `CURLOPT_INFILE`/`CURLOPT_READDATA`,
-  `CURLOPT_STDERR`) — rejected with the same `false` + warning path a genuinely
-  unsupported option uses. Compiled code implements all four; `eval()` does not.
-
-**Why easy-only.** This is an intentional scope decision, not an oversight, for
-three independent reasons:
-
-1. **Object-model mismatch.** `eval()`'s curl handles are resource-like cells
-   (see below), not real objects — the same shape `hash_init()`'s `HashContext`
-   already uses in eval. The multi and share interfaces are fundamentally
-   *object-identity* APIs: `curl_multi_add_handle()` attaches a handle by
-   object identity, `curl_multi_info_read()` hands back the *same* `CurlHandle`
-   object instance that was attached, and `CURLOPT_SHARE` reads a
-   `CurlShareHandle` object out of a scalar-shaped `curl_setopt()` call. None of
-   that has a home in a resource-cell world without inventing a parallel
-   object-identity map inside the interpreter.
-2. **Callbacks need a runtime callable invoker eval does not have.**
-   `CURLOPT_WRITEFUNCTION` and friends are decomposed into a descriptor pointer
-   plus a generated-assembly adapter address at the AOT layer
-   (`src/codegen/runtime_callable_invoker.rs`) so libcurl's C trampoline can
-   call back into a PHP callable. A pure Rust interpreter has no generated
-   assembly to hand libcurl the address of — invoking a PHP callable from a C
-   callback requires exactly the machinery this interpreter does not have.
-3. **Pay-for-use.** Every one of these is reachable-but-rare from inside
-   `eval()` specifically (as opposed to compiled code, where they are common).
-   Shipping them would mean carrying object-identity and callback-invocation
-   machinery for a code path most programs that use `eval()` at all never
-   exercise.
-
-**Roadmap.** None of the three reasons above is permanent in principle, but (2)
-is the hard one: it needs eval-callable invocation from a C trampoline, which
-does not exist yet anywhere in this interpreter (not just for curl). No
-committed timeline exists.
-
-**What happens if you try.** Calling `curl_multi_init()`, any other
-`curl_multi_*`/`curl_share_*` function, `curl_file_create()`, or constructing
-`new CURLFile(...)`/`new CURLStringFile(...)` from inside `eval()` is
-**intercepted and rejected honestly** — the same "eval() fragment uses an
-unsupported construct" fatal any other undefined-in-eval name already
-produces, not a working object:
+  (`multipart/form-data`) form of `CURLOPT_POSTFIELDS`, walked into the same
+  `curl_mime` structure compiled code builds.
+- All six **callback** options: `CURLOPT_WRITEFUNCTION`, `_HEADERFUNCTION`,
+  `_READFUNCTION`, `_PROGRESSFUNCTION`, `_XFERINFOFUNCTION`, `_DEBUGFUNCTION`.
+  A PHP exception thrown inside one aborts the transfer and surfaces as an
+  ordinary catchable throwable *after* `curl_exec()` returns, with
+  `curl_errno()` answering `0` — exactly what compiled code and php-src do.
 
 ```php
 curl_version(); // links elephc_curl into this program at all
-eval('curl_multi_init();');
-// Fatal error: eval() fragment uses an unsupported construct
+$bodies = eval('
+    $mh = curl_multi_init();
+    $a = curl_init("https://example.com/a");
+    curl_setopt($a, CURLOPT_RETURNTRANSFER, true);
+    curl_multi_add_handle($mh, $a);
+    $still = 0;
+    do {
+        $code = curl_multi_exec($mh, $still);
+        if ($still > 0) { curl_multi_select($mh, 1.0); }
+    } while ($still > 0 && $code == CURLM_OK);
+    return curl_multi_getcontent($a);
+');
 ```
 
-This is deliberately **not** a silent, confusing failure. Before this
-interception existed, an unrecognized-by-eval name like `curl_multi_init`
-fell through to `context.native_function()` — the interpreter's escape hatch
-for calling AOT-compiled functions by name. Whenever the host program also
-linked `elephc_curl` (which a top-level `curl_version()` call, or any other
-non-`eval()` curl usage, causes), that fallthrough resolved to the *real*
-compiled `curl_multi_init()` and handed back a genuine AOT `CurlMultiHandle`
-object. The call looked like it worked — until that object was mixed with an
-eval-owned easy handle (`curl_multi_add_handle($mh, $evalCreatedHandle)`),
-which then failed confusingly because the two object spaces do not
-interoperate (see "Handles cannot cross the eval boundary" below). The fix
-checks these names explicitly before the native-function fallback and turns
-that into the same honest, immediate rejection every other deferred name gets.
+**Not available in `eval()`:** the four **stream** options — `CURLOPT_FILE`,
+`CURLOPT_WRITEHEADER`, `CURLOPT_INFILE`/`CURLOPT_READDATA`, `CURLOPT_STDERR`.
+They answer `false` plus the same honest "option … is not supported by this
+build" warning a genuinely uncarryable option gets, never a fatal. Compiled
+code implements all four.
+
+**Why the stream options specifically, when callbacks now work.** Compiled code
+implements them by *composing* its callback slots with internal PHP closures
+declared in the curl prelude, which `fwrite()` to (or `fread()` from) a stream
+held on the `CurlHandle` object. `eval()` can install a callback but cannot
+install one of *those*: they are AOT prelude closures over an AOT object the
+interpreter has neither of. What is left is a native re-implementation, which is
+a different piece of work — the four options are not one rule but three
+interacting ones, each branch measured against PHP 8.4.20:
+
+- the write and header sinks share a single **last-set-wins** mode with
+  `CURLOPT_RETURNTRANSFER` and `CURLOPT_WRITEFUNCTION`, and `null` on any of them
+  falls back to stdout rather than to a previously selected sibling;
+- the read source is a **fixed precedence** in which `CURLOPT_READFUNCTION`
+  outranks `CURLOPT_INFILE` in *both* setting orders;
+- the debug sink is a **one-way shadow**: touching `CURLOPT_DEBUGFUNCTION` at
+  all, even with `null`, permanently disables `CURLOPT_STDERR`.
+
+Shipping three of those correctly and one subtly wrong would be worse than the
+current honest refusal, so they stay refused.
+
+**No curl name is intercepted any more.** Earlier releases routed
+`curl_multi_*`/`curl_share_*`/`curl_file_create` and `new CURLFile(...)` away
+from the interpreter's native-function/native-class fallbacks and rejected them
+with an "eval() fragment uses an unsupported construct" fatal. That guard existed
+because the fallback resolved those names to the *real* compiled implementation
+whenever the host program also linked `elephc_curl`, handing back a genuine AOT
+`CurlMultiHandle` that looked like it worked — until it was mixed with an
+eval-owned easy handle and failed confusingly, because the two object spaces do
+not interoperate. It is gone: the multi and share names now have real eval
+implementations answered before any fallback, and `CURLFile`/`CURLStringFile`
+are deliberately served *by* that fallback, because — unlike every other curl
+class — they wrap no native handle and the real compiled data class works
+correctly inside `eval()`.
 
 Further differences inside `eval()`:
 
