@@ -19,6 +19,12 @@ crate-type = ["staticlib", "rlib"]
 # mod.rs` for the full rationale) — every other consumer of this crate,
 # including every existing eval codegen test, keeps building the exact same
 # curl-free archive this crate has always produced.
+#
+# The root `elephc` package also relays this feature (its own `curl`), which is
+# how the workspace parity suite and the builtin-docs exporter see the eval
+# bindings and the shared catalog's `curl_*` contracts in one process. Those are
+# metadata readers: they never reach the eval dispatch table, so they link
+# without a native libcurl too.
 [features]
 # Also publishes the shared catalog's PHP-visible `curl_*` contracts: the
 # eval homes below bind to them by ID, and the catalog's backend-coverage

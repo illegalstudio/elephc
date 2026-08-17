@@ -19,10 +19,19 @@
 //!   unconditionally would therefore make the default curl-free
 //!   `libelephc_magician.a` fail its own coverage assertion at registry init.
 //!   `elephc-magician`'s `curl` feature turns this one on, so the two move together.
-//! - Because the generated-docs exporter (`tools/gen_builtins.rs`) links Magician
-//!   WITHOUT its `curl` feature, these entries stay out of the generated PHP builtin
-//!   catalog, exactly as they did before the shared-contract migration. The curl
-//!   surface is documented by hand in `docs/php/curl.md`.
+//! - THE ROOT `elephc` PACKAGE RELAYS THIS FEATURE (`Cargo.toml`'s `curl`), which is
+//!   what puts these contracts and Magician's eval bindings in one process. Two
+//!   workspace consumers depend on that:
+//!   * `tests/builtin_parity_tests.rs` applies its full per-contract cross-backend
+//!     audit to these thirty-four surfaces, exactly as it does to every other
+//!     builtin (`curl_php_surface_is_a_full_parity_citizen` pins what a
+//!     `PreludeProvided` route can and cannot be asked); and
+//!   * the generated-docs exporter (`tools/gen_builtins.rs`) is BUILT WITH THE
+//!     FEATURE ON — that is the single canonical documentation configuration, so
+//!     these entries carry honest `aot: prelude` / `eval: registry` annotations in
+//!     `scripts/docs/builtin_registry.json` and get generated pages under
+//!     `docs/php/builtins/network/`. The narrative contract (options, constants,
+//!     TLS/CA behaviour) stays hand-written in `docs/php/curl.md`.
 
 use crate::{Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec};
 

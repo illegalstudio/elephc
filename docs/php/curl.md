@@ -908,4 +908,5 @@ that is itself an array), and an object inside a nested array.
 - [Linking and conditional compilation](../compiling/linking-and-conditional-compilation.md) — `--with-curl`
 - [Streams](streams.md) — `file_get_contents('https://…')` and `fopen()` HTTP(S) wrappers, which stay on rustls and are unaffected by curl
 - [Eval](eval.md) — the interpreter bridge that hosts curl inside `eval()`
+- [Builtin reference — Network](builtins/network.md) — the generated per-function pages for the 34 `curl_*` builtins, with their AOT and `eval()` availability
 - `examples/curl-get/main.php` — a documented GET with error handling
