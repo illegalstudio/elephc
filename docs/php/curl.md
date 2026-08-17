@@ -172,8 +172,8 @@ that case). Left alone, a binary shipped anywhere else fails every verified HTTP
 transfer with `CURLE_SSL_CACERT_BADFILE` (`77`).
 
 elephc's curl bridge therefore resolves a CA bundle at **run** time and sets it
-as an ordinary `CURLOPT_CAINFO` on each handle. The order, applied once per
-process at the first `curl_init()`:
+as an ordinary `CURLOPT_CAINFO` — and `CURLOPT_PROXY_CAINFO` — on each handle.
+The order, applied once per process at the first `curl_init()`:
 
 1. **`$CURL_CA_BUNDLE`**, if it names an absolute path. Not checked for
    existence — naming a bundle is an instruction, and a wrong one fails loudly
@@ -221,6 +221,23 @@ machine where that path does not exist fails the whole transfer with `77` before
 your capath is ever read. Set `CURLOPT_CAINFO` to your own bundle alongside the
 capath if you need the trust set to be exactly yours.
 
+**HTTPS proxies get the same bundle.** libcurl verifies the TLS connection to a
+proxy against a completely separate set of options, with its own copy of the
+baked-in default, so tunnelling through one used to fail on a foreign machine for
+exactly the reason a direct transfer did:
+
+```php
+curl_setopt($ch, CURLOPT_PROXY, "https://proxy.internal:3128");
+// The proxy's certificate is verified against the discovered bundle too.
+```
+
+`CURLOPT_PROXY_CAINFO` and `CURLOPT_PROXY_CAPATH` behave on that hop exactly as
+their non-proxy counterparts do on the origin hop — the first replaces the
+discovered bundle, the second composes with it. There is only ever **one**
+resolution per process: whether the baked-in path is usable is a fact about the
+machine, not about which hop is being verified. A plain `http://` proxy involves
+no TLS to the proxy and is unaffected.
+
 `curl_reset($ch)` puts the discovered bundle back (it restores libcurl's own
 defaults, which would otherwise mean the dead baked-in path), and
 `curl_copy_handle($ch)` carries whichever bundle the original had. Share handles
@@ -266,12 +283,17 @@ worth designing around:
   preload a library — but if your threat model excludes it, `unset CURL_CA_BUNDLE`
   in the service's launcher and set `CURLOPT_CAINFO` in code instead.
 
-Two things discovery does **not** do. It never picks a `CURLOPT_CAPATH`
-directory — a hashed-certificate directory needs an OpenSSL `c_rehash` layout
-that a filesystem check cannot confirm — and it does not touch
-`CURLOPT_PROXY_CAINFO`, so verifying the certificate of an **HTTPS proxy** still
-uses libcurl's baked-in path. Set `CURLOPT_PROXY_CAINFO` explicitly if you tunnel
-through one.
+Both consequences apply **identically to HTTPS-proxy trust**: the same one
+resolution feeds `CURLOPT_PROXY_CAINFO`, so a stale `$CURL_CA_BUNDLE` breaks the
+proxy hop too, and whoever sets it chooses the roots the *proxy* certificate is
+verified against as well as the origin's. Pinning one hop in code and leaving the
+other to the environment is the mistake to avoid — set `CURLOPT_PROXY_CAINFO`
+alongside `CURLOPT_CAINFO` when you pin.
+
+One thing discovery does **not** do: it never picks a `CURLOPT_CAPATH` (or
+`CURLOPT_PROXY_CAPATH`) directory. A hashed-certificate directory needs an
+OpenSSL `c_rehash` layout that a filesystem check cannot confirm, so only bundle
+*files* are ever discovered.
 
 ```php
 // This reports the path libcurl was BUILT with, not the one in force.
