@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_info_read() — internals"
 description: "Compiler internals for __elephc_curl_multi_info_read(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 521
+  order: 535
 ---
 
 ## `__elephc_curl_multi_info_read()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_multi_info_read.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_multi_info_read.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
