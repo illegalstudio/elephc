@@ -1330,6 +1330,7 @@ jobs:
       - image-api-sync
       - builtins-docs-sync
       - managed-native-smoke
+      - curl-feature-contract
     if: always()
     steps:
       - name: Verify test jobs
@@ -1358,6 +1359,7 @@ jobs:
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"
+          test "${{ needs.curl-feature-contract.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite
