@@ -88,6 +88,67 @@ pub(crate) const MIME_FIELD_FILEDATA: i32 = 2;
 pub(crate) const MIME_FIELD_TYPE: i32 = 3;
 pub(crate) const MIME_FIELD_FILENAME: i32 = 4;
 
+// `elephc_curl_easy_set_callback`'s `slot` indices, copied verbatim from
+// `crates/elephc-curl/src/callbacks.rs`'s `SLOT_*` constants. NOT `CURLOPT_*` numbers —
+// the option-number-to-slot mapping lives on the PHP/eval side, exactly as
+// `crate::curl_prelude::curl_setopt`'s `$kind === 8` branch spells it out.
+pub(crate) const SLOT_WRITE: i32 = 0;
+pub(crate) const SLOT_HEADER: i32 = 1;
+pub(crate) const SLOT_READ: i32 = 2;
+pub(crate) const SLOT_PROGRESS: i32 = 3;
+pub(crate) const SLOT_DEBUG: i32 = 4;
+pub(crate) const SLOT_XFERINFO: i32 = 5;
+pub(crate) const SLOT_COUNT: usize = 6;
+
+/// `crates/elephc-curl/src/callbacks.rs`'s `CallSpec::result_kind`: the PHP return value
+/// is read as an integer.
+pub(crate) const RESULT_INT: i64 = 0;
+/// `crates/elephc-curl/src/callbacks.rs`'s `CallSpec::result_kind`: the PHP return value
+/// is read as a string and copied into `CallSpec::out_buf`, capped at `out_cap`.
+pub(crate) const RESULT_STRING: i64 = 1;
+
+/// Runtime value tags the callback argument marshalling uses, copied verbatim from
+/// `crates/elephc-curl/src/callbacks.rs`'s own `TAG_*` constants (which in turn mirror
+/// `__rt_mixed_from_value`'s tag numbering). These are the ONLY three the bridge's six
+/// trampolines ever produce.
+pub(crate) const CALL_TAG_INT: i64 = 0;
+pub(crate) const CALL_TAG_STRING: i64 = 1;
+pub(crate) const CALL_TAG_NULL: i64 = 8;
+
+/// One PHP argument in the `(tag, lo, hi)` triple shape the bridge's trampolines build.
+/// LAYOUT IS LOAD-BEARING and copied verbatim from `crates/elephc-curl/src/callbacks.rs`'s
+/// `CallArg`: the bridge builds an array of these and the adapter walks it with a 24-byte
+/// stride. `CALL_TAG_STRING` puts the byte pointer in `lo` and the byte length in `hi`, and
+/// those bytes are a TRANSIENT libcurl buffer — the adapter must copy them out before it
+/// returns.
+#[repr(C)]
+pub(crate) struct CallArg {
+    pub(crate) tag: i64,
+    pub(crate) lo: i64,
+    pub(crate) hi: i64,
+}
+
+/// The call description the bridge's trampolines hand to the installed adapter. FIELD
+/// OFFSETS ARE LOAD-BEARING and copied verbatim from `crates/elephc-curl/src/callbacks.rs`'s
+/// `CallSpec` — the AOT adapter reads them as raw displacements, so this eval adapter must
+/// agree with the bridge's own layout exactly.
+///
+/// `argv` describes the arguments AFTER `$ch`; the adapter itself supplies `$ch` as
+/// argument 0 (in AOT because only generated code can box an object, and here because only
+/// the interpreter knows the eval table key behind the handle).
+#[repr(C)]
+pub(crate) struct CallSpec {
+    pub(crate) argc: i64,
+    pub(crate) argv: *const CallArg,
+    pub(crate) result_kind: i64,
+    pub(crate) out_buf: *mut u8,
+    pub(crate) out_cap: i64,
+    /// Written by the adapter: bytes copied into `out_buf` for [`RESULT_STRING`].
+    pub(crate) out_len: i64,
+    /// Written by the adapter: `0` on a normal return, `-1` when the PHP callable threw.
+    pub(crate) status: i64,
+}
+
 unsafe extern "C" {
     fn elephc_curl_option_kind(opt: i64) -> i32;
     fn elephc_curl_easy_init() -> i64;
@@ -140,6 +201,14 @@ unsafe extern "C" {
     fn elephc_curl_mime_part_field(id: i64, kind: i32, ptr: *const u8, len: usize) -> i32;
     fn elephc_curl_mime_post(id: i64) -> i32;
     fn elephc_curl_mime_abort(id: i64) -> i32;
+    fn elephc_curl_easy_set_callback(
+        id: i64,
+        slot: i32,
+        descriptor: *mut std::ffi::c_void,
+        self_obj: *mut std::ffi::c_void,
+        adapter: *const std::ffi::c_void,
+    ) -> i32;
+    fn elephc_curl_take_callback_threw() -> i32;
 }
 
 /// Copies bytes out of a "probe for length, then fill" ABI entry point (the
@@ -436,6 +505,31 @@ pub(crate) fn mime_abort(id: i64) {
     unsafe {
         elephc_curl_mime_abort(id);
     }
+}
+
+/// Installs (`descriptor` non-null) or clears (`descriptor` null) one callback slot.
+///
+/// # Safety
+/// `descriptor`/`self_obj` are opaque to the bridge, which only ever hands them back to
+/// `adapter` — the eval side passes small integers rather than pointers, so neither can
+/// dangle. `adapter` must be an `extern "C" fn(*mut c_void, *mut c_void, *mut CallSpec)
+/// -> i64` honouring `CallSpec`'s layout contract above; see
+/// `crate::interpreter::builtins::curl::callbacks`.
+pub(crate) unsafe fn easy_set_callback(
+    id: i64,
+    slot: i32,
+    descriptor: *mut std::ffi::c_void,
+    self_obj: *mut std::ffi::c_void,
+    adapter: *const std::ffi::c_void,
+) -> bool {
+    unsafe { elephc_curl_easy_set_callback(id, slot, descriptor, self_obj, adapter) != 0 }
+}
+
+/// Reports (and clears) whether a PHP callback threw during the transfer that just ended —
+/// the bridge's own gate, the SAME one `__rt_curl_rethrow_pending` consumes in the AOT
+/// build.
+pub(crate) fn take_callback_threw() -> bool {
+    unsafe { elephc_curl_take_callback_threw() != 0 }
 }
 
 /// LINK-SATISFYING STAND-INS for `cargo test -p elephc-magician --features curl`, NOT a
@@ -736,5 +830,19 @@ mod test_stubs {
     #[no_mangle]
     extern "C" fn elephc_curl_mime_abort(_id: i64) -> i32 {
         1
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_easy_set_callback(
+        _id: i64,
+        _slot: i32,
+        _descriptor: *mut std::ffi::c_void,
+        _self_obj: *mut std::ffi::c_void,
+        _adapter: *const std::ffi::c_void,
+    ) -> i32 {
+        1
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_take_callback_threw() -> i32 {
+        0
     }
 }

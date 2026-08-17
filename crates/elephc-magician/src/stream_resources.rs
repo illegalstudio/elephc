@@ -69,6 +69,13 @@ mod types;
 
 use types::*;
 
+/// Re-exported for `crate::interpreter::builtins::curl::callbacks`, the one caller outside
+/// this module that has to NAME a callback slot's state (to install, clear, or copy one).
+/// Every other curl field on `EvalStreamResources` stays private behind an accessor because
+/// nothing outside needs its type.
+#[cfg(feature = "curl")]
+pub(crate) use types::EvalCurlCallbackSlot;
+
 /// Eval-owned table of local file streams keyed by runtime resource payload.
 #[derive(Default)]
 pub(crate) struct EvalStreamResources {

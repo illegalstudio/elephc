@@ -79,5 +79,16 @@ fn eval_curl_copy_handle_result(
         private_value,
         values,
     )?;
+    // CALLBACKS ARE RE-REGISTERED ONTO THE COPY, NEVER INHERITED — see
+    // `eval_curl_copy_callbacks`'s own doc for why libcurl's `dupset` cannot be trusted here
+    // and why the write slot's re-registration is decided by the ACTIVE-MODE mirror.
+    eval_curl_copy_callbacks(
+        table_id,
+        new_table_id,
+        new_raw,
+        write_user,
+        context,
+        values,
+    )?;
     values.curl_handle(new_table_id)
 }

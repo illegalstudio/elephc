@@ -115,8 +115,20 @@ fn eval_curl_multi_exec_perform(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(i64, i64), EvalStatus> {
-    let raw = eval_curl_multi_raw("curl_multi_exec", multi_handle, context, values)?;
-    let (running, code) = ffi::multi_perform(raw);
+    let (multi_id, raw) = eval_curl_multi_handle("curl_multi_exec", multi_handle, context, values)?;
+    // EVERY ATTACHED HANDLE joins the frame, not just one: `curl_multi_perform` drives all
+    // of them, so any of their callbacks can fire during this single call.
+    let attached = context
+        .stream_resources()
+        .curl_multi_attached(multi_id)
+        .unwrap_or_default();
+    let (running, code) =
+        eval_curl_with_callback_frame(&attached, context, values, || ffi::multi_perform(raw))?;
+    // Consumed HERE rather than at the end of the driving loop, matching the AOT runtime's
+    // own re-raise point (`__rt_curl_multi_exec`): the throwable belongs to the
+    // `curl_multi_exec()` call that ran the callback, and a program that never loops again
+    // must still see it.
+    eval_curl_rethrow_pending_callback_throw()?;
     Ok((running, code))
 }
 

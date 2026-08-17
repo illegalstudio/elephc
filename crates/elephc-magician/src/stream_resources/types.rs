@@ -308,6 +308,33 @@ pub(super) struct EvalCurlEasyHandle {
     /// `None` until first set, read back as PHP `false` — matching the AOT property's
     /// `false` default.
     pub(super) private_value: Option<RuntimeCellHandle>,
+    /// Mirrors `CurlHandle::$__elephc_callbacks`, indexed by `crate::curl_ffi`'s `SLOT_*`.
+    /// THE ROOT for every installed callback: the bridge's own slot holds only two opaque
+    /// integers (the slot index and this handle's eval table key), never the callable, so
+    /// this table is what keeps the PHP value alive between `curl_setopt()` and the
+    /// transfer that fires it.
+    pub(super) callbacks: [EvalCurlCallbackSlot; crate::curl_ffi::SLOT_COUNT],
+}
+
+/// One `CURLOPT_*FUNCTION` slot's eval-side state.
+#[cfg(feature = "curl")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum EvalCurlCallbackSlot {
+    /// Nothing installed: the bridge slot is cleared and libcurl's own default applies.
+    #[default]
+    Empty,
+    /// INSTALLED BUT DELIBERATELY SILENT — the `CURLOPT_DEBUGFUNCTION => null` case, and
+    /// only that one. Clearing the debug registration does not restore "nothing", it
+    /// restores libcurl's OWN default, which with `CURLOPT_VERBOSE` on dumps the entire
+    /// trace to the process's fd 2; php-src prints nothing there because its C trampoline
+    /// stays installed with no PHP callable behind it. Keeping the bridge slot registered
+    /// with no callable reproduces php exactly. See
+    /// `crate::curl_prelude::curl_setopt`'s `$slot === 4` branch, which installs a no-op
+    /// closure for the identical reason.
+    Silent,
+    /// A real PHP callable, RETAINED by this table (released on reset, overwrite, and
+    /// context teardown).
+    Callable(RuntimeCellHandle),
 }
 
 /// Opaque `elephc-curl` MULTI-handle resource, plus the eval counterpart of

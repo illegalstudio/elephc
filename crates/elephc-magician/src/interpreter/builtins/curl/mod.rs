@@ -3,7 +3,8 @@
 //! `curl_setopt[_array]`, `curl_exec`, `curl_getinfo`, `curl_close`, `curl_copy_handle`,
 //! `curl_errno`, `curl_error`, `curl_escape`/`curl_unescape`, `curl_pause`, `curl_reset`,
 //! `curl_upkeep`, `curl_version`, `curl_strerror` — plus the MULTI interface
-//! (`curl_multi_*`) and the SHARE interface (`curl_share_*`). Every one of them calls the
+//! (`curl_multi_*`), the SHARE interface (`curl_share_*`), `CURLOPT_POSTFIELDS`'s
+//! `multipart/form-data` array form, and the six callback options. Every one of them calls the
 //! SAME `elephc_curl_*` C ABI the AOT `curl_setopt()`/etc. prelude wrappers call
 //! (`crate::curl_ffi`) — nothing here reimplements HTTP, TLS, or any `CURLOPT_*` semantic.
 //!
@@ -171,14 +172,42 @@
 //! exists. There is no configuration in which `new CURLFile(...)` compiles into eval's path
 //! and finds no class.
 //!
+//! ALSO SHIPPED — THE SIX CALLBACK OPTIONS (R3-C): `CURLOPT_WRITEFUNCTION`,
+//! `_HEADERFUNCTION`, `_READFUNCTION`, `_PROGRESSFUNCTION`, `_XFERINFOFUNCTION` and
+//! `_DEBUGFUNCTION` (option KIND 8) install a real PHP callable that libcurl invokes
+//! mid-transfer. `callbacks.rs` carries the whole mechanism and its soundness argument; the
+//! headline is that the previous claim here — "a pure Rust interpreter with no generated
+//! assembly has no address to hand libcurl", called out above as the hard blocker — was
+//! wrong. An ordinary `extern "C" fn` in this crate is such an address, and the bridge
+//! stores the adapter as an opaque `*const c_void` it calls through without caring where it
+//! came from. The AOT adapter is generated only because compiled PHP's calling convention
+//! is generated; an interpreter's is not.
+//!
+//! A PHP THROW FROM A CALLBACK NEVER UNWINDS THROUGH LIBCURL, the same invariant the AOT
+//! path holds with a `setjmp` firewall — except eval gets it structurally: the interpreter
+//! reports a throw as an `Err(EvalStatus)` return value, so there is no unwind to contain.
+//! The throw is parked, the bridge's own process-wide gate aborts the transfer and
+//! suppresses every further callback, and the throwable is resumed as an ordinary catchable
+//! PHP exception once `curl_exec()`/`curl_multi_exec()` returns — with `curl_errno()`
+//! answering `0`, php-src's measured answer for exactly this case.
+//!
 //! STILL DEFERRED:
-//! - Callback options (`CURLOPT_WRITEFUNCTION`/`_HEADERFUNCTION`/`_READFUNCTION`/
-//!   `_PROGRESSFUNCTION`/`_DEBUGFUNCTION`/`_XFERINFOFUNCTION`, option KIND 8): rejected
-//!   through the SAME honest "option ... is not supported by this build" warning +
-//!   `false` path KIND 6 (a real option this build cannot carry) already uses.
 //! - `CURLOPT_FILE`/`CURLOPT_INFILE`/`CURLOPT_WRITEHEADER`/`CURLOPT_STDERR` (PHP-stream-
-//!   valued options): these are KIND 9 (`KIND_STREAM`) options that need a live PHP stream
-//!   resource on the far end.
+//!   valued options, KIND 9): still the honest "not supported by this build" warning plus
+//!   `false`. THIS IS NOT UNBLOCKED BY THE CALLBACK WORK, though it looks like it should
+//!   be. The AOT build implements all four by composing its callback slots with INTERNAL
+//!   PHP CLOSURES declared in the curl prelude (`__elephc_curl_install_internal_callback`),
+//!   which `fwrite()` to — or `fread()` from — a PHP stream held on the `CurlHandle` object.
+//!   eval can install a callback but cannot install one of THOSE: they are AOT prelude
+//!   closures over an AOT object this interpreter has neither of. Reusing the composition is
+//!   therefore not available; what is available is a native re-implementation, which is a
+//!   different piece of work — the four options are not one rule but three interacting ones,
+//!   every branch of them measured against PHP 8.4.20 (the write and header sinks are a
+//!   single LAST-SET-WINS mode shared with `RETURNTRANSFER`/`WRITEFUNCTION`, the read source
+//!   is a FIXED PRECEDENCE that outranks `INFILE` in BOTH orders, and the debug sink is a
+//!   ONE-WAY SHADOW where touching `DEBUGFUNCTION` at all permanently disables `STDERR`).
+//!   Shipping three of those rules correctly and one subtly wrong would be worse than the
+//!   current honest refusal, so they stay refused.
 //!
 //! NO CURL NAME IS INTERCEPTED ANY MORE. `crate::interpreter::builtins::registry::names`
 //! used to carry `eval_curl_deferred_function_name`/`eval_curl_deferred_class_name`, checked
@@ -191,6 +220,7 @@
 //! registry before any fallback runs, and `CURLFile`/`CURLStringFile`/`curl_file_create()`
 //! are deliberately served BY that fallback for the data-class reason spelled out above.
 
+mod callbacks;
 mod handle;
 mod multipart;
 
@@ -265,6 +295,7 @@ pub(in crate::interpreter) use curl_upkeep::*;
 pub(in crate::interpreter) use curl_version::*;
 
 use super::super::*;
+use callbacks::*;
 use handle::*;
 use multipart::*;
 

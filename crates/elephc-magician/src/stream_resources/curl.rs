@@ -31,6 +31,7 @@ impl EvalStreamResources {
                 return_transfer: false,
                 write_user: false,
                 private_value: None,
+                callbacks: Default::default(),
             },
         );
         id
@@ -68,6 +69,12 @@ impl EvalStreamResources {
                 return_transfer,
                 write_user,
                 private_value,
+                // NOT copied from the source handle: `elephc_curl_easy_duphandle` clears
+                // every bridge registration on the duplicate (libcurl's own `dupset` would
+                // otherwise carry the ORIGINAL's `CURLOPT_*DATA`, i.e. the original's id),
+                // and `curl_copy_handle()` re-installs them onto the copy afterwards —
+                // exactly the loop `crate::curl_prelude::curl_copy_handle` runs.
+                callbacks: Default::default(),
             },
         );
         Ok(id)
@@ -227,7 +234,95 @@ impl EvalStreamResources {
             if let Some(previous) = handle.private_value.take() {
                 let _ = values.release(previous);
             }
+            // THE CALLBACK ROOTS GO OUT THE SAME DOOR, for the identical reason and at the
+            // identical moment: `set_curl_easy_callback` retains every installed callable,
+            // and `Drop for EvalStreamResources` cannot release one (it never receives a
+            // `RuntimeValueOps`). A callback closure can capture — or be — an eval-declared
+            // object with a `__destruct()`, which is exactly why this runs from
+            // `__elephc_eval_context_free` while the context's dynamic-object registration
+            // is still intact, rather than from `Drop`.
+            for slot in &mut handle.callbacks {
+                if let EvalCurlCallbackSlot::Callable(cell) = std::mem::take(slot) {
+                    let _ = values.release(cell);
+                }
+            }
         }
+    }
+
+    /// Replaces one callback slot, RETAINING a `Callable` value and releasing whatever the
+    /// slot previously held — the same independent-owned-reference discipline
+    /// `set_curl_easy_private` documents, and for the same reason: the caller's cell is a
+    /// borrowed scope entry that `unset()`/reassignment can free while libcurl still has the
+    /// slot registered.
+    ///
+    /// Returns `false` (after releasing the just-retained value, so nothing leaks) for an
+    /// unknown id or an out-of-range slot.
+    pub(crate) fn set_curl_easy_callback(
+        &mut self,
+        id: i64,
+        slot: usize,
+        value: EvalCurlCallbackSlot,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<bool, EvalStatus> {
+        let value = match value {
+            EvalCurlCallbackSlot::Callable(cell) => {
+                EvalCurlCallbackSlot::Callable(values.retain(cell)?)
+            }
+            other => other,
+        };
+        let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
+            if let EvalCurlCallbackSlot::Callable(cell) = value {
+                values.release(cell)?;
+            }
+            return Ok(false);
+        };
+        let Some(current) = handle.callbacks.get_mut(slot) else {
+            if let EvalCurlCallbackSlot::Callable(cell) = value {
+                values.release(cell)?;
+            }
+            return Ok(false);
+        };
+        let previous = std::mem::replace(current, value);
+        if let EvalCurlCallbackSlot::Callable(cell) = previous {
+            values.release(cell)?;
+        }
+        Ok(true)
+    }
+
+    /// Drops every callback slot on one handle, releasing each retained callable —
+    /// `curl_reset()`'s half of `crates/elephc-curl/src/callbacks.rs`'s `clear_all`
+    /// (php-src frees its handler callables in `curl_reset()` too).
+    pub(crate) fn clear_curl_easy_callbacks(
+        &mut self,
+        id: i64,
+        values: &mut impl RuntimeValueOps,
+    ) -> Result<(), EvalStatus> {
+        let Some(handle) = self.curl_easy_handles.get_mut(&id) else {
+            return Ok(());
+        };
+        for slot in &mut handle.callbacks {
+            if let EvalCurlCallbackSlot::Callable(cell) = std::mem::take(slot) {
+                values.release(cell)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns every non-`Empty` callback slot on one handle as `(slot index, state)`, so
+    /// `curl_exec()`/`curl_multi_exec()` can build their invocation frame and
+    /// `curl_copy_handle()` can re-install the set onto the duplicate — neither of which can
+    /// hold a borrow on this table while it calls back into the interpreter.
+    pub(crate) fn curl_easy_callbacks(&self, id: i64) -> Vec<(usize, EvalCurlCallbackSlot)> {
+        let Some(handle) = self.curl_easy_handles.get(&id) else {
+            return Vec::new();
+        };
+        handle
+            .callbacks
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| **slot != EvalCurlCallbackSlot::Empty)
+            .map(|(index, slot)| (index, *slot))
+            .collect()
     }
 
     /// Registers a freshly allocated curl MULTI handle and returns its eval table key.

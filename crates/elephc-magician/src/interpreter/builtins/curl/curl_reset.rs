@@ -56,5 +56,10 @@ fn eval_curl_reset_result(
     context
         .stream_resources_mut()
         .reset_curl_easy_mirror(table_id, values)?;
+    // The bridge's own `elephc_curl_easy_reset` already ran `callbacks::clear_all`, which
+    // dropped every libcurl-side registration; this drops the eval-side ROOTS to match, so a
+    // reset handle holds no retained callable — php-src frees its handler callables in
+    // `curl_reset()` for the same reason.
+    eval_curl_clear_callbacks(table_id, context, values)?;
     values.null()
 }

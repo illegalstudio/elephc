@@ -454,12 +454,30 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
             values,
         );
     }
-    // KIND_STREAM IS IN THIS LIST FOR A REASON THE OTHERS ARE NOT: without it, the four
+    // CALLBACK OPTIONS (option KIND 8). The callable is rooted in this eval context's own
+    // curl table and the bridge slot gets two opaque INTEGERS plus this crate's adapter
+    // address — see `crate::interpreter::builtins::curl::callbacks`, whose module doc also
+    // carries the reentrancy argument that makes calling back into the interpreter from
+    // libcurl's thread sound.
+    if kind == ffi::KIND_CALLBACK {
+        // A KIND 8 option this mapping does not know would fall through to the scalar guard
+        // below and reject a perfectly good closure with a confusing type error, so an
+        // unrecognized one takes the honest unsupported-option path instead. Not reachable
+        // today: the bridge's own KIND 8 set is exactly these six.
+        let Some((slot, option_name)) = eval_curl_callback_slot(option) else {
+            warn_unsupported_option(option, values)?;
+            return values.bool_value(false);
+        };
+        return eval_curl_setopt_callback(
+            raw, table_id, slot, option_name, value, context, values,
+        );
+    }
+    // KIND_STREAM IS IN THIS LIST FOR A REASON THE OTHER IS NOT: without it, the four
     // PHP-stream options would fall PAST the warning and into the scalar-type guard below,
     // where a stream resource is none of int/string/float/bool and therefore a HARD FATAL.
     // They used to be `KIND_UNSUPPORTED`, so leaving them out here would have turned a
     // `false` + warning into an uncatchable fault the moment the AOT side implemented them.
-    if kind == ffi::KIND_CALLBACK || kind == ffi::KIND_STREAM || kind == ffi::KIND_UNSUPPORTED {
+    if kind == ffi::KIND_STREAM || kind == ffi::KIND_UNSUPPORTED {
         warn_unsupported_option(option, values)?;
         return values.bool_value(false);
     }

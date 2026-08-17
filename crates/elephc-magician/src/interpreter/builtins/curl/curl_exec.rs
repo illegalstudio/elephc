@@ -54,7 +54,15 @@ fn eval_curl_exec_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (table_id, raw) = eval_curl_easy_handle("curl_exec", handle, context, values)?;
-    if !ffi::easy_perform(raw) {
+    // THE FRAME MUST COVER THE PERFORM, and the rethrow must follow it before anything else
+    // is decided: a callback that threw aborted the transfer, so `easy_perform` answers
+    // `false` for a reason that is a PHP exception rather than a `CURLcode`. Reporting
+    // `false` first would swallow the throwable.
+    let performed = eval_curl_with_callback_frame(&[table_id], context, values, || {
+        ffi::easy_perform(raw)
+    })?;
+    eval_curl_rethrow_pending_callback_throw()?;
+    if !performed {
         return values.bool_value(false);
     }
     if context.stream_resources().curl_easy_return_transfer(table_id) {

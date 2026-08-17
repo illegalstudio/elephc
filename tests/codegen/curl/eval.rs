@@ -994,3 +994,319 @@ fn eval_curl_postfields_array_refuses_unsupported_values_catchably() {
         |recovered|alive"
     );
 }
+
+
+/// R3-C: THE SIX CALLBACK OPTIONS INSIDE `eval()`, end to end against the loopback fixture.
+///
+/// This is the piece the eval curl surface documented as impossible ("a pure Rust
+/// interpreter has no address to hand libcurl"), which was wrong: an ordinary `extern "C"`
+/// function in the magician crate is an address with the same C ABI the bridge already calls
+/// through. See `crates/elephc-magician/src/interpreter/builtins/curl/callbacks.rs`.
+///
+/// Asserted here: `CURLOPT_WRITEFUNCTION` receives body chunks and its return value is what
+/// libcurl compares against the chunk length; `CURLOPT_HEADERFUNCTION` receives header lines
+/// including the status line; `CURLOPT_XFERINFOFUNCTION` fires with four integer counters;
+/// `CURLOPT_DEBUGFUNCTION` fires only under `CURLOPT_VERBOSE`; and every one of them receives
+/// the SAME `$ch` it was installed on as argument 0.
+#[test]
+fn eval_curl_write_header_progress_and_debug_callbacks_fire() {
+    if skip_without_curl_native("eval_curl_write_header_progress_and_debug_callbacks_fire") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init("{url}");
+            $body = "";
+            $headers = [];
+            $progress = 0;
+            $debug = 0;
+            $sameHandle = true;
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($h, $chunk) use (&$body, &$sameHandle, $ch) {{
+                if ($h !== $ch) {{ $sameHandle = false; }}
+                $body .= $chunk;
+                return strlen($chunk);
+            }});
+            curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($h, $line) use (&$headers) {{
+                $trimmed = trim($line);
+                if ($trimmed !== "") {{ $headers[] = $trimmed; }}
+                return strlen($line);
+            }});
+            curl_setopt($ch, CURLOPT_XFERINFOFUNCTION, function ($h, $dt, $dn, $ut, $un) use (&$progress) {{
+                $progress++;
+                return 0;
+            }});
+            curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+            curl_setopt($ch, CURLOPT_VERBOSE, true);
+            curl_setopt($ch, CURLOPT_DEBUGFUNCTION, function ($h, $type, $data) use (&$debug) {{
+                $debug++;
+                return 0;
+            }});
+            $result = curl_exec($ch);
+            return implode("|", [
+                $body,
+                $sameHandle ? "same" : "different",
+                count($headers) > 0 ? $headers[0] : "no-headers",
+                $progress > 0 ? "progressed" : "no-progress",
+                $debug > 0 ? "debugged" : "no-debug",
+                $result === true ? "true" : "not-true",
+            ]);
+        ');
+        echo $r;
+        "#
+    ));
+    let fields: Vec<&str> = out.split('|').collect();
+    assert_eq!(fields[0], "hello-curl", "{out}");
+    assert_eq!(fields[1], "same", "{out}");
+    assert!(fields[2].starts_with("HTTP/1."), "{out}");
+    assert_eq!(fields[3], "progressed", "{out}");
+    assert_eq!(fields[4], "debugged", "{out}");
+    // A write callback selects php-src's `PHP_CURL_USER`, which deselects `PHP_CURL_RETURN`,
+    // so `curl_exec()` answers `true` rather than the body — the same single-write-mode rule
+    // the AOT fixtures pin.
+    assert_eq!(fields[5], "true", "{out}");
+}
+
+/// R3-C: `CURLOPT_READFUNCTION` inside `eval()` supplies an upload body.
+///
+/// The callback's `$fd` argument is always `null` here — eval carries none of the four
+/// PHP-stream options, so there is no `CURLOPT_INFILE` to pass, which is also exactly what
+/// php-src passes for a handle that has none. Returning `""` is end-of-data.
+#[test]
+fn eval_curl_read_callback_supplies_an_upload_body() {
+    if skip_without_curl_native("eval_curl_read_callback_supplies_an_upload_body") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/echo");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init("{url}");
+            $payload = "uploaded-by-eval";
+            $offset = 0;
+            $sawNullFd = true;
+            curl_setopt($ch, CURLOPT_UPLOAD, true);
+            curl_setopt($ch, CURLOPT_INFILESIZE, strlen($payload));
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_READFUNCTION, function ($h, $fd, $max) use (&$offset, &$sawNullFd, $payload) {{
+                if ($fd !== null) {{ $sawNullFd = false; }}
+                if ($offset >= strlen($payload)) {{ return ""; }}
+                $chunk = substr($payload, $offset, $max);
+                $offset += strlen($chunk);
+                return $chunk;
+            }});
+            $echoed = curl_exec($ch);
+            return ($sawNullFd ? "null-fd" : "stream-fd") . "|" . $echoed;
+        ');
+        echo $r;
+        "#
+    ));
+    assert!(out.starts_with("null-fd|"), "{out}");
+    assert!(out.contains("uploaded-by-eval"), "{out}");
+}
+
+/// R3-C, THE INVARIANT THAT MATTERS MOST: a PHP exception thrown inside a curl callback
+/// running in `eval()` NEVER unwinds through libcurl. It aborts the transfer, is parked, and
+/// surfaces as an ordinary CATCHABLE throwable after `curl_exec()` returns — with
+/// `curl_errno()` answering `0`, php-src's own measured answer for this case (the transfer
+/// was ended by the exception, not by a `CURLcode`).
+///
+/// eval reaches that without the AOT path's `setjmp` firewall, and structurally rather than
+/// defensively: the interpreter reports a throw as an `Err(EvalStatus)` return value, so
+/// there is no unwind to contain in the first place. The bridge's own process-wide gate is
+/// still what authorizes the re-raise, exactly as `__rt_curl_rethrow_pending` uses it in AOT.
+#[test]
+fn eval_curl_callback_throw_is_catchable_after_exec_with_errno_zero() {
+    if skip_without_curl_native("eval_curl_callback_throw_is_catchable_after_exec_with_errno_zero")
+    {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init("{url}");
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($h, $chunk) {{
+                throw new \RuntimeException("from the write callback");
+            }});
+            $out = [];
+            try {{
+                curl_exec($ch);
+                $out[] = "no exception";
+            }} catch (\RuntimeException $e) {{
+                $out[] = get_class($e) . ":" . $e->getMessage();
+            }}
+            $out[] = "errno=" . curl_errno($ch);
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, null);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            $out[] = curl_exec($ch);
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#
+    ));
+    assert_eq!(
+        out,
+        "RuntimeException:from the write callback|errno=0|hello-curl|alive"
+    );
+}
+
+/// R3-C: a callback that throws during `curl_multi_exec()` is caught the same way.
+///
+/// The bridge's gate is process-wide precisely so a `try`/`catch` inside another handle's
+/// callback cannot clear this handle's parked throwable — php-src has the same shape,
+/// because `zend_call_function` refuses to run anything at all while `EG(exception)` is set.
+#[test]
+fn eval_curl_multi_callback_throw_surfaces_from_multi_exec() {
+    if skip_without_curl_native("eval_curl_multi_callback_throw_surfaces_from_multi_exec") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $mh = curl_multi_init();
+            $a = curl_init("{url}");
+            $b = curl_init("{url}");
+            $bRan = 0;
+            curl_setopt($a, CURLOPT_WRITEFUNCTION, function ($h, $chunk) {{
+                throw new \LogicException("multi callback boom");
+            }});
+            curl_setopt($b, CURLOPT_WRITEFUNCTION, function ($h, $chunk) use (&$bRan) {{
+                $bRan++;
+                return strlen($chunk);
+            }});
+            curl_multi_add_handle($mh, $a);
+            curl_multi_add_handle($mh, $b);
+            $out = [];
+            $still = 0;
+            try {{
+                do {{
+                    $code = curl_multi_exec($mh, $still);
+                    if ($still > 0) {{ curl_multi_select($mh, 1.0); }}
+                }} while ($still > 0 && $code == CURLM_OK);
+                $out[] = "no exception";
+            }} catch (\LogicException $e) {{
+                $out[] = get_class($e) . ":" . $e->getMessage();
+            }}
+            $out[] = "errno=" . curl_errno($a);
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#
+    ));
+    assert_eq!(out, "LogicException:multi callback boom|errno=0|alive");
+}
+
+/// R3-C: the write-mode interlock and the `null`-clearing rules, reproduced in `eval()`.
+///
+/// php-src keeps ONE write mode, so whichever of `CURLOPT_RETURNTRANSFER` and
+/// `CURLOPT_WRITEFUNCTION` is set LAST wins, and `CURLOPT_WRITEFUNCTION => null` falls back
+/// to STDOUT — never to a previously-selected `RETURNTRANSFER`. Both were measured on PHP
+/// 8.4.20 for the AOT side and are pinned by their own AOT fixtures; this is the eval half.
+///
+/// `CURLOPT_DEBUGFUNCTION => null` is the exception: it is never deregistered, because
+/// clearing the registration restores libcurl's OWN default, which under `CURLOPT_VERBOSE`
+/// dumps the whole trace to the process's fd 2 while php prints nothing there.
+#[test]
+fn eval_curl_write_mode_interlock_and_null_clearing_match_php() {
+    if skip_without_curl_native("eval_curl_write_mode_interlock_and_null_clearing_match_php") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let output = compile_and_run_capture(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $out = [];
+
+            $a = curl_init("{url}");
+            curl_setopt($a, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($a, CURLOPT_WRITEFUNCTION, function ($h, $c) {{ return strlen($c); }});
+            $out[] = curl_exec($a) === true ? "true" : "not-true";
+
+            $b = curl_init("{url}");
+            curl_setopt($b, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($b, CURLOPT_WRITEFUNCTION, function ($h, $c) {{ return strlen($c); }});
+            curl_setopt($b, CURLOPT_WRITEFUNCTION, null);
+            $out[] = curl_exec($b) === true ? "true" : "not-true";
+
+            $c = curl_init("{url}");
+            curl_setopt($c, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($c, CURLOPT_VERBOSE, true);
+            curl_setopt($c, CURLOPT_DEBUGFUNCTION, function ($h, $t, $d) {{ return 0; }});
+            curl_setopt($c, CURLOPT_DEBUGFUNCTION, null);
+            curl_exec($c);
+            $out[] = "done";
+            return implode("|", $out);
+        ');
+        echo "@@", $r;
+        "#
+    ));
+    let (printed, summary) = output
+        .stdout
+        .split_once("@@")
+        .unwrap_or_else(|| panic!("stdout was: {}", output.stdout));
+    // The `null`-cleared write callback falls back to STDOUT, so handle B's body is printed
+    // rather than returned — and handle A's callback swallowed its own body.
+    assert_eq!(printed, "hello-curl", "stdout was: {}", output.stdout);
+    assert_eq!(summary, "true|true|done", "stdout was: {}", output.stdout);
+    assert!(
+        !output.stderr.contains("Trying"),
+        "a cleared CURLOPT_DEBUGFUNCTION must not leak libcurl's verbose trace to fd 2; \
+        stderr was: {}",
+        output.stderr
+    );
+}
+
+/// R3-C: a callback that is not callable is rejected at `curl_setopt()` time with the same
+/// catchable `\TypeError` php-src and the AOT prelude raise — eagerly, not at transfer time.
+#[test]
+fn eval_curl_setopt_rejects_an_invalid_callback_catchably() {
+    if skip_without_curl_native("eval_curl_setopt_rejects_an_invalid_callback_catchably") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init();
+            $out = [];
+            try {
+                curl_setopt($ch, CURLOPT_WRITEFUNCTION, "no_such_function_at_all");
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_setopt($ch, CURLOPT_HEADERFUNCTION, 42);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(
+        out,
+        "curl_setopt(): Argument #3 ($value) must be a valid callback for option \
+        CURLOPT_WRITEFUNCTION, function \"no_such_function_at_all\" not found or invalid \
+        function name\
+        |curl_setopt(): Argument #3 ($value) must be a valid callback for option \
+        CURLOPT_HEADERFUNCTION, no array or string given\
+        |alive"
+    );
+}

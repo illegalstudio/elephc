@@ -63,6 +63,10 @@ pub(in crate::interpreter) use function_exists::{
 pub(in crate::interpreter) use get_class::eval_get_class_result;
 pub(in crate::interpreter) use get_parent_class::eval_get_parent_class_result;
 pub(in crate::interpreter) use is_a::dynamic_object_is_a;
+/// Gated with its only consumer: `curl_setopt()`'s KIND 8 options are the sole caller
+/// outside `is_callable()` itself, and this whole crate compiles curl-free by default.
+#[cfg(feature = "curl")]
+pub(in crate::interpreter) use is_callable::eval_callable_probe_exists;
 pub(in crate::interpreter) use is_callable::{
     eval_builtin_is_callable_call, eval_is_callable_call_with_evaluated_args,
     eval_is_callable_value,
