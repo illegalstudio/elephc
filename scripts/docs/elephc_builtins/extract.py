@@ -116,26 +116,43 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     return entries
 
 
-# Every PHP-visible surface the canonical documentation configuration must contain,
-# as (predicate name, matcher, expected count). Feature-gated catalog slices are the
-# only way the exporter can come back short without failing outright, so each one is
-# pinned here: a mismatch means the exporter was built in the wrong configuration.
+# Every feature-gated catalog slice the canonical documentation configuration must
+# contain, as (label, matcher, expected count, cargo flag that publishes it). A
+# feature-gated slice is the only way the exporter can come back SHORT without failing
+# outright, so each one is pinned here.
 _REQUIRED_SURFACES = (
-    ("PHP-visible curl_* (`--features curl`)", lambda entry: entry["name"].startswith("curl_"), 34),
+    (
+        "PHP-visible curl_*",
+        lambda entry: entry["name"].startswith("curl_"),
+        34,
+        "--features curl",
+    ),
 )
 
 
 def _require_canonical_configuration(entries: list[dict]) -> None:
     """Fail unless the exporter was built in the canonical documentation configuration."""
-    for label, matches, expected in _REQUIRED_SURFACES:
+    for label, matches, expected, flag in _REQUIRED_SURFACES:
         found = sum(1 for entry in entries if matches(entry))
-        if found != expected:
+        if found == expected:
+            continue
+        # Zero found is a wrong-configuration diagnosis; any other count means the
+        # surface really did change size and the constant above needs bumping. Saying
+        # "rebuild with the feature" for the second case sends the reader hunting a
+        # stale binary that is not there.
+        if found == 0:
             sys.exit(
-                f"gen_builtins exported {found} {label} entries, expected {expected}.\n"
+                f"gen_builtins exported no {label} entries, expected {expected}.\n"
                 "The committed docs are generated in ONE canonical configuration; rebuild\n"
-                "the exporter with `cargo build --example gen_builtins --features curl`\n"
+                f"the exporter with `cargo build --example gen_builtins {flag}`\n"
                 "(a stale default-feature binary under target/*/examples/ is the usual cause)."
             )
+        sys.exit(
+            f"gen_builtins exported {found} {label} entries, expected {expected}.\n"
+            f"The {label} surface changed size. If that is intended, update the expected\n"
+            "count in _REQUIRED_SURFACES (scripts/docs/elephc_builtins/extract.py) and\n"
+            "regenerate; the constant exists so a shrinking catalog cannot pass silently."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -499,18 +516,34 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # Orchestration
 # ---------------------------------------------------------------------------
 
-# Which injected prelude declares a ``prelude`` route, by the contract's own area.
-# Each value is (source file under src/, human name used in the page note). The
-# contract crate keeps the curl surface in its own feature-gated catalog module, so
-# curl entries also carry a different `sig_file` than the always-on surfaces.
+# Which injected prelude declares a ``prelude``-routed contract, keyed by the contract's
+# own area. Each value is (source file under src/, human name used in the page note,
+# contract module the signature lives in). The contract crate keeps the curl surface in a
+# feature-gated catalog module, so curl entries carry a different ``sig_file`` than the
+# always-on surfaces.
+#
+# THERE IS NO DEFAULT ENTRY ON PURPOSE. An unmapped area used to fall through to
+# hash_prelude.rs, and a missing declaration used to fall through to line 1, so a
+# prelude-provided contract added in a third area would have shipped a page naming the
+# wrong prelude and linking to an unrelated line — generated, committed, and plausible
+# enough to survive review. Both now raise. When a new prelude family lands, add its area
+# here; the seven prelude sources the compiler can inject are enumerated in
+# ``src/builtins/parity_tests.rs``'s PRELUDE_SOURCES, and its
+# ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
+# by exactly one of them.
 PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
     "curl": (
         "curl_prelude.rs",
         "curl",
         "crates/elephc-builtin-contract/src/catalog_curl.rs",
     ),
+    # The four hash_* contracts (`Area::String`).
+    "string": (
+        "hash_prelude.rs",
+        "hash",
+        "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+    ),
 }
-DEFAULT_PRELUDE = ("hash_prelude.rs", "hash", "crates/elephc-builtin-contract/src/catalog_surfaces.rs")
 
 
 def resolve_non_registry_lowering(
@@ -533,12 +566,27 @@ def resolve_non_registry_lowering(
     lowering = LoweringInfo(sig_file=contract_file)
     kind = aot_support.get("kind")
     if kind == "prelude":
-        source, label, sig_file = PRELUDE_SOURCES.get(area, DEFAULT_PRELUDE)
+        try:
+            source, label, sig_file = PRELUDE_SOURCES[area]
+        except KeyError:
+            raise ValueError(
+                f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
+                f"PRELUDE_SOURCES does not map to a prelude. Add the area (see the constant's "
+                f"comment) — falling back to another area's prelude would publish a page "
+                f"pointing at the wrong file with the wrong prose."
+            ) from None
         lowering.sig_file = sig_file
         prelude = repo / "src" / source
         match = re.search(rf"^function\s+{re.escape(canonical)}\s*\(", read(prelude), re.MULTILINE)
+        if match is None:
+            raise ValueError(
+                f"prelude-provided builtin {canonical!r} is not declared by src/{source}. "
+                f"Its contract area {area!r} maps there, so either the contract's area or "
+                f"PRELUDE_SOURCES is wrong; a line-1 fallback would ship a page linking to "
+                f"an unrelated place in the file."
+            )
         lowering.codegen_file = str(prelude.relative_to(repo))
-        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1 if match else 1
+        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1
         lowering.codegen_function = canonical
         lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
     elif kind == "language-construct":
