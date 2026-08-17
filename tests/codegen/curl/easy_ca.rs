@@ -326,4 +326,3 @@ fn eval_handles_get_the_same_discovered_bundle() {
     );
     assert_eq!(out, "F77\n");
 }
-
