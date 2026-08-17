@@ -92,6 +92,7 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_bcmath",
         package: "elephc-bcmath",
+        php_extension: Some("bcmath"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_phar",
