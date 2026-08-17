@@ -352,3 +352,168 @@ fn curl_close_on_a_non_handle_value_throws_a_catchable_type_error() {
         "curl_close(): Argument #1 ($handle) must be of type CurlHandle, string given"
     );
 }
+
+/// FIX ROUND 1, MINOR 5: the two PHP 8.5-only curl names must be INVISIBLE to eval's
+/// function-existence probe on an older compatibility profile, so `function_exists()` agrees
+/// with AOT — where the curl prelude's `-- elephc PHP >= 8.5 ... --` fences strip the
+/// declaration outright and the name simply does not exist.
+///
+/// A UNIT TEST RATHER THAN A CODEGEN FIXTURE, for a harness reason documented at the foot of
+/// `tests/codegen/curl/eval.rs`: `compile_and_run_with_php_version` threads its version into
+/// prelude injection but never reaches `codegen::set_compile_profile`, so the profile the
+/// compiled binary publishes to this interpreter stays at the default and no eval-side
+/// version gate is observable through it. `scoped_profile` drives the same input directly.
+#[test]
+fn php_85_only_curl_names_are_hidden_from_introspection_below_85() {
+    for profile in [80_200, 80_300, 80_400] {
+        let _guard = crate::eval_php_profile::scoped_profile(profile);
+        for name in ["curl_multi_get_handles", "curl_share_init_persistent"] {
+            assert!(
+                crate::interpreter::builtins::eval_builtin_hidden_by_php_version(name),
+                "{name} must be hidden from introspection on profile {profile}"
+            );
+        }
+        // The rest of the curl surface is version-independent and must stay visible.
+        for name in ["curl_multi_init", "curl_share_init", "curl_init", "curl_setopt"] {
+            assert!(
+                !crate::interpreter::builtins::eval_builtin_hidden_by_php_version(name),
+                "{name} exists on every supported profile and must stay visible ({profile})"
+            );
+        }
+    }
+}
+
+/// The other half of the same gate: on 8.5 (and later) both names are ordinary, visible
+/// builtins. Without this, a predicate that simply always answered `true` would pass the
+/// test above.
+#[test]
+fn php_85_only_curl_names_are_visible_on_85() {
+    for profile in [80_500, 80_600] {
+        let _guard = crate::eval_php_profile::scoped_profile(profile);
+        for name in ["curl_multi_get_handles", "curl_share_init_persistent"] {
+            assert!(
+                !crate::interpreter::builtins::eval_builtin_hidden_by_php_version(name),
+                "{name} must be visible on profile {profile}"
+            );
+        }
+    }
+}
+
+/// FIX ROUND 1, MINOR 8: an installed callback is a RETAINED root, and every path that
+/// replaces or drops one must release exactly the reference it retained — the same
+/// discipline `set_curl_easy_private` already has, and the same failure mode if it is
+/// missing (a PHP-level reference leaked for the lifetime of the eval context, invisible to
+/// `--gc-stats` because the cell is still reachable from this table).
+///
+/// Covers all four transitions in one sequence: install, overwrite, `curl_reset()`, and the
+/// context-teardown sweep.
+#[test]
+fn callback_slots_retain_on_install_and_release_on_every_drop() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let id = context.stream_resources_mut().open_curl_easy_handle(42);
+
+    let first = values.string("first-callback").expect("fake string cell");
+    let stored = context
+        .stream_resources_mut()
+        .set_curl_easy_callback(
+            id,
+            0,
+            crate::stream_resources::EvalCurlCallbackSlot::Callable(first),
+            &mut values,
+        )
+        .expect("install");
+    assert!(stored);
+    // `FakeOps::retain` is an identity no-op that records nothing (see this file's module
+    // doc), so what these tests observe is the RELEASE SEQUENCE — which is exactly where a
+    // missing-release leak shows up.
+    assert!(values.releases.is_empty(), "installing must release nothing");
+
+    // Overwriting the SAME slot releases the previous root and retains the new one — without
+    // this, `curl_setopt($ch, CURLOPT_WRITEFUNCTION, $a); curl_setopt($ch, ..., $b);` would
+    // leak `$a`'s reference, unbounded across a loop.
+    let second = values.string("second-callback").expect("fake string cell");
+    context
+        .stream_resources_mut()
+        .set_curl_easy_callback(
+            id,
+            0,
+            crate::stream_resources::EvalCurlCallbackSlot::Callable(second),
+            &mut values,
+        )
+        .expect("overwrite");
+    assert_eq!(
+        values.releases,
+        vec![first],
+        "overwriting must release exactly the previous root"
+    );
+
+    // `curl_reset()` drops every slot.
+    context
+        .stream_resources_mut()
+        .clear_curl_easy_callbacks(id, &mut values)
+        .expect("clear");
+    assert_eq!(
+        values.releases,
+        vec![first, second],
+        "curl_reset() must release every still-installed root"
+    );
+
+    // And the teardown sweep releases whatever survived to the end of the context.
+    let third = values.string("third-callback").expect("fake string cell");
+    context
+        .stream_resources_mut()
+        .set_curl_easy_callback(
+            id,
+            1,
+            crate::stream_resources::EvalCurlCallbackSlot::Callable(third),
+            &mut values,
+        )
+        .expect("install header slot");
+    context
+        .stream_resources_mut()
+        .release_curl_easy_private_values(&mut values);
+    assert_eq!(
+        values.releases,
+        vec![first, second, third],
+        "context teardown must release the callback roots too, not only CURLOPT_PRIVATE"
+    );
+}
+
+/// `EvalCurlCallbackSlot::Silent` (the `CURLOPT_DEBUGFUNCTION => null` state) holds no PHP
+/// value, so it must neither retain nor release — and installing it over a real callable
+/// must still release that callable. Without the second half, clearing a debug callback
+/// would leak its root.
+#[test]
+fn silent_callback_slot_retains_nothing_but_still_releases_what_it_replaces() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let id = context.stream_resources_mut().open_curl_easy_handle(42);
+
+    let debug = values.string("debug-callback").expect("fake string cell");
+    context
+        .stream_resources_mut()
+        .set_curl_easy_callback(
+            id,
+            4,
+            crate::stream_resources::EvalCurlCallbackSlot::Callable(debug),
+            &mut values,
+        )
+        .expect("install debug");
+    assert!(values.releases.is_empty());
+
+    context
+        .stream_resources_mut()
+        .set_curl_easy_callback(
+            id,
+            4,
+            crate::stream_resources::EvalCurlCallbackSlot::Silent,
+            &mut values,
+        )
+        .expect("silence debug");
+    assert_eq!(
+        values.releases,
+        vec![debug],
+        "silencing must release the callable it replaced"
+    );
+}
