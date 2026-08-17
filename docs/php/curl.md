@@ -580,10 +580,11 @@ R3-C work — ships **almost the whole compiled surface**:
   `curl_setopt()`'s full table-driven option dispatch — every LONG / STRING /
   SLIST / OFF_T / PHP-layer option works, not a hand-picked subset.
 - The **multi** interface: `curl_multi_init`, `_add_handle`, `_remove_handle`,
-  `_exec` (including its by-reference `$still_running`), `_select`,
-  `_info_read` (including its by-reference `$queued_messages`), `_getcontent`,
-  `_setopt`, `_errno`, `_strerror`, `_close`, plus PHP 8.5's
-  `curl_multi_get_handles`.
+  `_exec`, `_select`, `_info_read`, `_getcontent`, `_setopt`, `_errno`,
+  `_strerror`, `_close`, plus PHP 8.5's `curl_multi_get_handles`.
+  `curl_multi_exec()`'s `$still_running` and `curl_multi_info_read()`'s
+  `$queued_messages` are written back on every call shape a PHP program normally
+  writes — see "By-reference parameters" below for the one that is not.
 - The **share** interface: `curl_share_init`, `_setopt`, `_errno`, `_strerror`,
   `_close`, plus PHP 8.5's `curl_share_init_persistent` — and
   `curl_setopt($ch, CURLOPT_SHARE, $sh)`.
@@ -664,6 +665,53 @@ Further differences inside `eval()`:
   eval's curl functions.
 - **`--with-curl` is required** when curl appears *only* inside an `eval()`
   string, because usage detection reads the compiled source, not the string.
+
+- **By-reference parameters are written back on the ordinary call shapes only.**
+  `curl_multi_exec($mh, $still)` and `curl_multi_info_read($mh, $queued)` assign
+  their out-parameter when called normally, through a variable function, or via
+  `call_user_func_array()` with a referenceable argument. Every *other* shape —
+  notably `call_user_func('curl_multi_exec', $mh, $n)`, which passes its
+  arguments by value — cannot write back, and eval emits
+  `curl_multi_exec(): Argument #2 ($still_running) must be passed by reference,
+  value given` and continues. Real PHP throws
+  `Error: curl_multi_exec(): Argument #2 ($still_running) could not be passed by
+  reference` for a non-referenceable argument, and compiled elephc rejects the
+  same call at *compile* time against the prelude's `int &$still_running`. The
+  warning is what every by-reference builtin in the interpreter does
+  (`preg_match()`'s `$matches`, `flock()`'s `$would_block`, `settype()`'s
+  `$var`), so this is an interpreter-wide shape rather than a curl one.
+
+- **`$still_running` is not assigned when a callback throws.** If a
+  `curl_multi_exec()` call is aborted by an exception from a curl callback, the
+  by-reference count keeps its previous value; PHP assigns it (measured: `0`).
+  Compiled elephc has the identical gap, so eval and AOT agree — this is a
+  divergence from PHP, not between the two elephc backends.
+
+- **`curl_multi_info_read()`'s `handle` is the same *handle*, not the same
+  *object*.** PHP guarantees `$info['handle'] === $ch`. Inside `eval()` a curl
+  handle is a resource-like cell rather than an object (see the first bullet
+  above), so the reported value addresses the same underlying handle — every
+  `curl_*` function, `curl_multi_getcontent()` included, works on it — but is not
+  guaranteed to be the identical cell, and `===` against the original is
+  therefore not a supported test. Compiled code keeps real object identity.
+
+- **`CURLOPT_READFUNCTION`'s `$fd` argument is always `null`.** PHP passes the
+  `CURLOPT_INFILE` stream there. `eval()` does not implement the four stream
+  options at all, so there is never a stream to pass — and `null` is exactly what
+  PHP itself passes for a handle with no `CURLOPT_INFILE`. Compiled code passes
+  the real stream.
+
+- **Callback arguments are allocated per invocation and released with the eval
+  context, not after each call.** Every callback invocation builds fresh runtime
+  cells for `$ch` and for its data arguments (2 cells for write/header, 3 for
+  read and debug, 5 for progress/xferinfo). They are bound into the callback's
+  scope as borrowed cells, so the callback's own frame teardown does not free
+  them, and — like every other callback-taking builtin in the interpreter
+  (`preg_replace_callback()`, `array_map()`, `array_filter()`, `usort()`) — the
+  builtin does not free them either. They are reclaimed when the eval context's
+  heap is torn down. This is bounded by the number of callback invocations in one
+  eval context and matters most for `CURLOPT_WRITEFUNCTION`, which fires once per
+  received chunk.
 
 **Aligned with AOT (previously diverged):**
 
