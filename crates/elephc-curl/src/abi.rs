@@ -329,10 +329,10 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_str(
             return 0;
         };
         // NO CA-SPECIFIC HANDLING HERE, AND THAT IS THE DESIGN, not an omission.
-        // `CURLOPT_CAINFO` replaces the discovered bundle in its own option slot, and
-        // `CURLOPT_CAPATH` is deliberately allowed to compose with it — see
-        // [`apply_discovered_cainfo`] for the measurement that ruled out taking the
-        // discovered bundle back out.
+        // `CURLOPT_CAINFO`/`CURLOPT_PROXY_CAINFO` replace the discovered bundle in their
+        // own option slots, and `CURLOPT_CAPATH`/`CURLOPT_PROXY_CAPATH` are deliberately
+        // allowed to compose with it — see [`apply_discovered_cainfo`] for the
+        // measurement that ruled out taking the discovered bundle back out.
         let code = unsafe { easy::setopt_str(entry.curl, opt as c_int, value.as_ptr()) };
         (code == easy::CURLE_OK) as i32
     })
