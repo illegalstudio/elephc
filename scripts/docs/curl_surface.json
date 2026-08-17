@@ -1292,5 +1292,23 @@
         "exact_size": 53153930,
         "sha256": "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8",
         "checksum_cross_check": "Matches both the published https://openssl-library.org/source/openssl-3.5.7.tar.gz.sha256 checksum file and the GitHub release asset digest for openssl-3.5.7.tar.gz on tag openssl-3.5.7. 3.5 is the current \"[LTS]\"-labelled row on the openssl-library.org source page."
+    },
+    "nghttp2": {
+        "version": "1.70.0",
+        "release_date": "2026-07-29",
+        "url": "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.gz",
+        "exact_size": 3104002,
+        "sha256": "aa317e2cf9dca6afa0aed68f8fad6ff303ec6982e25a78c75c0b65e2b9b3ded5",
+        "role": "libcurl's HTTP/2 framing library (--with-nghttp2). Built --enable-lib-only, so it links nothing itself.",
+        "checksum_cross_check": "nghttp2 publishes no standalone checksum file and GitHub Releases is its only distribution point, so the sha256 and the 3104002-byte size are the release asset's own, read from `gh api repos/nghttp2/nghttp2/releases/latest` for tag v1.70.0 and re-hashed locally after download."
+    },
+    "libssh2": {
+        "version": "1.11.1",
+        "release_date": "2024-10-16",
+        "url": "https://github.com/libssh2/libssh2/releases/download/libssh2-1.11.1/libssh2-1.11.1.tar.gz",
+        "exact_size": 1093012,
+        "sha256": "d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7",
+        "role": "libcurl's SSH transport (--with-libssh2), backing scp:// and sftp://. Built --with-crypto=openssl against the managed OpenSSL and --with-libz against the managed zlib.",
+        "checksum_cross_check": "Downloaded independently from the project's own mirror, https://www.libssh2.org/download/libssh2-1.11.1.tar.gz, and hashed: byte-identical to the GitHub release asset. 1.11.1 is the newest release on both."
     }
 }
