@@ -120,6 +120,32 @@ pdo-oci = ["elephc-pdo/oci"]
 # Keeps codegen fixtures and the PDO archive on the official CUBRID CCI profile.
 pdo-cubrid = ["elephc-pdo/cubrid"]
 
+# Publishes the PHP-visible `curl_*` surface to every workspace-level consumer of
+# the shared builtin catalog, on the `pdo-*` relay model above. OFF BY DEFAULT:
+# the default build is byte-for-byte unchanged, and nothing here links a native
+# libcurl (`elephc-curl`'s `elephc_curl_*` externs stay unresolved until a
+# compiled PHP program's final link).
+#
+# Both edges are deliberate, and neither is redundant:
+#  - `elephc-magician/curl` compiles Magician's thirty-four `ext/curl` eval homes
+#    (and transitively turns on the contract crate's own `curl` feature), which is
+#    what makes the eval half of the surface observable in-process.
+#  - `elephc-builtin-contract/curl` is the ROOT package's own direct edge. Magician
+#    is a dev-dependency, so under resolver 2 its relay only reaches the contract
+#    crate when dev-dependencies are part of the build (tests, examples, benches).
+#    Naming the contract feature here makes `cargo build/check --features curl`
+#    publish the same catalog as `cargo test --features curl` instead of silently
+#    selecting a different one.
+# Together they resolve to exactly one `elephc-builtin-contract` instance with
+# `curl` on; prove it with
+# `cargo tree -e features -i elephc-builtin-contract --features curl`.
+#
+# Turning this on is what lets `tests/builtin_parity_tests.rs` apply its full
+# per-contract assertions to the curl surface (both backends visible in one
+# process), and what makes `cargo build --example gen_builtins --features curl`
+# export the curl rows into the generated builtin documentation.
+curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
+
 # PDO needs two mysql client controls that upstream 28.0.0 does not expose:
 # caller-supplied authentication RSA keys and rustls cipher-suite selection.
 # Keep the small audited patch in-tree until those options land upstream.
