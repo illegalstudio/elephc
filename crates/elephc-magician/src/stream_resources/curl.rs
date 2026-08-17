@@ -78,6 +78,23 @@ impl EvalStreamResources {
         self.curl_easy_handles.get(&id).map(|handle| handle.raw)
     }
 
+    /// Reverse lookup: the EVAL TABLE KEY owning a given bridge raw easy-handle id.
+    ///
+    /// `curl_multi_info_read()` needs it and nothing else does: the bridge reports a
+    /// completed transfer by its own easy id (`INFO_FIELD_EASY_ID`), and eval addresses
+    /// handles by table key. A linear scan is right here — the map holds one entry per
+    /// `curl_init()` an eval fragment ever made, and this runs once per completion message.
+    ///
+    /// The mapping is unambiguous: every entry gets its raw id from a distinct
+    /// `elephc_curl_easy_init()`/`elephc_curl_easy_duphandle()` call, and the bridge never
+    /// reuses an id, so no two entries can share a raw.
+    pub(crate) fn curl_easy_id_for_raw(&self, raw: i64) -> Option<i64> {
+        self.curl_easy_handles
+            .iter()
+            .find(|(_, handle)| handle.raw == raw)
+            .map(|(&id, _)| id)
+    }
+
     /// Returns a shallow copy of the PHP-layer mirror fields for an eval table key, so
     /// `curl_copy_handle()` can seed the duplicate without holding two borrows at once.
     pub(crate) fn curl_easy_mirror(&self, id: i64) -> Option<(bool, bool, Option<RuntimeCellHandle>)> {
@@ -211,5 +228,77 @@ impl EvalStreamResources {
                 let _ = values.release(previous);
             }
         }
+    }
+
+    /// Registers a freshly allocated curl MULTI handle and returns its eval table key.
+    pub(crate) fn open_curl_multi_handle(&mut self, raw: i64) -> i64 {
+        let id = self.take_next_id();
+        self.curl_multi_handles.insert(
+            id,
+            EvalCurlMultiHandle {
+                raw,
+                attached: Vec::new(),
+            },
+        );
+        id
+    }
+
+    /// Returns the bridge's raw multi-handle id for an eval table key.
+    pub(crate) fn curl_multi_raw(&self, id: i64) -> Option<i64> {
+        self.curl_multi_handles.get(&id).map(|handle| handle.raw)
+    }
+
+    /// Records an easy handle's eval table key on a multi handle's add-order list, matching
+    /// `crate::curl_prelude::CurlMultiHandle::__elephc_attach`. Callers must invoke this
+    /// ONLY after the bridge answered `CURLM_OK`, so a refused attach leaves the list
+    /// exactly as it was — otherwise `curl_multi_get_handles()` would list a handle libcurl
+    /// never took. Idempotent for an already-listed key.
+    pub(crate) fn attach_curl_multi_easy(&mut self, multi_id: i64, easy_id: i64) {
+        if let Some(handle) = self.curl_multi_handles.get_mut(&multi_id) {
+            if !handle.attached.contains(&easy_id) {
+                handle.attached.push(easy_id);
+            }
+        }
+    }
+
+    /// Removes an easy handle's eval table key from a multi handle's add-order list,
+    /// matching `crate::curl_prelude::CurlMultiHandle::__elephc_detach`.
+    pub(crate) fn detach_curl_multi_easy(&mut self, multi_id: i64, easy_id: i64) {
+        if let Some(handle) = self.curl_multi_handles.get_mut(&multi_id) {
+            handle.attached.retain(|&id| id != easy_id);
+        }
+    }
+
+    /// Returns a multi handle's attached easy-handle table keys in add order — the list
+    /// PHP 8.5's `curl_multi_get_handles()` reports and `curl_multi_info_read()` resolves
+    /// its completion message against.
+    pub(crate) fn curl_multi_attached(&self, multi_id: i64) -> Option<Vec<i64>> {
+        self.curl_multi_handles
+            .get(&multi_id)
+            .map(|handle| handle.attached.clone())
+    }
+
+    /// Registers a freshly allocated curl SHARE handle and returns its eval table key.
+    /// `persistent` marks a share minted by PHP 8.5's `curl_share_init_persistent()`.
+    pub(crate) fn open_curl_share_handle(&mut self, raw: i64, persistent: bool) -> i64 {
+        let id = self.take_next_id();
+        self.curl_share_handles
+            .insert(id, EvalCurlShareHandle { raw, persistent });
+        id
+    }
+
+    /// Returns the bridge's raw share-handle id for an eval table key.
+    pub(crate) fn curl_share_raw(&self, id: i64) -> Option<i64> {
+        self.curl_share_handles.get(&id).map(|handle| handle.raw)
+    }
+
+    /// Returns whether an eval table key names a PERSISTENT share (PHP 8.5's
+    /// `CurlSharePersistentHandle`), which `curl_share_setopt()`/`curl_share_errno()`/
+    /// `curl_share_close()` must refuse exactly as their AOT `CurlShareHandle` parameter
+    /// type does — php-src does not make the persistent class a subclass.
+    pub(crate) fn curl_share_is_persistent(&self, id: i64) -> bool {
+        self.curl_share_handles
+            .get(&id)
+            .is_some_and(|handle| handle.persistent)
     }
 }

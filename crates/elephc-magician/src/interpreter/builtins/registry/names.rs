@@ -23,30 +23,32 @@ pub(in crate::interpreter) fn eval_php_visible_builtin_exists(name: &str) -> boo
     eval_declared_builtin_exists(name)
 }
 
-/// Returns true for a `curl_multi_*`/`curl_share_*`/`curl_file_create` name — the curl
-/// multi interface, share interface, and `CURLFile` factory function this eval
-/// interpreter deliberately never implements (`crate::interpreter::builtins::curl`'s
-/// module doc, "Scope shipped vs. deferred"). Checked BEFORE every native-function
-/// fallback that could otherwise reach one of these names — `crate::interpreter::
-/// expressions::eval_call`, the `call_user_func()`/`call_user_func_array()` string-callback
-/// paths (`registry::callable::object_dispatch`), and the plain-callable-array-argument
-/// paths (`registry::callable::array_dispatch`, which also cover a bare `$f()` variable
-/// call and `ReflectionFunction::invoke()`) — because whenever the compiled program
-/// hosting this `eval()` call also links `elephc_curl` (i.e. it uses curl anywhere outside
-/// `eval()` too, which is what makes `elephc_curl` available at all), the AOT prelude
-/// registers a REAL `curl_multi_init()`/`curl_share_init()`/`curl_file_create()` symbol in
-/// `ElephcEvalContext::native_function()`. Without this check, calling one of those names
-/// from inside `eval()` — through ANY of those paths — would silently run the COMPILED
-/// implementation and hand back a real AOT `CurlMultiHandle`/`CurlShareHandle` object —
-/// indistinguishable from a genuinely supported call until it is mixed with an eval-owned
-/// easy handle and fails confusingly (that module doc's "TWO DISTINCT OBJECT SPACES"
-/// section). This check turns that silent, confusing interop failure into the same
-/// "eval() fragment uses an unsupported construct" fatal any other undefined-in-eval name
-/// already produces.
+/// Returns true for `curl_file_create` — the ONE curl name this eval interpreter still
+/// routes away from `ElephcEvalContext::native_function()`.
+///
+/// HISTORY, because the shape of this guard is not obvious: it used to match the whole
+/// `curl_multi_*`/`curl_share_*` PREFIX space too, back when the eval curl surface was
+/// easy-interface-only. Whenever the compiled program hosting an `eval()` call also links
+/// `elephc_curl` (i.e. it uses curl anywhere outside `eval()`, which is what makes the
+/// bridge available at all), the AOT prelude registers REAL `curl_multi_init()`/
+/// `curl_share_init()`/`curl_file_create()` symbols in `native_function()`; without a
+/// guard, calling one from inside `eval()` silently ran the COMPILED implementation and
+/// handed back a genuine AOT `CurlMultiHandle`/`CurlShareHandle` — indistinguishable from
+/// a supported call right up until it was mixed with an eval-owned easy handle and failed
+/// confusingly (`crate::interpreter::builtins::curl`'s "TWO DISTINCT OBJECT SPACES"). The
+/// multi and share interfaces now have real eval homes
+/// (`crate::interpreter::builtins::curl::curl_multi_init` and friends), so those names are
+/// answered by the eval builtin registry BEFORE any native fallback is consulted and need
+/// no interception at all.
+///
+/// `curl_file_create()` IS STILL LISTED because `CURLFile`/`CURLStringFile` are still
+/// rejected as classes (see `eval_curl_deferred_class_name` below): a factory that can only
+/// hand back a class this interpreter refuses to construct would be a worse failure than an
+/// honest rejection.
 ///
 /// GATED behind this crate's own `curl` Cargo feature, and that gate is not a
 /// simplification — it is exactly as precise as the bug it closes. The build that can
-/// actually observe `native_function("curl_multi_init")` resolving to the real extension
+/// actually observe `native_function("curl_file_create")` resolving to the real extension
 /// function is, by construction, the SAME build this guard needs to exist in:
 /// `src/linker/bridges.rs`'s bridge-archive resolver selects/builds the curl-aware
 /// `libelephc_magician_curl.a` (this crate compiled `--features curl`) exactly when a
@@ -54,26 +56,15 @@ pub(in crate::interpreter) fn eval_php_visible_builtin_exists(name: &str) -> boo
 /// identical `needs_curl` condition that also decides whether `elephc_curl` itself gets
 /// linked at all. A build of this crate WITHOUT the `curl` feature can never be paired
 /// with a real `elephc_curl` link, so `native_function()` can never resolve a genuine curl
-/// symbol there — and gating this way closes a real false-positive the unconditional
-/// version had: outside a curl-linked program, nothing stops a user script from declaring
-/// its OWN `function curl_multi_init() { ... }` (PHP only forbids redeclaring a name once
-/// the REAL extension function already exists, which requires curl to be loaded), and an
-/// unconditional prefix match would have rejected that legitimate call too. Inside a
-/// curl-linked program, no such collision is possible — PHP does not allow redeclaring a
-/// function the loaded `curl` extension already defines — so the guard is exactly as wide
-/// as it needs to be and no wider.
-///
-/// Matching is by PREFIX (`curl_multi_`/`curl_share_`) rather than an exhaustive name
-/// list, so PHP 8.5 additions (`curl_multi_get_handles`, `curl_share_init_persistent`,
-/// …) are covered without needing a matching update here.
+/// symbol there.
 #[cfg(feature = "curl")]
 pub(in crate::interpreter) fn eval_curl_deferred_function_name(name: &str) -> bool {
-    name.starts_with("curl_multi_") || name.starts_with("curl_share_") || name == "curl_file_create"
+    name == "curl_file_create"
 }
 
 /// Returns true for `CURLFile`/`CURLStringFile` — the two classes
 /// `curl_file_create()`/`CURLOPT_POSTFIELDS`'s multipart array form need, which this eval
-/// interpreter deliberately never implements (same module doc as
+/// interpreter does not yet construct (same module doc as
 /// `eval_curl_deferred_function_name`, whose "gated behind `curl`" rationale applies here
 /// identically). Checked before every native-class-construction fallback that could
 /// otherwise reach one of these names — `crate::interpreter::expressions::evaluation::

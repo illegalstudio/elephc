@@ -15,7 +15,7 @@ use super::*;
 /// `null` (NOT `gettype()`'s `"NULL"`), and `gettype($value)` for everything else —
 /// `crate::curl_prelude::curl_setopt`'s own `$given` ternary, reproduced here so an eval
 /// curl error message reads identically to the AOT one for the same misuse.
-fn eval_curl_given_type_name(
+pub(in crate::interpreter) fn eval_curl_given_type_name(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
@@ -82,9 +82,158 @@ pub(in crate::interpreter) fn eval_curl_easy_raw(
     Ok(eval_curl_easy_handle(function, handle, context, values)?.1)
 }
 
-/// `curl_setopt()`'s message for KIND 6 (a real option this build cannot carry) and KIND 7/
-/// 8 (share/callback — accepted PHP API this eval interpreter specifically does not wire,
-/// per this family's module doc), formatted exactly like the AOT prelude's own
+/// `eval_curl_easy_handle` for a handle that is NOT argument #1 — `curl_multi_add_handle()`
+/// and `curl_multi_remove_handle()` take the easy handle as argument #2, and their AOT
+/// counterparts spell that position out in their own runtime `instanceof` guards
+/// (`crate::curl_prelude::curl_multi_add_handle`), so the eval message has to as well.
+pub(in crate::interpreter) fn eval_curl_easy_handle_at(
+    function: &str,
+    position: usize,
+    parameter: &str,
+    handle: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(i64, i64), EvalStatus> {
+    if values.type_tag(handle)? == EVAL_TAG_RESOURCE {
+        if let Ok(table_id) = i64::try_from(values.raw_value_word(handle)?) {
+            if let Some(raw) = context.stream_resources().curl_easy_raw(table_id) {
+                return Ok((table_id, raw));
+            }
+        }
+    }
+    let given = eval_curl_given_type_name(handle, values)?;
+    eval_throw_type_error(
+        &format!(
+            "{function}(): Argument #{position} (${parameter}) must be of type CurlHandle, \
+             {given} given"
+        ),
+        context,
+        values,
+    )
+}
+
+/// Resolves a `curl_multi_*()` call's `$multi_handle` argument (always #1) to its EVAL
+/// TABLE KEY and bridge raw id, throwing PHP's own catchable `\TypeError` for anything
+/// else.
+///
+/// TYPING BY TABLE MEMBERSHIP is what makes this exact: every eval-owned curl handle draws
+/// its key from ONE shared `take_next_id()` counter (`crate::stream_resources`), so a key
+/// that resolves in the multi table cannot also be an easy or share key. Passing
+/// `curl_multi_exec()` an easy handle therefore lands here, not in a confusing partial
+/// success — the eval counterpart of the `CurlMultiHandle $multi_handle` parameter type the
+/// AOT prelude gets checked at compile time (`eval_curl_easy_handle`'s own doc explains why
+/// eval needs a runtime check where AOT needs none).
+pub(in crate::interpreter) fn eval_curl_multi_handle(
+    function: &str,
+    handle: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(i64, i64), EvalStatus> {
+    if values.type_tag(handle)? == EVAL_TAG_RESOURCE {
+        if let Ok(table_id) = i64::try_from(values.raw_value_word(handle)?) {
+            if let Some(raw) = context.stream_resources().curl_multi_raw(table_id) {
+                return Ok((table_id, raw));
+            }
+        }
+    }
+    let given = eval_curl_given_type_name(handle, values)?;
+    eval_throw_type_error(
+        &format!(
+            "{function}(): Argument #1 ($multi_handle) must be of type CurlMultiHandle, \
+             {given} given"
+        ),
+        context,
+        values,
+    )
+}
+
+/// `eval_curl_multi_handle`, keeping only the bridge raw id.
+pub(in crate::interpreter) fn eval_curl_multi_raw(
+    function: &str,
+    handle: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    Ok(eval_curl_multi_handle(function, handle, context, values)?.1)
+}
+
+/// Resolves a `curl_share_*()` call's `$share_handle` argument (always #1) to its bridge raw
+/// id, throwing PHP's own catchable `\TypeError` for anything else.
+///
+/// A PERSISTENT share (PHP 8.5's `CurlSharePersistentHandle`) IS REFUSED HERE, because
+/// php-src does not make that class a subclass of `CurlShareHandle`: `curl_share_setopt()`/
+/// `curl_share_errno()`/`curl_share_close()` are all declared `CurlShareHandle` and never
+/// accept it (`crate::curl_prelude`'s own comment on the class). The AOT build gets that
+/// from the parameter type; eval has to check it.
+pub(in crate::interpreter) fn eval_curl_share_raw(
+    function: &str,
+    handle: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    if values.type_tag(handle)? == EVAL_TAG_RESOURCE {
+        if let Ok(table_id) = i64::try_from(values.raw_value_word(handle)?) {
+            if let Some(raw) = context.stream_resources().curl_share_raw(table_id) {
+                if !context.stream_resources().curl_share_is_persistent(table_id) {
+                    return Ok(raw);
+                }
+                return eval_throw_type_error(
+                    &format!(
+                        "{function}(): Argument #1 ($share_handle) must be of type \
+                         CurlShareHandle, CurlSharePersistentHandle given"
+                    ),
+                    context,
+                    values,
+                );
+            }
+        }
+    }
+    let given = eval_curl_given_type_name(handle, values)?;
+    eval_throw_type_error(
+        &format!(
+            "{function}(): Argument #1 ($share_handle) must be of type CurlShareHandle, \
+             {given} given"
+        ),
+        context,
+        values,
+    )
+}
+
+/// Rejects a PHP-8.5-only curl function on an older compatibility profile with PHP's own
+/// catchable `Call to undefined function` `\Error`.
+///
+/// THE AOT SIDE GETS THIS FROM THE PRELUDE'S VERSION FENCE:
+/// `curl_multi_get_handles()`/`curl_share_init_persistent()` sit inside
+/// `-- elephc PHP >= 8.5 ... --` blocks that `prelude_source_for_version` STRIPS below 8.5,
+/// so a program compiled with `--php-version 8.4` never declares them and the call fails as
+/// undefined, exactly as that runtime would. eval carries one registry for every profile,
+/// so the same gate has to be a runtime check against the profile generated code published
+/// through `__elephc_eval_set_php_version_id` (`crate::eval_php_profile`).
+pub(in crate::interpreter) fn eval_curl_require_php_85(
+    function: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if crate::eval_php_profile::eval_php_version_id() >= 80_500 {
+        return Ok(());
+    }
+    // `eval_throw_error` only ever returns `Err(EvalStatus::UncaughtThrowable)` — the
+    // `Ok` arm of its `Result<RuntimeCellHandle, _>` is uninhabited in practice — so the
+    // cell type it would nominally produce is irrelevant here and named only to satisfy
+    // inference. Every other `eval_throw_*` caller in this family returns the value
+    // directly and gets the type from its own return position.
+    let _: RuntimeCellHandle = eval_throw_error(
+        &format!("Call to undefined function {function}()"),
+        context,
+        values,
+    )?;
+    Ok(())
+}
+
+/// `curl_setopt()`'s message for KIND 6 (a real option this build cannot carry), KIND 8
+/// (callbacks) and KIND 9 (the PHP-stream options) — accepted PHP API this eval interpreter
+/// specifically does not wire, per this family's module doc — formatted exactly like the
+/// AOT prelude's own
 /// `__elephc_curl_setopt_unsupported_warning` (`src/codegen_support/runtime/curl/
 /// warn_option.rs`'s `CURL_SETOPT_UNSUPPORTED_PREFIX`/`_SUFFIX`), so a script observing
 /// the warning text sees the identical wording whether it runs compiled or through
@@ -98,15 +247,29 @@ fn warn_unsupported_option(
     ))
 }
 
+/// `warn_unsupported_option`'s `curl_multi_setopt()` twin, for `CURLMOPT_PUSHFUNCTION` —
+/// the one real php-src multi option this build cannot carry. A SEPARATE STRING because
+/// PHP names the function that refused the option, exactly as the AOT side keeps
+/// `CURL_MULTI_SETOPT_UNSUPPORTED_PREFIX` separate from `CURL_SETOPT_UNSUPPORTED_PREFIX`
+/// (`src/codegen_support/runtime/data`).
+pub(in crate::interpreter) fn eval_curl_warn_unsupported_multi_option(
+    option: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    values.warning(&format!(
+        "curl_multi_setopt(): Option {option} is not supported by this build"
+    ))
+}
+
 /// Applies one `curl_setopt($handle, $option, $value)` call, given the handle's bridge raw
 /// id, EVAL TABLE KEY (for the PHP-layer mirror fields), and already-evaluated option/value
 /// cells. Returns the same `bool` `curl_setopt()` itself returns.
 ///
 /// Mirrors `crate::curl_prelude::curl_setopt`'s body kind-for-kind (see that function's own
-/// extensive comments for the libcurl-side rationale of each branch), MINUS the KIND 3
-/// (`CURLOPT_POSTFIELDS` array/`multipart`) special case, KIND 7 (`CURLOPT_SHARE`), and
-/// KIND 8 (callbacks) — all three fall into the honest "not supported by this build"
-/// warning path instead, per this family's module doc.
+/// extensive comments for the libcurl-side rationale of each branch), MINUS the
+/// `CURLOPT_POSTFIELDS` array/`multipart` special case and KIND 8 (callbacks) — both fall
+/// into the honest "not supported by this build" warning path instead, per this family's
+/// module doc.
 pub(in crate::interpreter) fn eval_curl_setopt_apply(
     raw: i64,
     table_id: i64,
@@ -224,16 +387,43 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
         // CURLOPT_BINARYTRANSFER (19914): documented no-op in modern PHP.
         return values.bool_value(true);
     }
+    // CURLOPT_SHARE (10100) IS THE ONE OBJECT-VALUED `curl_setopt()` OPTION, handled here
+    // before the scalar-type guard below (an eval share handle is a resource cell, never
+    // int/string/float/bool). BOTH share kinds are accepted — `CurlShareHandle` and PHP
+    // 8.5's `CurlSharePersistentHandle` — matching php-src's own `CURLOPT_SHARE` contract
+    // and `crate::curl_prelude::curl_setopt`'s `$kind === 7` branch, which likewise accepts
+    // the persistent class even though no other share function does.
+    //
+    // NO PHP-LEVEL REFERENCE IS TAKEN from the easy handle to the share, deliberately: the
+    // BRIDGE is what keeps a share alive as long as any easy handle still points at it
+    // (`crates/elephc-curl/src/share.rs`'s deferred-free protocol), exactly as on the AOT
+    // side. eval could not usefully take one anyway — its curl cells own nothing.
+    if kind == ffi::KIND_SHARE {
+        if values.type_tag(value)? == EVAL_TAG_RESOURCE {
+            if let Ok(share_table_id) = i64::try_from(values.raw_value_word(value)?) {
+                if let Some(share_raw) =
+                    context.stream_resources().curl_share_raw(share_table_id)
+                {
+                    return values.bool_value(ffi::easy_set_share(raw, share_raw));
+                }
+            }
+        }
+        let given = eval_curl_given_type_name(value, values)?;
+        return eval_throw_type_error(
+            &format!(
+                "curl_setopt(): Argument #3 ($value) must be of type CurlShareHandle, \
+                 {given} given"
+            ),
+            context,
+            values,
+        );
+    }
     // KIND_STREAM IS IN THIS LIST FOR A REASON THE OTHERS ARE NOT: without it, the four
     // PHP-stream options would fall PAST the warning and into the scalar-type guard below,
     // where a stream resource is none of int/string/float/bool and therefore a HARD FATAL.
     // They used to be `KIND_UNSUPPORTED`, so leaving them out here would have turned a
     // `false` + warning into an uncatchable fault the moment the AOT side implemented them.
-    if kind == ffi::KIND_SHARE
-        || kind == ffi::KIND_CALLBACK
-        || kind == ffi::KIND_STREAM
-        || kind == ffi::KIND_UNSUPPORTED
-    {
+    if kind == ffi::KIND_CALLBACK || kind == ffi::KIND_STREAM || kind == ffi::KIND_UNSUPPORTED {
         warn_unsupported_option(option, values)?;
         return values.bool_value(false);
     }

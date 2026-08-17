@@ -12,8 +12,28 @@ use super::*;
 
 impl Drop for EvalStreamResources {
     /// Frees any incremental hash contexts that were never finalized, and (curl feature
-    /// only) any curl easy handles this eval context ever created — see
+    /// only) any curl multi, easy, and share handles this eval context ever created — see
     /// `EvalCurlEasyHandle`'s own doc for why this `Drop` is the ONLY place they are freed.
+    ///
+    /// THE CURL ORDER IS MULTI -> EASY -> SHARE, and it is load-bearing on both ends:
+    ///
+    /// - MULTI BEFORE EASY, because `elephc_curl_multi_free` detaches every still-attached
+    ///   easy handle with `curl_multi_remove_handle` before `curl_multi_cleanup`, and it
+    ///   can only do that while those easy handles still exist. Freeing the easy handles
+    ///   first is not unsafe (libcurl's own `curl_easy_cleanup` detaches a handle from its
+    ///   multi, and the bridge skips ids it no longer knows), but it leaves the detaching
+    ///   to libcurl's internals instead of doing it explicitly.
+    /// - EASY BEFORE SHARE, because the bridge's share free is DEFERRED
+    ///   (`crates/elephc-curl/src/share.rs`'s module doc): a `curl_share_cleanup()` while
+    ///   any attached easy handle remains is refused by libcurl with `CURLSHE_IN_USE` and
+    ///   frees nothing. Running `elephc_curl_easy_free` first lets each handle's own
+    ///   `detach_easy` drain the share's attachment list, so the share free that follows
+    ///   takes the immediate path and the native share (DNS cache, cookie jar, TLS session
+    ///   cache, connection pool) is genuinely released. The other order also terminates
+    ///   correctly — the share would simply be marked `pending_free` and cleaned up by the
+    ///   LAST easy free instead — so this is a "make the common path the direct one"
+    ///   choice, not a correctness cliff. Either way nothing is freed twice: the bridge
+    ///   removes an entry from its table before cleaning it up, and this table drains.
     fn drop(&mut self) {
         for context in self.hash_contexts.drain().map(|(_, context)| context) {
             unsafe {
@@ -23,8 +43,16 @@ impl Drop for EvalStreamResources {
             }
         }
         #[cfg(feature = "curl")]
-        for handle in self.curl_easy_handles.drain().map(|(_, handle)| handle) {
-            crate::curl_ffi::easy_free(handle.raw);
+        {
+            for handle in self.curl_multi_handles.drain().map(|(_, handle)| handle) {
+                crate::curl_ffi::multi_free(handle.raw);
+            }
+            for handle in self.curl_easy_handles.drain().map(|(_, handle)| handle) {
+                crate::curl_ffi::easy_free(handle.raw);
+            }
+            for handle in self.curl_share_handles.drain().map(|(_, handle)| handle) {
+                crate::curl_ffi::share_free(handle.raw);
+            }
         }
     }
 }
@@ -280,6 +308,39 @@ pub(super) struct EvalCurlEasyHandle {
     /// `None` until first set, read back as PHP `false` — matching the AOT property's
     /// `false` default.
     pub(super) private_value: Option<RuntimeCellHandle>,
+}
+
+/// Opaque `elephc-curl` MULTI-handle resource, plus the eval counterpart of
+/// `crate::curl_prelude::CurlMultiHandle`'s `$__elephc_ids`/`$__elephc_handles` identity
+/// map. The AOT class needs two parallel lists because it stores real PHP OBJECTS whose
+/// identity `curl_multi_info_read()` must hand back; eval stores only the attached easy
+/// handles' EVAL TABLE KEYS, because an eval curl handle is an inert resource-kind-5 cell
+/// (`crate::interpreter::builtins::curl`'s module doc) that can be re-boxed from its key at
+/// any time — two cells carrying the same key are interchangeable and neither owns
+/// anything, so there is no double-free hazard for AOT's map to prevent here.
+#[cfg(feature = "curl")]
+pub(super) struct EvalCurlMultiHandle {
+    /// The bridge's own multi-handle id (`elephc_curl_multi_init()`'s return value).
+    pub(super) raw: i64,
+    /// EVAL TABLE KEYS of the easy handles currently attached, in add order — what
+    /// `curl_multi_get_handles()` lists and what `curl_multi_info_read()` resolves a
+    /// completion message's easy handle through.
+    pub(super) attached: Vec<i64>,
+}
+
+/// Opaque `elephc-curl` SHARE-handle resource. Carries no attachment bookkeeping of its
+/// own: the BRIDGE owns that (`crates/elephc-curl/src/share.rs`'s `ShareEntry::attached`
+/// and its deferred-free protocol), and duplicating it here would be a second, desyncable
+/// copy of the same truth.
+#[cfg(feature = "curl")]
+pub(super) struct EvalCurlShareHandle {
+    /// The bridge's own share-handle id.
+    pub(super) raw: i64,
+    /// Set for a share minted by PHP 8.5's `curl_share_init_persistent()`. Recorded only so
+    /// `curl_setopt($ch, CURLOPT_SHARE, $sh)`'s TypeError message and this table's own
+    /// teardown can tell the two apart; the bridge independently refuses to free a
+    /// persistent share, so this flag is never load-bearing for lifetime.
+    pub(super) persistent: bool,
 }
 
 /// Stream context metadata tracked by eval.

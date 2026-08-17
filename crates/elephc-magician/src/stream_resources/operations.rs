@@ -80,6 +80,10 @@ impl EvalStreamResources {
             user_wrapper_streams,
             #[cfg(feature = "curl")]
             curl_easy_handles,
+            #[cfg(feature = "curl")]
+            curl_multi_handles,
+            #[cfg(feature = "curl")]
+            curl_share_handles,
         } = self;
         streams.contains_key(&id)
             || user_wrapper_streams.contains_key(&id)
@@ -94,6 +98,8 @@ impl EvalStreamResources {
                 #[cfg(feature = "curl")]
                 {
                     curl_easy_handles.contains_key(&id)
+                        || curl_multi_handles.contains_key(&id)
+                        || curl_share_handles.contains_key(&id)
                 }
                 #[cfg(not(feature = "curl"))]
                 {

@@ -1,11 +1,11 @@
 //! Purpose:
-//! Eval homes for PHP's `ext/curl` easy interface:
-//! `curl_init`, `curl_setopt[_array]`, `curl_exec`, `curl_getinfo`, `curl_close`,
-//! `curl_copy_handle`, `curl_errno`, `curl_error`, `curl_escape`/`curl_unescape`,
-//! `curl_pause`, `curl_reset`, `curl_upkeep`, `curl_version`, `curl_strerror`. Every one
-//! of them calls the SAME `elephc_curl_*` C ABI the AOT `curl_setopt()`/etc. prelude
-//! wrappers call (`crate::curl_ffi`) — nothing here reimplements HTTP, TLS, or any
-//! `CURLOPT_*` semantic.
+//! Eval homes for PHP's `ext/curl`. The easy interface — `curl_init`,
+//! `curl_setopt[_array]`, `curl_exec`, `curl_getinfo`, `curl_close`, `curl_copy_handle`,
+//! `curl_errno`, `curl_error`, `curl_escape`/`curl_unescape`, `curl_pause`, `curl_reset`,
+//! `curl_upkeep`, `curl_version`, `curl_strerror` — plus the MULTI interface
+//! (`curl_multi_*`) and the SHARE interface (`curl_share_*`). Every one of them calls the
+//! SAME `elephc_curl_*` C ABI the AOT `curl_setopt()`/etc. prelude wrappers call
+//! (`crate::curl_ffi`) — nothing here reimplements HTTP, TLS, or any `CURLOPT_*` semantic.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::hooks::{EvalDirectHook, EvalValuesHook}::Curl`.
@@ -116,76 +116,68 @@
 //! STRING/SLIST/OFF_T/PHP-LAYER option `curl_setopt()` recognizes works, not just a
 //! hand-picked subset.
 //!
-//! DEFERRED (not implemented — the multi interface, the share interface, and
-//! `CURLFile`/`CURLStringFile`):
-//! - The multi interface (`curl_multi_*`) and the share interface (`curl_share_*`).
+//! ALSO SHIPPED — THE MULTI AND SHARE INTERFACES (R3-C): `curl_multi_init`/`_add_handle`/
+//! `_remove_handle`/`_exec`/`_select`/`_info_read`/`_getcontent`/`_setopt`/`_errno`/
+//! `_strerror`/`_close` plus PHP 8.5's `curl_multi_get_handles`, and `curl_share_init`/
+//! `_setopt`/`_errno`/`_strerror`/`_close` plus PHP 8.5's `curl_share_init_persistent` —
+//! together with `curl_setopt()`'s `CURLOPT_SHARE` (option KIND 7). Every one of them
+//! calls the SAME `elephc_curl_multi_*`/`elephc_curl_share_*` ABI the AOT prelude calls.
+//!
+//! WHAT MADE THAT POSSIBLE, since an earlier revision of this doc argued it was blocked by
+//! an OBJECT-MODEL MISMATCH: the argument was that multi and share are OBJECT-IDENTITY
+//! APIs (`curl_multi_info_read()` must hand back the SAME `CurlHandle` instance that was
+//! added) and that a resource-cell world has no home for that without a parallel identity
+//! map. The premise was right and the conclusion was wrong. AOT needs the identity map for
+//! an OWNERSHIP reason, spelled out at `crate::curl_prelude::CurlMultiHandle`: its
+//! `CurlHandle` object OWNS the native handle (resource kind 6 -> `curl_easy_cleanup`), so
+//! minting a second object around one reported id would DOUBLE-FREE it. An eval curl handle
+//! owns nothing — it is an inert resource-kind-5 cell whose payload is an
+//! `EvalStreamResources` table key, freed only by that table's own `Drop` — so two cells
+//! carrying the same key are simply interchangeable, and `curl_multi_info_read()` can
+//! re-box the key it resolves. What eval needs instead is only an ADD-ORDER LIST of table
+//! keys per multi handle (`EvalCurlMultiHandle::attached`), which is what
+//! `curl_multi_get_handles()` reports. The share side needs even less: the BRIDGE owns the
+//! attachment bookkeeping and its deferred-free protocol
+//! (`crates/elephc-curl/src/share.rs`), so eval stores only the raw id.
+//!
+//! TYPING IS BY TABLE MEMBERSHIP. Every eval-owned curl handle — easy, multi, share —
+//! draws its key from ONE shared `take_next_id()` counter, so a key that resolves in the
+//! multi table cannot also be an easy or share key. That is what lets
+//! `curl_multi_add_handle($mh, $ch)` tell its two arguments apart, and it is the eval
+//! counterpart of the `CurlMultiHandle`/`CurlHandle` parameter types the AOT prelude gets
+//! checked at COMPILE time. See `handle.rs`'s resolver family.
+//!
+//! STILL DEFERRED:
 //! - `CURLFile`/`CURLStringFile`/`curl_file_create()` and, with them,
 //!   `CURLOPT_POSTFIELDS`'s ARRAY (`multipart/form-data`) form — `curl_setopt()` still
 //!   accepts a plain STRING `CURLOPT_POSTFIELDS` body.
 //! - Callback options (`CURLOPT_WRITEFUNCTION`/`_HEADERFUNCTION`/`_READFUNCTION`/
 //!   `_PROGRESSFUNCTION`/`_DEBUGFUNCTION`/`_XFERINFOFUNCTION`, option KIND 8): rejected
 //!   through the SAME honest "option ... is not supported by this build" warning +
-//!   `false` path KIND 6 (a real option this build cannot carry) already uses —
-//!   installing a callback from inside
-//!   `eval()` would need the descriptor-based runtime callable invoker
-//!   (`src/codegen/runtime_callable_invoker.rs`), which is generated-assembly machinery
-//!   this crate has no access to from a pure interpreter context.
-//! - `CURLOPT_SHARE` (option KIND 7) for the same reason as the multi/share interfaces:
-//!   there is no eval-side `CurlShareHandle` to read it from.
+//!   `false` path KIND 6 (a real option this build cannot carry) already uses.
 //! - `CURLOPT_FILE`/`CURLOPT_INFILE`/`CURLOPT_WRITEHEADER`/`CURLOPT_STDERR` (PHP-stream-
 //!   valued options): these are KIND 9 (`KIND_STREAM`) options that need a live PHP stream
-//!   resource on the far end; wiring them is future work, tracked with the rest of this
-//!   list, not attempted here.
+//!   resource on the far end.
 //!
-//! WHY EASY-ONLY IS A DELIBERATE, PERMANENT-ISH SCOPE DECISION (WP-B, curl punch list
-//! coda), not merely "not gotten to yet":
-//!
-//! 1. OBJECT-MODEL MISMATCH. A curl easy handle in `eval()` is a resource-like cell (see
-//!    "Handle representation" above), not a real object — the same shape `hash_init()`'s
-//!    `HashContext` already uses. The multi and share interfaces are fundamentally
-//!    OBJECT-IDENTITY APIs: `curl_multi_add_handle()` attaches a handle by identity,
-//!    `curl_multi_info_read()` hands back the SAME `CurlHandle` object instance that was
-//!    attached (not a new one with the same raw id), and `CURLOPT_SHARE` reads a
-//!    `CurlShareHandle` OBJECT out of a `curl_setopt()` call whose third argument is
-//!    otherwise always a scalar. None of that has a home in a resource-cell world without
-//!    inventing a parallel object-identity map inside this interpreter — real, nontrivial
-//!    new machinery, not a missing case in an existing dispatch table.
-//! 2. CALLBACKS NEED EVAL-INTERPRETER CALLABLE INVOCATION FROM C, WHICH DOES NOT EXIST.
-//!    AOT installs a callback by decomposing it into a descriptor pointer plus the shared
-//!    codegen adapter's address (`src/codegen/runtime_callable_invoker.rs`), so libcurl's
-//!    C trampoline can call back into compiled PHP. A pure Rust interpreter with no
-//!    generated assembly has no address to hand libcurl for that trampoline to call INTO
-//!    eval-interpreted PHP — this is not "harder to implement", it is a capability this
-//!    interpreter does not have anywhere yet, for curl or otherwise.
-//! 3. PAY-FOR-USE, applied to eval SPECIFICALLY. Multi/share/callbacks are common in
-//!    compiled code and rare from inside a STRING passed to `eval()` — carrying
-//!    object-identity tracking and C-callback-invocation machinery for that combination
-//!    would cost every eval()-using program (this module's own Cargo-feature-gating doc
-//!    above explains the same tradeoff for curl as a whole) for a path few `eval()`
-//!    callers exercise.
-//!
-//! ROADMAP: none of the three reasons above is permanent in principle, but (2) is the hard
-//! one — it needs eval-callable invocation from a C trampoline, machinery this interpreter
-//! does not have for ANY builtin family yet, not just curl. No committed timeline exists.
-//!
-//! WHAT HAPPENS IF YOU TRY (post item-6 fix): every `curl_multi_*`/`curl_share_*` function
-//! name, `curl_file_create()`, and `new CURLFile(...)`/`new CURLStringFile(...)` is
-//! INTERCEPTED and answers eval's own honest "eval() fragment uses an unsupported
-//! construct" fatal — the identical rejection any other undefined-in-eval name already
-//! produces — rather than silently doing something confusing. This is a deliberate fix,
-//! not the original behavior: before it, an unrecognized-by-eval name fell through to
-//! `context.native_function()` (the interpreter's normal "call this AOT-compiled function
-//! by name" escape hatch), and whenever the host program also linked `elephc_curl` (which
-//! ANY non-`eval()` curl usage in the same program causes), that fallthrough resolved to
-//! the REAL compiled `curl_multi_init()`/`curl_share_init()`/`curl_file_create()`/
-//! `CURLFile` and handed back a genuine, apparently-working AOT object — right up until it
-//! was mixed with an eval-owned easy handle and failed confusingly (the "TWO DISTINCT
-//! OBJECT SPACES" consequence documented above). See
+//! WHAT HAPPENS IF YOU TRY A STILL-DEFERRED NAME (post item-6 fix): `curl_file_create()`
+//! and `new CURLFile(...)`/`new CURLStringFile(...)` are INTERCEPTED and answer eval's own
+//! honest "eval() fragment uses an unsupported construct" fatal — the identical rejection
+//! any other undefined-in-eval name already produces — rather than silently doing something
+//! confusing. This is a deliberate fix, not the original behavior: before it, an
+//! unrecognized-by-eval name fell through to `context.native_function()` (the interpreter's
+//! normal "call this AOT-compiled function by name" escape hatch), and whenever the host
+//! program also linked `elephc_curl` (which ANY non-`eval()` curl usage in the same program
+//! causes), that fallthrough resolved to the REAL compiled implementation and handed back a
+//! genuine, apparently-working AOT object — right up until it was mixed with an eval-owned
+//! easy handle and failed confusingly (the "TWO DISTINCT OBJECT SPACES" consequence
+//! documented above). See
 //! `crate::interpreter::builtins::registry::names::{eval_curl_deferred_function_name,
 //! eval_curl_deferred_class_name}` for the interception itself and
 //! `crate::interpreter::expressions::{eval_call, evaluation::eval_new_object_result}` for
 //! where each is checked, ahead of their respective native-function/native-class
-//! fallbacks.
+//! fallbacks. The `curl_multi_*`/`curl_share_*` PREFIXES ARE NO LONGER INTERCEPTED — they
+//! are answered by this module's own registry entries, which are consulted before any
+//! native fallback.
 
 mod handle;
 
@@ -197,10 +189,28 @@ mod curl_escape;
 mod curl_exec;
 mod curl_getinfo;
 mod curl_init;
+mod curl_multi_add_handle;
+mod curl_multi_close;
+mod curl_multi_errno;
+mod curl_multi_exec;
+mod curl_multi_get_handles;
+mod curl_multi_getcontent;
+mod curl_multi_info_read;
+mod curl_multi_init;
+mod curl_multi_remove_handle;
+mod curl_multi_select;
+mod curl_multi_setopt;
+mod curl_multi_strerror;
 mod curl_pause;
 mod curl_reset;
 mod curl_setopt;
 mod curl_setopt_array;
+mod curl_share_close;
+mod curl_share_errno;
+mod curl_share_init;
+mod curl_share_init_persistent;
+mod curl_share_setopt;
+mod curl_share_strerror;
 mod curl_strerror;
 mod curl_unescape;
 mod curl_upkeep;
@@ -214,10 +224,28 @@ pub(in crate::interpreter) use curl_escape::*;
 pub(in crate::interpreter) use curl_exec::*;
 pub(in crate::interpreter) use curl_getinfo::*;
 pub(in crate::interpreter) use curl_init::*;
+pub(in crate::interpreter) use curl_multi_add_handle::*;
+pub(in crate::interpreter) use curl_multi_close::*;
+pub(in crate::interpreter) use curl_multi_errno::*;
+pub(in crate::interpreter) use curl_multi_exec::*;
+pub(in crate::interpreter) use curl_multi_get_handles::*;
+pub(in crate::interpreter) use curl_multi_getcontent::*;
+pub(in crate::interpreter) use curl_multi_info_read::*;
+pub(in crate::interpreter) use curl_multi_init::*;
+pub(in crate::interpreter) use curl_multi_remove_handle::*;
+pub(in crate::interpreter) use curl_multi_select::*;
+pub(in crate::interpreter) use curl_multi_setopt::*;
+pub(in crate::interpreter) use curl_multi_strerror::*;
 pub(in crate::interpreter) use curl_pause::*;
 pub(in crate::interpreter) use curl_reset::*;
 pub(in crate::interpreter) use curl_setopt::*;
 pub(in crate::interpreter) use curl_setopt_array::*;
+pub(in crate::interpreter) use curl_share_close::*;
+pub(in crate::interpreter) use curl_share_errno::*;
+pub(in crate::interpreter) use curl_share_init::*;
+pub(in crate::interpreter) use curl_share_init_persistent::*;
+pub(in crate::interpreter) use curl_share_setopt::*;
+pub(in crate::interpreter) use curl_share_strerror::*;
 pub(in crate::interpreter) use curl_strerror::*;
 pub(in crate::interpreter) use curl_unescape::*;
 pub(in crate::interpreter) use curl_upkeep::*;
@@ -226,10 +254,16 @@ pub(in crate::interpreter) use curl_version::*;
 use super::super::*;
 use handle::*;
 
-/// Dispatches one curl builtin from unevaluated positional expressions. None of the
-/// functions in this family take a by-reference parameter, so every arm evaluates its
-/// arguments left to right and forwards to the same `*_result` helper the values-based
-/// dispatcher below also calls — the same shape `hash_init`/`hash_update` use.
+/// Dispatches one curl builtin from unevaluated positional expressions. Every arm
+/// evaluates its arguments left to right and forwards to the same `*_result` helper the
+/// values-based dispatcher below also calls — the same shape `hash_init`/`hash_update` use.
+///
+/// TWO ARMS ARE NOT PURE FORWARDERS: `curl_multi_exec()` and `curl_multi_info_read()` take a
+/// BY-REFERENCE out-parameter, so their arms resolve the lvalue out of the raw `EvalExpr`
+/// (through `eval_call_arg_value`) and write it back. A literal call reaches them through
+/// `crate::interpreter::expressions::calls::eval_call`'s own `&[EvalCallArg]` interception
+/// instead, which additionally carries named-argument metadata; see each home file's header
+/// for the full path list and for why the remaining by-value paths warn.
 pub(in crate::interpreter) fn eval_builtin_curl_declared_call(
     name: &str,
     args: &[EvalExpr],
@@ -246,10 +280,38 @@ pub(in crate::interpreter) fn eval_builtin_curl_declared_call(
         "curl_exec" => eval_builtin_curl_exec(args, context, scope, values),
         "curl_getinfo" => eval_builtin_curl_getinfo(args, context, scope, values),
         "curl_init" => eval_builtin_curl_init(args, context, scope, values),
+        "curl_multi_add_handle" => {
+            eval_builtin_curl_multi_add_handle(args, context, scope, values)
+        }
+        "curl_multi_close" => eval_builtin_curl_multi_close(args, context, scope, values),
+        "curl_multi_errno" => eval_builtin_curl_multi_errno(args, context, scope, values),
+        "curl_multi_exec" => eval_builtin_curl_multi_exec(args, context, scope, values),
+        "curl_multi_get_handles" => {
+            eval_builtin_curl_multi_get_handles(args, context, scope, values)
+        }
+        "curl_multi_getcontent" => {
+            eval_builtin_curl_multi_getcontent(args, context, scope, values)
+        }
+        "curl_multi_info_read" => eval_builtin_curl_multi_info_read(args, context, scope, values),
+        "curl_multi_init" => eval_builtin_curl_multi_init(args, context, values),
+        "curl_multi_remove_handle" => {
+            eval_builtin_curl_multi_remove_handle(args, context, scope, values)
+        }
+        "curl_multi_select" => eval_builtin_curl_multi_select(args, context, scope, values),
+        "curl_multi_setopt" => eval_builtin_curl_multi_setopt(args, context, scope, values),
+        "curl_multi_strerror" => eval_builtin_curl_multi_strerror(args, context, scope, values),
         "curl_pause" => eval_builtin_curl_pause(args, context, scope, values),
         "curl_reset" => eval_builtin_curl_reset(args, context, scope, values),
         "curl_setopt" => eval_builtin_curl_setopt(args, context, scope, values),
         "curl_setopt_array" => eval_builtin_curl_setopt_array(args, context, scope, values),
+        "curl_share_close" => eval_builtin_curl_share_close(args, context, scope, values),
+        "curl_share_errno" => eval_builtin_curl_share_errno(args, context, scope, values),
+        "curl_share_init" => eval_builtin_curl_share_init(args, context, values),
+        "curl_share_init_persistent" => {
+            eval_builtin_curl_share_init_persistent(args, context, scope, values)
+        }
+        "curl_share_setopt" => eval_builtin_curl_share_setopt(args, context, scope, values),
+        "curl_share_strerror" => eval_builtin_curl_share_strerror(args, context, scope, values),
         "curl_strerror" => eval_builtin_curl_strerror(args, context, scope, values),
         "curl_unescape" => eval_builtin_curl_unescape(args, context, scope, values),
         "curl_upkeep" => eval_builtin_curl_upkeep(args, context, scope, values),
@@ -274,10 +336,40 @@ pub(in crate::interpreter) fn eval_curl_declared_values_result(
         "curl_exec" => eval_curl_exec_values_result(evaluated_args, context, values),
         "curl_getinfo" => eval_curl_getinfo_values_result(evaluated_args, context, values),
         "curl_init" => eval_curl_init_values_result(evaluated_args, context, values),
+        "curl_multi_add_handle" => {
+            eval_curl_multi_add_handle_values_result(evaluated_args, context, values)
+        }
+        "curl_multi_close" => eval_curl_multi_close_values_result(evaluated_args, context, values),
+        "curl_multi_errno" => eval_curl_multi_errno_values_result(evaluated_args, context, values),
+        "curl_multi_exec" => eval_curl_multi_exec_values_result(evaluated_args, context, values),
+        "curl_multi_get_handles" => {
+            eval_curl_multi_get_handles_values_result(evaluated_args, context, values)
+        }
+        "curl_multi_getcontent" => {
+            eval_curl_multi_getcontent_values_result(evaluated_args, context, values)
+        }
+        "curl_multi_info_read" => {
+            eval_curl_multi_info_read_values_result(evaluated_args, context, values)
+        }
+        "curl_multi_init" => eval_curl_multi_init_values_result(evaluated_args, context, values),
+        "curl_multi_remove_handle" => {
+            eval_curl_multi_remove_handle_values_result(evaluated_args, context, values)
+        }
+        "curl_multi_select" => eval_curl_multi_select_values_result(evaluated_args, context, values),
+        "curl_multi_setopt" => eval_curl_multi_setopt_values_result(evaluated_args, context, values),
+        "curl_multi_strerror" => eval_curl_multi_strerror_values_result(evaluated_args, values),
         "curl_pause" => eval_curl_pause_values_result(evaluated_args, context, values),
         "curl_reset" => eval_curl_reset_values_result(evaluated_args, context, values),
         "curl_setopt" => eval_curl_setopt_values_result(evaluated_args, context, values),
         "curl_setopt_array" => eval_curl_setopt_array_values_result(evaluated_args, context, values),
+        "curl_share_close" => eval_curl_share_close_values_result(evaluated_args, context, values),
+        "curl_share_errno" => eval_curl_share_errno_values_result(evaluated_args, context, values),
+        "curl_share_init" => eval_curl_share_init_values_result(evaluated_args, context, values),
+        "curl_share_init_persistent" => {
+            eval_curl_share_init_persistent_values_result(evaluated_args, context, values)
+        }
+        "curl_share_setopt" => eval_curl_share_setopt_values_result(evaluated_args, context, values),
+        "curl_share_strerror" => eval_curl_share_strerror_values_result(evaluated_args, values),
         "curl_strerror" => eval_curl_strerror_values_result(evaluated_args, values),
         "curl_unescape" => eval_curl_unescape_values_result(evaluated_args, context, values),
         "curl_upkeep" => eval_curl_upkeep_values_result(evaluated_args, context, values),

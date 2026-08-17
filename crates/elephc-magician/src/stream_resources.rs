@@ -86,6 +86,16 @@ pub(crate) struct EvalStreamResources {
     // `EvalCurlEasyHandle`'s own doc for the PHP-layer mirror fields it carries.
     #[cfg(feature = "curl")]
     curl_easy_handles: HashMap<i64, EvalCurlEasyHandle>,
+    // The multi and share tables share the SAME `next_id` counter as `curl_easy_handles`
+    // and every other eval-owned resource, which is what makes a table key alone enough to
+    // TYPE a curl handle: an easy key can never also be a multi key, so
+    // `curl_multi_add_handle($mh, $ch)` distinguishes its two arguments purely by which
+    // table each key resolves in — the eval counterpart of AOT's `instanceof CurlHandle`
+    // guards. See `crate::stream_resources::curl` for the accessors.
+    #[cfg(feature = "curl")]
+    curl_multi_handles: HashMap<i64, EvalCurlMultiHandle>,
+    #[cfg(feature = "curl")]
+    curl_share_handles: HashMap<i64, EvalCurlShareHandle>,
     process_children: HashMap<i64, Child>,
     socket_listeners: HashMap<i64, TcpListener>,
     socket_names: HashMap<i64, EvalSocketNames>,

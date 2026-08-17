@@ -189,55 +189,49 @@ fn eval_rejects_the_stream_options_with_a_warning_not_a_fatal() {
     }
 }
 
-/// ITEM 6 (WP-B, curl punch list): `curl_multi_*`/`curl_share_*`/`curl_file_create` are
-/// deliberately unimplemented in `eval()` (this family's module doc, "Scope shipped vs.
-/// deferred"). Before the fix, an unrecognized-by-eval name FELL THROUGH to
-/// `context.native_function()`, which — whenever the host program also links
-/// `elephc_curl`, exactly the condition this test's top-level `curl_version()` call
-/// creates — resolved to the REAL AOT prelude function and silently handed back a working
-/// `CurlMultiHandle`/`CurlShareHandle`/`CURLFile` object instead of failing. The fix
-/// intercepts these names and rejects them with eval's own honest "unsupported construct"
-/// fatal (the same one any other undefined-in-eval name already produces) — an
-/// UNCATCHABLE process exit, not a PHP-catchable exception, so this asserts the process
-/// exit code and stderr message rather than wrapping in try/catch.
+/// ITEM 6 (WP-B, curl punch list), NARROWED BY R3-C: `curl_file_create` is the last curl
+/// FUNCTION name `eval()` still routes away from `context.native_function()`.
+///
+/// The original bug this pins is unchanged: an unrecognized-by-eval name FELL THROUGH to
+/// `context.native_function()`, which — whenever the host program also links `elephc_curl`,
+/// exactly the condition this test's top-level `curl_version()` call creates — resolved to
+/// the REAL AOT prelude function and silently handed back a working AOT object instead of
+/// failing. What changed is the SET of names that needs the guard: `curl_multi_*` and
+/// `curl_share_*` now have real eval homes and are answered by the builtin registry before
+/// any native fallback (see the multi/share fixtures below), so only the `CURLFile` factory
+/// — whose class `eval()` still cannot construct — is left. The rejection is an UNCATCHABLE
+/// process exit, not a PHP-catchable exception, so this asserts the process exit code and
+/// stderr message rather than wrapping in try/catch.
 #[test]
-fn eval_curl_multi_share_and_file_create_are_rejected_not_working_aot_objects() {
-    if skip_without_curl_native(
-        "eval_curl_multi_share_and_file_create_are_rejected_not_working_aot_objects",
-    ) {
+fn eval_curl_file_create_is_rejected_not_a_working_aot_object() {
+    if skip_without_curl_native("eval_curl_file_create_is_rejected_not_a_working_aot_object") {
         return;
     }
-    let cases = [
-        ("curl_multi_init();", "curl_multi_init"),
-        ("curl_share_init();", "curl_share_init"),
-        (r#"curl_file_create("/etc/hosts");"#, "curl_file_create"),
-    ];
-    for (call, label) in cases {
-        let output = compile_and_run_capture(&format!(
-            r#"<?php
-            curl_version();
-            $r = eval('$h = {call} return get_class($h);');
-            echo "unexpectedly reached: ", $r;
-            "#
-        ));
-        assert!(
-            !output.success,
-            "{label}(): eval() must fail instead of returning a working AOT object; stdout was: {}",
-            output.stdout
-        );
-        assert!(
-            output
-                .stderr
-                .contains("eval() fragment uses an unsupported construct"),
-            "{label}(): stderr was: {}",
-            output.stderr
-        );
-        assert!(
-            output.stdout.is_empty(),
-            "{label}(): must never reach the echo after eval(); stdout was: {}",
-            output.stdout
-        );
-    }
+    let output = compile_and_run_capture(
+        r#"<?php
+        curl_version();
+        $r = eval('$h = curl_file_create("/etc/hosts"); return get_class($h);');
+        echo "unexpectedly reached: ", $r;
+        "#,
+    );
+    assert!(
+        !output.success,
+        "curl_file_create(): eval() must fail instead of returning a working AOT object; \
+        stdout was: {}",
+        output.stdout
+    );
+    assert!(
+        output
+            .stderr
+            .contains("eval() fragment uses an unsupported construct"),
+        "stderr was: {}",
+        output.stderr
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "must never reach the echo after eval(); stdout was: {}",
+        output.stdout
+    );
 }
 
 /// The class-construction half of item 6: `new CURLFile(...)`/`new CURLStringFile(...)`
@@ -270,73 +264,65 @@ fn eval_new_curlfile_is_rejected_not_a_working_aot_object() {
     );
 }
 
-/// Review follow-up to item 6: the direct-literal-name interception
-/// (`eval_curl_multi_share_and_file_create_are_rejected_not_working_aot_objects` above)
-/// does not cover every path that can resolve a "Named" callable to
-/// `context.native_function()`. `call_user_func('curl_multi_init')` resolves through
-/// `registry::callable::object_dispatch::eval_named_callable_with_call_user_func_values`'s
-/// OWN native-function fallback — a completely separate call site from `eval_call`'s — so
-/// it used to bypass the guard entirely and return a real, working `CurlMultiHandle`
-/// object. Same fix (the same `eval_curl_deferred_function_name` check, added to that
-/// fallback too), same fatal.
+/// Review follow-up to item 6, now inverted by R3-C: `call_user_func('curl_multi_init')`
+/// resolves through `registry::callable::object_dispatch::
+/// eval_named_callable_with_call_user_func_values`'s OWN native-function fallback — a
+/// completely separate call site from `eval_call`'s — which is why it once bypassed the
+/// deferred-name guard and returned a real AOT `CurlMultiHandle`.
+///
+/// Now that the multi interface has a real eval home, that path must resolve the EVAL
+/// builtin instead: the handle it hands back has to work with the other eval multi
+/// functions, which it could not if it were an AOT object (`curl_multi_errno()` would fail
+/// its `CurlMultiHandle` table lookup). This is the same call site, asserting the opposite
+/// outcome.
 #[test]
-fn eval_call_user_func_of_a_deferred_curl_name_is_rejected() {
-    if skip_without_curl_native("eval_call_user_func_of_a_deferred_curl_name_is_rejected") {
-        return;
-    }
-    let output = compile_and_run_capture(
-        r#"<?php
-        curl_version();
-        $r = eval('$h = call_user_func("curl_multi_init"); return get_class($h);');
-        echo "unexpectedly reached: ", $r;
-        "#,
-    );
-    assert!(
-        !output.success,
-        "call_user_func('curl_multi_init') must fail instead of returning a working AOT \
-        object; stdout was: {}",
-        output.stdout
-    );
-    assert!(
-        output
-            .stderr
-            .contains("eval() fragment uses an unsupported construct"),
-        "stderr was: {}",
-        output.stderr
-    );
-}
-
-/// Review follow-up to item 6, the variable-function shape: `$f = 'curl_multi_init'; $f();`
-/// resolves through `registry::callable::array_dispatch::eval_callable_with_call_array_args`
-/// (via `expressions::calls::eval_dynamic_call`) — yet ANOTHER separate native-function
-/// fallback from both `eval_call`'s literal-name dispatch and `call_user_func`'s own path
-/// above. Same fix, same fatal.
-#[test]
-fn eval_variable_function_call_of_a_deferred_curl_name_is_rejected() {
-    if skip_without_curl_native("eval_variable_function_call_of_a_deferred_curl_name_is_rejected")
+fn eval_call_user_func_of_curl_multi_init_returns_a_working_eval_handle() {
+    if skip_without_curl_native("eval_call_user_func_of_curl_multi_init_returns_a_working_eval_handle")
     {
         return;
     }
-    let output = compile_and_run_capture(
+    let out = compile_and_run(
         r#"<?php
         curl_version();
-        $r = eval('$f = "curl_share_init"; $h = $f(); return get_class($h);');
-        echo "unexpectedly reached: ", $r;
+        $r = eval('
+            $mh = call_user_func("curl_multi_init");
+            $ch = call_user_func("curl_init");
+            $added = call_user_func("curl_multi_add_handle", $mh, $ch);
+            return $added . ":" . curl_multi_errno($mh) . ":" . count(curl_multi_get_handles($mh));
+        ');
+        echo $r;
         "#,
     );
-    assert!(
-        !output.success,
-        "$f = 'curl_share_init'; $f(); must fail instead of returning a working AOT object; \
-        stdout was: {}",
-        output.stdout
+    assert_eq!(out, "0:0:1");
+}
+
+/// Review follow-up to item 6, the variable-function shape, likewise inverted by R3-C:
+/// `$f = 'curl_share_init'; $f();` resolves through
+/// `registry::callable::array_dispatch::eval_callable_with_call_array_args` (via
+/// `expressions::calls::eval_dynamic_call`) — yet ANOTHER separate native-function fallback
+/// from both `eval_call`'s literal-name dispatch and `call_user_func`'s own path above. It
+/// must now reach the eval share builtin, and the handle must be usable by the rest of the
+/// eval share surface.
+#[test]
+fn eval_variable_function_call_of_curl_share_init_returns_a_working_eval_handle() {
+    if skip_without_curl_native(
+        "eval_variable_function_call_of_curl_share_init_returns_a_working_eval_handle",
+    ) {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $f = "curl_share_init";
+            $sh = $f();
+            $set = curl_share_setopt($sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS) ? "1" : "0";
+            return $set . ":" . curl_share_errno($sh);
+        ');
+        echo $r;
+        "#,
     );
-    assert!(
-        output
-            .stderr
-            .contains("eval() fragment uses an unsupported construct"),
-        "stderr was: {}",
-        output.stderr
-    );
+    assert_eq!(out, "1:0");
 }
 
 /// ITEMS 8 & 9 (WP-B, curl punch list): every curl_*() function that takes a `$handle`
@@ -536,3 +522,326 @@ fn eval_curl_setopt_slist_option_throws_catchable_type_errors_for_non_scalar_ite
 // `release_curl_easy_private_values_releases_every_still_retained_entry` and
 // `..._skips_handles_with_no_stored_private_value` (magician unit tests, `--features curl`),
 // which exercise the storage-layer method directly with no such confound.
+
+/// R3-C: THE MULTI INTERFACE END TO END INSIDE `eval()`. Two handles on one multi handle,
+/// driven with the canonical `curl_multi_exec`/`curl_multi_select` loop, then drained with
+/// `curl_multi_info_read()` — all from inside an `eval()` string, against the loopback
+/// fixture.
+///
+/// What this pins beyond "it works":
+/// - `curl_multi_exec()`'s BY-REFERENCE `$still_running` is genuinely written back through
+///   the eval reference-target machinery (the loop would spin forever or exit immediately
+///   otherwise).
+/// - `curl_multi_info_read()`'s `handle` key resolves back to the SAME eval handle that was
+///   added, through `curl_easy_id_for_raw` — proven by using it as `curl_multi_getcontent()`'s
+///   argument, which needs the eval table key to find the RETURNTRANSFER mirror flag.
+/// - The completion `result` is `CURLE_OK` (0) for both transfers.
+#[test]
+fn eval_curl_multi_drives_two_transfers_against_the_local_fixture() {
+    if skip_without_curl_native("eval_curl_multi_drives_two_transfers_against_the_local_fixture") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        // A real top-level curl call, so the prelude is injected and the bridge linked —
+        // see this file's module doc.
+        curl_version();
+        $r = eval('
+            $mh = curl_multi_init();
+            $a = curl_init("{url}");
+            curl_setopt($a, CURLOPT_RETURNTRANSFER, true);
+            $b = curl_init("{url}");
+            curl_setopt($b, CURLOPT_RETURNTRANSFER, true);
+            curl_multi_add_handle($mh, $a);
+            curl_multi_add_handle($mh, $b);
+            $still = 0;
+            do {{
+                $code = curl_multi_exec($mh, $still);
+                if ($still > 0) {{
+                    curl_multi_select($mh, 1.0);
+                }}
+            }} while ($still > 0 && $code == CURLM_OK);
+            $bodies = [];
+            $results = [];
+            while (true) {{
+                $info = curl_multi_info_read($mh, $queued);
+                if ($info === false) {{
+                    break;
+                }}
+                $results[] = $info["result"];
+                $bodies[] = curl_multi_getcontent($info["handle"]);
+            }}
+            sort($bodies);
+            curl_multi_remove_handle($mh, $a);
+            curl_multi_remove_handle($mh, $b);
+            curl_multi_close($mh);
+            return implode(",", $results) . "|" . implode(",", $bodies) . "|" . $code;
+        ');
+        echo $r;
+        "#
+    ));
+    assert_eq!(out, "0,0|hello-curl,hello-curl|0");
+}
+
+/// R3-C: PHP 8.5's `curl_multi_get_handles()` inside `eval()` reports the attached handles
+/// IN ADD ORDER, and the reported handles are usable as ordinary eval curl handles.
+///
+/// Identity is asserted the only way it is meaningful in eval: the reported cell addresses
+/// the SAME `EvalStreamResources` entry, so `curl_getinfo(..., CURLINFO_PRIVATE)` reads back
+/// the value set on the original. eval curl handles are inert resource-kind-5 cells (see
+/// `crates/elephc-magician/src/interpreter/builtins/curl/mod.rs`), so there is no object
+/// instance to compare with `===` the way AOT's `CurlHandle` map guarantees — that
+/// divergence is documented, not papered over here.
+#[test]
+fn eval_curl_multi_get_handles_lists_attachments_in_add_order() {
+    if skip_without_curl_native("eval_curl_multi_get_handles_lists_attachments_in_add_order") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $mh = curl_multi_init();
+            $a = curl_init();
+            curl_setopt($a, CURLOPT_PRIVATE, "first");
+            $b = curl_init();
+            curl_setopt($b, CURLOPT_PRIVATE, "second");
+            curl_multi_add_handle($mh, $a);
+            curl_multi_add_handle($mh, $b);
+            $names = [];
+            foreach (curl_multi_get_handles($mh) as $h) {
+                $names[] = curl_getinfo($h, CURLINFO_PRIVATE);
+            }
+            curl_multi_remove_handle($mh, $a);
+            $after = count(curl_multi_get_handles($mh));
+            return implode(",", $names) . "|" . $after;
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(out, "first,second|1");
+}
+
+/// R3-C: the multi interface's ERROR PARITY with AOT — every catchable throwable AOT
+/// produces for the same misuse, produced by `eval()` too and caught by ordinary PHP
+/// `try`/`catch` running inside the fragment, with the script alive afterward.
+///
+/// The `CurlMultiHandle`/`CurlHandle` `TypeError`s have no AOT RUNTIME counterpart at all —
+/// the prelude declares those parameter types, so AOT rejects the same call at COMPILE
+/// time. eval has no checker, so these are the runtime-only counterpart of that compiled
+/// guarantee, worded exactly like the prelude's own runtime `instanceof` guards for the
+/// handful of curl functions that cannot enforce the type statically.
+#[test]
+fn eval_curl_multi_functions_throw_catchable_errors_for_bad_arguments() {
+    if skip_without_curl_native("eval_curl_multi_functions_throw_catchable_errors_for_bad_arguments")
+    {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $mh = curl_multi_init();
+            $ch = curl_init();
+            $out = [];
+            try {
+                curl_multi_errno("not a handle");
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_multi_add_handle($mh, 42);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                // An EASY handle where a MULTI one belongs: eval types curl handles by
+                // which table their key resolves in, so this is a TypeError, never a
+                // confusing partial success.
+                curl_multi_errno($ch);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_multi_setopt($mh, 999999, 1);
+            } catch (\ValueError $e) {
+                $out[] = get_class($e) . ":" . $e->getMessage();
+            }
+            try {
+                curl_multi_setopt($mh, CURLMOPT_MAXCONNECTS, [1]);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(
+        out,
+        "curl_multi_errno(): Argument #1 ($multi_handle) must be of type CurlMultiHandle, string given\
+        |curl_multi_add_handle(): Argument #2 ($handle) must be of type CurlHandle, integer given\
+        |curl_multi_errno(): Argument #1 ($multi_handle) must be of type CurlMultiHandle, resource given\
+        |ValueError:curl_multi_setopt(): Argument #2 ($option) is not a valid cURL multi option\
+        |curl_multi_setopt(): Argument #3 ($value) must be of type string|int|float|bool, array given\
+        |alive"
+    );
+}
+
+/// R3-C: the SHARE interface inside `eval()` — `curl_share_init()`, both real
+/// `CURLSHOPT_*` options, `curl_setopt($ch, CURLOPT_SHARE, $sh)` attaching an eval easy
+/// handle to it, and a real transfer through the shared handle.
+///
+/// `curl_share_setopt()` with a `CURL_LOCK_DATA_*` value libcurl refuses answers a plain
+/// `false` with NO warning — a genuine libcurl-level answer, not "this build cannot carry a
+/// real PHP option" — and the true `CURLSHcode` stays readable through
+/// `curl_share_errno()`/`curl_share_strerror()`. That distinction is the share module's own
+/// (`crates/elephc-curl/src/share.rs`), mirrored here.
+#[test]
+fn eval_curl_share_attaches_to_an_easy_handle_and_transfers() {
+    if skip_without_curl_native("eval_curl_share_attaches_to_an_easy_handle_and_transfers") {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $sh = curl_share_init();
+            $out = [];
+            $out[] = curl_share_setopt($sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS) ? "dns" : "dns-failed";
+            $out[] = curl_share_setopt($sh, CURLSHOPT_UNSHARE, CURL_LOCK_DATA_DNS) ? "unshare" : "unshare-failed";
+            $out[] = curl_share_setopt($sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT) ? "connect" : "connect-failed";
+            $ch = curl_init("{url}");
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            $out[] = curl_setopt($ch, CURLOPT_SHARE, $sh) ? "attached" : "attach-failed";
+            $out[] = curl_exec($ch);
+            $out[] = (string) curl_share_errno($sh);
+            curl_share_close($sh);
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#
+    ));
+    assert_eq!(out, "dns|unshare|connect|attached|hello-curl|0");
+}
+
+/// R3-C: the share interface's error parity — `curl_share_setopt()`'s `ValueError` for an
+/// option number PHP does not expose at all, `curl_setopt(CURLOPT_SHARE, ...)`'s `TypeError`
+/// for a non-share value, and the `CurlShareHandle` `TypeError` every share function raises
+/// for a foreign handle. All catchable, script alive afterward.
+#[test]
+fn eval_curl_share_functions_throw_catchable_errors_for_bad_arguments() {
+    if skip_without_curl_native("eval_curl_share_functions_throw_catchable_errors_for_bad_arguments")
+    {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $sh = curl_share_init();
+            $ch = curl_init();
+            $out = [];
+            try {
+                // 3 is a real libcurl CURLSHOPT_* (LOCKFUNC) that PHP never exposes as a
+                // constant, so php-src answers ValueError, not a libcurl refusal.
+                curl_share_setopt($sh, 3, 1);
+            } catch (\ValueError $e) {
+                $out[] = get_class($e) . ":" . $e->getMessage();
+            }
+            try {
+                curl_share_errno($ch);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_setopt($ch, CURLOPT_SHARE, "not a share");
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(
+        out,
+        "ValueError:curl_share_setopt(): Argument #2 ($option) is not a valid cURL share option\
+        |curl_share_errno(): Argument #1 ($share_handle) must be of type CurlShareHandle, resource given\
+        |curl_setopt(): Argument #3 ($value) must be of type CurlShareHandle, string given\
+        |alive"
+    );
+}
+
+/// R3-C TEARDOWN: an `eval()` fragment that leaves a multi handle with easy handles still
+/// attached AND a share still attached to one of them, then returns — so
+/// `EvalStreamResources::drop` has to unwind all three tables in the right order.
+///
+/// The multi handle is freed FIRST (it detaches its easy handles before
+/// `curl_multi_cleanup`), the easy handles SECOND (their `curl_easy_cleanup` releases
+/// libcurl's own reference on the share, and the bridge's `detach_easy` drains the share's
+/// attachment list), and the share LAST — at which point its `curl_share_cleanup()` takes
+/// the immediate path instead of the deferred one. A wrong order does not merely leak: the
+/// bridge's `finish_share_cleanup` `debug_assert_eq!`s that libcurl accepted the cleanup, so
+/// a desynced attachment list fails LOUDLY in this debug-built test binary. The process
+/// exiting cleanly with the marker printed is the assertion.
+///
+/// `curl_share_close()`/`curl_multi_close()` are deliberately NOT called: PHP 8 makes both
+/// documented no-ops, so this exercises the "the program never cleaned up" path, which is
+/// the one teardown has to survive.
+#[test]
+fn eval_curl_context_teardown_unwinds_multi_easy_and_share_without_double_free() {
+    if skip_without_curl_native(
+        "eval_curl_context_teardown_unwinds_multi_easy_and_share_without_double_free",
+    ) {
+        return;
+    }
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/hello");
+    let output = compile_and_run_capture(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $mh = curl_multi_init();
+            $sh = curl_share_init();
+            curl_share_setopt($sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+            $a = curl_init("{url}");
+            curl_setopt($a, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($a, CURLOPT_SHARE, $sh);
+            $b = curl_init("{url}");
+            curl_setopt($b, CURLOPT_RETURNTRANSFER, true);
+            curl_multi_add_handle($mh, $a);
+            curl_multi_add_handle($mh, $b);
+            $still = 0;
+            do {{
+                $code = curl_multi_exec($mh, $still);
+                if ($still > 0) {{
+                    curl_multi_select($mh, 1.0);
+                }}
+            }} while ($still > 0 && $code == CURLM_OK);
+            // Nothing is closed on purpose: every handle is still live, still attached, and
+            // still shared when this eval() context is torn down.
+            return "done";
+        ');
+        echo $r, "\n";
+        echo "alive\n";
+        "#
+    ));
+    assert!(
+        output.success,
+        "teardown must not fault; stderr was: {}",
+        output.stderr
+    );
+    assert_eq!(output.stdout, "done\nalive\n");
+    assert!(
+        !output.stderr.contains("has leaked"),
+        "the bridge must not report a refused curl_share_cleanup; stderr was: {}",
+        output.stderr
+    );
+}
