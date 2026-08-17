@@ -1,6 +1,6 @@
 ---
 title: "cURL"
-description: "PHP's ext/curl on a statically pinned libcurl 8.21.0: easy, multi and share interfaces, uploads, callbacks, the protocol matrix, and every documented difference from PHP."
+description: "PHP's ext/curl on a statically pinned libcurl 8.21.0 with HTTP/2 and 25 protocols: easy, multi and share interfaces, uploads, callbacks, the protocol matrix, and every documented difference from PHP."
 sidebar:
   order: 18
 ---
@@ -74,51 +74,76 @@ never disagree about it.
 
 ## Protocol matrix
 
-The pinned libcurl is configured for a deliberately small protocol set. What is
-built in:
+The pinned libcurl carries 25 schemes — everything a stock distribution libcurl
+offers except LDAP and RTMP. `curl_version()['protocols']` on this build reports
+exactly:
 
-| Scheme | Status |
-|---|---|
-| `file://` | Supported |
-| `http://` | Supported |
-| `https://` | Supported (see [TLS](#tls-and-the-openssl-split)) |
-| `ftp://` | Supported |
-| `ftps://` | Supported |
-| `ws://`, `wss://` | Compiled in by libcurl's default, but PHP exposes no WebSocket API — see below |
-
-`curl_version()['protocols']` on this build reports exactly
-`file, ftp, ftps, http, https, ws, wss`.
-
-Everything else is **disabled at build time and fails loudly** — never silently,
-and never with a fabricated success. A URL in a disabled scheme fails at
-`curl_exec()` / `curl_multi_exec()` with `CURLE_UNSUPPORTED_PROTOCOL` (`1`):
-
-```php
-$ch = curl_init("sftp://example.invalid/x");
-curl_exec($ch);
-echo curl_errno($ch);   // 1  (CURLE_UNSUPPORTED_PROTOCOL)
-echo curl_error($ch);   // Protocol "sftp" is disabled
+```
+dict file ftp ftps gopher gophers http https imap imaps mqtt mqtts pop3 pop3s
+rtsp scp sftp smb smbs smtp smtps telnet tftp ws wss
 ```
 
-The disabled set is `dict`, `gopher`, `gophers`, `imap`, `imaps`, `ldap`,
-`ldaps`, `mqtt`, `pop3`, `pop3s`, `rtsp`, `scp`, `sftp`, `smb`, `smbs`, `smtp`,
-`smtps`, `telnet` and `tftp` — all reporting `Protocol "…" is disabled`.
+That list is pinned by a test
+(`codegen::curl::easy_handle::curl_version_reports_the_full_pinned_protocol_set`),
+so it cannot drift from the build.
 
-`rtmp`, `rtmps` and `rtmpe` report `Protocol "…" not supported` instead: librtmp
-was never linked, so libcurl does not know those schemes at all rather than
-knowing them and refusing. A scheme that is not a cURL scheme in the first place
-(`xyzzy://`) gets the same message. All of these are errno `1`.
+| Family | Schemes | Backed by |
+|---|---|---|
+| Web | `http`, `https`, `ws`, `wss` | built-in + OpenSSL; **HTTP/2** through nghttp2 |
+| File transfer | `file`, `ftp`, `ftps`, `tftp`, `sftp`, `scp` | built-in + OpenSSL; SFTP/SCP through libssh2 |
+| Mail | `smtp`, `smtps`, `imap`, `imaps`, `pop3`, `pop3s` | built-in + OpenSSL |
+| Messaging / streaming | `mqtt`, `mqtts`, `rtsp` | built-in |
+| SMB | `smb`, `smbs` | built-in, via NTLM (`--enable-smb --enable-ntlm`) |
+| Legacy | `dict`, `gopher`, `gophers`, `telnet` | built-in |
 
-Also not built in, and therefore not available even over supported schemes:
+Three outcomes stay distinguishable, and none of them is ever a fabricated
+success:
 
-- **HTTP/2 and HTTP/3.** The build has no nghttp2 and no QUIC library, so
-  transfers are HTTP/1.1. This is visible at `curl_setopt()` rather than
-  silently: `CURLOPT_HTTP_VERSION` accepts `CURL_HTTP_VERSION_NONE`,
-  `CURL_HTTP_VERSION_1_0` and `CURL_HTTP_VERSION_1_1`, and returns `false` for
-  `CURL_HTTP_VERSION_2_0`, `CURL_HTTP_VERSION_2TLS` and `CURL_HTTP_VERSION_3`.
+```php
+// A built-in scheme really connects (or fails to, honestly):
+$ch = curl_init("sftp://127.0.0.1:1/x");
+curl_exec($ch);
+echo curl_errno($ch);   // 7  (CURLE_COULDNT_CONNECT)
+
+// A scheme libcurl knows but this build lacks:
+$ch = curl_init("ldap://example.invalid/x");
+curl_exec($ch);
+echo curl_error($ch);   // Protocol "ldap" is disabled          (errno 1)
+
+// A scheme libcurl has no handler for at all:
+$ch = curl_init("rtmp://example.invalid/x");
+curl_exec($ch);
+echo curl_error($ch);   // Protocol "rtmp" not supported        (errno 1)
+```
+
+`ldap` and `ldaps` are the only *disabled* schemes. `rtmp`, `rtmps`, `rtmpe` —
+and any string that is not a cURL scheme at all, like `xyzzy://` — report
+`not supported`, because librtmp was never linked and libcurl therefore does not
+know those schemes rather than knowing them and refusing.
+
+### What is deliberately not built in
+
+- **LDAP and LDAPS.** They need OpenLDAP, which elephc does not pin. Measured on
+  OpenLDAP 2.6.14: a client-only static build against our own OpenSSL works, but
+  it yields three archives (~2.3 MB, larger than libcurl itself) that still leave
+  `pthread_*` and resolver symbols to the final link — and elephc's catalog has no
+  way to declare a system library a managed package needs. Pinning LDAP is
+  therefore a change to the package model, not just another recipe.
+- **HTTP/3.** curl 8.21.0 removed the standalone `openssl-quic` backend, so the
+  only non-experimental QUIC path in this pin is `--with-ngtcp2 --with-nghttp3`
+  (quiche is still marked EXPERIMENTAL in the tarball's own
+  `docs/EXPERIMENTAL.md`). That is two further pinned packages plus an
+  `ngtcp2_crypto_ossl` build; until they are taken, `CURLOPT_HTTP_VERSION`
+  returns `false` for `CURL_HTTP_VERSION_3` and `CURL_HTTP_VERSION_3ONLY`, and
+  `curl_version()['feature_list']['HTTP3']` is `false`.
+- **RTMP.** librtmp is abandoned upstream.
 - **Brotli and zstd** content encodings. gzip and deflate work through zlib.
-- **libssh2**, so SCP/SFTP cannot be re-enabled by an option.
 - **libpsl** (public-suffix cookie checks) and **libidn2** (IDN host names).
+
+**HTTP/2 works.** `CURLOPT_HTTP_VERSION` accepts `CURL_HTTP_VERSION_2_0`,
+`CURL_HTTP_VERSION_2TLS` and `CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE` alongside the
+1.x values, `curl_version()['feature_list']['HTTP2']` is `true`, and
+`curl_getinfo($ch, CURLINFO_HTTP_VERSION)` reports what was actually negotiated.
 
 `ws://` and `wss://` deserve a note: libcurl 8.21 builds its WebSocket support
 by default, so the schemes appear in `curl_version()['protocols']`, but PHP's
@@ -126,6 +151,25 @@ by default, so the schemes appear in `curl_version()['protocols']`, but PHP's
 elephc. A `ws://` URL therefore performs the HTTP upgrade handshake through
 `curl_exec()` and then has no API to drive the resulting connection. Treat
 WebSockets as unsupported.
+
+### `curl_version()` and the sub-libraries
+
+`curl_version()` reports this build's real dependency set, so the keys PHP
+age-gates are populated rather than empty:
+
+| Key | Value on this build |
+|---|---|
+| `version` | `8.21.0` |
+| `ssl_version` | `OpenSSL/3.5.7` |
+| `libz_version` | `1.3.2` |
+| `libssh_version` | `libssh2/1.11.1` |
+| `libidn`, `brotli_version` | `""` — not built in |
+| `ares`, `ares_num`, `iconv_ver_num`, `brotli_ver_num` | `""` / `0` — not built in |
+
+The `feature_list` entries this build reports `true` are `AsynchDNS`, `IPv6`,
+`Largefile`, `libz`, `NTLM`, `SSL`, `TLS-SRP`, `HTTP2`, `UNIX_SOCKETS`,
+`HTTPS_PROXY`, `ALTSVC` and `HSTS`. Every other name php publishes is present and
+`false` — php never omits a key.
 
 ## TLS and the OpenSSL split
 
@@ -379,15 +423,16 @@ so it cannot drift from the code:
 | Options | Why |
 |---|---|
 | `CURLOPT_CAINFO_BLOB`, `CURLOPT_ISSUERCERT_BLOB`, `CURLOPT_PROXY_CAINFO_BLOB`, `CURLOPT_PROXY_ISSUERCERT_BLOB`, `CURLOPT_PROXY_SSLCERT_BLOB`, `CURLOPT_PROXY_SSLKEY_BLOB`, `CURLOPT_SSLCERT_BLOB`, `CURLOPT_SSLKEY_BLOB` | In-memory certificate/key blobs. The **file-path** forms (`CURLOPT_SSLCERT`, `CURLOPT_CAINFO`, …) all work — write the material to a file. |
-| `CURLOPT_FNMATCH_FUNCTION`, `CURLOPT_PREREQFUNCTION`, `CURLOPT_SSH_HOSTKEYFUNCTION` | Callbacks outside the six implemented ones (below). `SSH_HOSTKEYFUNCTION` is moot anyway — SSH is not built in. |
+| `CURLOPT_FNMATCH_FUNCTION`, `CURLOPT_PREREQFUNCTION`, `CURLOPT_SSH_HOSTKEYFUNCTION` | Callbacks outside the six implemented ones (below). SSH itself *is* built in, so `CURLOPT_SSH_KNOWNHOSTS` and the rest of the `CURLOPT_SSH_*` family work — it is only the host-key **callback** that is unimplemented. |
 
 `CURLINFO_HEADER_OUT` — which is a `curl_setopt()` option despite its name — is
 rejected the same way, so `curl_getinfo($ch, CURLINFO_HEADER_OUT)` has nothing to
 report.
 
 `curl_multi_setopt()` implements 8 of PHP's 9 `CURLMOPT_*` options;
-`CURLMOPT_PUSHFUNCTION` is rejected (it is an HTTP/2 server-push hook, and HTTP/2
-is not built in). `curl_share_setopt()` implements `CURLSHOPT_SHARE` and
+`CURLMOPT_PUSHFUNCTION` is rejected because it is a callback, and this build
+carries no callback machinery on the multi handle — not because of HTTP/2, which
+*is* built in. `curl_share_setopt()` implements `CURLSHOPT_SHARE` and
 `CURLSHOPT_UNSHARE` over the five `CURL_LOCK_DATA_*` values PHP exposes.
 
 ### PHP-layer options
