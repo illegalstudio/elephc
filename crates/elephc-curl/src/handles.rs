@@ -131,6 +131,28 @@ pub(crate) struct EasyEntry {
     /// global `EG(exception)` gate; keying that on this per-handle flag left it sticky on
     /// the multi path, which never clears it.
     pub(crate) callback_threw: bool,
+    /// Whether the `CURLOPT_CAINFO` currently set on this handle is the one RUNTIME CA
+    /// DISCOVERY (`crate::ca`) put there, rather than one the PHP program set.
+    ///
+    /// Its only consumer is `crate::abi::forget_discovered_cainfo`: a program that sets
+    /// `CURLOPT_CAPATH` (a DIRECTORY store) and never touches `CURLOPT_CAINFO` would
+    /// otherwise end up verifying against ITS capath UNION the bundle discovery had
+    /// already installed — a wider trust set than it asked for. The flag is what lets that
+    /// setter take the discovered bundle back out.
+    ///
+    /// There is no matching "the user set CAINFO/CAPATH" flag because there is nothing to
+    /// track: discovery only ever runs at `curl_init()` and `curl_reset()`, and at both of
+    /// those moments the handle provably carries no user CA configuration (a fresh handle
+    /// has none; `curl_easy_reset` has just cleared it). Every user `curl_setopt()`
+    /// therefore lands strictly AFTER discovery and wins by ordinary option assignment.
+    ///
+    /// TRAVELS ACROSS `curl_copy_handle()` alongside the option value it describes:
+    /// `curl_easy_duphandle`'s `dupset` (pinned libcurl 8.21.0, `lib/easy.c:873`) does a
+    /// shallow `dst->set = src->set` and then `Curl_setstropt`s every string option, so
+    /// the copy gets its own independent allocation of whatever CA file the source had.
+    /// A copy that inherited the string but not this flag would forget that the bundle was
+    /// discovered rather than chosen.
+    pub(crate) discovered_cainfo: bool,
 }
 
 // SAFETY: `*mut CURL` is not `Send` by default only because raw pointers make
@@ -176,6 +198,7 @@ impl EasyEntry {
             callbacks: [CallbackSlot::empty(); SLOT_COUNT],
             write_user: false,
             callback_threw: false,
+            discovered_cainfo: false,
             return_transfer: false,
             body: Vec::new(),
             taken_body: Vec::new(),

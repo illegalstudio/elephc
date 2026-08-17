@@ -23,7 +23,9 @@
 //!   gated real tests (`tests.rs`, behind `#[cfg(elephc_curl_native)]`) only
 //!   compile in when `build.rs` detects `ELEPHC_CURL_LIB_DIR` and emits both
 //!   the link directives and the cfg. See `build.rs` for the full mechanism.
-//! - Module layout: `easy` (raw libcurl bindings), `handles` (the easy-handle
+//! - Module layout: `easy` (raw libcurl bindings), `ca` (runtime CA-trust-store
+//!   discovery, so a binary verifies HTTPS on a machine whose CA layout differs
+//!   from the one libcurl was built on), `handles` (the easy-handle
 //!   table + panic-firewall helpers), `php_layer` (PHP-only option/write-
 //!   callback semantics), `callbacks` (PHP-callable write/header/read/
 //!   progress/debug callback dispatch), `info` (`curl_getinfo()`'s data
@@ -33,6 +35,7 @@
 //!   points every module above is reached through).
 
 mod abi;
+mod ca;
 mod callbacks;
 mod easy;
 mod handles;

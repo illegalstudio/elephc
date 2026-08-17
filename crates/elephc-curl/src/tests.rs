@@ -421,6 +421,197 @@ mod share_option_table {
     }
 }
 
+/// Purpose:
+/// The decision table for RUNTIME CA-TRUST-STORE DISCOVERY (`crate::ca::resolve`): which
+/// CA bundle a handle ends up verifying against, given what libcurl was built with, what
+/// the machine actually has, and what the operator asked for.
+///
+/// Called from:
+/// - `cargo test -p elephc-curl` through Rust's test harness.
+///
+/// Key details:
+/// - THESE RUN WITHOUT NATIVE libcurl, like the option table above and unlike everything
+///   in `native`. `crate::ca::resolve` takes the baked-in path, the environment value and
+///   the existence predicate as PARAMETERS precisely so the whole table is checkable on
+///   any machine — the branch that matters most (the baked-in path is MISSING) is
+///   unreachable on the machine that built libcurl, which is the only machine this suite
+///   ever runs on.
+/// - EXISTENCE IS INJECTED, never `stat`ed. A test that asserted against this machine's
+///   real `/etc/ssl/...` layout would pass or fail for reasons that have nothing to do
+///   with the code under test.
+#[cfg(test)]
+mod ca_discovery {
+    use crate::ca::{resolve, CANDIDATE_CA_FILES};
+
+    /// An existence predicate that answers `true` for exactly the listed paths.
+    fn only<'a>(present: &'a [&'static str]) -> impl Fn(&str) -> bool + 'a {
+        move |path: &str| present.contains(&path)
+    }
+
+    /// BRANCH 1, THE NO-OP: a binary running where its baked-in CA bundle exists — its own
+    /// build machine, or any same-layout system — is left completely alone, so this
+    /// feature cannot change the behavior of a deployment that already worked.
+    #[test]
+    fn an_existing_baked_bundle_is_left_alone() {
+        let decision = resolve(Some("/etc/ssl/cert.pem"), None, &only(&["/etc/ssl/cert.pem"]));
+        assert_eq!(decision, None);
+    }
+
+    /// The no-op holds even when the machine ALSO has a higher-priority store from the
+    /// probe list: libcurl's own configured answer still works, so discovery has no
+    /// business overriding it and silently changing which roots a running deployment
+    /// trusts.
+    #[test]
+    fn an_existing_baked_bundle_wins_over_the_probe_list() {
+        let decision = resolve(
+            Some("/etc/ssl/cert.pem"),
+            None,
+            &only(&["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"]),
+        );
+        assert_eq!(decision, None);
+    }
+
+    /// BRANCH 2, THE WHOLE POINT: a macOS-built binary run on Debian, where the baked
+    /// `/etc/ssl/cert.pem` does not exist. Discovery finds the distro's own store instead
+    /// of leaving libcurl to fail every verified HTTPS transfer with
+    /// `CURLE_SSL_CACERT_BADFILE`.
+    #[test]
+    fn a_missing_baked_bundle_falls_through_to_the_probe_list() {
+        let decision = resolve(
+            Some("/etc/ssl/cert.pem"),
+            None,
+            &only(&["/etc/ssl/certs/ca-certificates.crt"]),
+        );
+        assert_eq!(decision.as_deref(), Some("/etc/ssl/certs/ca-certificates.crt"));
+    }
+
+    /// A CROSS-COMPILED libcurl has NO baked-in bundle at all (`CURL_CHECK_CA_BUNDLE`
+    /// skips detection when `cross_compiling` is yes, which the managed recipe triggers by
+    /// passing `--host=`), so `baked` is `None` and the probe list is the only answer
+    /// there has ever been.
+    #[test]
+    fn a_build_with_no_baked_bundle_uses_the_probe_list() {
+        let decision = resolve(None, None, &only(&["/etc/pki/tls/certs/ca-bundle.crt"]));
+        assert_eq!(decision.as_deref(), Some("/etc/pki/tls/certs/ca-bundle.crt"));
+    }
+
+    /// The probe list is ordered, and the FIRST existing entry wins: a machine carrying
+    /// both a Debian-style and a RHEL-style store resolves to the Debian one, not to
+    /// whichever `stat` happened to be cheapest.
+    #[test]
+    fn the_first_existing_candidate_wins() {
+        let decision = resolve(
+            Some("/nonexistent/baked.pem"),
+            None,
+            &only(&[
+                "/etc/pki/tls/certs/ca-bundle.crt",
+                "/etc/ssl/certs/ca-certificates.crt",
+                "/etc/ssl/cert.pem",
+            ]),
+        );
+        assert_eq!(decision.as_deref(), Some("/etc/ssl/certs/ca-certificates.crt"));
+    }
+
+    /// Every candidate is reachable on its own, which is what keeps the list from
+    /// containing a row that can never be selected.
+    #[test]
+    fn every_candidate_is_selectable_on_its_own() {
+        for candidate in CANDIDATE_CA_FILES {
+            let decision = resolve(Some("/nonexistent/baked.pem"), None, &only(&[candidate]));
+            assert_eq!(decision.as_deref(), Some(*candidate));
+        }
+    }
+
+    /// BRANCH 3, FAIL CLOSED: a machine with no recognizable CA store anywhere is left
+    /// exactly as libcurl configured it, so it reports libcurl's own clear error. Discovery
+    /// never relaxes verification to make a transfer succeed.
+    #[test]
+    fn no_store_anywhere_changes_nothing() {
+        let decision = resolve(Some("/nonexistent/baked.pem"), None, &only(&[]));
+        assert_eq!(decision, None);
+    }
+
+    /// `$CURL_CA_BUNDLE` outranks BOTH the baked-in default and the probe list: an
+    /// operator naming a bundle is an instruction, not a hint.
+    #[test]
+    fn the_environment_override_outranks_everything() {
+        let decision = resolve(
+            Some("/etc/ssl/cert.pem"),
+            Some("/opt/app/ca-bundle.pem"),
+            &only(&["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt"]),
+        );
+        assert_eq!(decision.as_deref(), Some("/opt/app/ca-bundle.pem"));
+    }
+
+    /// The override is NOT existence-checked, on purpose: a wrong value must fail closed
+    /// with libcurl's own `CURLE_SSL_CACERT_BADFILE` rather than be silently swapped for a
+    /// guess from the probe list, which would leave the operator verifying against a store
+    /// they did not choose and never told about it.
+    #[test]
+    fn a_missing_environment_override_is_still_honored() {
+        let decision = resolve(
+            Some("/etc/ssl/cert.pem"),
+            Some("/opt/app/typo.pem"),
+            &only(&["/etc/ssl/cert.pem"]),
+        );
+        assert_eq!(decision.as_deref(), Some("/opt/app/typo.pem"));
+    }
+
+    /// A RELATIVE override is refused — a CA store resolved against the process's working
+    /// directory is precisely the writable-location hazard this module exists not to
+    /// introduce — and so are the empty string (how a shell spells "unset") and a value
+    /// with an interior NUL (not expressible as a C string). All three fall through to the
+    /// ordinary answer rather than aborting discovery.
+    #[test]
+    fn unusable_environment_overrides_fall_through() {
+        for value in ["", "ca-bundle.pem", "./ca.pem", "../ca.pem", "/opt/ca\0.pem"] {
+            let decision = resolve(
+                Some("/nonexistent/baked.pem"),
+                Some(value),
+                &only(&["/etc/ssl/certs/ca-certificates.crt"]),
+            );
+            assert_eq!(
+                decision.as_deref(),
+                Some("/etc/ssl/certs/ca-certificates.crt"),
+                "{value:?} is not a usable CURL_CA_BUNDLE and must not stop discovery"
+            );
+        }
+    }
+
+    /// A fallen-through override does not resurrect a baked-in path that does not exist
+    /// either: the two rules compose, and the answer is still "leave the handle alone".
+    #[test]
+    fn an_unusable_override_with_nothing_installed_changes_nothing() {
+        let decision = resolve(Some("/nonexistent/baked.pem"), Some("relative.pem"), &only(&[]));
+        assert_eq!(decision, None);
+    }
+
+    /// Every probed path is absolute. The whole security argument for this module is that
+    /// it only ever looks at fixed, root-owned-by-convention locations; a relative entry
+    /// would make the trust store depend on the working directory.
+    #[test]
+    fn every_candidate_is_an_absolute_path() {
+        for candidate in CANDIDATE_CA_FILES {
+            assert!(
+                candidate.starts_with('/'),
+                "{candidate} must be an absolute path"
+            );
+        }
+    }
+
+    /// No duplicates: a repeated row could never be reached and would only make the
+    /// ordering argument harder to check.
+    #[test]
+    fn the_candidate_list_has_no_duplicates() {
+        for (index, candidate) in CANDIDATE_CA_FILES.iter().enumerate() {
+            assert!(
+                !CANDIDATE_CA_FILES[index + 1..].contains(candidate),
+                "{candidate} appears twice in the probe list"
+            );
+        }
+    }
+}
+
 #[cfg(not(elephc_curl_native))]
 mod skipped {
     /// Reports why the real libcurl-linked tests below did not run, instead
