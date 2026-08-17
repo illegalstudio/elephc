@@ -63,6 +63,110 @@ fn curl_version_reports_pinned_libcurl() {
     assert!(out.contains("http\n"), "{out}");
 }
 
+/// THE PINNED BUILD'S PROTOCOL SET, ASSERTED EXACTLY. `curl_version()['protocols']` is
+/// the one place a recipe change is visible from PHP, so this fixture is what makes the
+/// protocol matrix in `docs/php/curl.md` a checked claim rather than a comment: it pins
+/// the whole list, in libcurl's own order, for curl recipe revision 2.
+///
+/// This is deliberately NOT a php-parity assertion. A distro's libcurl carries `ldap`,
+/// `ldaps` and (where librtmp survives) `rtmp*` that this build does not, and typically
+/// lacks nothing this build has; comparing our list to the one a system `php` prints
+/// would be comparing two build configurations, not two implementations. What must match
+/// php is the SHAPE — a list of lowercase scheme strings in libcurl's order — and that is
+/// what `curl_version_exposes_php_key_shape` and `curl_version_keys_are_in_phps_order`
+/// cover.
+///
+/// `ipfs`/`ipns` are absent on purpose: curl's configure summary reports them as enabled,
+/// but they are a feature of the curl TOOL (which rewrites an IPFS URL to an HTTP gateway
+/// request), not schemes libcurl registers, so `curl_version_info()` never lists them.
+#[test]
+fn curl_version_reports_the_full_pinned_protocol_set() {
+    if skip_without_curl_native("curl_version_reports_the_full_pinned_protocol_set") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        echo implode(" ", curl_version()['protocols']), "\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        "dict file ftp ftps gopher gophers http https imap imaps mqtt mqtts pop3 pop3s \
+         rtsp scp sftp smb smbs smtp smtps telnet tftp ws wss\n"
+    );
+}
+
+/// The two capability flips recipe revision 2 makes visible through php's own
+/// `curl_version()` keys: `HTTP2` in `feature_list` (and its bit in `features`), and a
+/// non-empty `libssh_version` — which for revision 1 was the empty string php substitutes
+/// for libcurl's NULL, since there was no SSH library at all.
+///
+/// `HTTP3` is asserted FALSE, and that is the honest state of this pin rather than an
+/// oversight: curl 8.21.0 has no standalone `openssl-quic` backend (it was removed), so
+/// the only non-experimental HTTP/3 path is ngtcp2 + nghttp3 — two further pinned
+/// packages this round did not take.
+#[test]
+fn curl_version_reports_http2_and_the_ssh_library() {
+    if skip_without_curl_native("curl_version_reports_http2_and_the_ssh_library") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        $v = curl_version();
+        echo $v['feature_list']['HTTP2'] ? "http2\n" : "no-http2\n";
+        // CURL_VERSION_HTTP2 is 1 << 16; feature_list and the bitmask must agree.
+        echo ($v['features'] & (1 << 16)) ? "bit\n" : "no-bit\n";
+        echo $v['feature_list']['HTTP3'] ? "http3\n" : "no-http3\n";
+        echo ($v['features'] & (1 << 25)) ? "bit3\n" : "no-bit3\n";
+        echo $v['feature_list']['NTLM'] ? "ntlm\n" : "no-ntlm\n";
+        echo $v['libssh_version'], "\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        "http2\nbit\nno-http3\nno-bit3\nntlm\nlibssh2/1.11.1\n"
+    );
+}
+
+/// The protocol set is enforced by libcurl at `curl_exec()`, and the three outcomes stay
+/// distinguishable — which is what makes a scheme's status observable from PHP without a
+/// network:
+///
+/// - a built-in scheme gets as far as CONNECTING (`sftp://` to a closed local port fails
+///   with `CURLE_COULDNT_CONNECT`, 7, proving libcurl knows the scheme);
+/// - a scheme libcurl knows but was built without says `is disabled` (`ldap`, which needs
+///   an OpenLDAP this catalog does not pin);
+/// - a scheme libcurl has no handler for at all says `not supported` (`rtmp`, whose
+///   librtmp is abandoned upstream).
+///
+/// All three are errno 1 vs 7 — never a fabricated success. The `sftp` half is the only
+/// socket this file opens, and it opens it against `127.0.0.1:1` with a 200 ms cap, so it
+/// resolves nothing and reaches no network.
+#[test]
+fn built_in_disabled_and_unknown_schemes_stay_distinguishable() {
+    if skip_without_curl_native("built_in_disabled_and_unknown_schemes_stay_distinguishable") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        $sftp = curl_init("sftp://127.0.0.1:1/x");
+        curl_setopt($sftp, CURLOPT_CONNECTTIMEOUT_MS, 200);
+        curl_exec($sftp);
+        echo curl_errno($sftp), "\n";
+        $ldap = curl_init("ldap://127.0.0.1:1/x");
+        curl_exec($ldap);
+        echo curl_errno($ldap), " ", curl_error($ldap), "\n";
+        $rtmp = curl_init("rtmp://127.0.0.1/x");
+        curl_exec($rtmp);
+        echo curl_errno($rtmp), " ", curl_error($rtmp), "\n";
+        "#,
+    );
+    assert_eq!(
+        out,
+        "7\n1 Protocol \"ldap\" is disabled\n1 Protocol \"rtmp\" not supported\n"
+    );
+}
+
 /// `curl_version()` carries the rest of PHP's documented key set, and the numeric keys
 /// really are numbers rather than the JSON blob's text — proof the array came through
 /// `json_decode()`'s typed decoding and not a string split.
