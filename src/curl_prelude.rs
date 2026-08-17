@@ -1299,11 +1299,11 @@ function curl_reset(CurlHandle $handle): void {
 // `false` for.
 //
 // THE COPY DUPLICATES BOTH LAYERS. `curl_easy_duphandle` copies libcurl's own options; the
-// bridge copies the capture flag and the captured body it keeps beside them; and this
-// wrapper copies the two object-side mirrors. Missing any one of the three would produce a
-// handle that looks identical and behaves differently — the RETURNTRANSFER mirror in
-// particular decides `curl_exec()`'s RETURN TYPE, so a copy without it would answer `true`
-// where the original answers a string.
+// bridge carries over the capture flag (while the buffered body, errno, and error text all
+// start clean on the copy, matching PHP); and this wrapper copies the two object-side
+// mirrors. Missing any one of the three would produce a handle that looks identical and
+// behaves differently — the RETURNTRANSFER mirror in particular decides `curl_exec()`'s
+// RETURN TYPE, so a copy without it would answer `true` where the original answers a string.
 function curl_copy_handle(CurlHandle $handle): CurlHandle {
     $raw = $handle->__elephc_handle;
     $copy = __elephc_curl_easy_copy($raw);
