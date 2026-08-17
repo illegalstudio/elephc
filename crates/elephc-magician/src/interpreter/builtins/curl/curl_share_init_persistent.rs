@@ -69,8 +69,8 @@ fn eval_curl_share_init_persistent_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_curl_require_php_85("curl_share_init_persistent", context, values)?;
-    if !values.is_array_like(share_options)? {
-        let given = eval_curl_given_type_name(share_options, values)?;
+    if !eval_curl_is_php_array(share_options, values)? {
+        let given = eval_curl_given_type_name(share_options, context, values)?;
         return eval_throw_type_error(
             &format!(
                 "curl_share_init_persistent(): Argument #1 ($share_options) must be of type \

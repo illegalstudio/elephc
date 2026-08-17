@@ -81,13 +81,6 @@ pub(super) fn eval_reflection_class_new_instance_result(
     let class_name = context
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
-    // See `eval_curl_deferred_class_name`'s own doc: `(new ReflectionClass('CURLFile'))->
-    // newInstance()`/`newInstanceArgs()` reaches the native-class fallback below too, and
-    // must be rejected the same way plain `new CURLFile(...)` is.
-    #[cfg(feature = "curl")]
-    if eval_curl_deferred_class_name(&class_name) {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
     if let Some(error) = eval_reflection_aot_class_public_instantiation_error(&class_name, values)?
     {
         return eval_throw_reflection_instantiation_error(error, context, values);
@@ -184,13 +177,6 @@ pub(super) fn eval_reflection_class_new_instance_without_constructor_result(
     let class_name = context
         .resolve_class_name(&reflected_name)
         .unwrap_or(reflected_name);
-    // See `eval_curl_deferred_class_name`'s own doc: `(new ReflectionClass('CURLFile'))->
-    // newInstanceWithoutConstructor()` reaches the native-class fallback below too, and
-    // must be rejected the same way plain `new CURLFile(...)` is.
-    #[cfg(feature = "curl")]
-    if eval_curl_deferred_class_name(&class_name) {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
     if let Some(message) =
         eval_reflection_aot_class_without_constructor_error(&class_name, values)?
     {
@@ -238,14 +224,6 @@ pub(super) fn eval_reflection_attribute_new_instance_result(
     let class_name = context
         .resolve_class_name(attribute.name())
         .unwrap_or_else(|| attribute.name().trim_start_matches('\\').to_string());
-    // See `eval_curl_deferred_class_name`'s own doc: an (admittedly exotic)
-    // `#[CURLFile(...)]` attribute's `ReflectionAttribute::newInstance()` reaches the
-    // native-class fallback below too, and must be rejected the same way plain `new
-    // CURLFile(...)` is.
-    #[cfg(feature = "curl")]
-    if eval_curl_deferred_class_name(&class_name) {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
     if !values.class_exists(&class_name)? {
         return values.null();
     }

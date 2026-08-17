@@ -147,10 +147,31 @@
 //! counterpart of the `CurlMultiHandle`/`CurlHandle` parameter types the AOT prelude gets
 //! checked at COMPILE time. See `handle.rs`'s resolver family.
 //!
+//! ALSO SHIPPED — `CURLFile`/`CURLStringFile` AND `CURLOPT_POSTFIELDS`'s ARRAY FORM (R3-C):
+//! `curl_setopt($ch, CURLOPT_POSTFIELDS, [...])` posts real `multipart/form-data` through
+//! the SAME `elephc_curl_mime_*` ABI the AOT prelude drives — see `multipart.rs`, which
+//! mirrors `crate::curl_prelude::__elephc_curl_build_multipart` part for part.
+//!
+//! THE TWO CLASSES ARE THE AOT ONES, NOT EVAL RE-DECLARATIONS, and that is the one place
+//! this module deliberately DOES cross the object-space boundary it warns about above. The
+//! warning is about handles: an eval curl handle is a resource cell and an AOT `CurlHandle`
+//! is an object, so neither works where the other is expected. `CURLFile`/`CURLStringFile`
+//! are not handles — they are PURE PHP DATA CLASSES wrapping no native resource at all
+//! (`crate::curl_prelude`'s own comment above their declarations: no `$__elephc_handle`, no
+//! private constructor, no factory). The real AOT class therefore works correctly inside
+//! `eval()`: `new CURLFile(...)` constructs it through the ordinary native-class fallback,
+//! `get_class()` reports `CURLFile`, `instanceof` matches, the three getters and two setters
+//! dispatch, and `multipart.rs` reads its properties. `curl_file_create()` likewise resolves
+//! to the AOT prelude function, which is a plain alias of the constructor.
+//!
+//! THE CLASSES ARE ALWAYS THERE WHEN THIS MODULE IS. A program that reaches the eval curl
+//! surface at all has, by construction, been linked with `elephc_curl`
+//! (`src/linker/bridges.rs`'s `needs_curl`), and that same condition is what injects the
+//! curl prelude — so `CURLFile`/`CURLStringFile` are declared in every build where this code
+//! exists. There is no configuration in which `new CURLFile(...)` compiles into eval's path
+//! and finds no class.
+//!
 //! STILL DEFERRED:
-//! - `CURLFile`/`CURLStringFile`/`curl_file_create()` and, with them,
-//!   `CURLOPT_POSTFIELDS`'s ARRAY (`multipart/form-data`) form — `curl_setopt()` still
-//!   accepts a plain STRING `CURLOPT_POSTFIELDS` body.
 //! - Callback options (`CURLOPT_WRITEFUNCTION`/`_HEADERFUNCTION`/`_READFUNCTION`/
 //!   `_PROGRESSFUNCTION`/`_DEBUGFUNCTION`/`_XFERINFOFUNCTION`, option KIND 8): rejected
 //!   through the SAME honest "option ... is not supported by this build" warning +
@@ -159,27 +180,19 @@
 //!   valued options): these are KIND 9 (`KIND_STREAM`) options that need a live PHP stream
 //!   resource on the far end.
 //!
-//! WHAT HAPPENS IF YOU TRY A STILL-DEFERRED NAME (post item-6 fix): `curl_file_create()`
-//! and `new CURLFile(...)`/`new CURLStringFile(...)` are INTERCEPTED and answer eval's own
-//! honest "eval() fragment uses an unsupported construct" fatal — the identical rejection
-//! any other undefined-in-eval name already produces — rather than silently doing something
-//! confusing. This is a deliberate fix, not the original behavior: before it, an
-//! unrecognized-by-eval name fell through to `context.native_function()` (the interpreter's
-//! normal "call this AOT-compiled function by name" escape hatch), and whenever the host
-//! program also linked `elephc_curl` (which ANY non-`eval()` curl usage in the same program
-//! causes), that fallthrough resolved to the REAL compiled implementation and handed back a
-//! genuine, apparently-working AOT object — right up until it was mixed with an eval-owned
-//! easy handle and failed confusingly (the "TWO DISTINCT OBJECT SPACES" consequence
-//! documented above). See
-//! `crate::interpreter::builtins::registry::names::{eval_curl_deferred_function_name,
-//! eval_curl_deferred_class_name}` for the interception itself and
-//! `crate::interpreter::expressions::{eval_call, evaluation::eval_new_object_result}` for
-//! where each is checked, ahead of their respective native-function/native-class
-//! fallbacks. The `curl_multi_*`/`curl_share_*` PREFIXES ARE NO LONGER INTERCEPTED — they
-//! are answered by this module's own registry entries, which are consulted before any
-//! native fallback.
+//! NO CURL NAME IS INTERCEPTED ANY MORE. `crate::interpreter::builtins::registry::names`
+//! used to carry `eval_curl_deferred_function_name`/`eval_curl_deferred_class_name`, checked
+//! ahead of the native-function/native-class fallbacks in six places, so that an
+//! unimplemented curl name could not silently resolve to the REAL compiled implementation
+//! and hand back a genuine, apparently-working AOT object — which then failed confusingly
+//! the moment it met an eval-owned easy handle (the "TWO DISTINCT OBJECT SPACES"
+//! consequence documented above). Both predicates and all six checks are gone: every
+//! `curl_multi_*`/`curl_share_*` name now has a real eval home answered by the builtin
+//! registry before any fallback runs, and `CURLFile`/`CURLStringFile`/`curl_file_create()`
+//! are deliberately served BY that fallback for the data-class reason spelled out above.
 
 mod handle;
+mod multipart;
 
 mod curl_close;
 mod curl_copy_handle;
@@ -253,6 +266,7 @@ pub(in crate::interpreter) use curl_version::*;
 
 use super::super::*;
 use handle::*;
+use multipart::*;
 
 /// Dispatches one curl builtin from unevaluated positional expressions. Every arm
 /// evaluates its arguments left to right and forwards to the same `*_result` helper the

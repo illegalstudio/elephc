@@ -10,13 +10,45 @@ use crate::curl_ffi as ffi;
 
 use super::*;
 
+/// Returns whether a cell is a PHP ARRAY — and nothing else.
+///
+/// NOT `RuntimeValueOps::is_array_like`, which is a deliberately WIDER predicate: it answers
+/// "can eval index this like an array for a WRITE", and therefore reports `true` for an
+/// OBJECT too (runtime tag 6), so that `ArrayAccess`-capable objects reach the runtime's own
+/// set helpers. Every `curl_setopt()` guard in this family is asking php-src's `is_array()`
+/// question instead — `CURLOPT_HTTPHEADER`'s "must be of type array" `TypeError`, and
+/// `CURLOPT_POSTFIELDS`'s array-versus-scalar fork — and using the wider predicate for them
+/// is a real misclassification, not a stylistic difference: it sent a `CURLFile` object down
+/// the multipart walk's NESTED-ARRAY branch, where it silently produced ZERO parts (measured:
+/// a four-field `CURLOPT_POSTFIELDS` array containing a `CURLFile` and a `CURLStringFile`
+/// posted three parts instead of five, with both file parts missing and no error anywhere).
+pub(in crate::interpreter) fn eval_curl_is_php_array(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    Ok(matches!(
+        values.type_tag(value)?,
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC
+    ))
+}
+
 /// Computes the "given" type name AOT's curl prelude uses in its own `TypeError`/
 /// `ValueError` messages: `get_class($value)` for an object, the literal `"null"` for
 /// `null` (NOT `gettype()`'s `"NULL"`), and `gettype($value)` for everything else —
 /// `crate::curl_prelude::curl_setopt`'s own `$given` ternary, reproduced here so an eval
 /// curl error message reads identically to the AOT one for the same misuse.
+///
+/// THE EVAL DYNAMIC-OBJECT REGISTRY IS CONSULTED FIRST, and it has to be. A class DECLARED
+/// INSIDE the `eval()` fragment is allocated as a backing `stdClass` cell tagged by object
+/// identity in `ElephcEvalContext` (`crate::interpreter::statements::class_resolution`'s
+/// `eval_dynamic_class_allocate_object`), so `RuntimeValueOps::object_class_name` — which
+/// reads the RUNTIME cell's class — answers `"stdClass"` for it. Reaching only for that is
+/// how `curl_setopt($ch, CURLOPT_POSTFIELDS, ['f' => new MyThing()])` reported
+/// "... stdClass given" instead of naming the real class (measured). `get_class()` itself
+/// resolves this the same way, through `dynamic_object_class_name`.
 pub(in crate::interpreter) fn eval_curl_given_type_name(
     value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     let tag = values.type_tag(value)?;
@@ -24,6 +56,10 @@ pub(in crate::interpreter) fn eval_curl_given_type_name(
         return Ok("null".to_string());
     }
     if tag == EVAL_TAG_OBJECT {
+        let identity = values.object_identity(value)?;
+        if let Some(name) = context.dynamic_object_class_name(identity) {
+            return Ok(name);
+        }
         let class_name = values.object_class_name(value)?;
         let bytes = values.string_bytes(class_name)?;
         return Ok(String::from_utf8_lossy(&bytes).into_owned());
@@ -63,7 +99,7 @@ pub(in crate::interpreter) fn eval_curl_easy_handle(
             }
         }
     }
-    let given = eval_curl_given_type_name(handle, values)?;
+    let given = eval_curl_given_type_name(handle, context, values)?;
     eval_throw_type_error(
         &format!("{function}(): Argument #1 ($handle) must be of type CurlHandle, {given} given"),
         context,
@@ -101,7 +137,7 @@ pub(in crate::interpreter) fn eval_curl_easy_handle_at(
             }
         }
     }
-    let given = eval_curl_given_type_name(handle, values)?;
+    let given = eval_curl_given_type_name(handle, context, values)?;
     eval_throw_type_error(
         &format!(
             "{function}(): Argument #{position} (${parameter}) must be of type CurlHandle, \
@@ -136,7 +172,7 @@ pub(in crate::interpreter) fn eval_curl_multi_handle(
             }
         }
     }
-    let given = eval_curl_given_type_name(handle, values)?;
+    let given = eval_curl_given_type_name(handle, context, values)?;
     eval_throw_type_error(
         &format!(
             "{function}(): Argument #1 ($multi_handle) must be of type CurlMultiHandle, \
@@ -188,7 +224,7 @@ pub(in crate::interpreter) fn eval_curl_share_raw(
             }
         }
     }
-    let given = eval_curl_given_type_name(handle, values)?;
+    let given = eval_curl_given_type_name(handle, context, values)?;
     eval_throw_type_error(
         &format!(
             "{function}(): Argument #1 ($share_handle) must be of type CurlShareHandle, \
@@ -312,8 +348,8 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
         return Err(EvalStatus::RuntimeFatal);
     };
     if kind == ffi::KIND_SLIST {
-        if !values.is_array_like(value)? {
-            let given = eval_curl_given_type_name(value, values)?;
+        if !eval_curl_is_php_array(value, values)? {
+            let given = eval_curl_given_type_name(value, context, values)?;
             return eval_throw_type_error(
                 &format!(
                     "curl_setopt(): Argument #3 ($value) must be of type array, {given} given"
@@ -408,7 +444,7 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
                 }
             }
         }
-        let given = eval_curl_given_type_name(value, values)?;
+        let given = eval_curl_given_type_name(value, context, values)?;
         return eval_throw_type_error(
             &format!(
                 "curl_setopt(): Argument #3 ($value) must be of type CurlShareHandle, \
@@ -427,14 +463,24 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
         warn_unsupported_option(option, values)?;
         return values.bool_value(false);
     }
-    // CURLOPT_POSTFIELDS (10015) with an ARRAY value posts real `multipart/form-data` in
-    // the AOT build (`crate::curl_prelude::__elephc_curl_build_multipart`), which
-    // needs `CURLFile`/`CURLStringFile` — deferred here (see this module's own doc). The
-    // plain STRING form (the common urlencoded-body case) still works below through the
-    // ordinary KIND_STRING path.
-    if option == 10015 && values.is_array_like(value)? {
-        warn_unsupported_option(option, values)?;
-        return values.bool_value(false);
+    // CURLOPT_POSTFIELDS (10015) is the one option whose value may be an ARRAY as well as a
+    // string, and an array posts real `multipart/form-data` through the SAME
+    // `elephc_curl_mime_*` ABI the AOT walker uses — see
+    // `crate::interpreter::builtins::curl::multipart`, which mirrors
+    // `crate::curl_prelude::__elephc_curl_build_multipart` part for part. The plain STRING
+    // form (the common urlencoded-body case) still goes through the ordinary KIND_STRING
+    // path below.
+    //
+    // AN EMPTY ARRAY IS AN EMPTY STRING BODY, NOT AN EMPTY MULTIPART, and the special case
+    // lives HERE rather than in the walker because that is where the AOT prelude puts it:
+    // php-src returns `curl_easy_setopt(cp, CURLOPT_POSTFIELDS, "")` before building any
+    // mime structure, and the difference is observable on the wire (an urlencoded content
+    // type and an empty body, versus a multipart content type and a boundary-only body).
+    if option == 10015 && eval_curl_is_php_array(value, values)? {
+        if values.array_len(value)? == 0 {
+            return values.bool_value(ffi::easy_setopt_str(raw, opt, b""));
+        }
+        return eval_curl_build_multipart(raw, value, context, values);
     }
     // php-src rejects a non-scalar `$value` with a catchable `\TypeError` here
     // (`crate::curl_prelude::curl_setopt`'s own guard, mirrored verbatim) — see
@@ -444,7 +490,7 @@ pub(in crate::interpreter) fn eval_curl_setopt_apply(
         tag,
         EVAL_TAG_INT | EVAL_TAG_STRING | EVAL_TAG_FLOAT | EVAL_TAG_BOOL
     ) {
-        let given = eval_curl_given_type_name(value, values)?;
+        let given = eval_curl_given_type_name(value, context, values)?;
         return eval_throw_type_error(
             &format!(
                 "curl_setopt(): Argument #3 ($value) must be of type string|int|float|bool, {given} given"

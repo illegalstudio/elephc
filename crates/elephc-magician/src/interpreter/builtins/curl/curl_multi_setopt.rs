@@ -90,7 +90,7 @@ fn eval_curl_multi_setopt_result(
         tag,
         EVAL_TAG_INT | EVAL_TAG_STRING | EVAL_TAG_FLOAT | EVAL_TAG_BOOL
     ) {
-        let given = eval_curl_given_type_name(value, values)?;
+        let given = eval_curl_given_type_name(value, context, values)?;
         return eval_throw_type_error(
             &format!(
                 "curl_multi_setopt(): Argument #3 ($value) must be of type \

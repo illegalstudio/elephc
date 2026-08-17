@@ -133,14 +133,17 @@ pub(super) fn eval_new_object_result(
     if let Some(class) = context.class(class_name).cloned() {
         return eval_dynamic_class_new_object(&class, args, context, scope, values);
     }
-    // Checked BEFORE the native-class fallback below — see
-    // `eval_curl_deferred_class_name`'s own doc for why a real AOT `CURLFile`/
-    // `CURLStringFile` object must never be constructed through it (and why the check
-    // itself is gated behind the `curl` feature).
-    #[cfg(feature = "curl")]
-    if eval_curl_deferred_class_name(class_name) {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
+    // `CURLFile`/`CURLStringFile` DELIBERATELY FALL THROUGH to the native-class fallback
+    // below, and that is the whole point rather than an oversight. They used to be
+    // intercepted here alongside the curl multi/share interfaces, on a "TWO DISTINCT OBJECT
+    // SPACES" argument that does not apply to them: unlike every other curl class, they are
+    // PURE PHP DATA CLASSES wrapping no native handle at all
+    // (`crate::curl_prelude`'s own comment above their declarations), so the real AOT class
+    // an `elephc_curl`-linked program already carries works correctly inside `eval()` — its
+    // properties read, its getters and setters dispatch, and
+    // `crate::interpreter::builtins::curl::multipart` consumes exactly such an object when
+    // it walks a `CURLOPT_POSTFIELDS` array. The interception existed only because that
+    // walk did not, which made a constructible `CURLFile` a value nothing could use.
     let object = values.new_object(class_name)?;
     if let Err(err) =
         eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)

@@ -79,6 +79,15 @@ pub(crate) const SHARE_SETOPT_APPLIED: i32 = 1;
 pub(crate) const SHARE_SETOPT_REFUSED: i32 = 0;
 pub(crate) const SHARE_SETOPT_INVALID: i32 = -1;
 
+// `elephc_curl_mime_part_field`'s `kind` codes, copied verbatim from
+// `crates/elephc-curl/src/mime.rs`'s `FIELD_*` constants (spelled out as literals in
+// `crate::curl_prelude::__elephc_curl_build_multipart` too).
+pub(crate) const MIME_FIELD_NAME: i32 = 0;
+pub(crate) const MIME_FIELD_DATA: i32 = 1;
+pub(crate) const MIME_FIELD_FILEDATA: i32 = 2;
+pub(crate) const MIME_FIELD_TYPE: i32 = 3;
+pub(crate) const MIME_FIELD_FILENAME: i32 = 4;
+
 unsafe extern "C" {
     fn elephc_curl_option_kind(opt: i64) -> i32;
     fn elephc_curl_easy_init() -> i64;
@@ -126,6 +135,11 @@ unsafe extern "C" {
         -> i32;
     fn elephc_curl_easy_set_share(easy_id: i64, share_id: i64) -> i32;
     fn elephc_curl_share_free(share_id: i64);
+    fn elephc_curl_mime_new(id: i64) -> i32;
+    fn elephc_curl_mime_add_part(id: i64) -> i32;
+    fn elephc_curl_mime_part_field(id: i64, kind: i32, ptr: *const u8, len: usize) -> i32;
+    fn elephc_curl_mime_post(id: i64) -> i32;
+    fn elephc_curl_mime_abort(id: i64) -> i32;
 }
 
 /// Copies bytes out of a "probe for length, then fill" ABI entry point (the
@@ -392,6 +406,36 @@ pub(crate) fn easy_set_share(easy: i64, share: i64) -> bool {
 /// `crates/elephc-curl/src/share.rs`'s module doc.
 pub(crate) fn share_free(share: i64) {
     unsafe { elephc_curl_share_free(share) }
+}
+
+/// Starts a fresh `curl_mime` builder on the handle (`CURLOPT_POSTFIELDS`'s array form),
+/// discarding any earlier PENDING builder and leaving whatever is already ATTACHED alone.
+pub(crate) fn mime_new(id: i64) -> bool {
+    unsafe { elephc_curl_mime_new(id) != 0 }
+}
+
+/// Appends a fresh, empty part to the pending builder.
+pub(crate) fn mime_add_part(id: i64) -> bool {
+    unsafe { elephc_curl_mime_add_part(id) != 0 }
+}
+
+/// Sets one `MIME_FIELD_*` field on the current pending part. `MIME_FIELD_DATA` is
+/// binary-safe; every other kind must be NUL-free (the bridge rejects an embedded NUL).
+pub(crate) fn mime_part_field(id: i64, kind: i32, value: &[u8]) -> bool {
+    unsafe { elephc_curl_mime_part_field(id, kind, value.as_ptr(), value.len()) != 0 }
+}
+
+/// Attaches the pending builder via `CURLOPT_MIMEPOST`.
+pub(crate) fn mime_post(id: i64) -> bool {
+    unsafe { elephc_curl_mime_post(id) != 0 }
+}
+
+/// Discards the pending builder without attaching it, for a walk that failed partway. Never
+/// a failure — this is a cleanup call, not a status query.
+pub(crate) fn mime_abort(id: i64) {
+    unsafe {
+        elephc_curl_mime_abort(id);
+    }
 }
 
 /// LINK-SATISFYING STAND-INS for `cargo test -p elephc-magician --features curl`, NOT a
@@ -668,4 +712,29 @@ mod test_stubs {
     }
     #[no_mangle]
     extern "C" fn elephc_curl_share_free(_share_id: i64) {}
+    #[no_mangle]
+    extern "C" fn elephc_curl_mime_new(_id: i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_mime_add_part(_id: i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_mime_part_field(
+        _id: i64,
+        _kind: i32,
+        _ptr: *const u8,
+        _len: usize,
+    ) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_mime_post(_id: i64) -> i32 {
+        0
+    }
+    #[no_mangle]
+    extern "C" fn elephc_curl_mime_abort(_id: i64) -> i32 {
+        1
+    }
 }

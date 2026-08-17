@@ -189,78 +189,53 @@ fn eval_rejects_the_stream_options_with_a_warning_not_a_fatal() {
     }
 }
 
-/// ITEM 6 (WP-B, curl punch list), NARROWED BY R3-C: `curl_file_create` is the last curl
-/// FUNCTION name `eval()` still routes away from `context.native_function()`.
+/// ITEM 6 (WP-B, curl punch list), CLOSED BY R3-C: `curl_file_create()` and
+/// `new CURLFile(...)` used to be INTERCEPTED inside `eval()` and answered eval's own
+/// "unsupported construct" fatal, because the eval interpreter could not do anything with a
+/// `CURLFile` — `CURLOPT_POSTFIELDS`'s array form was not implemented, so a constructible
+/// one would have been a value nothing could consume.
 ///
-/// The original bug this pins is unchanged: an unrecognized-by-eval name FELL THROUGH to
-/// `context.native_function()`, which — whenever the host program also links `elephc_curl`,
-/// exactly the condition this test's top-level `curl_version()` call creates — resolved to
-/// the REAL AOT prelude function and silently handed back a working AOT object instead of
-/// failing. What changed is the SET of names that needs the guard: `curl_multi_*` and
-/// `curl_share_*` now have real eval homes and are answered by the builtin registry before
-/// any native fallback (see the multi/share fixtures below), so only the `CURLFile` factory
-/// — whose class `eval()` still cannot construct — is left. The rejection is an UNCATCHABLE
-/// process exit, not a PHP-catchable exception, so this asserts the process exit code and
-/// stderr message rather than wrapping in try/catch.
+/// Now that the multipart walk exists, both are deliberately served BY the native fallback
+/// the guard used to block. That is safe here and nowhere else in the curl surface:
+/// `CURLFile`/`CURLStringFile` are PURE PHP DATA CLASSES wrapping no native handle, so
+/// unlike a `CurlHandle` there are no "two object spaces" to confuse. This asserts the whole
+/// data-class surface — construction both ways, `get_class`, `instanceof`, the three getters
+/// and two setters, and `CURLStringFile`'s DIFFERENT constructor argument order
+/// (`data, postname, mime`) and its `application/octet-stream` mime default.
 #[test]
-fn eval_curl_file_create_is_rejected_not_a_working_aot_object() {
-    if skip_without_curl_native("eval_curl_file_create_is_rejected_not_a_working_aot_object") {
+fn eval_curlfile_and_curl_file_create_construct_working_objects() {
+    if skip_without_curl_native("eval_curlfile_and_curl_file_create_construct_working_objects") {
         return;
     }
-    let output = compile_and_run_capture(
+    let out = compile_and_run(
         r#"<?php
         curl_version();
-        $r = eval('$h = curl_file_create("/etc/hosts"); return get_class($h);');
-        echo "unexpectedly reached: ", $r;
+        $r = eval('
+            $out = [];
+            $a = new CURLFile("/tmp/a.txt", "text/plain", "posted.txt");
+            $out[] = get_class($a);
+            $out[] = $a->getFilename();
+            $out[] = $a->getMimeType();
+            $out[] = $a->getPostFilename();
+            $a->setMimeType("application/json");
+            $a->setPostFilename("other.json");
+            $out[] = $a->getMimeType() . "/" . $a->getPostFilename();
+            $b = curl_file_create("/tmp/b.txt");
+            $out[] = get_class($b) . ":" . ($b instanceof CURLFile ? "is" : "not");
+            $out[] = "[" . $b->getMimeType() . "][" . $b->getPostFilename() . "]";
+            $c = new CURLStringFile("payload", "in-memory.bin");
+            $out[] = get_class($c) . ":" . $c->data . ":" . $c->postname . ":" . $c->mime;
+            $out[] = is_subclass_of("CURLStringFile", "CURLFile") ? "subclass" : "sibling";
+            return implode("|", $out);
+        ');
+        echo $r;
         "#,
     );
-    assert!(
-        !output.success,
-        "curl_file_create(): eval() must fail instead of returning a working AOT object; \
-        stdout was: {}",
-        output.stdout
-    );
-    assert!(
-        output
-            .stderr
-            .contains("eval() fragment uses an unsupported construct"),
-        "stderr was: {}",
-        output.stderr
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "must never reach the echo after eval(); stdout was: {}",
-        output.stdout
-    );
-}
-
-/// The class-construction half of item 6: `new CURLFile(...)`/`new CURLStringFile(...)`
-/// inside `eval()` used to construct a real AOT object the same way the function names
-/// above did (verified before this fix: `get_class($f) === "CURLFile"`), through
-/// `values.new_object()`'s own native-class fallback. Same fatal, same reasoning.
-#[test]
-fn eval_new_curlfile_is_rejected_not_a_working_aot_object() {
-    if skip_without_curl_native("eval_new_curlfile_is_rejected_not_a_working_aot_object") {
-        return;
-    }
-    let output = compile_and_run_capture(
-        r#"<?php
-        curl_version();
-        $r = eval('$f = new CURLFile("/etc/hosts"); return get_class($f);');
-        echo "unexpectedly reached: ", $r;
-        "#,
-    );
-    assert!(
-        !output.success,
-        "new CURLFile(...) must fail instead of returning a working AOT object; stdout was: {}",
-        output.stdout
-    );
-    assert!(
-        output
-            .stderr
-            .contains("eval() fragment uses an unsupported construct"),
-        "stderr was: {}",
-        output.stderr
+    assert_eq!(
+        out,
+        "CURLFile|/tmp/a.txt|text/plain|posted.txt|application/json/other.json\
+        |CURLFile:is|[][]|CURLStringFile:payload:in-memory.bin:application/octet-stream\
+        |sibling"
     );
 }
 
@@ -843,5 +818,179 @@ fn eval_curl_context_teardown_unwinds_multi_easy_and_share_without_double_free()
         !output.stderr.contains("has leaked"),
         "the bridge must not report a refused curl_share_cleanup; stderr was: {}",
         output.stderr
+    );
+}
+
+/// R3-C: `CURLOPT_POSTFIELDS`'s ARRAY form inside `eval()` posts REAL `multipart/form-data`
+/// on the wire, proven against the loopback fixture's `/multipart` route rather than by a
+/// `curl_setopt()` return value.
+///
+/// Covers every part shape `crate::interpreter::builtins::curl::multipart` handles: a plain
+/// scalar field, a `CURLFile` read from a real file on disk, a `CURLStringFile` posted from
+/// memory, and a nested array flattening to one part per inner element under the SAME outer
+/// key (php-src's repeated-field idiom).
+#[test]
+fn eval_curl_postfields_array_posts_real_multipart() {
+    if skip_without_curl_native("eval_curl_postfields_array_posts_real_multipart") {
+        return;
+    }
+    let path = std::env::temp_dir().join(format!(
+        "elephc_curl_eval_mime_{}_{:?}.txt",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::write(&path, b"file bytes").expect("write fixture file");
+    let path_str = path.to_string_lossy().into_owned();
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/multipart");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $ch = curl_init("{url}");
+            $fields = [
+                "plain" => "scalar-value",
+                "file" => new CURLFile("{path_str}", "text/plain", "hello.txt"),
+                "mem" => new CURLStringFile("in-memory bytes", "mem.bin", "application/x-thing"),
+                "tags" => ["one", "two"],
+            ];
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $fields);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            return curl_exec($ch);
+        ');
+        echo $r;
+        "#
+    ));
+    let _ = std::fs::remove_file(&path);
+    assert!(out.contains("content-type=multipart/form-data"), "{out}");
+    assert!(out.contains("parts=5"), "{out}");
+    assert!(out.contains("part[0].name=plain"), "{out}");
+    assert!(out.contains("part[0].body=scalar-value"), "{out}");
+    assert!(out.contains("part[1].name=file"), "{out}");
+    assert!(out.contains("part[1].filename=hello.txt"), "{out}");
+    assert!(out.contains("part[1].type=text/plain"), "{out}");
+    assert!(out.contains("part[1].body=file bytes"), "{out}");
+    assert!(out.contains("part[2].name=mem"), "{out}");
+    assert!(out.contains("part[2].filename=mem.bin"), "{out}");
+    assert!(out.contains("part[2].type=application/x-thing"), "{out}");
+    assert!(out.contains("part[2].body=in-memory bytes"), "{out}");
+    // The nested array flattens to two parts, BOTH named with the outer key, the inner keys
+    // discarded entirely — measured php-src behaviour, mirrored from the AOT walker.
+    assert!(out.contains("part[3].name=tags"), "{out}");
+    assert!(out.contains("part[3].body=one"), "{out}");
+    assert!(out.contains("part[4].name=tags"), "{out}");
+    assert!(out.contains("part[4].body=two"), "{out}");
+}
+
+/// R3-C: the two `CURLOPT_POSTFIELDS` array corner cases whose answers are counter-intuitive
+/// and whose AOT versions are pinned by their own fixtures — reproduced in `eval()`.
+///
+/// - AN EMPTY ARRAY IS AN EMPTY STRING BODY, NOT AN EMPTY MULTIPART: php-src short-circuits
+///   before building any mime structure, so the request carries
+///   `application/x-www-form-urlencoded` and an empty body, byte for byte what
+///   `CURLOPT_POSTFIELDS => ""` sends. A built-but-empty `curl_mime` would send a multipart
+///   content type and a boundary-only body instead.
+/// - A `CURLFile` WITH NO EXPLICIT MIME SENDS `application/octet-stream`, php-src's own
+///   literal default — NOT whatever libcurl sniffs from the posted filename's extension. The
+///   `.png` name is deliberate: it is one of the extensions the pinned libcurl 8.21.0 would
+///   sniff to a real image type if the type were left unset.
+#[test]
+fn eval_curl_postfields_empty_array_and_default_mime_match_php() {
+    if skip_without_curl_native("eval_curl_postfields_empty_array_and_default_mime_match_php") {
+        return;
+    }
+    let path = std::env::temp_dir().join(format!(
+        "elephc_curl_eval_mime_default_{}_{:?}.png",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::write(&path, b"not really a png").expect("write fixture file");
+    let path_str = path.to_string_lossy().into_owned();
+    let server = LocalHttpServer::spawn_hello();
+    let url = server.url("/multipart");
+    let out = compile_and_run(&format!(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            $empty = curl_init("{url}");
+            curl_setopt($empty, CURLOPT_POST, true);
+            curl_setopt($empty, CURLOPT_POSTFIELDS, []);
+            curl_setopt($empty, CURLOPT_RETURNTRANSFER, true);
+            $emptyBody = curl_exec($empty);
+
+            $sniff = curl_init("{url}");
+            curl_setopt($sniff, CURLOPT_POST, true);
+            curl_setopt($sniff, CURLOPT_POSTFIELDS, ["f" => new CURLFile("{path_str}")]);
+            curl_setopt($sniff, CURLOPT_RETURNTRANSFER, true);
+            $sniffBody = curl_exec($sniff);
+            return $emptyBody . "@@" . $sniffBody;
+        ');
+        echo $r;
+        "#
+    ));
+    let _ = std::fs::remove_file(&path);
+    let (empty, sniff) = out.split_once("@@").expect("two responses");
+    assert!(
+        empty.contains("content-type=application/x-www-form-urlencoded"),
+        "empty array must not build a multipart body; got: {empty}"
+    );
+    assert!(
+        !sniff.contains("image/png"),
+        "an unset CURLFile mime must not be sniffed from the .png name; got: {sniff}"
+    );
+    assert!(
+        sniff.contains("part[0].type=application/octet-stream"),
+        "got: {sniff}"
+    );
+}
+
+/// R3-C: `CURLOPT_POSTFIELDS`'s array walk refuses the two shapes the AOT walker refuses,
+/// with the SAME catchable `\TypeError` and the same wording — an object that is neither a
+/// `CURLFile` nor a `CURLStringFile`, and an inner element of a nested array that is itself
+/// an array.
+///
+/// Both are documented DIVERGENCES from php-src, taken deliberately and identically on both
+/// sides: php-src would `(string)`-cast the object (raising a catchable `\Error` for one with
+/// no `__toString()`), but elephc's own object-to-string cast for such a class is an
+/// UNCATCHABLE process exit, so refusing before the cast is strictly better than reproducing
+/// php's answer through a mechanism that kills the process.
+#[test]
+fn eval_curl_postfields_array_refuses_unsupported_values_catchably() {
+    if skip_without_curl_native("eval_curl_postfields_array_refuses_unsupported_values_catchably") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+        curl_version();
+        $r = eval('
+            class EvalPostfieldsProbe {}
+            $ch = curl_init();
+            $out = [];
+            try {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, ["f" => new EvalPostfieldsProbe()]);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            try {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, ["f" => [["deep"]]]);
+            } catch (\TypeError $e) {
+                $out[] = $e->getMessage();
+            }
+            // The handle is still usable afterwards: every failure path aborts the pending
+            // mime builder instead of leaving it dangling.
+            $out[] = curl_setopt($ch, CURLOPT_POSTFIELDS, ["ok" => "1"]) ? "recovered" : "broken";
+            $out[] = "alive";
+            return implode("|", $out);
+        ');
+        echo $r;
+        "#,
+    );
+    assert_eq!(
+        out,
+        "curl_setopt(): CURLOPT_POSTFIELDS array value must be of type \
+        string|int|float|bool|CURLFile|CURLStringFile, EvalPostfieldsProbe given\
+        |curl_setopt(): CURLOPT_POSTFIELDS nested array value must contain only scalars\
+        |recovered|alive"
     );
 }
