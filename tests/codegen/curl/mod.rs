@@ -13,6 +13,7 @@
 
 mod callbacks;
 mod constants;
+mod easy_ca;
 mod easy_handle;
 mod easy_http;
 mod easy_options;
