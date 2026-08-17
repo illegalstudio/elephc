@@ -49,10 +49,23 @@ fn eval_curl_pause_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let raw = eval_curl_easy_raw("curl_pause", handle, context, values)?;
+    let (table_id, raw) = eval_curl_easy_handle("curl_pause", handle, context, values)?;
     let flags = eval_int_value(flags, values)?;
     let Ok(bitmask) = i32::try_from(flags) else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    values.int(i64::from(ffi::easy_pause(raw, bitmask)))
+    // A CALLBACK FRAME AROUND `curl_easy_pause` IS NOT BELT AND BRACES — UNPAUSING FLUSHES.
+    // `CURLPAUSE_CONT` on a handle whose receive side was paused makes libcurl deliver the
+    // buffered body immediately, from inside this very call, which fires the write (and
+    // header) callback. Without an active frame the adapter would find no interpreter to
+    // re-enter and answer "wrote nothing", which libcurl reads as `CURLE_WRITE_ERROR`. The
+    // AOT side reaches the same conclusion from the other direction: its
+    // `__rt_curl_easy_pause` is one of the three sites that calls
+    // `__rt_curl_rethrow_pending` afterwards (`src/codegen_support/runtime/curl/callbacks.rs`),
+    // which only makes sense because a callback can genuinely throw during a pause.
+    let code = eval_curl_with_callback_frame(&[table_id], context, values, || {
+        ffi::easy_pause(raw, bitmask)
+    })?;
+    eval_curl_rethrow_pending_callback_throw()?;
+    values.int(i64::from(code))
 }
