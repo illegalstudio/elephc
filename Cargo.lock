@@ -675,6 +675,7 @@ dependencies = [
  "elephc-image",
  "elephc-magician",
  "elephc-monitoring-contract",
+ "elephc-pcntl",
  "elephc-pdo",
  "elephc-phar",
  "elephc-probe",
@@ -779,6 +780,13 @@ dependencies = [
 [[package]]
 name = "elephc-monitoring-contract"
 version = "0.1.0"
+
+[[package]]
+name = "elephc-pcntl"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "elephc-pdo"

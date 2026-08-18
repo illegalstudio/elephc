@@ -10,7 +10,7 @@
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated
 //!   temp dir, compile a plain executable, run it, and assert stdout — mirroring the
 //!   web_tests / cdylib_tests harness. Host-target only (macOS aarch64 local).
-//! - The forced-bridge path uses `--with-pdo` (PDO); the auto-detected path uses
+//! - The forced-bridge paths use `--with-pdo` (PDO) and `--with-pcntl` (pcntl); the auto-detected path uses
 //!   `hash()` (links elephc_crypto -> the `hash` extension); the negative case links no
 //!   bridge. Core extensions (json) always report loaded; a bridge with no linked
 //!   staticlib (curl) never does.
@@ -271,6 +271,24 @@ fn pdo_and_mysqli_usage_reports_both() {
         out, "bool(true)\nbool(true)\n",
         "both surfaces: PDO and mysqli both loaded"
     );
+}
+
+/// Verifies PCNTL stays absent when its bridge is neither forced nor selected by a builtin.
+#[test]
+fn unused_pcntl_reports_extension_not_loaded() {
+    let dir = make_test_dir("ext_no_pcntl");
+    let src = "<?php echo extension_loaded('pcntl') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "no");
+}
+
+/// Verifies `--with-pcntl` links the bridge and reports the canonical extension name.
+#[test]
+fn with_pcntl_reports_extension_loaded() {
+    let dir = make_test_dir("ext_pcntl_forced");
+    let src = "<?php echo extension_loaded('PCNTL') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &["--with-pcntl"]);
+    assert_eq!(run_binary(&bin), "yes");
 }
 
 /// Verifies extension-name matching is case-insensitive (PHP semantics): `--with-tls`
