@@ -38,6 +38,8 @@ pub(crate) mod math_constants;
 pub(crate) mod openssl_constants;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
+/// Target-aware `ext/pcntl` integer constants shared by checker and codegen.
+pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
 /// Preg/PCRE flag constants shared by checker and codegen.
