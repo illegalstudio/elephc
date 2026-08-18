@@ -130,6 +130,17 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         php_extension: Some("session"),
     },
     BridgeStaticlib {
+        lib_name: "elephc_pcntl",
+        env_var: "ELEPHC_PCNTL_LIB_DIR",
+        crate_name: "elephc-pcntl",
+        flag_name: "pcntl",
+        whole_archive: false,
+        macos_frameworks: &[],
+        needs_libdl: true,
+        // The process-control bridge implements PHP's `pcntl` extension.
+        php_extension: Some("pcntl"),
+    },
+    BridgeStaticlib {
         lib_name: "elephc_magician",
         env_var: "ELEPHC_MAGICIAN_LIB_DIR",
         crate_name: "elephc-magician",
@@ -678,6 +689,7 @@ mod tests {
         assert_eq!(php_extension_for_lib("elephc_phar"), Some("Phar"));
         assert_eq!(php_extension_for_lib("elephc_image"), Some("gd"));
         assert_eq!(php_extension_for_lib("elephc_web"), Some("session"));
+        assert_eq!(php_extension_for_lib("elephc_pcntl"), Some("pcntl"));
         assert_eq!(php_extension_for_lib("elephc_tz"), None);
         assert_eq!(php_extension_for_lib("elephc_magician"), None);
         assert_eq!(php_extension_for_lib("elephc_bogus"), None);

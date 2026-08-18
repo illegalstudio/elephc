@@ -667,6 +667,7 @@ dependencies = [
  "elephc-crypto",
  "elephc-image",
  "elephc-magician",
+ "elephc-pcntl",
  "elephc-pdo",
  "elephc-phar",
  "elephc-tls",
@@ -743,6 +744,13 @@ dependencies = [
  "libc",
  "serde_json",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "elephc-pcntl"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

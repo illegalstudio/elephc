@@ -1,0 +1,13 @@
+[package]
+name = "elephc-pcntl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Target-aware PHP PCNTL bridge and stable C ABI for elephc"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+libc = "0.2"
