@@ -177,7 +177,7 @@ pub(crate) fn is_php_visible_builtin_function_for_target(
 }
 
 /// Returns whether a registry builtin is implemented for `target`.
-fn builtin_is_available_for_target(
+pub(super) fn builtin_is_available_for_target(
     name: &str,
     target: crate::codegen_support::platform::Target,
 ) -> bool {

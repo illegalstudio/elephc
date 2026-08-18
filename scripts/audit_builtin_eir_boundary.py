@@ -452,6 +452,14 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
     )
     unary_variant_by_name = {name: variant for variant, name in unary_variants.items()}
     unary_backend_source = read(REPO / "src" / "codegen" / "lower_inst" / "runtime_calls.rs")
+    pcntl_source = read(REPO / "src" / "ir" / "pcntl_runtime.rs")
+    pcntl_variants = dict(
+        re.findall(r'Self::([A-Za-z0-9_]+)\s*=>\s*"([^"]+)"', function_body(pcntl_source, "as_eir"))
+    )
+    pcntl_variant_by_name = {name: variant for variant, name in pcntl_variants.items()}
+    pcntl_backend_source = read(
+        REPO / "src" / "codegen" / "lower_inst" / "builtins" / "pcntl.rs"
+    )
     builtin_semantics_source = "\n".join(
         read(path) for path in sorted((REPO / "src" / "builtins").rglob("*.rs"))
     )
@@ -478,6 +486,10 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
             variant = unary_variant_by_name[target]
             if f"UnaryStringRuntime::{variant}" not in unary_backend_source:
                 errors.append(f"{record['name']}: unary runtime target {target} has no backend arm")
+        elif target in pcntl_variant_by_name:
+            variant = pcntl_variant_by_name[target]
+            if f"PcntlRuntime::{variant}" not in pcntl_backend_source:
+                errors.append(f"{record['name']}: PCNTL runtime target {target} has no backend arm")
         else:
             errors.append(f"{record['name']}: unknown typed runtime target {target}")
     return errors

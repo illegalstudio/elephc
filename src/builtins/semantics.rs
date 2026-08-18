@@ -160,6 +160,16 @@ impl BuiltinTargetSupport {
             }
         }
     }
+
+    /// Returns whether this semantic contract is implemented on macOS.
+    pub const fn supports_macos(self) -> bool {
+        matches!(self, Self::All | Self::HostOnly | Self::MacOs)
+    }
+
+    /// Returns whether this semantic contract is implemented on Linux.
+    pub const fn supports_linux(self) -> bool {
+        matches!(self, Self::All | Self::HostOnly | Self::Linux)
+    }
 }
 
 /// Runtime functions that a backend-neutral lowering may emit.
