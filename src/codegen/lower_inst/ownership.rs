@@ -185,6 +185,12 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_),
             )) => true,
+            Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Pcntl(target),
+            )) => matches!(
+                target.result_ownership(),
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            ),
             _ => false,
         };
         return Ok(!result_is_fresh);

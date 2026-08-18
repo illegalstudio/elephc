@@ -15,6 +15,7 @@
 mod aot_profile;
 mod callback_parameters;
 mod catalog_data;
+mod catalog_pcntl;
 mod catalog_surfaces;
 mod eval_profile;
 mod id;

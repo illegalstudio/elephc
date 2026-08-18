@@ -32,9 +32,11 @@ pub fn contracts() -> &'static [BuiltinContract] {
         .get_or_init(|| {
             let mut contracts = Vec::with_capacity(
                 crate::catalog_data::CONTRACTS.len()
+                    + crate::catalog_pcntl::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len(),
             );
             contracts.extend_from_slice(crate::catalog_data::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
             for contract in &mut contracts {
                 contract.requirements = crate::requirements::fixed_requirements(contract.id);
@@ -134,7 +136,7 @@ mod tests {
     /// Verifies the shared catalog validates and exposes every compiler/eval surface.
     #[test]
     fn catalog_is_valid_and_complete_for_all_contract_surfaces() {
-        assert_eq!(contracts().len(), 544);
+        assert_eq!(contracts().len(), 558);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

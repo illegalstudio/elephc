@@ -112,6 +112,17 @@ pub(crate) fn supported_builtin_function_names_for_profile(
         .collect()
 }
 
+/// Returns PHP-visible builtin names implemented for one explicit target platform.
+pub(crate) fn supported_builtin_function_names_for_target(
+    strict_php: bool,
+    platform: crate::codegen_support::platform::Platform,
+) -> Vec<&'static str> {
+    supported_builtin_function_names_for_profile(strict_php)
+        .into_iter()
+        .filter(|name| builtin_is_available_for_target(name, platform))
+        .collect()
+}
+
 /// Converts a function name to lowercase and returns it if it is a supported builtin.
 ///
 /// Returns `None` if the name is neither registry-backed nor compiler-resident,
@@ -153,6 +164,26 @@ pub(crate) fn is_php_visible_builtin_function_for_profile(
         || crate::builtins::registry::lookup(&canonical)
             .map(|def| !def.spec.internal)
             .unwrap_or(false)
+}
+
+/// Returns PHP visibility after applying strict-PHP and target-availability contracts.
+pub(crate) fn is_php_visible_builtin_function_for_target(
+    name: &str,
+    strict_php: bool,
+    platform: crate::codegen_support::platform::Platform,
+) -> bool {
+    is_php_visible_builtin_function_for_profile(name, strict_php)
+        && builtin_is_available_for_target(name, platform)
+}
+
+/// Returns whether a registry builtin is implemented for `platform`.
+fn builtin_is_available_for_target(
+    name: &str,
+    platform: crate::codegen_support::platform::Platform,
+) -> bool {
+    crate::builtins::registry::lookup(name)
+        .map(|def| def.spec.semantics.target_support.supports(platform))
+        .unwrap_or(true)
 }
 
 /// Returns `true` if the name is a supported builtin function (case-insensitive).

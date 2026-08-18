@@ -254,6 +254,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::optimize::fold_constants(resolved);
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
+    set_fixture_linked_extensions(&check_result.required_libraries);
     let optimized = elephc::optimize::propagate_constants(resolved);
     let optimized = elephc::optimize::prune_constant_control_flow(optimized);
     let optimized = elephc::optimize::normalize_control_flow(optimized);
@@ -302,6 +303,30 @@ fn try_compile_source_to_asm_with_defines_repr(
     );
     // user assembly is already platform-correct (emitters handle platform at emit time)
     (user_asm, runtime_asm, link_requirements)
+}
+
+/// Mirrors the production bridge-to-extension projection before fixture code generation.
+fn set_fixture_linked_extensions(libraries: &[String]) {
+    let mut extensions = Vec::new();
+    for library in libraries {
+        let extension = match library.as_str() {
+            "elephc_tls" => Some("openssl"),
+            "elephc_pdo" => Some("PDO"),
+            "elephc_crypto" => Some("hash"),
+            "elephc_bcmath" => Some("bcmath"),
+            "elephc_phar" => Some("Phar"),
+            "elephc_image" => Some("gd"),
+            "elephc_web" => Some("session"),
+            "elephc_pcntl" => Some("pcntl"),
+            _ => None,
+        };
+        if let Some(extension) = extension {
+            if !extensions.iter().any(|existing| existing == extension) {
+                extensions.push(extension.to_string());
+            }
+        }
+    }
+    elephc::codegen::set_linked_extensions(extensions);
 }
 
 /// Lowers codegen fixtures to EIR, runs the default-on IR optimizer, and validates the result.

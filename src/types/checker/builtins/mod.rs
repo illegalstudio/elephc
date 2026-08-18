@@ -23,8 +23,9 @@ use super::Checker;
 
 pub(crate) use catalog::{
     all_supported_builtin_function_names, canonical_builtin_function_name,
-    is_php_visible_builtin_function_for_profile, is_supported_builtin_function,
-    strict_php_hidden_builtin, supported_builtin_function_names_for_profile,
+    is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
+    is_supported_builtin_function, strict_php_hidden_builtin,
+    supported_builtin_function_names_for_profile, supported_builtin_function_names_for_target,
 };
 #[cfg(test)]
 pub(crate) use catalog::is_php_visible_builtin_function;
@@ -115,6 +116,20 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
+            if !def
+                .spec
+                .semantics
+                .target_support
+                .supports(self.target_platform)
+            {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{}() is not available for the {:?} target",
+                        def.name, self.target_platform
+                    ),
+                ));
+            }
             // One authority for every builtin that declares a by-reference parameter. Several
             // builtins used to hand-roll this check, which is a catalogue: the ones nobody
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.

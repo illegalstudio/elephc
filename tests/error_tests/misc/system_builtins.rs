@@ -27,6 +27,39 @@ expect_builtin_arity_error!(
     "eval() takes exactly 1 argument"
 );
 
+expect_builtin_arity_error!(
+    test_error_pcntl_alarm_wrong_args,
+    "<?php pcntl_alarm();",
+    "pcntl_alarm() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_pcntl_fork_wrong_args,
+    "<?php pcntl_fork(1);",
+    "pcntl_fork() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_pcntl_getpriority_wrong_args,
+    "<?php pcntl_getpriority(1, 2, 3);",
+    "pcntl_getpriority() takes at most 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_pcntl_setpriority_wrong_args,
+    "<?php pcntl_setpriority();",
+    "pcntl_setpriority() takes 1 to 3 arguments"
+);
+
+/// Verifies PCNTL signatures reject non-integer operands before EIR lowering.
+#[test]
+fn test_error_pcntl_status_requires_int() {
+    expect_error(
+        "<?php pcntl_wifexited([]);",
+        "pcntl_wifexited() argument 1 must be int-compatible",
+    );
+}
+
 /// Verifies an eval barrier allows later reads of variables that eval may create dynamically.
 #[test]
 fn test_eval_barrier_allows_dynamic_variable_read() {

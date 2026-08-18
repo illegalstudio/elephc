@@ -134,8 +134,12 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     };
     let target_support = match semantics.target_support {
         crate::builtins::semantics::BuiltinTargetSupport::All => {
-            ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
+            vec!["macos-aarch64", "linux-aarch64", "linux-x86_64"]
         }
+        crate::builtins::semantics::BuiltinTargetSupport::Linux => {
+            vec!["linux-aarch64", "linux-x86_64"]
+        }
+        crate::builtins::semantics::BuiltinTargetSupport::MacOs => vec!["macos-aarch64"],
     };
     let runtime_functions = match semantics.runtime_functions {
         BuiltinRuntimeFunctions::None => Vec::new(),
