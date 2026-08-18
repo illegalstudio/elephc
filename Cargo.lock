@@ -669,6 +669,7 @@ dependencies = [
  "elephc-magician",
  "elephc-pdo",
  "elephc-phar",
+ "elephc-probe",
  "elephc-tls",
  "elephc-tz",
  "elephc-web",
@@ -687,6 +688,7 @@ dependencies = [
  "toml",
  "toml_edit 0.25.12+spec-1.1.0",
  "ureq",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -728,6 +730,13 @@ dependencies = [
  "image",
  "kamadak-exif",
  "tiny-skia",
+]
+
+[[package]]
+name = "elephc-instr"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -782,6 +791,13 @@ dependencies = [
  "rsa",
  "sha1",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "elephc-probe"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
