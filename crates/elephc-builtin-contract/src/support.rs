@@ -236,6 +236,9 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "pcntl_setcpuaffinity",
     "pcntl_setns",
     "pcntl_setpriority",
+    "pcntl_sigprocmask",
+    "pcntl_sigtimedwait",
+    "pcntl_sigwaitinfo",
     "pcntl_strerror",
     "pcntl_unshare",
     "pcntl_wait",
@@ -304,12 +307,12 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(eval_registry, 484 + curl_surface);
         assert_eq!(eval_internal, 82);
-        assert_eq!(eval_pending, 53);
+        assert_eq!(eval_pending, 56);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
-        // entry points. PCNTL contributes twenty-two more AOT registry contracts.
-        assert_eq!(aot_registry, 606);
+        // entry points. PCNTL contributes twenty-five more AOT registry contracts.
+        assert_eq!(aot_registry, 609);
         assert_eq!(aot_external, 10 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
@@ -359,7 +362,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463 + curl_surface);
-        assert_eq!(unsupported, 135);
+        assert_eq!(unsupported, 138);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

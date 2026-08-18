@@ -55,6 +55,9 @@ pub(crate) fn lower(
             0x4000_0000,
         ),
         PcntlRuntime::SetPriority => lower_setpriority(ctx, inst),
+        PcntlRuntime::SignalMask => super::pcntl_signals::lower_sigprocmask(ctx, inst),
+        PcntlRuntime::SignalTimedWait => super::pcntl_signals::lower_signal_wait(ctx, inst, true),
+        PcntlRuntime::SignalWaitInfo => super::pcntl_signals::lower_signal_wait(ctx, inst, false),
         PcntlRuntime::StrError => lower_strerror(ctx, inst),
         PcntlRuntime::Unshare => lower_unary_int_bridge(
             ctx,
@@ -477,7 +480,7 @@ fn pcntl_rusage_output_local_slot(
 }
 
 /// Resolves a PCNTL signal-information output to writable associative or boxed storage.
-fn pcntl_siginfo_output_local_slot(
+pub(super) fn pcntl_siginfo_output_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     name: &str,
@@ -485,7 +488,8 @@ fn pcntl_siginfo_output_local_slot(
     let slot = pcntl_output_local_slot(ctx, value, name, "info")?;
     match ctx.local_php_type(slot)?.codegen_repr() {
         PhpType::AssocArray { key, value }
-            if key.codegen_repr() == PhpType::Str && value.codegen_repr() == PhpType::Int =>
+            if key.codegen_repr() == PhpType::Str
+                && matches!(value.codegen_repr(), PhpType::Int | PhpType::Mixed) =>
         {
             Ok(slot)
         }
@@ -497,7 +501,7 @@ fn pcntl_siginfo_output_local_slot(
 }
 
 /// Resolves one write-only PCNTL operand to its source local slot.
-fn pcntl_output_local_slot(
+pub(super) fn pcntl_output_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     name: &str,
@@ -544,13 +548,16 @@ fn store_pcntl_rusage_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) ->
 }
 
 /// Stores a fresh signal-information hash into its typed or boxed PHP output local.
-fn store_pcntl_siginfo_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+pub(super) fn store_pcntl_siginfo_array(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
     if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
         emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::AssocArray {
                 key: Box::new(PhpType::Str),
-                value: Box::new(PhpType::Int),
+                value: Box::new(PhpType::Mixed),
             },
         );
     }
