@@ -20,8 +20,9 @@ use crate::types::iconv_constants::ICONV_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
-use crate::types::session_constants::SESSION_INT_CONSTANTS;
+use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::PhpType;
@@ -131,6 +132,9 @@ impl Checker {
         // curl and therefore never link the `elephc_curl` bridge. See
         // `crate::types::curl_constants` for why.
         for (name, _value) in CURL_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in pcntl_int_constants(target_platform) {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`

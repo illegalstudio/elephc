@@ -349,7 +349,7 @@ pub(super) fn resolve_constant_name(
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
 /// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
-        if matches!(
+    if matches!(
             name,
             "PHP_OS"
                 // The PHP version surface, baked per compilation from `--php-version` / `--web`
@@ -410,10 +410,12 @@ fn is_builtin_global_constant(name: &str) -> bool {
             return true;
         }
     // Shared source-of-truth slices for JSON, stream/socket, session, array, math, iconv,
-    // and curl
-    // constants. CURL_INT_CONSTANTS is always in this chain (like JSON_INT_CONSTANTS) so a
+    // and curl constants. CURL_INT_CONSTANTS is always in this chain (like JSON_INT_CONSTANTS) so a
     // bare `CURLOPT_URL` mention resolves to the global constant even inside a namespace,
     // with or without the curl prelude/bridge being linked.
+    if crate::types::pcntl_constants::is_pcntl_int_constant(name) {
+        return true;
+    }
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::openssl_constants::OPENSSL_INT_CONSTANTS.iter())

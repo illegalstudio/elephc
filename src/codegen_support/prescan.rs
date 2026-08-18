@@ -20,6 +20,7 @@ use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
+use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
@@ -273,9 +274,15 @@ pub(crate) fn collect_constants(
         );
     }
     // `ext/curl` constants materialize from the frozen `CURL_INT_CONSTANTS` table
-    // unconditionally — like JSON_*, their value is a compile-time literal that needs no
+    // unconditionally. Like JSON_*, their value is a compile-time literal that needs no
     // libcurl link, even in a program that never mentions curl.
     for (name, value) in CURL_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in pcntl_int_constants(target_platform) {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),
@@ -461,5 +468,21 @@ mod tests {
         assert_eq!(int_constant(&linux, "FNM_PATHNAME"), 1);
         assert_eq!(int_constant(&linux, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&linux, "FNM_CASEFOLD"), 16);
+    }
+
+    /// Verifies PCNTL constants are seeded with target-specific values and availability.
+    #[test]
+    fn test_pcntl_constants_follow_target_platform() {
+        let mac = collect_constants(&vec![], Platform::MacOS);
+        assert_eq!(int_constant(&mac, "SIGCHLD"), 20);
+        assert_eq!(int_constant(&mac, "PCNTL_EAGAIN"), 35);
+        assert!(mac.contains_key("PRIO_DARWIN_BG"));
+        assert!(!mac.contains_key("CLONE_NEWNS"));
+
+        let linux = collect_constants(&vec![], Platform::Linux);
+        assert_eq!(int_constant(&linux, "SIGCHLD"), 17);
+        assert_eq!(int_constant(&linux, "PCNTL_EAGAIN"), 11);
+        assert!(linux.contains_key("CLONE_NEWNS"));
+        assert!(!linux.contains_key("PRIO_DARWIN_BG"));
     }
 }

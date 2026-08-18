@@ -60,6 +60,7 @@ mod pdo_cubrid;
 mod pdo_mysql;
 mod pdo_pgsql;
 mod image;
+mod pcntl;
 mod arrays;
 mod calendar;
 mod call_counters;
