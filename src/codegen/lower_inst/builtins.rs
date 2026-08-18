@@ -59,6 +59,7 @@ pub(crate) mod openssl;
 pub(crate) mod output_buffering;
 pub(crate) mod pcntl;
 pub(crate) mod pcntl_signals;
+pub(crate) mod pcntl_handlers;
 pub(crate) mod pointers;
 pub(crate) mod regex;
 pub(crate) mod round_mode;

@@ -70,6 +70,8 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) web: bool,
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
+    pcntl_async_signals: bool,
+    pcntl_signal_handlers: bool,
     pub(super) epilogue_label: Option<String>,
     block_labels: Vec<String>,
 }
@@ -89,6 +91,8 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
+        let pcntl_async_signals = module_uses_pcntl_async_signals(module);
+        let pcntl_signal_handlers = module_uses_pcntl_signal_handlers(module);
         let function_fragment = label_fragment(&function.name);
         // Indexed by raw block id, matching `Function::block()`'s positional lookup.
         // The platform-local prefix keeps every intra-function label out of the object's
@@ -133,6 +137,8 @@ impl<'a> FunctionContext<'a> {
             web: false,
             gc_stats,
             heap_debug,
+            pcntl_async_signals,
+            pcntl_signal_handlers,
             epilogue_label,
             block_labels,
         }
@@ -165,6 +171,16 @@ impl<'a> FunctionContext<'a> {
             label_fragment(prefix),
             self.shared.next_label_id()
         )
+    }
+
+    /// Returns whether this module needs automatic PCNTL dispatch safe points.
+    pub(super) const fn uses_pcntl_async_signals(&self) -> bool {
+        self.pcntl_async_signals
+    }
+
+    /// Returns whether this module owns process-wide PCNTL handler registrations.
+    pub(super) const fn uses_pcntl_signal_handlers(&self) -> bool {
+        self.pcntl_signal_handlers
     }
 
     /// Emits an unconditional target-aware branch to one local assembly label.
@@ -1240,6 +1256,37 @@ impl<'a> FunctionContext<'a> {
             .copied()
             .ok_or_else(|| CodegenIrError::invalid_module(format!("missing try handler token {}", token)))
     }
+}
+
+/// Scans every emitted function-like body for `pcntl_async_signals()` state changes.
+fn module_uses_pcntl_async_signals(module: &Module) -> bool {
+    module_uses_pcntl_operation(module, crate::ir::PcntlRuntime::AsyncSignals)
+}
+
+/// Scans every emitted function-like body for `pcntl_signal()` registrations.
+pub(super) fn module_uses_pcntl_signal_handlers(module: &Module) -> bool {
+    module_uses_pcntl_operation(module, crate::ir::PcntlRuntime::Signal)
+}
+
+/// Scans every emitted function-like body for one typed PCNTL operation.
+fn module_uses_pcntl_operation(module: &Module, target: crate::ir::PcntlRuntime) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function.instructions.iter().any(|inst| {
+                matches!(
+                    inst.immediate,
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(found))) if found == target
+                )
+            })
+        })
 }
 
 /// Rejects local ref-cell operations whose frame representation spans multiple words.

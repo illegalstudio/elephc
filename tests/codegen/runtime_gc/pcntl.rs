@@ -1,11 +1,11 @@
 //! Purpose:
-//! Ownership regressions for PCNTL by-reference arrays returned by child-wait operations.
+//! Ownership regressions for PCNTL output arrays and registered callable descriptors.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests runtime_gc::pcntl` through Rust's test harness.
 //!
 //! Key details:
-//! - Reusing `$usage` must release the prior hash, while final frame cleanup owns the last one.
+//! - Output rebinding and process-wide handler teardown must release every retained heap owner.
 
 use crate::support::compile_and_run_with_heap_debug;
 
@@ -26,6 +26,26 @@ fn test_pcntl_waitpid_resource_usage_rebind_is_heap_clean() {
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "17|5|17", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr,
+    );
+}
+
+/// Releases a capturing closure retained by the process-wide signal-handler table at exit.
+#[test]
+fn test_pcntl_signal_closure_registration_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php
+        $prefix = 'signal';
+        $handler = function (int $signal, array $info) use ($prefix): void {
+            echo $prefix . ':' . $signal;
+        };
+        echo pcntl_signal(SIGUSR1, $handler) ? 'registered' : 'bad';",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "registered", "stderr: {}", out.stderr);
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap, got: {}",

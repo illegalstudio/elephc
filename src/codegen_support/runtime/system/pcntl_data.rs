@@ -7,7 +7,7 @@
 //! Key details:
 //! - Symbol spellings are a private assembly ABI shared with the PCNTL runtime emitters.
 
-/// Returns assembly data for PHP's 17 `pcntl_wait*()` resource-usage keys.
+/// Returns assembly data for PCNTL array keys and process-wide signal-dispatch state.
 pub(crate) fn emit_pcntl_data() -> String {
     let fields = [
         ("_pcntl_rusage_oublock", "ru_oublock"),
@@ -48,5 +48,12 @@ pub(crate) fn emit_pcntl_data() -> String {
     for (symbol, key) in siginfo_fields {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {key:?}\n"));
     }
+    out.push_str("    .balign 8\n");
+    out.push_str(".globl __rt_pcntl_handler_kind\n__rt_pcntl_handler_kind:\n    .zero 1024\n");
+    out.push_str(".globl __rt_pcntl_handler_descriptor\n__rt_pcntl_handler_descriptor:\n    .zero 1024\n");
+    out.push_str(".globl __rt_pcntl_async_enabled\n__rt_pcntl_async_enabled:\n    .quad 0\n");
+    out.push_str(".globl __rt_pcntl_dispatching\n__rt_pcntl_dispatching:\n    .quad 0\n");
+    out.push_str(".globl __rt_pcntl_signal_fn\n__rt_pcntl_signal_fn:\n    .quad 0\n");
+    out.push_str(".globl __rt_pcntl_signal_next_fn\n__rt_pcntl_signal_next_fn:\n    .quad 0\n");
     out
 }

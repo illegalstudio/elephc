@@ -12,10 +12,12 @@
 
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::OnceLock;
 #[cfg(test)]
 use std::sync::Mutex;
 
 static LAST_ERROR: AtomicI32 = AtomicI32::new(0);
+static SIGNAL_PIPE: OnceLock<(libc::c_int, libc::c_int, libc::c_int)> = OnceLock::new();
 #[cfg(test)]
 static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -98,7 +100,6 @@ const SIGINFO_UID: u64 = 1 << 5;
 const SIGINFO_UTIME: u64 = 1 << 6;
 #[cfg(target_os = "linux")]
 const SIGINFO_STIME: u64 = 1 << 7;
-#[cfg(target_os = "linux")]
 const SIGINFO_ADDRESS: u64 = 1 << 8;
 #[cfg(target_os = "linux")]
 const SIGINFO_BAND: u64 = 1 << 9;
@@ -184,8 +185,7 @@ unsafe fn copy_child_siginfo(info: &libc::siginfo_t) -> ElephcPcntlSigInfo {
     }
 }
 
-/// Copies Linux signal-specific information into the stable PCNTL record.
-#[cfg(target_os = "linux")]
+/// Copies target-native signal information into the stable PCNTL record.
 unsafe fn copy_signal_siginfo(
     signal: libc::c_int,
     info: &libc::siginfo_t,
@@ -199,18 +199,18 @@ unsafe fn copy_signal_siginfo(
     };
     if signal == libc::SIGCHLD {
         stable.status = i64::from(info.si_status());
-        stable.utime = info.si_utime() as i64;
-        stable.stime = info.si_stime() as i64;
         stable.pid = i64::from(info.si_pid());
         stable.uid = i64::from(info.si_uid());
-        stable.present |= SIGINFO_STATUS
-            | SIGINFO_UTIME
-            | SIGINFO_STIME
-            | SIGINFO_PID
-            | SIGINFO_UID;
+        stable.present |= SIGINFO_STATUS | SIGINFO_PID | SIGINFO_UID;
+        #[cfg(target_os = "linux")]
+        {
+            stable.utime = info.si_utime() as i64;
+            stable.stime = info.si_stime() as i64;
+            stable.present |= SIGINFO_UTIME | SIGINFO_STIME;
+        }
     } else if signal == libc::SIGUSR1
         || signal == libc::SIGUSR2
-        || (signal >= libc::SIGRTMIN() && signal <= libc::SIGRTMAX())
+        || is_realtime_signal(signal)
     {
         stable.pid = i64::from(info.si_pid());
         stable.uid = i64::from(info.si_uid());
@@ -218,7 +218,9 @@ unsafe fn copy_signal_siginfo(
     } else if matches!(signal, libc::SIGILL | libc::SIGFPE | libc::SIGSEGV | libc::SIGBUS) {
         stable.address = info.si_addr() as usize as i64;
         stable.present |= SIGINFO_ADDRESS;
-    } else if signal == libc::SIGPOLL {
+    }
+    #[cfg(target_os = "linux")]
+    if signal == libc::SIGPOLL {
         #[repr(C)]
         struct PollSigInfo {
             signo: libc::c_int,
@@ -236,10 +238,89 @@ unsafe fn copy_signal_siginfo(
     stable
 }
 
+/// Reports whether a signal is in Linux's target-native realtime range.
+#[cfg(target_os = "linux")]
+fn is_realtime_signal(signal: libc::c_int) -> bool {
+    signal >= libc::SIGRTMIN() && signal <= libc::SIGRTMAX()
+}
+
+/// Reports that Darwin has no realtime signal range exposed by PCNTL.
+#[cfg(target_os = "macos")]
+const fn is_realtime_signal(_signal: libc::c_int) -> bool {
+    false
+}
+
+/// Creates the process-wide nonblocking self-pipe used by queued signal handlers.
+fn ensure_signal_pipe() -> Option<(libc::c_int, libc::c_int)> {
+    let pair = *SIGNAL_PIPE.get_or_init(|| {
+        let mut descriptors = [-1; 2];
+        if unsafe { libc::pipe(descriptors.as_mut_ptr()) } != 0 {
+            return (-1, -1, current_errno());
+        }
+        for descriptor in descriptors {
+            let status_flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+            let descriptor_flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+            if status_flags == -1
+                || descriptor_flags == -1
+                || unsafe {
+                    libc::fcntl(descriptor, libc::F_SETFL, status_flags | libc::O_NONBLOCK)
+                } == -1
+                || unsafe {
+                    libc::fcntl(descriptor, libc::F_SETFD, descriptor_flags | libc::FD_CLOEXEC)
+                } == -1
+            {
+                let error = current_errno();
+                unsafe {
+                    libc::close(descriptors[0]);
+                    libc::close(descriptors[1]);
+                }
+                return (-1, -1, error);
+            }
+        }
+        (descriptors[0], descriptors[1], 0)
+    });
+    if pair.0 == -1 {
+        LAST_ERROR.store(pair.2, Ordering::Relaxed);
+        None
+    } else {
+        Some((pair.0, pair.1))
+    }
+}
+
+/// Queues one fixed-size signal record through the async-signal-safe self-pipe.
+unsafe extern "C" fn queued_signal_handler(
+    signal: libc::c_int,
+    info: *mut libc::siginfo_t,
+    _context: *mut libc::c_void,
+) {
+    let saved_errno = *errno_location();
+    if let Some((_, write_descriptor, _)) = SIGNAL_PIPE.get().copied() {
+        let stable = if info.is_null() {
+            ElephcPcntlSigInfo {
+                signo: i64::from(signal),
+                present: SIGINFO_SIGNO,
+                ..ElephcPcntlSigInfo::default()
+            }
+        } else {
+            copy_signal_siginfo(signal, &*info)
+        };
+        let _ = libc::write(
+            write_descriptor,
+            std::ptr::from_ref(&stable).cast(),
+            std::mem::size_of::<ElephcPcntlSigInfo>(),
+        );
+    }
+    *errno_location() = saved_errno;
+}
+
+/// Reads the current thread's OS errno without mutating PCNTL state.
+fn current_errno() -> libc::c_int {
+    unsafe { *errno_location() }
+}
+
 /// Records the current thread's OS errno as the last PCNTL error.
 fn record_errno() {
-    let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-    LAST_ERROR.store(error, Ordering::Relaxed);
+    LAST_ERROR.store(current_errno(), Ordering::Relaxed);
 }
 
 /// Returns a writable pointer to the target C library's thread-local errno.
@@ -318,6 +399,93 @@ pub extern "C" fn elephc_pcntl_fork() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_pcntl_alarm(seconds: i64) -> i64 {
     i64::from(unsafe { libc::alarm(seconds as libc::c_uint) })
+}
+
+/// Returns one past the highest signal number accepted by the current target.
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_signal_limit() -> libc::c_int {
+    signal_limit()
+}
+
+/// Installs a default, ignored, or queued PCNTL signal disposition.
+///
+/// `disposition` uses the bridge-private values zero for `SIG_DFL`, one for `SIG_IGN`, and two
+/// for the self-pipe queue consumed by `elephc_pcntl_signal_next()`. Returns one on success or
+/// zero after recording errno or `EINVAL`.
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_signal(
+    signal: libc::c_int,
+    disposition: libc::c_int,
+    restart_syscalls: libc::c_int,
+) -> libc::c_int {
+    if signal < 1 || signal >= signal_limit() || !(0..=2).contains(&disposition) {
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return 0;
+    }
+    if disposition == 2 && ensure_signal_pipe().is_none() {
+        return 0;
+    }
+    let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+    action.sa_sigaction = match disposition {
+        0 => libc::SIG_DFL,
+        1 => libc::SIG_IGN,
+        _ => queued_signal_handler as *const () as libc::sighandler_t,
+    };
+    if unsafe { libc::sigemptyset(&mut action.sa_mask) } != 0 {
+        record_errno();
+        return 0;
+    }
+    action.sa_flags = if disposition == 2 { libc::SA_SIGINFO } else { 0 };
+    if restart_syscalls != 0 {
+        action.sa_flags |= libc::SA_RESTART;
+    }
+    if unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) } != 0 {
+        record_errno();
+        return 0;
+    }
+    1
+}
+
+/// Pops one queued signal record without blocking.
+///
+/// Returns one when a complete record was written, zero when the queue is empty, or `-1` after
+/// recording an unexpected read error.
+///
+/// # Safety
+/// `info` must point to writable storage for one `ElephcPcntlSigInfo` value.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_signal_next(
+    info: *mut ElephcPcntlSigInfo,
+) -> libc::c_int {
+    if info.is_null() {
+        LAST_ERROR.store(libc::EFAULT, Ordering::Relaxed);
+        return -1;
+    }
+    let Some((read_descriptor, _)) = ensure_signal_pipe() else {
+        return -1;
+    };
+    loop {
+        let read = libc::read(
+            read_descriptor,
+            info.cast(),
+            std::mem::size_of::<ElephcPcntlSigInfo>(),
+        );
+        if read == std::mem::size_of::<ElephcPcntlSigInfo>() as isize {
+            return 1;
+        }
+        if read == -1 && current_errno() == libc::EINTR {
+            continue;
+        }
+        if read == -1 && current_errno() == libc::EAGAIN {
+            return 0;
+        }
+        if read >= 0 {
+            LAST_ERROR.store(libc::EIO, Ordering::Relaxed);
+        } else {
+            record_errno();
+        }
+        return -1;
+    }
 }
 
 /// Waits for a matching child and writes its opaque target-native status word.
@@ -959,6 +1127,34 @@ mod tests {
         unsafe {
             assert_eq!(libc::sigprocmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()), 0);
         }
+    }
+
+    /// Queues one asynchronously delivered signal and copies its stable siginfo outside the handler.
+    #[test]
+    fn signal_handler_queues_a_stable_record() {
+        let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+        let mut original = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+        let mut selected = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+        unsafe {
+            libc::sigemptyset(&mut selected);
+            libc::sigaddset(&mut selected, libc::SIGUSR1);
+            assert_eq!(libc::sigprocmask(libc::SIG_UNBLOCK, &selected, &mut original), 0);
+        }
+        let mut discarded = ElephcPcntlSigInfo::default();
+        while unsafe { elephc_pcntl_signal_next(&mut discarded) } == 1 {}
+        assert_eq!(elephc_pcntl_signal(libc::SIGUSR1, 2, 1), 1);
+        let raise_result = unsafe { libc::raise(libc::SIGUSR1) };
+        let mut info = ElephcPcntlSigInfo::default();
+        let queued = unsafe { elephc_pcntl_signal_next(&mut info) };
+        let restore_handler = elephc_pcntl_signal(libc::SIGUSR1, 0, 1);
+        unsafe {
+            assert_eq!(libc::sigprocmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()), 0);
+        }
+        assert_eq!(raise_result, 0);
+        assert_eq!(queued, 1);
+        assert_eq!(restore_handler, 1);
+        assert_eq!(info.signo, i64::from(libc::SIGUSR1));
+        assert_ne!(info.present & SIGINFO_SIGNO, 0);
     }
 
     /// Receives a queued Linux signal synchronously and exposes sender identity fields.

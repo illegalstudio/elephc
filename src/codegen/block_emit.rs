@@ -1194,6 +1194,9 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         lower_inst::lower_instruction(ctx, *inst_id)?;
+        if ctx.uses_pcntl_async_signals() {
+            abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
+        }
     }
     let terminator = block.terminator.as_ref().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
