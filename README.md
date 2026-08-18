@@ -116,6 +116,21 @@ still audits every physical `.php` file while included or autoloaded `.lfc`
 files keep their extension-enabled profile. See
 [LFC source files](docs/beyond-php/lfc-source-files.md).
 
+Compiled programs profile at the PHP level, with **one command that does not
+change with the environment**. Build with `--with-monitoring` and `elephc
+monitor` reads the binary you ran, or the service already serving traffic at
+`https://host:9411` — same command, same numbers. What it reports is *measured*,
+not sampled: exact time, allocations, retained objects, I/O wait, SQL queries and
+call counts, so an N+1 is a certainty rather than a suspicion, and a profile taken
+in production says the same kind of thing as one taken on a laptop. The capability
+is dormant until asked, and asking takes the build key — a control channel for a
+program you launch, a mutual handshake for one you connect to, a signed
+`X-Elephc-Query` header for a single production request. A project's performance
+budget lives in a `.elephc` file and fails the build when it is exceeded, and
+every profile carries a W3C Trace Context identity, so it joins whatever
+distributed trace its caller already belongs to. See
+[Profiling](docs/beyond-php/profiling.md).
+
 The compiler is experimental and evolving. Not everything PHP supports is implemented, and you will find bugs. But as the DOOM showcase demonstrates, you can build real, non-trivial programs with it today.
 
 If you want to contribute, you're welcome. Mi casa es tu casa.
@@ -234,6 +249,21 @@ elephc --heap-debug heavy.php
 
 # Print allocation/free counters to stderr while debugging GC behavior
 elephc --gc-stats heavy.php
+
+# Profile a program at the PHP level: bar table on stdout (runtime helper time
+# translated to causes like heap allocation or Mixed cell boxing), Speedscope
+# profile on disk, inlined calls recovered as virtual frames (macOS)
+elephc monitor hot.php
+
+# Top-style live view of a running program and its worker children
+elephc monitor --attach <pid> --live
+
+# Embed the profiling capability (dormant until asked); the .key sidecar it
+# writes lets `elephc monitor <host:port>` profile the service in production
+elephc --with-monitoring app.php
+
+# Embed exact per-function call counters (printed to stderr at exit)
+elephc --counters app.php
 
 # Enable compile-time feature branches
 elephc --define DEBUG app.php

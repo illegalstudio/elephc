@@ -551,7 +551,7 @@ _float_1: .quad 0x4000000000000000    ; 2.0
 - Floats are stored as 64-bit IEEE 754 bit patterns
 - Identical literals are deduplicated (two `"hello"` in source = one `_str_0` in binary)
 
-These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer).
+These are **read-only** — the program never modifies them. When a string operation needs to work with a literal, it reads from the data section and writes the result to the [string buffer](#the-string-buffer-scratch-pad).
 
 The runtime data layer is split into fixed shared data, user-program data, and dynamic `instanceof` lookup formatting under `src/codegen_support/runtime/data/`. Together they emit these static data tables:
 - `_fmt_g` — printf format string for float-to-string conversion (`%.14G`)

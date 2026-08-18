@@ -75,6 +75,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
+- [Profiling](beyond-php/profiling.md) — PHP-level profiling with one command in every environment: build with `--with-monitoring`, then `elephc monitor` reads a binary or a running service and reports exact measurements (time, allocations, retained objects, I/O wait, SQL queries, call counts, runtime-cause breakdown, per-`--web`-route tags), plus `.elephc` performance budgets, W3C distributed traces, and a self-contained interactive call-graph page
 
 ## Compiler Internals
 
