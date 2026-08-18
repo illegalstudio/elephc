@@ -514,7 +514,7 @@ pub(super) fn lower_enum_backing_string_to_int(
 /// int-result register and control falls through. On a non-numeric string, control branches
 /// to `invalid_label` with the 16-byte temporary still on the stack — the caller is
 /// responsible for releasing it and emitting the `TypeError` there.
-fn emit_string_result_to_int_checked(ctx: &mut FunctionContext<'_>, invalid_label: &str) {
+pub(super) fn emit_string_result_to_int_checked(ctx: &mut FunctionContext<'_>, invalid_label: &str) {
     let (string_ptr_reg, string_len_reg) = abi::string_result_regs(ctx.emitter);
     let int_reg = abi::int_result_reg(ctx.emitter);
     // Preserve the input string across the numeric-validity probe, which clobbers the
@@ -630,7 +630,12 @@ pub(super) fn lower_enum_backing_mixed_to_int(
 }
 
 /// Emits a `tag == value` comparison and a branch to `target` on equality.
-fn emit_mixed_tag_branch(ctx: &mut FunctionContext<'_>, tag_reg: &str, value: i64, target: &str) {
+pub(super) fn emit_mixed_tag_branch(
+    ctx: &mut FunctionContext<'_>,
+    tag_reg: &str,
+    value: i64,
+    target: &str,
+) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, value));   // compare the unboxed Mixed tag with this type
@@ -644,7 +649,7 @@ fn emit_mixed_tag_branch(ctx: &mut FunctionContext<'_>, tag_reg: &str, value: i6
 }
 
 /// Moves `src` into `dst` (int-result register), no-op when they alias.
-fn emit_move_reg(ctx: &mut FunctionContext<'_>, dst: &str, src: &str) {
+pub(super) fn emit_move_reg(ctx: &mut FunctionContext<'_>, dst: &str, src: &str) {
     if dst != src {
         ctx.emitter.instruction(&format!("mov {}, {}", dst, src));              // forward the unboxed integer payload to the result register
     }
@@ -667,7 +672,7 @@ fn emit_float_payload_to_int(ctx: &mut FunctionContext<'_>, bits_reg: &str) {
 
 /// Builds `<prefix><suffix>` (e.g. prefix `"E::from(): … must be of type int, "` + suffix
 /// `"array given"`) and throws it as a catchable `TypeError` through the standard unwinder.
-fn emit_throw_int_arg_type_error(
+pub(super) fn emit_throw_int_arg_type_error(
     ctx: &mut FunctionContext<'_>,
     prefix_label: &str,
     prefix_len: usize,

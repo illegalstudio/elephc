@@ -119,6 +119,28 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         php_extension: Some("gd"),
     },
     BridgeStaticlib {
+        lib_name: "elephc_probe",
+        env_var: "ELEPHC_PROBE_LIB_DIR",
+        crate_name: "elephc-probe",
+        flag_name: "probe",
+        whole_archive: false,
+        macos_frameworks: &[],
+        needs_libdl: true,
+        // The sampling probe is an elephc-native diagnostic, not a PHP extension.
+        php_extension: None,
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_instr",
+        env_var: "ELEPHC_INSTR_LIB_DIR",
+        crate_name: "elephc-instr",
+        flag_name: "instrument",
+        whole_archive: false,
+        macos_frameworks: &[],
+        needs_libdl: true,
+        // Exact per-function instrumentation is an elephc-native diagnostic.
+        php_extension: None,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_web",
         env_var: "ELEPHC_WEB_LIB_DIR",
         crate_name: "elephc-web",
@@ -602,6 +624,72 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&output);
+    }
+
+    /// Every bridge crate must appear in the lists CI and the Docker scripts build.
+    ///
+    /// The archives are produced by an explicit `cargo build -p …` list that lives in
+    /// six places outside Rust, and `cargo test` alone never emits a staticlib. So a
+    /// bridge added to the table above but not to those lists compiles fine, passes
+    /// review, and then fails only in CI with `required Elephc bridge X could not be
+    /// found` — which is exactly how `elephc-instr` and `elephc-probe` shipped
+    /// unbuildable. Deriving the expectation from the table is the point: the next
+    /// bridge is covered without anyone remembering this test exists.
+    #[test]
+    fn every_bridge_crate_is_in_the_build_lists() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let lists = [
+            ".github/workflows/ci.yml",
+            "scripts/test-linux-arm64.sh",
+            "scripts/test-linux-x86_64.sh",
+        ];
+        for rel in lists {
+            let path = root.join(rel);
+            let Ok(body) = std::fs::read_to_string(&path) else {
+                panic!("cannot read {rel}; the build lists moved");
+            };
+            for bridge in BRIDGES {
+                assert!(
+                    body.contains(&format!("-p {}", bridge.crate_name)),
+                    "{rel} never builds `{}`, so linking with --{} fails there",
+                    bridge.crate_name,
+                    bridge.flag_name
+                );
+            }
+        }
+    }
+
+    /// Every bridge's staticlib must also be listed in the nextest archive.
+    ///
+    /// Building a bridge and shipping it to the machine that runs the tests are
+    /// two different lists, and having the first without the second is the worse
+    /// half: the archive job goes green, and the failure lands in a sharded test
+    /// job as `required Elephc bridge X could not be found` — nowhere near the
+    /// file that forgot it. That is exactly how `elephc_instr` reached CI:
+    /// present in `BRIDGE_CRATES`, absent from the archive, so every shard that
+    /// compiled a monitored program failed on a platform-shaped error message
+    /// for a config-shaped mistake.
+    ///
+    /// Derived from `BRIDGES` rather than pinned, so a twelfth bridge cannot be
+    /// half-registered.
+    #[test]
+    fn every_bridge_staticlib_is_in_the_nextest_archive() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".config/nextest.toml";
+        let Ok(body) = std::fs::read_to_string(root.join(rel)) else {
+            panic!("cannot read {rel}; the archive list moved");
+        };
+        for bridge in BRIDGES {
+            let entry = format!("debug/{}", bridge.archive_filename());
+            assert!(
+                body.contains(&entry),
+                "{rel} never archives `{}`, so a sharded run compiling with --{} \
+                 fails with `required Elephc bridge {} could not be found`",
+                bridge.archive_filename(),
+                bridge.flag_name,
+                bridge.lib_name
+            );
+        }
     }
 
     /// Verifies every bridge flag maps back to the table's linker library name.

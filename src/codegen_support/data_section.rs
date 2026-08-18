@@ -159,6 +159,16 @@ impl DataSection {
         (label, bytes.len())
     }
 
+    /// Emits `bytes` under the caller-chosen global symbol `name` in the `.data`
+    /// section (`.globl name` + `.ascii`), for a fixed-name blob other objects
+    /// reference by symbol — e.g. the `--probe` build key. Idempotent by name.
+    pub fn add_named_symbol(&mut self, name: String, bytes: &[u8]) {
+        if self.entries.iter().any(|(label, _)| label == &name) {
+            return;
+        }
+        self.entries.push((name, bytes.to_vec()));
+    }
+
     /// Looks up `label` in the common-symbol deduplication map; if found, returns the existing label.
     /// Otherwise inserts `label` into `comm_entries` with the given `size` and returns `label` unchanged.
     pub fn add_comm(&mut self, label: String, size: usize) -> String {

@@ -41,6 +41,7 @@ mod comparisons;
 mod conversions;
 mod enums;
 mod exceptions;
+mod mixed_narrowing;
 mod externs;
 mod floats;
 mod hashes;
@@ -340,6 +341,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EvalStaticMethodCall => lower_eval_static_method_call(ctx, &inst),
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
+        Op::PackedFieldMixedToInt => objects::lower_packed_field_mixed_to_int(ctx, &inst),
+        Op::ReturnBoundaryMixedToInt => {
+            mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
+        }
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),

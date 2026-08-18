@@ -165,3 +165,87 @@ pub(super) fn is_pointer_sized_property_type(php_type: &PhpType) -> bool {
             | PhpType::Resource(_)
     )
 }
+
+/// Lowers `Op::PackedFieldMixedToInt`: narrows a boxed `Mixed` value to the raw `I64`
+/// payload a packed `int` field stores. Strict by design — only the int tag passes; every
+/// other runtime tag throws a catchable `TypeError` naming the runtime type, because a
+/// packed field is a fixed-layout systems extension and the PHP coercions the enum variant
+/// performs (float truncation, numeric strings, null-to-0) would silently swallow the very
+/// overflow promotion the boxed value exists to carry.
+pub(in crate::codegen::lower_inst) fn lower_packed_field_mixed_to_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    use super::super::enums::{emit_mixed_tag_branch, emit_move_reg, emit_throw_int_arg_type_error};
+    use crate::codegen::platform::Arch;
+
+    let input = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::unsupported("packed_field_mixed_to_int without operand".to_string())
+    })?;
+    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "packed_field_mixed_to_int without a TypeError message prefix".to_string(),
+        ));
+    };
+    let (prefix_label, prefix_len) = ctx.intern_string_data(data_id)?;
+    let loaded_ty = ctx.load_value_to_result(input)?.codegen_repr();
+    // Constant folding runs AFTER lowering and can retype the operand under the op: a
+    // checker-Mixed value becomes a raw scalar. Unboxing it as a pointer is a segfault,
+    // so raw ints pass straight through and a raw float throws like its boxed twin.
+    if matches!(loaded_ty, crate::types::PhpType::Int) {
+        return store_if_result(ctx, inst);
+    }
+    if matches!(loaded_ty, crate::types::PhpType::Float) {
+        emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "float given");
+        return store_if_result(ctx, inst);
+    }
+    // Unbox the Mixed cell. `__rt_mixed_unbox` returns tag in the int-result register and the
+    // payload lo/hi in target-specific registers (AArch64: x1/x2; x86_64: rdi/rdx).
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    let lo_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    let done = ctx.next_label("packed_mixed_to_int_done");
+    let l_int = ctx.next_label("packed_mixed_to_int_ok");
+    let l_string = ctx.next_label("packed_mixed_to_int_string");
+    let l_float = ctx.next_label("packed_mixed_to_int_float");
+    let l_bool = ctx.next_label("packed_mixed_to_int_bool");
+    let l_array = ctx.next_label("packed_mixed_to_int_array");
+    let l_null = ctx.next_label("packed_mixed_to_int_null");
+    let l_resource = ctx.next_label("packed_mixed_to_int_resource");
+    let l_callable = ctx.next_label("packed_mixed_to_int_callable");
+    // Tag values: 0 int, 1 string, 2 float, 3 bool, 4 indexed array, 5 hash, 6 object,
+    // 8 null, 9 resource, 10 callable (7 nested is peeled by `__rt_mixed_unbox`).
+    emit_mixed_tag_branch(ctx, tag_reg, 0, &l_int);
+    emit_mixed_tag_branch(ctx, tag_reg, 1, &l_string);
+    emit_mixed_tag_branch(ctx, tag_reg, 2, &l_float);
+    emit_mixed_tag_branch(ctx, tag_reg, 3, &l_bool);
+    emit_mixed_tag_branch(ctx, tag_reg, 4, &l_array);
+    emit_mixed_tag_branch(ctx, tag_reg, 5, &l_array);
+    emit_mixed_tag_branch(ctx, tag_reg, 8, &l_null);
+    emit_mixed_tag_branch(ctx, tag_reg, 9, &l_resource);
+    emit_mixed_tag_branch(ctx, tag_reg, 10, &l_callable);
+    // Any other tag is an object-like value; each arm throws and never falls through.
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "object given");
+    ctx.emitter.label(&l_string);
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "string given");
+    ctx.emitter.label(&l_float);
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "float given");
+    ctx.emitter.label(&l_bool);
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "bool given");
+    ctx.emitter.label(&l_array);
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "array given");
+    ctx.emitter.label(&l_null);
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "null given");
+    ctx.emitter.label(&l_resource);
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "resource given");
+    ctx.emitter.label(&l_callable);
+    emit_throw_int_arg_type_error(ctx, &prefix_label, prefix_len, "Closure given");
+    // int: the payload is already the raw field word.
+    ctx.emitter.label(&l_int);
+    emit_move_reg(ctx, tag_reg, lo_reg);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}

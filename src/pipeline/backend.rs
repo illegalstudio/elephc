@@ -26,6 +26,8 @@ pub(super) struct BackendInputs<'a> {
     pub(super) emit: Emit,
     pub(super) heap_size: usize,
     pub(super) gc_stats: bool,
+    pub(super) counters: bool,
+    pub(super) instrument: crate::codegen::Instrumentation,
     pub(super) heap_debug: bool,
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
     pub(super) regalloc_linear: bool,
@@ -52,6 +54,8 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         emit,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         exported_functions,
         regalloc_linear,
@@ -67,6 +71,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // lets eval setup register that managed provider with Magician.
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
+    }
+    let probe = with_crates.contains("probe");
+    if probe {
+        let key = crate::probe_key::build_key();
+        eprintln!("probe build fingerprint: {}", crate::probe_key::fingerprint(&key));
+        ir_module.probe_key = Some(key);
     }
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
@@ -142,6 +152,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let user_asm = match codegen::generate_user_asm_from_ir_with_options(
         &ir_module,
         gc_stats,
+        counters,
+        instrument,
+        probe,
         heap_debug,
         requires_elephc_tls,
         emit,
@@ -293,6 +306,15 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         emit_debug_info && !linker::bake_debug_info(target, &output_paths.bin);
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
+    }
+
+    // Write the probe build key sidecar next to the binary: the `--probe-host`
+    // client reads it to run the HMAC handshake. Keep it like a `.env` secret.
+    if let Some(key) = ir_module.probe_key {
+        let sidecar = output_paths.bin.with_extension("probe-key");
+        if let Err(err) = fs::write(&sidecar, crate::probe_key::to_hex(&key)) {
+            eprintln!("warning: could not write probe key sidecar {}: {err}", sidecar.display());
+        }
     }
 
     crate::progress::clear();

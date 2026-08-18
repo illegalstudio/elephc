@@ -208,7 +208,7 @@ pub(super) fn emit_descriptor_callback_wrapper(
     visible_arg_types: Vec<PhpType>,
     return_ty: PhpType,
 ) -> String {
-    let wrapper_label = ctx.next_label("array_map_descriptor_callback_wrapper");
+    let wrapper_label = ctx.next_global_label("array_map_descriptor_callback_wrapper");
     let done_label = ctx.next_label("array_map_descriptor_callback_after_wrapper");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),

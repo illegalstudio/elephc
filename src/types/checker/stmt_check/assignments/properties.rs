@@ -504,8 +504,15 @@ fn check_pointer_property_write(
             ));
         }
     } else if let Some(field_ty) = checker.packed_field_type(class_name, property) {
+        // A Mixed value is admitted into an `int` field because lowering emits a strict
+        // runtime narrowing there (int tag → raw payload, anything else → TypeError). This
+        // is what lets int arithmetic — typed Mixed for its overflow-to-float promotion —
+        // feed packed fields without either a false compile error or a silent truncation.
+        let guarded_mixed_int =
+            field_ty == PhpType::Int && matches!(val_ty, PhpType::Mixed);
         if &field_ty != val_ty
             && !matches!((&field_ty, val_ty), (PhpType::Bool, PhpType::False))
+            && !guarded_mixed_int
         {
             return Err(CompileError::new(
                 span,

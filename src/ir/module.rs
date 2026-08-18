@@ -51,6 +51,10 @@ pub struct TraitMethodInfo {
 pub struct Module {
     pub target: Target,
     pub source_path: Option<String>,
+    /// `--probe` build key, embedded as `_elephc_probe_key` so the probe endpoint
+    /// can prove the binary's identity through the HMAC handshake. `None` unless
+    /// `--probe` is set.
+    pub probe_key: Option<[u8; 32]>,
     pub functions: Vec<Function>,
     pub class_methods: Vec<Function>,
     pub closures: Vec<Function>,
@@ -105,6 +109,7 @@ impl Module {
         Self {
             target,
             source_path: None,
+            probe_key: None,
             functions: Vec::new(),
             class_methods: Vec::new(),
             closures: Vec::new(),

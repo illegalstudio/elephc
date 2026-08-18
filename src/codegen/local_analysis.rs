@@ -630,7 +630,7 @@ mod tests {
     fn dynamic_release_emits_aarch64_representation_guard() {
         let asm = dynamic_release_asm(Target::new(Platform::Linux, Arch::AArch64));
 
-        assert!(asm.contains("cbnz x0, _eir_main_raw_local_cleanup_done"), "{asm}");
+        assert!(asm.contains("cbnz x0, .L_eir_main_raw_local_cleanup_done"), "{asm}");
     }
 
     /// Verifies x86_64 cleanup guards skip raw release when the runtime slot is a cell.
@@ -639,7 +639,7 @@ mod tests {
         let asm = dynamic_release_asm(Target::new(Platform::Linux, Arch::X86_64));
 
         assert!(asm.contains("test rax, rax"), "{asm}");
-        assert!(asm.contains("jne _eir_main_raw_local_cleanup_done"), "{asm}");
+        assert!(asm.contains("jne .L_eir_main_raw_local_cleanup_done"), "{asm}");
     }
 
     /// Builds a conditional promotion followed by deferred cleanup for one target.

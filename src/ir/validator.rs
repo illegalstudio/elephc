@@ -311,6 +311,8 @@ fn validate_instruction_immediate(
         | EvalStaticMethodCall
         | EnumBackingStringToInt
         | EnumBackingMixedToInt
+        | PackedFieldMixedToInt
+        | ReturnBoundaryMixedToInt
         | PropInitialized
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))

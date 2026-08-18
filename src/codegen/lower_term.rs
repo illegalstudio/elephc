@@ -437,7 +437,14 @@ mod tests {
             .lines()
             .filter_map(|line| line.strip_suffix(':'))
             .filter(|name| {
-                name.strip_prefix(prefix)
+                // Block labels carry the platform's assembler-local prefix (`L` on Mach-O,
+                // `.L` on ELF) so they stay out of the symbol table; the stem follows it.
+                // Match on the stem but keep the full name — branches target the full label.
+                let stem = name
+                    .strip_prefix(".L")
+                    .or_else(|| name.strip_prefix('L'))
+                    .unwrap_or(name);
+                stem.strip_prefix(prefix)
                     .and_then(|rest| rest.strip_prefix('_'))
                     .is_some_and(|digits| {
                         !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())

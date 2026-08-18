@@ -19,6 +19,7 @@ use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
     emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
 };
+use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
 use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
 use crate::ir_passes::{allocate_registers, Allocation};
@@ -239,6 +240,8 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
     // is never guarded — it is the root of every call chain and runs before the floor exists.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
+    emit_probe_init(ctx);
+    emit_instr_init(ctx);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
@@ -271,6 +274,7 @@ pub(super) fn emit_function_prologue_with_label(
     // means the compare already accounts for this function's own frame size.
     let stack_ok_label = ctx.next_label("stack_ok");
     stack_guard::emit_stack_limit_check(ctx.emitter, &stack_ok_label);
+    emit_call_counter_increment(ctx, entry_label);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
 
@@ -313,6 +317,10 @@ pub(super) fn emit_function_prologue_with_label(
     zero_initialize_ref_cell_owner_locals(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
+    // Instrument entry runs LAST in the prologue: the incoming arguments are
+    // already spilled to their slots, so a call clobbering the argument/scratch
+    // registers is safe. Callee-saved registers are already preserved above.
+    emit_instr_enter(ctx);
     Ok(())
 }
 
@@ -355,8 +363,15 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_global_epilogue_cleanup(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
+    emit_probe_dump(ctx);
     if ctx.gc_stats {
         emit_gc_stats(ctx);
+    }
+    if ctx.shared.counters {
+        emit_counters_dump(ctx);
+    }
+    if ctx.shared.instrument.is_on() {
+        emit_instr_dump(ctx);
     }
     if ctx.heap_debug {
         ctx.emitter
@@ -485,8 +500,15 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     // exiting, so the exit-based main epilogue (where `--gc-stats` normally
     // prints) is never reached. Emitting the counters here, once per request,
     // is the only way to observe them in server mode.
+    emit_probe_dump(ctx);
     if ctx.gc_stats {
         emit_gc_stats(ctx);
+    }
+    if ctx.shared.counters {
+        emit_counters_dump(ctx);
+    }
+    if ctx.shared.instrument.is_on() {
+        emit_instr_dump(ctx);
     }
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
@@ -524,6 +546,13 @@ pub(super) fn emit_web_entry_stub(
     // main stack, so the floor measured here stays valid in every child. Measuring before the
     // bridge call also keeps the clobbered argument registers away from `elephc_web_run`.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
+    // Install the probe here — in the MASTER, before elephc_web_run forks — so the SIGPROF
+    // sampler and the shared-memory ring are inherited by every worker. Placed in the handler
+    // prologue instead, it would re-init per request in each worker and never share.
+    emit_probe_init(ctx);
+    // The instrument name table is set once in the master before the fork, so
+    // workers inherit it; each worker's thread-local counters stay its own.
+    emit_instr_init(ctx);
     // Enable the small-bin double-free guard for every --web worker process: a detected
     // double free `_exit(1)`s the worker (the prefork master respawns it), containing
     // corruption to one request. Cheap — a short bin-chain scan on free, with no
@@ -880,6 +909,10 @@ fn emit_function_local_epilogue_cleanup(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
 ) {
+    // Instrument exit runs FIRST — before the early return for cleanup-free
+    // functions — so every return path records the exit. It preserves the
+    // return value across its own call.
+    emit_instr_exit(ctx);
     let cleanup_locals = function_cleanup_locals(ctx, skip_return_slot);
     let ref_cell_owners = ref_cell_owner_locals(ctx);
     let eval_scopes = eval_scope_locals(ctx);
@@ -1199,6 +1232,300 @@ fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
 }
 
 /// Emits allocation/free totals to stderr using the shared runtime counters.
+/// Emits the `--probe` initialization call in main's prologue: hands the
+/// embedded symbol table's address and entry count to `elephc_probe_init`,
+/// which installs the SIGPROF handler and arms the profiling timer. Inert
+/// unless the probe symbol table was built (i.e. `--probe`).
+fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
+    let Some((table_label, count)) = ctx.shared.probe_table.clone() else {
+        return;
+    };
+    ctx.emitter.comment("probe: install SIGPROF sampler (--probe)");
+    let target = ctx.emitter.target;
+    let table_arg = abi::int_arg_reg_name(target, 0);
+    let count_arg = abi::int_arg_reg_name(target, 1);
+    let key_arg = abi::int_arg_reg_name(target, 2);
+    abi::emit_symbol_address(ctx.emitter, table_arg, &table_label);
+    abi::emit_load_int_immediate(ctx.emitter, count_arg, count as i64);
+    let key_symbol = target.extern_symbol("elephc_probe_build_key");
+    abi::emit_symbol_address(ctx.emitter, key_arg, &key_symbol);
+    // `elephc_probe_init` is a `#[no_mangle] extern "C"` Rust symbol in the probe
+    // staticlib; resolve its platform C-ABI mangling like the web bridge entry.
+    let entry = target.extern_symbol("elephc_probe_init");
+    abi::emit_call_label(ctx.emitter, &entry);
+    // Publish the route-tagging entry into the core runtime's `_elephc_probe_route_fn`
+    // slot so the --web bridge can call it without a dlsym or a compile-time coupling.
+    // This reference also keeps `elephc_probe_set_route` from being dead-stripped (it is
+    // otherwise reached only through this slot). Both symbols exist only under --probe.
+    let set_route = target.extern_symbol("elephc_probe_set_route");
+    let scratch = abi::int_arg_reg_name(target, 0);
+    abi::emit_symbol_address(ctx.emitter, scratch, &set_route);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_probe_route_fn"), 0);
+    // Publish the worker re-arm entry the same way: the --web bridge calls it to
+    // restore the profiling timer the post-fork disarm turned off.
+    let rearm = target.extern_symbol("elephc_probe_rearm");
+    abi::emit_symbol_address(ctx.emitter, scratch, &rearm);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_probe_rearm_fn"), 0);
+    let verify = target.extern_symbol("elephc_probe_verify_query");
+    abi::emit_symbol_address(ctx.emitter, scratch, &verify);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_verify_fn"),
+        0,
+    );
+    // Claim the I/O event slots the PDO bridge calls through, so a `--probe`
+    // binary reports EXACT query counts and I/O wait per route. Those events are
+    // not sampled — a driver call fires exactly one — and they cost an atomic
+    // increment paid only when a query happens, so unlike per-call
+    // instrumentation this is affordable in production.
+    //
+    // `--instrument` wins when both are linked: it attributes the same events per
+    // FUNCTION through its shadow stack, which strictly refines per-route. Two
+    // writers to one slot would otherwise leave the winner to emission order.
+    // A marker `monitor` can find by reading the file, before it runs anything.
+    // Detection has to work from OUTSIDE the process — the whole point is to tell
+    // a user "this binary cannot be monitored, rebuild it" instead of launching
+    // it and reporting an empty profile, which reads as "your program is fast".
+    // A named global rather than an anonymous string, so nothing strips it and
+    // `strings` shows a human why it is there.
+    ctx.data.add_named_symbol(
+        target.extern_symbol("elephc_monitoring_marker"),
+        b"elephc-monitoring-v1 (built with --with-monitoring)\0",
+    );
+    // Hand the sampler the address of the allocation counter, so it can attribute
+    // allocation deltas to the stack it samples — the same shape as Go's heap
+    // profile. A pointer rather than the symbol, so `_gc_allocs` stays a name only
+    // the emitted assembly resolves.
+    abi::emit_symbol_address(ctx.emitter, scratch, "_gc_allocs");
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_probe_allocs_ptr"),
+        0,
+    );
+    if !ctx.shared.instrument.is_on() {
+        let note_io = target.extern_symbol("elephc_probe_note_io");
+        abi::emit_symbol_address(ctx.emitter, scratch, &note_io);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_instr_io_fn"),
+            0,
+        );
+        let note_wait = target.extern_symbol("elephc_probe_note_wait");
+        abi::emit_symbol_address(ctx.emitter, scratch, &note_wait);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_instr_wait_fn"),
+            0,
+        );
+    }
+}
+
+/// Emits the `--probe` exit dump call at main's epilogue: disarms the timer and
+/// writes the folded profile to stderr. Placed like the gc-stats dump.
+fn emit_probe_dump(ctx: &mut FunctionContext<'_>) {
+    if ctx.shared.probe_table.is_none() {
+        return;
+    }
+    ctx.emitter.comment("probe: dump folded profile to stderr (--probe)");
+    let entry = ctx.emitter.target.extern_symbol("elephc_probe_dump");
+    abi::emit_call_label(ctx.emitter, &entry);
+}
+
+/// Emits the `--instrument` name table and the `elephc_instr_init` call in main's
+/// prologue (and the `--web` entry stub). The table is `(name_ptr, name_len)`
+/// pairs in function-id order — the registry the per-function prologues built as
+/// they were emitted. Main is emitted last, so the registry is complete here.
+/// Inert unless `--instrument`.
+fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let names = ctx.shared.instr_registry().to_vec();
+    if names.is_empty() {
+        return;
+    }
+    let mut words = Vec::with_capacity(names.len() * 2);
+    for name in &names {
+        let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+        words.push(DataWord::Symbol(name_label));
+        words.push(DataWord::U64(name_len as u64));
+    }
+    let table_label = ctx.data.add_words(words);
+    ctx.emitter
+        .comment("instrument: register function name table (--instrument)");
+    let target = ctx.emitter.target;
+    let table_arg = abi::int_arg_reg_name(target, 0);
+    let count_arg = abi::int_arg_reg_name(target, 1);
+    abi::emit_symbol_address(ctx.emitter, table_arg, &table_label);
+    abi::emit_load_int_immediate(ctx.emitter, count_arg, names.len() as i64);
+    let entry = target.extern_symbol("elephc_instr_init");
+    abi::emit_call_label(ctx.emitter, &entry);
+    // Publish elephc_instr_io into the runtime slot so I/O builtins (PDO
+    // queries) can count operations per function without a compile-time coupling
+    // to the instrument crate. The slot stays zero in non-instrument binaries.
+    let io_fn = target.extern_symbol("elephc_instr_io");
+    let scratch = abi::int_arg_reg_name(target, 0);
+    abi::emit_symbol_address(ctx.emitter, scratch, &io_fn);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_io_fn"), 0);
+    // Companion slot: elephc_instr_query, so the PDO bridge can report each
+    // query's SQL text (the N+1 view) the same pay-for-use way as the counter.
+    let query_fn = target.extern_symbol("elephc_instr_query");
+    abi::emit_symbol_address(ctx.emitter, scratch, &query_fn);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_query_fn"), 0);
+    // Third slot: elephc_instr_wait, so the bridge can report how long a driver
+    // call actually blocked — the CPU-vs-wait split of each function's time.
+    let wait_fn = target.extern_symbol("elephc_instr_wait");
+    abi::emit_symbol_address(ctx.emitter, scratch, &wait_fn);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_wait_fn"), 0);
+    // Fourth slot: elephc_instr_trace_begin, so the web bridge can open each
+    // request's W3C trace context (distributed profiling).
+    let trace_fn = target.extern_symbol("elephc_instr_trace_begin");
+    abi::emit_symbol_address(ctx.emitter, scratch, &trace_fn);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_trace_fn"), 0);
+    let request = target.extern_symbol("elephc_instr_request");
+    abi::emit_symbol_address(ctx.emitter, scratch, &request);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_request_fn"),
+        0,
+    );
+    // Let the environment decide whether the hooks are live for this run.
+    abi::emit_call_label(ctx.emitter, &target.extern_symbol("elephc_instr_boot"));
+    // Tell the runtime its numbers describe a subset, so the report can say that
+    // self time now absorbs uninstrumented callees rather than presenting the same
+    // columns as the full mode.
+    if ctx.shared.instrument.is_partial() {
+        abi::emit_call_label(ctx.emitter, &target.extern_symbol("elephc_instr_partial"));
+    }
+
+}
+
+/// Emits the `--instrument` entry hook at the end of a user function's prologue:
+/// registers the function (assigning its id), records the id on the context for
+/// the epilogue, and calls `elephc_instr_enter(id)`. Synthetic bodies are not
+/// user code and stay uninstrumented; `main` uses its own prologue and is not
+/// a timed frame in this mode.
+fn emit_instr_enter(ctx: &mut FunctionContext<'_>) {
+    // Synthetic bodies are not user code. Beyond that, a selective set hooks
+    // only the functions it names — the rest run at full speed.
+    if ctx.function.flags.is_synthetic || !ctx.shared.instrument.covers(&ctx.function.name) {
+        return;
+    }
+    let id = ctx.shared.register_instr(ctx.function.name.clone());
+    ctx.instr_id = Some(id);
+    ctx.emitter.comment("instrument: enter (--instrument)");
+    emit_instr_hook_call(ctx, "elephc_instr_enter", id);
+}
+
+/// Emits the `--instrument` exit hook for one return path. Preserves the return
+/// value across the call (the hook clobbers the ABI result register).
+fn emit_instr_exit(ctx: &mut FunctionContext<'_>) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    let Some(id) = ctx.instr_id else {
+        return;
+    };
+    ctx.emitter.comment("instrument: exit (--instrument)");
+    let return_ty = ctx.function.return_php_type.codegen_repr();
+    let preserves_return = !matches!(return_ty, PhpType::Void | PhpType::Never);
+    if preserves_return {
+        push_return_value(ctx, &return_ty);
+    }
+    emit_instr_hook_call(ctx, "elephc_instr_exit", id);
+    if preserves_return {
+        pop_return_value(ctx, &return_ty);
+    }
+}
+
+/// Loads `id` into the first integer argument register, the program's live
+/// allocation counter (`_gc_allocs`) into the second, and the free counter
+/// (`_gc_frees`) into the third, then calls a `elephc_instr_*` hook. Reading
+/// both counters at the call site lets the runtime attribute allocations — and
+/// net retained objects (allocs minus frees) — per function exactly the way it
+/// attributes time.
+fn emit_instr_hook_call(ctx: &mut FunctionContext<'_>, hook: &str, id: usize) {
+    let target = ctx.emitter.target;
+    let id_arg = abi::int_arg_reg_name(target, 0);
+    abi::emit_load_int_immediate(ctx.emitter, id_arg, id as i64);
+    let allocs_arg = abi::int_arg_reg_name(target, 1);
+    abi::emit_load_symbol_to_reg(ctx.emitter, allocs_arg, "_gc_allocs", 0);
+    let frees_arg = abi::int_arg_reg_name(target, 2);
+    abi::emit_load_symbol_to_reg(ctx.emitter, frees_arg, "_gc_frees", 0);
+    let entry = target.extern_symbol(hook);
+    abi::emit_call_label(ctx.emitter, &entry);
+}
+
+/// Emits the `--instrument` exit dump call at main's epilogue (and per `--web`
+/// request): writes the exact per-function table and edges to stderr.
+fn emit_instr_dump(ctx: &mut FunctionContext<'_>) {
+    if !ctx.shared.instrument.is_on() {
+        return;
+    }
+    ctx.emitter
+        .comment("instrument: dump exact per-function profile to stderr (--instrument)");
+    let entry = ctx.emitter.target.extern_symbol("elephc_instr_dump");
+    abi::emit_call_label(ctx.emitter, &entry);
+}
+
+/// Emits the `--counters` prologue increment for one compiled PHP function and
+/// registers it for the exit dump.
+///
+/// Placed with the stack guard, before the parameter spill: only scratch
+/// registers are touched (AArch64 x9/x10, x86_64 r10), so the incoming ABI
+/// arguments are undisturbed. The count is a plain load/add/store — a lost
+/// update under threads costs a tick of precision, never correctness. Synthetic
+/// bodies are not user code and stay uncounted; `main` never reaches this
+/// prologue (it has its own), which keeps the dump to functions the user wrote.
+fn emit_call_counter_increment(ctx: &mut FunctionContext<'_>, entry_label: &str) {
+    if !ctx.shared.counters || ctx.function.flags.is_synthetic {
+        return;
+    }
+    let slot = ctx.data.add_comm(format!("_elephc_cnt{}", entry_label), 8);
+    ctx.shared
+        .register_counter(ctx.function.name.clone(), slot.clone());
+    ctx.emitter.comment("call counter (--counters)");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", &slot);
+            ctx.emitter.instruction("ldr x10, [x9]");
+            ctx.emitter.instruction("add x10, x10, #1");
+            ctx.emitter.instruction("str x10, [x9]");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r10", &slot);
+            ctx.emitter.instruction("inc qword ptr [r10]");
+        }
+    }
+}
+
+/// Emits the `--counters` exit dump: one `elephc-counters: <name> <count>` line
+/// per counted function, written to stderr like the gc-stats report.
+///
+/// Rendered from the shared registry, which is complete because main — the only
+/// emitter of this dump — is generated after every other function.
+fn emit_counters_dump(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter
+        .comment("counters: print exact per-function call counts to stderr");
+    let registry: Vec<(String, String)> = ctx.shared.counter_registry().to_vec();
+    let int_result_reg = abi::int_result_reg(ctx.emitter);
+    for (name, symbol) in registry {
+        let line = format!("elephc-counters: {} ", name);
+        let (label, len) = ctx.data.add_string(line.as_bytes());
+        emit_write_literal_stderr(ctx.emitter, &label, len);
+        abi::emit_load_symbol_to_reg(ctx.emitter, int_result_reg, &symbol, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_itoa");
+        emit_write_current_string_stderr(ctx.emitter);
+        let (newline_label, _) = ctx.data.add_string(b"\n");
+        emit_write_literal_stderr(ctx.emitter, &newline_label, 1);
+    }
+}
+
 fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("gc-stats: print allocation statistics to stderr");

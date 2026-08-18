@@ -258,6 +258,55 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_stack_limit", 8, target));
     out.push_str(&comm_directive("_stack_limit_main", 8, target));
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
+    // elephc_probe_route_fn: a function-pointer slot the sampling probe fills at init
+    // (with elephc_probe_set_route) and the --web bridge reads to tag samples by route.
+    // Zero unless --probe linked the probe, so route tagging is pay-for-use with no
+    // compile coupling and no dlsym (the symbol lives in the always-linked core runtime).
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_route_fn"), 8, target));
+    // elephc_probe_rearm_fn: filled with elephc_probe_rearm under --probe; the
+    // --web bridge calls it to re-arm the profiling timer in each worker, which
+    // the post-fork disarm (that protects exec'd children) turned off.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_rearm_fn"), 8, target));
+    // elephc_probe_verify_fn: verifies a signed X-Elephc-Query header against the
+    // embedded build key, so turning profiling on stays a privileged act.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_verify_fn"), 8, target));
+    // elephc_monitor_active: 1 once this process has been asked to profile —
+    // written by the probe's init, read by the exact profiler's, which runs after
+    // it. One check, in one place: repeating it would consume the control
+    // channel's marker twice and the second reader would see nothing.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_monitor_active"), 8, target));
+    // elephc_probe_allocs_ptr: the ADDRESS of `_gc_allocs`, published under
+    // --probe so the sampler can read the allocation counter without declaring
+    // that symbol itself. `_gc_allocs` is spelled with a hardcoded underscore
+    // everywhere it is emitted, which is self-consistent while only assembly
+    // names it; a Rust crate resolving it directly would break every ELF link.
+    // Handing over a pointer keeps that name inside the assembly.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_probe_allocs_ptr"), 8, target));
+    // elephc_instr_io_fn: a function-pointer slot filled with elephc_instr_io
+    // under --instrument, else zero. I/O builtins (PDO queries) read it and call
+    // through it when non-null, so the exact profiler can count queries per
+    // function — pay-for-use, no dlsym, no coupling to the instrument crate.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_io_fn"), 8, target));
+    // elephc_instr_query_fn: companion slot filled with elephc_instr_query under
+    // --instrument, else zero. The PDO bridge reads it and reports each query's
+    // SQL text (normalized) so the exact profiler can list distinct statements
+    // and their execution counts — the N+1 view. Pay-for-use, like the io slot.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_query_fn"), 8, target));
+    // elephc_instr_wait_fn: third companion slot, filled with elephc_instr_wait
+    // under --instrument. The PDO bridge times the actual driver call and
+    // reports the nanoseconds through it, which is what splits each function's
+    // self time into CPU and I/O wait. Zero (inert) in a normal binary.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_wait_fn"), 8, target));
+    // elephc_instr_trace_fn: fourth companion slot, filled with
+    // elephc_instr_trace_begin under --instrument. The web bridge calls it at
+    // the start of every request with the inbound W3C `traceparent`, so a
+    // profile slice carries the identity of the distributed trace it belongs
+    // to. Zero (inert) in a normal binary.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_trace_fn"), 8, target));
+    // elephc_instr_request_fn: brackets one request's profile under
+    // --web --instrument, so a dormant production binary can profile a single
+    // request on demand instead of every request or none.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_request_fn"), 8, target));
     out.push_str(&comm_directive("_rt_diag_suppression", 8, target));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
@@ -1430,5 +1479,100 @@ mod tests {
 
         assert!(asm.contains(".comm _stack_limit, 8, 8\n"));
         assert!(asm.contains(".comm _stack_limit_main, 8, 8\n"));
+    }
+
+    /// The function-pointer slots a *Rust* bridge crate resolves must be spelled with the
+    /// platform's C-ABI mangling, not a hardcoded Mach-O underscore.
+    ///
+    /// Most common symbols here are private to the emitted assembly, so their name is
+    /// self-consistent whatever it is. These six are different: `elephc-pdo` and
+    /// `elephc-web` declare them as `extern "C" { static … }`, so the linker looks for
+    /// `_name` on Mach-O and `name` on ELF. Emitting `_name` everywhere assembles fine on
+    /// both and then fails every ELF link with `undefined reference to 'elephc_probe_route_fn'`
+    /// — which is how a `--web` or PDO binary stopped linking on linux-aarch64 while every
+    /// macOS job stayed green. Same silent-until-link shape as the alignment sweep above.
+    #[test]
+    fn test_bridge_resolved_slots_use_the_platform_c_abi_mangling() {
+        // Derived from the bridge crates rather than pinned here: a hand-kept list would
+        // silently stop covering the seventh slot someone adds. Reading the sources at
+        // test time follows the same approach as the sentinel scans in `sentinels.rs`.
+        let bridge_slots = declared_bridge_slots();
+        assert!(
+            bridge_slots.len() >= 6,
+            "expected the bridge crates to declare their runtime slots, found {bridge_slots:?}"
+        );
+        for (platform, arch, prefix) in [
+            (Platform::MacOS, Arch::AArch64, "_"),
+            (Platform::Linux, Arch::AArch64, ""),
+            (Platform::Linux, Arch::X86_64, ""),
+        ] {
+            let target = Target { platform, arch };
+            let asm = emit_runtime_data_fixed(8_388_608, target);
+            for slot in &bridge_slots {
+                let wanted = format!(".comm {prefix}{slot}, 8, ");
+                assert!(
+                    asm.contains(&wanted),
+                    "{platform:?}/{arch:?} never declares `{wanted}…`; the bridge crate that \
+                     resolves `{slot}` will fail to link"
+                );
+                // And the other spelling must be absent, or the wrong one satisfies the link
+                // on one platform while the right one is missing on the other.
+                let unwanted = if prefix.is_empty() {
+                    format!(".comm _{slot}, ")
+                } else {
+                    format!(".comm {slot}, ")
+                };
+                assert!(
+                    !asm.contains(&unwanted),
+                    "{platform:?}/{arch:?} still declares `{unwanted}…`, the other platform's \
+                     spelling of {slot}"
+                );
+            }
+        }
+    }
+
+    /// Every `elephc_*` runtime slot a bridge crate resolves through the C ABI, read from
+    /// the crates themselves so the check cannot fall behind them.
+    ///
+    /// Matches a declaration — `static elephc_x: usize;` — and not a definition, which is
+    /// how the `#[cfg(test)]` stubs that give those crates their own zero slots
+    /// (`static elephc_instr_io_fn: usize = 0;`) stay out of the list: a crate that
+    /// defines the symbol itself constrains nothing about the runtime's spelling.
+    fn declared_bridge_slots() -> Vec<String> {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates");
+        let mut found = Vec::new();
+        collect_extern_statics(&crates, &mut found);
+        found.sort();
+        found.dedup();
+        found
+    }
+
+    fn collect_extern_statics(dir: &std::path::Path, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_extern_statics(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let Ok(body) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                for line in body.lines() {
+                    let line = line.trim();
+                    let Some(rest) = line.strip_prefix("static elephc_") else {
+                        continue;
+                    };
+                    // A declaration ends at the type; a definition carries `= …`.
+                    if line.contains('=') {
+                        continue;
+                    }
+                    if let Some((name, _)) = rest.split_once(':') {
+                        found.push(format!("elephc_{}", name.trim()));
+                    }
+                }
+            }
+        }
     }
 }
