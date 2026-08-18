@@ -31,6 +31,7 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
         &[
             "pcntl_alarm",
             "pcntl_async_signals",
+            "pcntl_exec",
             "pcntl_errno",
             "pcntl_fork",
             "pcntl_get_last_error",

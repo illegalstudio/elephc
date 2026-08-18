@@ -105,6 +105,24 @@ fn test_error_pcntl_signal_rejects_invalid_integer_handler() {
     );
 }
 
+/// Verifies `pcntl_exec()` rejects a non-array argv operand.
+#[test]
+fn test_error_pcntl_exec_requires_argument_array() {
+    expect_error(
+        "<?php pcntl_exec('/bin/echo', 'value');",
+        "pcntl_exec() parameter $args must be an array",
+    );
+}
+
+/// Verifies `pcntl_exec()` rejects array values outside its supported string storage.
+#[test]
+fn test_error_pcntl_exec_requires_string_array_values() {
+    expect_error(
+        "<?php pcntl_exec('/bin/echo', [1]);",
+        "pcntl_exec() array values must use string storage",
+    );
+}
+
 /// Verifies the prior-mask output is a writable variable.
 #[test]
 fn test_error_pcntl_signal_mask_output_must_be_variable() {

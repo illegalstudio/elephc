@@ -186,6 +186,37 @@ fn test_pcntl_linux_functions_are_not_visible_on_macos() {
     assert_eq!(out, "absent");
 }
 
+/// Replaces a forked child with `/bin/sh`, preserving argv order and the explicit environment.
+#[test]
+fn test_pcntl_exec_replaces_child_with_arguments_and_environment() {
+    let out = compile_and_run(
+        r#"<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            pcntl_exec(
+                '/bin/sh',
+                ['-c', 'printf "%s" "$PCNTL_EXEC_ENV"'],
+                ['PCNTL_EXEC_ENV' => 'ready'],
+            );
+            exit(99);
+        }
+        pcntl_waitpid($pid, $status);
+        echo '|' . pcntl_wexitstatus($status);"#,
+    );
+    assert_eq!(out, "ready|0");
+}
+
+/// Returns false and preserves the bridge errno when process replacement fails.
+#[test]
+fn test_pcntl_exec_failure_returns_false_and_records_errno() {
+    let out = compile_and_run(
+        "<?php
+        $ok = pcntl_exec('/definitely/missing/elephc-pcntl');
+        echo (!$ok ? 'false' : 'bad') . '|' . pcntl_get_last_error();",
+    );
+    assert_eq!(out, "false|2");
+}
+
 /// Forks and reaps a real child through `pcntl_waitpid`, proving by-reference status writeback.
 #[test]
 fn test_pcntl_fork_waitpid_round_trip() {
