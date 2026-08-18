@@ -204,6 +204,79 @@ mod tests {
         assert_eq!(plan.linux_mode(), &LinuxLinkMode::Static);
     }
 
+    /// THE PRODUCTION PLANNER IS IMMUNE TO THE ORDERING BUG THAT BROKE THE CODEGEN HARNESS,
+    /// and this pins that rather than leaving it as a happy accident.
+    ///
+    /// The harness used to emit managed packages as `-l` NAMES through the same dedupe set
+    /// every other named input shares, so a `-lz` planned earlier for `fopen()` suppressed
+    /// the managed zlib and left nothing after `libssh2.a` to resolve `deflateInit_` — a
+    /// hard failure under GNU ld, invisible under Apple's re-scanning ld64. This planner
+    /// never had that hole: managed packages become `LinkItem::managed_archive` with exact
+    /// paths, which are pushed unconditionally and never consulted against `named`. The
+    /// assertions below are what must stay true for that to remain the case.
+    #[test]
+    fn managed_archives_survive_an_earlier_system_library_of_the_same_name() {
+        let managed = |name: &str, archives: &[&str]| ResolvedNativePackage {
+            package: name.to_string(),
+            artifact_root: PathBuf::from(format!("/cache/{name}")),
+            archives: archives.iter().map(PathBuf::from).collect(),
+            system_libraries: Vec::new(),
+            frameworks: Vec::new(),
+        };
+        // The order `native_deps::resolver` produces for a lone `curl` requirement.
+        let packages = [
+            managed("curl", &["/cache/curl/lib/libcurl.a"]),
+            managed("libssh2", &["/cache/libssh2/lib/libssh2.a"]),
+            managed("openssl", &["/cache/openssl/lib/libssl.a", "/cache/openssl/lib/libcrypto.a"]),
+            managed("zlib", &["/cache/zlib/lib/libz.a"]),
+            managed("nghttp2", &["/cache/nghttp2/lib/libnghttp2.a"]),
+        ];
+        // What `fopen($path, …)` and `gzinflate()` contribute, ahead of the managed chain.
+        let requirements = [
+            LinkRequirement::SystemLibrary("z".to_string()),
+            LinkRequirement::SystemLibrary("bz2".to_string()),
+        ];
+        let plan = build(managed_inputs(&requirements, &packages));
+
+        let archives: Vec<String> = plan
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::StaticArchive { path, .. } => {
+                    Some(path.file_name()?.to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        // The early `-lz` removed nothing: every managed archive is still present.
+        assert_eq!(
+            archives,
+            vec![
+                "libcurl.a",
+                "libssh2.a",
+                "libssl.a",
+                "libcrypto.a",
+                "libz.a",
+                "libnghttp2.a",
+            ]
+        );
+        let at = |needle: &str| archives.iter().position(|name| name == needle).unwrap();
+        // GNU ld scans once, left to right: a dependency must follow its dependent.
+        assert!(at("libssh2.a") < at("libz.a"));
+        assert!(at("libssh2.a") < at("libssl.a"));
+        assert!(at("libcurl.a") < at("libnghttp2.a"));
+        // And the system `-lz` the fixture asked for is still there, exactly once.
+        let named: Vec<&str> = plan
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::NamedLibrary { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, vec!["z", "bz2"]);
+    }
+
     /// Verifies user, extern, bridge, and runtime named inputs keep distinct provenance.
     #[test]
     fn link_plan_classifies_non_managed_origins() {

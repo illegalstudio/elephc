@@ -60,12 +60,21 @@ const CURL_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
 pub(crate) const CURL_MACOS_FRAMEWORKS: &[&str] =
     &["Security", "CoreFoundation", "SystemConfiguration"];
 
-/// One discovered package: the `lib/` directory plus the `-l` names it provides, in
-/// libcurl's own dependency order (curl -> ssh2 -> ssl -> crypto -> z -> nghttp2).
+/// One discovered package: the `lib/` directory plus the EXACT ARCHIVE PATHS it provides,
+/// in libcurl's own dependency order (curl -> ssh2 -> ssl -> crypto -> z -> nghttp2).
+///
+/// Exact paths, not `-l` names, for the same reason the production planner uses
+/// `LinkItem::managed_archive` (`src/link_planning.rs`): a `-l` name competes with every
+/// other named library in the plan. It loses that competition twice over — a `-lz` already
+/// emitted for `gzinflate()`/`fopen()` suppresses the managed one (which is what broke the
+/// `streams::` fixtures on GNU ld), and even when it is emitted, `-lz` resolves through the
+/// `-L` search order and could bind a system zlib into a fixture whose entire purpose is to
+/// prove the pinned build. An absolute path can do neither.
 #[derive(Clone, Debug)]
 pub(crate) struct CurlNativePackage {
+    pub(crate) name: &'static str,
     pub(crate) library_dir: PathBuf,
-    pub(crate) libraries: Vec<String>,
+    pub(crate) archives: Vec<PathBuf>,
 }
 
 /// Returns every managed native package a curl fixture links, or `None` when any of them
@@ -120,16 +129,9 @@ fn discover_packages() -> Option<Vec<CurlNativePackage>> {
     for (package, archives) in CURL_NATIVE_PACKAGES {
         let library_dir = find_package_library_dir(&artifacts, package, archives)?;
         packages.push(CurlNativePackage {
+            name: package,
+            archives: archives.iter().map(|archive| library_dir.join(archive)).collect(),
             library_dir,
-            libraries: archives
-                .iter()
-                .map(|archive| {
-                    archive
-                        .trim_start_matches("lib")
-                        .trim_end_matches(".a")
-                        .to_string()
-                })
-                .collect(),
         });
     }
     Some(packages)

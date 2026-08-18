@@ -613,6 +613,140 @@ fn bridge_staticlib_dir_for(
 }
 
 #[cfg(test)]
+mod curl_native_link_order_tests {
+    use super::*;
+    use elephc::codegen::LinkRequirement;
+    use std::path::PathBuf;
+    use elephc::link_plan::{LinkItem, LinkOrigin};
+
+    /// Builds the package set `curl_native::CURL_NATIVE_PACKAGES` declares, with synthetic
+    /// paths, so this test asserts ORDER without needing the machine to have the packages.
+    fn fake_packages() -> Vec<super::super::curl_native::CurlNativePackage> {
+        [
+            ("curl", vec!["libcurl.a"]),
+            ("libssh2", vec!["libssh2.a"]),
+            ("openssl", vec!["libssl.a", "libcrypto.a"]),
+            ("zlib", vec!["libz.a"]),
+            ("nghttp2", vec!["libnghttp2.a"]),
+        ]
+        .into_iter()
+        .map(|(name, archives)| {
+            let library_dir = PathBuf::from(format!("/cache/{name}/lib"));
+            super::super::curl_native::CurlNativePackage {
+                name,
+                archives: archives.iter().map(|a| library_dir.join(a)).collect(),
+                library_dir,
+            }
+        })
+        .collect()
+    }
+
+    /// Returns the archive filenames a plan emits, in plan order.
+    fn archive_names(plan: &elephc::link_plan::LinkPlan) -> Vec<String> {
+        plan.items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::StaticArchive { path, .. } => {
+                    Some(path.file_name()?.to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// THE LINK ORDER GNU `ld` REQUIRES, asserted as a property rather than a literal list:
+    /// every archive precedes the archives that satisfy it.
+    ///
+    /// GNU ld scans archives once, left to right; Apple's ld64 re-scans to a fixed point.
+    /// A plan that is merely "complete" therefore links on macOS and can fail on Linux, so
+    /// ordering has to be checked here, on a machine that cannot observe the failure.
+    #[test]
+    fn managed_curl_archives_precede_the_archives_that_satisfy_them() {
+        let mut plan = elephc::link_plan::LinkPlan::new();
+        push_curl_native_archives(&mut plan, &fake_packages());
+        let names = archive_names(&plan);
+
+        let at = |needle: &str| {
+            names
+                .iter()
+                .position(|name| name == needle)
+                .unwrap_or_else(|| panic!("{needle} missing from {names:?}"))
+        };
+        // libssh2.a(comp.o) calls deflateInit_/deflate/deflateEnd, and its crypto backend
+        // is our OpenSSL: both must be scanned after it.
+        assert!(at("libssh2.a") < at("libz.a"), "{names:?}");
+        assert!(at("libssh2.a") < at("libssl.a"), "{names:?}");
+        assert!(at("libssh2.a") < at("libcrypto.a"), "{names:?}");
+        // libcurl.a references every one of them.
+        for dependency in ["libssh2.a", "libssl.a", "libcrypto.a", "libz.a", "libnghttp2.a"] {
+            assert!(at("libcurl.a") < at(dependency), "{names:?}");
+        }
+        assert_eq!(names.len(), 6, "{names:?}");
+    }
+
+    /// THE REGRESSION THIS FIXES. A `streams::` fixture calls `fopen($path, …)` with a
+    /// non-literal filename, whose requirements include `SystemLibrary("z")`
+    /// (`src/builtins/requirements.rs::fopen_requirements`). That `-lz` is planned BEFORE
+    /// the managed curl chain, and while the managed packages were emitted as `-l` NAMES
+    /// through the plan's shared dedupe set, the earlier `-lz` suppressed the managed zlib
+    /// entirely — leaving nothing after `libssh2.a` to resolve `deflateInit_`. GNU ld
+    /// failed the link on both Linux targets; ld64 re-scanned and never noticed.
+    ///
+    /// Managed archives are exact paths now, so they cannot collide with a named library at
+    /// all: the early `-lz` still appears, AND `libz.a` still follows `libssh2.a`.
+    #[test]
+    fn an_earlier_system_zlib_cannot_suppress_the_managed_one() {
+        let mut plan = elephc::link_plan::LinkPlan::new();
+        // Exactly what the runtime-requirement loop emits first for these fixtures.
+        plan.push(LinkItem::NamedLibrary {
+            name: "z".to_string(),
+            origin: LinkOrigin::Runtime,
+        });
+        push_curl_native_archives(&mut plan, &fake_packages());
+
+        let names = archive_names(&plan);
+        let ssh2 = names.iter().position(|n| n == "libssh2.a").expect("libssh2.a");
+        let zlib = names.iter().position(|n| n == "libz.a").expect("libz.a");
+        assert!(zlib > ssh2, "managed libz.a must follow libssh2.a: {names:?}");
+
+        // And the fixture's own `-lz` is untouched: this is not a deduplication fix.
+        let named: Vec<&str> = plan
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::NamedLibrary { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, vec!["z"]);
+    }
+
+    /// The managed chain must never re-enter the plan as `-l` names, whatever else is in
+    /// it: a `-lssl` resolved through the search path could bind a SYSTEM OpenSSL into a
+    /// fixture whose entire purpose is proving the pinned build linked.
+    #[test]
+    fn managed_curl_packages_are_never_named_libraries() {
+        let requirements = TestLinkRequirements::new(
+            vec!["elephc_curl".to_string()],
+            vec![
+                LinkRequirement::SystemLibrary("z".to_string()),
+                LinkRequirement::SystemLibrary("bz2".to_string()),
+                LinkRequirement::Bridge("elephc_phar"),
+            ],
+        );
+        let plan = test_link_plan(&requirements, &[], &[]);
+        for item in plan.items() {
+            if let LinkItem::NamedLibrary { name, .. } = item {
+                assert!(
+                    !["curl", "ssh2", "ssl", "crypto", "nghttp2"].contains(&name.as_str()),
+                    "managed native package leaked in as -l{name}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod bridge_staticlib_dir_tests {
     use super::*;
 
@@ -929,16 +1063,7 @@ fn test_link_plan(
     // reaches this point.
     if named.contains("elephc_curl") {
         if let Some(packages) = curl_native_packages() {
-            for package in packages {
-                plan.push(LinkItem::SearchPath(package.library_dir.clone()));
-            }
-            for package in packages {
-                for library in &package.libraries {
-                    if named.insert(library.clone()) {
-                        plan.push(LinkItem::named_runtime(library.as_str()));
-                    }
-                }
-            }
+            push_curl_native_archives(&mut plan, packages);
             if target().platform == Platform::MacOS {
                 for framework in CURL_MACOS_FRAMEWORKS {
                     plan.push(LinkItem::Framework((*framework).to_string()));
@@ -953,6 +1078,40 @@ fn test_link_plan(
         plan.push(LinkItem::Framework(framework.clone()));
     }
     plan.without_redundant_embedded_bridges()
+}
+
+/// Appends the managed native curl chain as EXACT ARCHIVES, in catalog dependency order.
+///
+/// THE ORDER IS THE CONTRACT, AND SO IS THE ABSENCE OF DEDUPING. GNU `ld` scans archives
+/// once, left to right, resolving only what is undefined at that moment; Apple's `ld64`
+/// re-scans until it reaches a fixed point. So a plan that links fine on macOS can fail on
+/// Linux purely on ordering — which is exactly what happened to the `streams::` fixtures:
+/// each one calls `fopen($path, …)` with a non-literal filename, whose requirements include
+/// `SystemLibrary("z")` (`src/builtins/requirements.rs::fopen_requirements`). That `-lz`
+/// landed in the plan BEFORE this block, the shared `named` set then suppressed the managed
+/// zlib as a duplicate, and nothing after `libssh2.a` could satisfy the `deflateInit_` /
+/// `deflate` / `deflateEnd` that `libssh2.a(comp.o)` needs for SSH channel compression.
+/// GNU ld reported them undefined; ld64 never noticed.
+///
+/// Pushing exact archive paths — the same `LinkItem::managed_archive` the production
+/// planner uses (`src/link_planning.rs`) — removes this whole class rather than reordering
+/// around it: managed archives never enter the `named` dedupe set, so no unrelated
+/// requirement can suppress or reorder them, and every one of them is emitted in the order
+/// `curl_native::CURL_NATIVE_PACKAGES` declares.
+fn push_curl_native_archives(
+    plan: &mut elephc::link_plan::LinkPlan,
+    packages: &[super::curl_native::CurlNativePackage],
+) {
+    use elephc::link_plan::LinkItem;
+
+    for package in packages {
+        plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+    }
+    for package in packages {
+        for archive in &package.archives {
+            plan.push(LinkItem::managed_archive(archive, package.name));
+        }
+    }
 }
 
 /// Appends every typed search path before archive and named-library inputs.
