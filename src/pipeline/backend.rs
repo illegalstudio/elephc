@@ -39,6 +39,18 @@ pub(super) struct BackendInputs<'a> {
 }
 
 /// Generates user assembly, resolves native requirements, and links the requested artifact.
+/// Restricts a file to its owner (0600).
+///
+/// The build key is written with whatever the umask allows, which on a normal
+/// system is world-readable — and possession of that file is the entire remote
+/// credential. Anyone on the host could read the key out of the deployed binary
+/// too, which is by design, but a sidecar sitting at 0644 next to it makes that
+/// a `cat` rather than a hex dump.
+fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
 pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
         filename,
@@ -74,7 +86,21 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     }
     let probe = with_crates.contains("probe");
     if probe {
-        let key = crate::probe_key::build_key();
+        // A build that cannot produce a real key does not produce a binary. The
+        // key is the only thing standing between a production endpoint and
+        // anyone who can reach it, so a weaker one is worse than none: it looks
+        // like a credential in every message and holds like nothing.
+        let key = match crate::probe_key::build_key() {
+            Ok(key) => key,
+            Err(error) => {
+                crate::progress::clear();
+                eprintln!(
+                    "Error: --with-monitoring needs a build key and {error}.\n  \
+                     Set ELEPHC_PROBE_KEY to 64 hex characters to supply one."
+                );
+                process::exit(1);
+            }
+        };
         eprintln!("probe build fingerprint: {}", crate::probe_key::fingerprint(&key));
         ir_module.probe_key = Some(key);
     }
@@ -308,12 +334,19 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         let _ = fs::remove_file(&output_paths.obj);
     }
 
-    // Write the probe build key sidecar next to the binary: the `--probe-host`
-    // client reads it to run the HMAC handshake. Keep it like a `.env` secret.
+    // Write the build key next to the binary: `elephc monitor <address> --key`
+    // reads it to run the HMAC handshake. Keep it like a `.env` secret.
     if let Some(key) = ir_module.probe_key {
-        let sidecar = output_paths.bin.with_extension("probe-key");
+        let sidecar = output_paths.bin.with_extension("key");
         if let Err(err) = fs::write(&sidecar, crate::probe_key::to_hex(&key)) {
-            eprintln!("warning: could not write probe key sidecar {}: {err}", sidecar.display());
+            eprintln!("warning: could not write the build key {}: {err}", sidecar.display());
+        } else if let Err(err) = restrict_to_owner(&sidecar) {
+            // Not fatal — the key is still usable — but say it, because the
+            // whole point of the file is that only its owner can read it.
+            eprintln!(
+                "warning: could not restrict {} to its owner: {err}",
+                sidecar.display()
+            );
         }
     }
 

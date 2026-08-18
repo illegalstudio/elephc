@@ -1,6 +1,6 @@
 //! Purpose:
 //! Compile-time build-key material for `--probe`: generate the 32-byte key that
-//! embeds in the binary and lands in the `.probe-key` sidecar, so the probe
+//! embeds in the binary and lands in the `.key` file beside it, so the probe
 //! endpoint can prove the binary's identity through the shared HMAC handshake.
 //!
 //! Called from:
@@ -18,10 +18,13 @@ use elephc_probe::handshake::KEY_LEN;
 
 /// Returns the build key for this compilation: the `ELEPHC_PROBE_KEY` hex
 /// override when set and valid, otherwise 32 fresh bytes from the OS RNG.
-pub(crate) fn build_key() -> [u8; KEY_LEN] {
+///
+/// `Err` when no entropy source can be read. There is no weaker key: see
+/// `random_key`.
+pub(crate) fn build_key() -> Result<[u8; KEY_LEN], String> {
     if let Ok(hex) = std::env::var("ELEPHC_PROBE_KEY") {
         if let Some(key) = parse_hex_key(hex.trim()) {
-            return key;
+            return Ok(key);
         }
         eprintln!(
             "warning: ELEPHC_PROBE_KEY is not {} hex characters; generating a random key",
@@ -54,50 +57,60 @@ fn parse_hex_key(hex: &str) -> Option<[u8; KEY_LEN]> {
     Some(key)
 }
 
-/// Reads 32 bytes from the OS entropy source. Falls back to a time-seeded xorshift
-/// only if `/dev/urandom` is unavailable — the build key is a possession credential,
-/// not a strong secret, so a degraded source still serves its purpose.
-fn random_key() -> [u8; KEY_LEN] {
+/// Reads 32 bytes from the OS entropy source, or fails.
+///
+/// This used to fall back to a xorshift seeded from the current nanosecond,
+/// justified as "a possession credential, not a strong secret". That rationale
+/// is backwards: a possession credential whose value can be *derived* is not a
+/// credential at all. The seed is the build time, which is in CI logs and in
+/// artifact timestamps, and the handshake hands any unauthenticated client a
+/// nonce and an HMAC over it — a free offline verifier for guessed keys, with no
+/// rate limit and no need to connect twice. Anyone who knew the build second
+/// could recover the key and authenticate to the endpoint without ever holding
+/// the binary.
+///
+/// So: no weaker key. A build that cannot read entropy fails, loudly, rather
+/// than shipping a credential that only looks like one.
+fn random_key() -> Result<[u8; KEY_LEN], String> {
     use std::io::Read as _;
-    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
-        let mut key = [0u8; KEY_LEN];
-        if file.read_exact(&mut key).is_ok() {
-            return key;
-        }
-    }
-    let mut state = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9e3779b97f4a7c15)
-        | 1;
+    let mut file = std::fs::File::open("/dev/urandom")
+        .map_err(|error| format!("cannot open /dev/urandom to generate a build key: {error}"))?;
     let mut key = [0u8; KEY_LEN];
-    for byte in key.iter_mut() {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        *byte = (state >> 24) as u8;
-    }
-    key
+    file.read_exact(&mut key)
+        .map_err(|error| format!("cannot read a build key from /dev/urandom: {error}"))?;
+    Ok(key)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The override is read through the parser, not through the environment.
+    ///
+    /// This used to `set_var`/`remove_var` around a `build_key()` call. Tests run
+    /// in parallel by default, and the variable is process-global: the moment any
+    /// other test in this binary reads a build key, the two race and one of them
+    /// fails for reasons that have nothing to do with what it tests. Exercising
+    /// the parser directly asserts the same property with nothing shared.
     #[test]
     fn hex_override_round_trips() {
         let hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-        std::env::set_var("ELEPHC_PROBE_KEY", hex);
-        let key = build_key();
-        std::env::remove_var("ELEPHC_PROBE_KEY");
+        let key = parse_hex_key(hex).expect("a well-formed override must parse");
         assert_eq!(to_hex(&key), hex);
         assert_eq!(key[0], 0x00);
         assert_eq!(key[31], 0xff);
     }
 
+    /// Two builds must not share a key — that is the whole revocation model.
     #[test]
     fn random_keys_differ() {
-        assert_ne!(random_key(), random_key());
+        let (a, b) = (
+            random_key().expect("entropy"),
+            random_key().expect("entropy"),
+        );
+        assert_ne!(a, b);
+        // And neither is the all-zero key a failed read would leave behind.
+        assert_ne!(a, [0u8; KEY_LEN]);
     }
 
     #[test]

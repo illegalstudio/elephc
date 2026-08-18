@@ -21,7 +21,13 @@ pub const NONCE_LEN: usize = 32;
 /// HMAC-SHA256 output length.
 pub const TAG_LEN: usize = 32;
 
-// --- SHA-256 (FIPS 180-4), dependency-free so the signal-safe crate stays lean ---
+// --- SHA-256 (FIPS 180-4), dependency-free so the crate stays lean ---
+//
+// Not async-signal-safe, and the wording used to imply otherwise: the digests
+// allocate, and `malloc` inside a signal handler deadlocks if the interrupted
+// thread was already in the allocator. Everything below runs in ordinary
+// context — the handshake, the per-request header check, the startup fd probe —
+// and nothing here may be called from the SIGPROF handler.
 
 const SHA256_H: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,

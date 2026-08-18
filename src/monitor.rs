@@ -49,7 +49,7 @@ pub(crate) struct MonitorCommand {
     pub prom_out: Option<String>,
     /// OTLP/HTTP endpoint to export correlated slices to as OpenTelemetry spans.
     pub otlp: Option<String>,
-    /// Path to the `.probe-key` sidecar for `--probe-host` authentication.
+    /// Path to the build key, for reading a running service (`--key`).
     /// Fail the run when a function's share grew by more than this many points.
     pub fail_on_regression: Option<f64>,
     /// Serve the live page over HTTP at this address instead of writing a file.
@@ -3527,7 +3527,7 @@ fn inject_inlined_frames(
 // --------------------------------------------------------------------------
 
 /// Profiles a running `--probe` binary through its endpoint socket: reads the
-/// build key from its `.probe-key` sidecar (or `ELEPHC_PROBE_KEY`), runs the
+/// build key from its `.key` file (or `ELEPHC_PROBE_KEY`), runs the
 /// mutual HMAC handshake, receives the folded profile, and renders the same
 /// table (plus optional Speedscope/pprof). Needs no macOS sampler.
 fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
@@ -3611,7 +3611,7 @@ fn run_probe_host(cmd: &MonitorCommand, socket: &str) -> i32 {
 }
 
 /// Resolves the build key for `--probe-host`: `ELEPHC_PROBE_KEY` hex if set,
-/// else the `<socket-without-.sock>.probe-key` sidecar, else a `.probe-key`
+/// else the `<socket-without-.sock>.key` file, else a `.key`
 /// next to the socket path.
 fn resolve_probe_key(cmd: &MonitorCommand, socket: &str) -> Result<[u8; 32], String> {
     if let Some(path) = &cmd.probe_key {
@@ -3625,8 +3625,8 @@ fn resolve_probe_key(cmd: &MonitorCommand, socket: &str) -> Result<[u8; 32], Str
             .ok_or_else(|| "ELEPHC_PROBE_KEY is not 64 hex characters".to_string());
     }
     let candidates = [
-        format!("{}.probe-key", socket.trim_end_matches(".sock")),
-        format!("{socket}.probe-key"),
+        format!("{}.key", socket.trim_end_matches(".sock")),
+        format!("{socket}.key"),
     ];
     for candidate in &candidates {
         if let Ok(hex) = std::fs::read_to_string(candidate) {
@@ -3636,7 +3636,8 @@ fn resolve_probe_key(cmd: &MonitorCommand, socket: &str) -> Result<[u8; 32], Str
         }
     }
     Err(format!(
-        "no build key: set ELEPHC_PROBE_KEY or place a .probe-key sidecar next to {socket}"
+        "no build key: pass --key <file>, set ELEPHC_PROBE_KEY, or place a .key \
+         file next to {socket}"
     ))
 }
 
@@ -3757,6 +3758,46 @@ fn looks_like_speedscope(path: &str) -> bool {
 /// which is the property a profile viewer's percentages depend on. Recursion is
 /// bounded by the path itself: a function already on the stack is not descended
 /// into again, and its remaining time stays on the frame that reached it.
+/// Below this share of the run, a path is folded into its caller instead of
+/// being descended into.
+///
+/// One stack is emitted per distinct root-to-leaf path, and shared callees are
+/// reached once per caller, so a chain of diamonds — layered dispatch, ordinary
+/// framework shape — doubles the count at every level. It stopped only because
+/// the budget halves each time and integer division eventually reaches zero,
+/// which is a brake made of the units: measured on a 52-node chain, a budget of
+/// 10^6 gave 2,951 stacks and the same graph with a realistic 10-second
+/// nanosecond budget gave 319,930. The bound was `log2(root nanoseconds)`, which
+/// is not a bound anyone chose.
+///
+/// A path carrying less than this fraction of the capture tells a reader
+/// nothing, so it stops there and the time stays on the frame that reached it —
+/// the total is unaffected, which is the property everything downstream rests on.
+///
+/// Measured against the ROOTS' time, not the sum of self times: the budget being
+/// divided comes from inclusive time, and a floor derived from anything else can
+/// round to zero and never engage — which is exactly what a first attempt at
+/// this did.
+const EXACT_STACK_FLOOR_DIVISOR: u64 = 10_000;
+
+/// Hard ceiling on emitted stacks.
+///
+/// The share floor bounds the count in terms of the capture, but a wide enough
+/// graph can still reach it slowly, and no reader has ever needed a hundred
+/// thousand distinct stacks. Reaching it stops the DESCENT, never the emission:
+/// a frame that stops descending keeps its children's time as its own, so the
+/// total stays right and the shape degrades instead of the arithmetic. It is
+/// reported when hit, because a silently truncated profile reads exactly like a
+/// complete one.
+const EXACT_STACK_CAP: usize = 50_000;
+
+/// How deep a single root-to-leaf descent may go before it stops.
+///
+/// `on_path` prevents cycles but not depth, and the recursion is a real Rust
+/// stack: a genuinely deep chain of distinct functions would overflow it, losing
+/// a capture that had already been taken.
+const EXACT_STACK_MAX_DEPTH: usize = 512;
+
 fn exact_stacks(graph: &crate::call_graph::CallGraph) -> Vec<(Vec<(String, Kind)>, u64)> {
     let mut children: Vec<Vec<(usize, u64)>> = vec![Vec::new(); graph.nodes.len()];
     let mut incoming: Vec<u64> = vec![0; graph.nodes.len()];
@@ -3787,6 +3828,10 @@ fn exact_stacks(graph: &crate::call_graph::CallGraph) -> Vec<(Vec<(String, Kind)
             roots.push(top);
         }
     }
+    // The floor is a share of the capture, so it means the same thing whatever
+    // unit the numbers are in.
+    let budget_total: u64 = roots.iter().map(|&r| graph.nodes[r].inclusive).sum();
+    let floor = budget_total / EXACT_STACK_FLOOR_DIVISOR;
     for root in roots {
         let inclusive = graph.nodes[root].inclusive;
         exact_walk(
@@ -3794,10 +3839,18 @@ fn exact_stacks(graph: &crate::call_graph::CallGraph) -> Vec<(Vec<(String, Kind)
             &children,
             root,
             inclusive,
+            floor,
             &mut path,
             &mut on_path,
             &mut seen,
             &mut stacks,
+        );
+    }
+    if stacks.len() >= EXACT_STACK_CAP {
+        eprintln!(
+            "elephc monitor: the call graph produced more than {EXACT_STACK_CAP} distinct \
+             stacks; deeper paths are folded into their callers. Totals are unaffected, \
+             the flame view is coarser."
         );
     }
     // Anything left over sits in a cycle no root reaches. Its own time is real
@@ -3811,6 +3864,33 @@ fn exact_stacks(graph: &crate::call_graph::CallGraph) -> Vec<(Vec<(String, Kind)
     stacks
 }
 
+/// Marks a folded subtree as accounted for, so the leftover pass leaves it alone.
+///
+/// Iterative rather than recursive: this runs precisely when a graph turned out
+/// to be deeper or wider than expected, which is the worst moment to add stack
+/// frames of its own.
+fn mark_folded(
+    children: &[Vec<(usize, u64)>],
+    start: usize,
+    on_path: &[bool],
+    seen: &mut [bool],
+) {
+    let mut stack = vec![start];
+    while let Some(node) = stack.pop() {
+        if seen[node] {
+            continue;
+        }
+        seen[node] = true;
+        for &(child, _) in &children[node] {
+            // A node on the current path is an ancestor, not part of what was
+            // folded away; its own frame still emits.
+            if !seen[child] && !on_path[child] {
+                stack.push(child);
+            }
+        }
+    }
+}
+
 /// One node of `exact_stacks`: place `budget` nanoseconds of this function on
 /// the current path, then hand each child the time its edge measured.
 fn exact_walk(
@@ -3818,6 +3898,7 @@ fn exact_walk(
     children: &[Vec<(usize, u64)>],
     node: usize,
     budget: u64,
+    floor: u64,
     path: &mut Vec<(String, Kind)>,
     on_path: &mut [bool],
     seen: &mut [bool],
@@ -3852,11 +3933,28 @@ fn exact_walk(
             continue;
         }
         let share = scale(edge_ns);
+        // Too small to say anything, too deep to descend safely, or past the
+        // ceiling: the time stays here rather than being dropped, so the total
+        // is unchanged and only the shape gets coarser.
         if share == 0 {
             continue;
         }
+        if share <= floor || path.len() >= EXACT_STACK_MAX_DEPTH || stacks.len() >= EXACT_STACK_CAP
+        {
+            // Folded into this frame: `spent` deliberately does not grow, so the
+            // share stays in `own` below.
+            //
+            // Everything under it must then be marked accounted-for. The leftover
+            // pass emits the self time of every node it never saw, and a folded
+            // subtree is exactly a set of nodes nobody saw — so without this its
+            // time is counted twice, once inside the caller and once flat. It
+            // showed up as +0.0053% on a real capture, which is small enough to
+            // have been read as rounding.
+            mark_folded(children, child, on_path, seen);
+            continue;
+        }
         spent = spent.saturating_add(share);
-        exact_walk(graph, children, child, share, path, on_path, seen, stacks);
+        exact_walk(graph, children, child, share, floor, path, on_path, seen, stacks);
     }
     let own = budget.saturating_sub(spent);
     if own > 0 {
@@ -4357,6 +4455,96 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Bounding the export must not cost its arithmetic.
+    ///
+    /// These two pull against each other, and fixing one broke the other: the
+    /// brake folds a subtree's time into its caller, and the leftover pass emits
+    /// the self time of every node it never saw — so the first version counted
+    /// folded subtrees twice. It measured +0.0053% on a real capture, small
+    /// enough to pass for rounding, which is why the count and the total are
+    /// asserted in the same test on the same graph.
+    ///
+    /// The shape is a chain of diamonds — layered dispatch, not adversarial
+    /// input — where every level doubles the number of distinct paths. Before
+    /// the brake, 52 nodes with a realistic nanosecond budget produced 319,930
+    /// stacks; the bound was `log2(root nanoseconds)`, an accident of the units.
+    #[test]
+    fn bounding_the_export_does_not_cost_its_accounting() {
+        use crate::call_graph::{CallGraph, GraphEdge, GraphNode};
+
+        fn node(name: &str, inclusive: u64, exclusive: u64) -> GraphNode {
+            GraphNode {
+                name: name.to_string(), inclusive, exclusive, call_count: None,
+                alloc_inclusive: 0, alloc_exclusive: 0, io_inclusive: 0, io_exclusive: 0,
+                retained_inclusive: 0, retained_exclusive: 0,
+                wait_inclusive: 0, wait_exclusive: 0, causes: Vec::new(),
+            }
+        }
+
+        // n diamonds: j_k calls a_k and b_k, both of which call j_{k+1}.
+        // Times are consistent — each frame's inclusive covers its own work plus
+        // what it hands on — because an impossible graph proves nothing.
+        // Each self time is DERIVED as inclusive minus what the frame hands on,
+        // so the selfs sum to the run by construction. Hand-picked numbers gave
+        // an impossible graph twice, and an impossible graph proves nothing.
+        let n = 24usize;
+        let run_ns = 10_000_000_000u64; // 10 s, so the floor is a real threshold
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        let mut w = run_ns;
+        for k in 0..n {
+            let (j, a, b) = (3 * k, 3 * k + 1, 3 * k + 2);
+            // j hands everything to its two arms; each arm keeps half of its own.
+            nodes.push(node(&format!("j{k}"), w, 0));
+            nodes.push(node(&format!("a{k}"), w / 2, w / 4));
+            nodes.push(node(&format!("b{k}"), w / 2, w / 4));
+            edges.push(GraphEdge { from: j, to: a, weight: w / 2, count: Some(1) });
+            edges.push(GraphEdge { from: j, to: b, weight: w / 2, count: Some(1) });
+            let next = 3 * (k + 1); // the next junction, or the leaf below
+            edges.push(GraphEdge { from: a, to: next, weight: w / 4, count: Some(1) });
+            edges.push(GraphEdge { from: b, to: next, weight: w / 4, count: Some(1) });
+            w /= 2;
+        }
+        nodes.push(node("leaf", w, w)); // index 3n, where the last arms point
+        let graph = CallGraph {
+            nodes, edges, total: run_ns, queries: Vec::new(), lines: None, trace: None,
+        };
+
+        let run: u64 = graph.nodes.iter().map(|n| n.exclusive).sum();
+        // Repeated halving loses a nanosecond here and there; what matters is
+        // that the fixture is a partition, not that it lands on a round number.
+        assert!(
+            run_ns - run < 100,
+            "the fixture itself must partition the run: {run} vs {run_ns}"
+        );
+        let stacks = exact_stacks(&graph);
+        let exported: u64 = stacks.iter().map(|(_, w)| *w).sum();
+
+        assert!(
+            stacks.len() < 10 * graph.nodes.len(),
+            "{} nodes produced {} stacks — the count is growing with the paths, \
+             not with the graph",
+            graph.nodes.len(),
+            stacks.len()
+        );
+        // The export distributes the roots' inclusive time, which on a real
+        // capture IS the sum of self times; here the two differ by the handful of
+        // nanoseconds this fixture's own halving loses. What is being asserted is
+        // that bounding the walk moved time into a caller rather than duplicating
+        // or dropping it — a defect of that kind moved it by 0.0053% when it was
+        // real, which is far outside this margin.
+        let drift = exported.abs_diff(run);
+        assert!(
+            drift < 100,
+            "bounding the walk must move time into a caller, never duplicate or \
+             drop it: exported {exported} vs run {run} (drift {drift})"
+        );
+        assert!(
+            stacks.iter().all(|(path, _)| path.len() <= EXACT_STACK_MAX_DEPTH),
+            "no stack may exceed the depth bound"
+        );
     }
 
     #[test]

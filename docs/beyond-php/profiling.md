@@ -369,9 +369,14 @@ profile, and a profile is the shape of your code and the URLs it serves.
 Locally, `elephc monitor ./app` needs no key and no address. It passes the
 program a **control channel** — a socket on fd 3 — and possession of that channel
 is the credential: there is nothing to copy, leak, or replay, because it exists
-only for as long as the two processes are connected. No environment variable
-turns profiling on, which means no environment variable can be set by someone
-else to turn it on.
+only for as long as the two processes are connected.
+
+`ELEPHC_PROBE_ADDR` is worth being precise about: it decides whether the program
+*listens*, not whether it can be profiled. Setting it exposes an endpoint that
+still refuses everyone who cannot prove the build key, so it is a deployment
+decision like binding a port — but it is a decision, and an endpoint that exists
+is an endpoint someone can knock on. Nothing you can put in the environment
+turns profiling on by itself.
 
 ### One request in production
 
@@ -384,7 +389,10 @@ X-Elephc-Query: t=<unix seconds>,v=<hex hmac of the timestamp>
 
 The value is signed with the build key and carries a timestamp, so it cannot be
 forged by someone who can set headers, and a captured header stops working within
-five minutes. An invalid or missing value profiles nothing — the request runs
+five minutes of the server's wall clock. That is the clock it has to be — the
+timestamp was minted on another machine, so a monotonic one would mean nothing —
+which makes the window sensitive to a backwards time correction on the server and
+to clock skew between the two hosts. An invalid or missing value profiles nothing — the request runs
 exactly as it would have. (This is the shape Blackfire uses, for the same reason:
 turning profiling on costs the request real time and reveals the code, so asking
 has to be something only a key holder can do.)
@@ -931,9 +939,15 @@ sampled function makes inlining visible by difference.
   anyone who can set one could then profile a service they do not own.
 - **Anyone who can read the *binary* can extract the key.** The handshake
   protects against other processes and other hosts, not against someone who
-  already has the artifact. Restrict the binary and the `.key` sidecar to `0600`
-  if untrusted local users exist; a Unix probe socket is chmod `0600`
-  automatically.
+  already has the artifact — so on a host with untrusted local users, every one
+  of them holds the profiling credential for anything deployed world-readable
+  there. The `<binary>.key` file is written `0600`, and a Unix probe socket is
+  chmod `0600`, but the binary's own permissions are yours to set.
+- **The handshake authenticates; it does not encrypt.** Over `host:port` or a
+  Unix socket, someone positioned in the middle can relay both sides' proofs and
+  then read the profile that follows without ever holding the key. Nothing is
+  forged and no secret leaks, but the capture is readable. Use `https://` across
+  any network you do not control.
 - **Plaintext after the handshake.** Over a Unix socket or loopback that is
   fine. Across a network, use `https://` — the certificate is validated against
   the system roots, and an untrusted one stops the connection — or tunnel over
