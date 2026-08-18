@@ -8,9 +8,10 @@
 //! - Exactly one top-level component is stripped and every link or special entry is rejected.
 
 use std::collections::HashSet;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, FileTimes, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -18,6 +19,30 @@ use std::os::unix::fs::PermissionsExt;
 use flate2::read::GzDecoder;
 
 use super::error::{NativeError, NativeErrorKind};
+
+/// The single modification time every extracted regular file is stamped with: midnight UTC
+/// on 2020-01-01, as seconds since the epoch.
+///
+/// WHY EVERY FILE GETS THE SAME ONE. Extraction writes files in tar order and never applies
+/// the header's mtime, so each file's timestamp is the moment it happened to be written —
+/// which makes the RELATIVE order of any two files a function of their position in the
+/// archive. For an autotools release that is actively wrong: upstream ships `aclocal.m4`
+/// NEWER than `configure.ac`/`m4/*.m4` precisely so the regeneration rules stay dormant,
+/// but `aclocal.m4` sorts near the front of the tar and `configure.ac`/`m4/` near the back,
+/// so extraction INVERTS the relationship. `make` then believes `aclocal.m4` is stale, runs
+/// `am--refresh`, and demands `aclocal-1.16` — a hard failure on any machine without
+/// automake, which is every CI runner and container this project builds on.
+///
+/// Stamping one identical value fixes the whole class rather than one package: GNU make
+/// rebuilds a target only when a prerequisite is STRICTLY newer, so an all-equal tree can
+/// never trigger a regeneration rule, whatever the package's build system.
+///
+/// The value is a FIXED PAST instant, not `now()`, for two reasons. It is reproducible —
+/// two extractions of the same verified tarball are byte-for-byte AND timestamp-for-
+/// timestamp identical. And it is safely older than anything `configure` generates during
+/// the build (`config.status`, `Makefile`, `config.h`), so generated outputs are always
+/// strictly newer than their sources and no build can decide to regenerate them either.
+const STAGED_SOURCE_MTIME: Duration = Duration::from_secs(1_577_836_800);
 
 const MAX_ENTRIES: u64 = 50_000;
 const MAX_EXPANDED: u64 = 256 * 1024 * 1024;
@@ -101,13 +126,27 @@ pub fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<PathBuf
             return Err(archive_error(&original, format!("tar file length mismatch: header {size}, stream {copied}")));
         }
         file.flush().map_err(|error| NativeError::io("flush extracted regular file", &output, error))?;
+        set_uniform_time(&file, &output)?;
         drop(file);
+        // `chmod` moves ctime, never mtime, so the stamp above survives this.
         set_safe_mode(&output, mode)?;
     }
     if root.is_none() {
         return Err(archive_error(archive_path, "archive contains no entries"));
     }
     Ok(destination.to_path_buf())
+}
+
+/// Stamps one extracted regular file with [`STAGED_SOURCE_MTIME`].
+///
+/// Only regular files are stamped. Directory mtimes are not load-bearing for any build
+/// system's staleness rules, and every directory's mtime moves anyway the moment the build
+/// writes its first object file into the tree, so normalizing them would buy nothing.
+fn set_uniform_time(file: &fs::File, path: &Path) -> Result<(), NativeError> {
+    let stamp = UNIX_EPOCH + STAGED_SOURCE_MTIME;
+    let times = FileTimes::new().set_accessed(stamp).set_modified(stamp);
+    file.set_times(times)
+        .map_err(|error| NativeError::io("stamp extracted regular file", path, error))
 }
 
 /// Preserves ordinary executable/read/write bits while excluding privilege-elevation bits.
@@ -184,6 +223,56 @@ mod tests {
     /// Builds a normal non-executable tiny archive entry.
     fn write_tar(path: &Path, entry_path: &str, entry_type: tar::EntryType) {
         write_tar_mode(path, entry_path, entry_type, 0o644);
+    }
+
+    /// EVERY EXTRACTED FILE CARRIES THE SAME MODIFICATION TIME, whatever the archive said
+    /// and whatever order the entries came in.
+    ///
+    /// This is the regression guard for a real CI outage. Extraction applies no header
+    /// mtime, so before this each file inherited the instant it was written — making the
+    /// relative age of any two files a function of their tar position. An autotools release
+    /// ships `aclocal.m4` deliberately NEWER than `configure.ac` and `m4/*.m4` so the
+    /// regeneration rules stay dormant, but `aclocal.m4` sits near the FRONT of the tar and
+    /// `configure.ac`/`m4/` near the BACK, so extraction inverted exactly the relationship
+    /// upstream set up. `make` then ran `am--refresh` and demanded `aclocal-1.16`, which no
+    /// CI runner or container here has: nghttp2 failed to build on all three platforms.
+    ///
+    /// The fixture below mirrors that shape — a front entry and a back entry, with the
+    /// front one deliberately given the NEWER header mtime, i.e. the upstream arrangement —
+    /// and asserts the extracted tree flattens both to one value. Equal mtimes are enough:
+    /// GNU make rebuilds only on a STRICTLY newer prerequisite.
+    #[test]
+    fn extraction_flattens_every_file_mtime() {
+        let root = fixture("uniform-mtime");
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("a.tar.gz");
+        let file = fs::File::create(&archive).unwrap();
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        // Front of the archive, newest upstream mtime — `aclocal.m4`'s role.
+        for (name, mtime) in [("root/aclocal.m4", 2_000_000_100_u64), ("root/m4/generated.m4", 2_000_000_000)] {
+            let bytes = b"fixture";
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_mtime(mtime);
+            header.set_cksum();
+            builder.append_data(&mut header, name, &bytes[..]).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let output = root.join("out");
+        extract_tar_gz(&archive, &output).unwrap();
+
+        let expected = UNIX_EPOCH + STAGED_SOURCE_MTIME;
+        let first = fs::metadata(output.join("aclocal.m4")).unwrap().modified().unwrap();
+        let second = fs::metadata(output.join("m4/generated.m4")).unwrap().modified().unwrap();
+        assert_eq!(first, expected, "extracted files must carry the fixed staging stamp");
+        assert_eq!(second, expected, "extracted files must carry the fixed staging stamp");
+        // The property the build systems actually depend on: neither file is newer.
+        assert_eq!(first, second);
+        fs::remove_dir_all(root).unwrap();
     }
 
     /// Verifies a leading `git archive`-style PAX global extended header (as shipped in
