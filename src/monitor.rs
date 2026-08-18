@@ -333,9 +333,14 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     }
     // A running service is a legitimate target, not a special mode: `monitor
     // 127.0.0.1:9000` reads a process that is already serving traffic, which is
-    // the only way to profile production without restarting it. A path stays a
-    // path, so a local socket is still a local socket.
-    if remote_target(&cmd.target).is_some() || cmd.target.starts_with('/') {
+    // the only way to profile production without restarting it.
+    //
+    // A local socket is recognised by ASKING THE FILESYSTEM, not by its spelling.
+    // Keying on a leading `/` made every absolute path a socket, so
+    // `monitor /usr/local/bin/shop` tried to connect to the binary and
+    // `monitor /home/me/shop.php` answered with a complaint about a missing build
+    // key — an absolute path being the most ordinary thing a user can type.
+    if remote_target(&cmd.target).is_some() || is_socket_path(&cmd.target) {
         let target = cmd.target.clone();
         return run_probe_host(&cmd, &target);
     }
@@ -2217,6 +2222,12 @@ const MONITORING_MARKER: &[u8] = b"elephc-monitoring-v1";
 /// anything is launched. Running it and reporting an empty profile would read as
 /// "your program is fast", which is the worst possible way to be wrong.
 fn carries_monitoring(path: &std::path::Path) -> bool {
+    // Regular files only. `fs::read` on a character device never returns —
+    // `monitor /dev/zero` read until the machine gave out — and on a directory
+    // it fails in a way that used to read as "no marker".
+    if !std::fs::metadata(path).map(|m| m.is_file()).unwrap_or(false) {
+        return false;
+    }
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
@@ -2227,12 +2238,43 @@ fn carries_monitoring(path: &std::path::Path) -> bool {
 
 /// Refuses a target that was not built to be monitored.
 ///
+/// Whether a target names an existing Unix socket.
+///
+/// The question is what the path IS, not how it is spelled: a socket answers a
+/// profiling endpoint, a regular file is a program to run. Asking the filesystem
+/// costs one `stat` and removes a whole class of surprise — a path that does not
+/// exist is not a socket either, so it falls through to the file paths and gets
+/// their error message instead of a connection failure.
+fn is_socket_path(target: &str) -> bool {
+    use std::os::unix::fs::FileTypeExt as _;
+    std::fs::metadata(target)
+        .map(|meta| meta.file_type().is_socket())
+        .unwrap_or(false)
+}
+
 /// Deliberately strict, with no reduced fallback. An external sampler could still
 /// produce time shares for an unequipped binary, but shipping that as a silent
 /// downgrade means two different things arrive under one command and the reader
 /// has to notice which — the exact ambiguity this whole design removes. One
 /// answer, or an error naming the fix.
 fn require_monitoring(path: &std::path::Path) -> Result<(), String> {
+    // Say what is actually wrong. Every read failure used to collapse into
+    // "not built with --with-monitoring", so a typo'd path, a directory, or a
+    // permission problem all sent the user off to rebuild a binary that was
+    // never the issue — an error that confidently names the wrong cause is
+    // worse than one that admits it does not know.
+    match std::fs::metadata(path) {
+        Ok(meta) if !meta.is_file() => {
+            return Err(format!(
+                "{} is not a file, so there is nothing to run.",
+                path.display()
+            ));
+        }
+        Err(error) => {
+            return Err(format!("cannot read {}: {error}", path.display()));
+        }
+        Ok(_) => {}
+    }
     if carries_monitoring(path) {
         return Ok(());
     }
@@ -3784,7 +3826,19 @@ fn exact_walk(
     path.push((graph.nodes[node].name.clone(), Kind::Php));
     on_path[node] = true;
     seen[node] = true;
-    let inclusive = graph.nodes[node].inclusive.max(1);
+    // The denominator is whichever is larger: the function's own inclusive time,
+    // or what its edges actually claim. They should agree, and in every capture
+    // measured here they do — but a truncated or corrupted dump can name edges
+    // summing past the parent, and then the children walk away with more than
+    // the budget while `own` saturates to zero. Taking the larger keeps the
+    // proportions and makes "the export totals the run" true by construction
+    // rather than true by luck.
+    let claimed: u64 = children[node]
+        .iter()
+        .filter(|(child, _)| !on_path[*child])
+        .map(|(_, edge_ns)| *edge_ns)
+        .sum();
+    let inclusive = graph.nodes[node].inclusive.max(claimed).max(1);
     // This path's share of the function, so a function with several callers is
     // divided among them instead of counted once per caller.
     let scale = |value: u64| -> u64 {

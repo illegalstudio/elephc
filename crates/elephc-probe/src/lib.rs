@@ -651,14 +651,31 @@ fn control_fd_present() -> bool {
         if ok != 0 || kind != libc::SOCK_STREAM {
             return false;
         }
+        // PEEK, then take only what is ours.
+        //
+        // Reading first and asking afterwards destroys data belonging to a
+        // program that never asked to be profiled: fd 3 is an ordinary number, a
+        // supervisor may hand a child a connected socket on it, and consuming 16
+        // bytes of someone else's protocol is silent and unrecoverable. Measured
+        // before this changed: a 35-byte payload came back 19 bytes long.
         let mut buf = [0u8; 16];
         let read = libc::recv(
             CONTROL_FD,
             buf.as_mut_ptr() as *mut libc::c_void,
             buf.len(),
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        );
+        if read != CONTROL_MAGIC.len() as isize || buf != CONTROL_MAGIC {
+            return false;
+        }
+        // It is ours: consume the marker so nothing downstream reads it back.
+        libc::recv(
+            CONTROL_FD,
+            buf.as_mut_ptr() as *mut libc::c_void,
+            CONTROL_MAGIC.len(),
             libc::MSG_DONTWAIT,
         );
-        read == CONTROL_MAGIC.len() as isize && buf == CONTROL_MAGIC
+        true
     }
 }
 
@@ -708,11 +725,28 @@ pub extern "C" fn elephc_probe_verify_query(ptr: *const u8, len: usize) -> u32 {
 
     let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut now) };
-    if (now.tv_sec as i64 - stamp).abs() > QUERY_WINDOW_SECS {
+    if !within_query_window(now.tv_sec as i64, stamp) {
         return 0;
     }
     let expected = handshake::hmac_sha256(&key, stamp.to_string().as_bytes());
     u32::from(handshake::tags_equal(&expected, &tag))
+}
+
+/// Whether a signed timestamp is close enough to now to be accepted.
+///
+/// Saturating on purpose. `stamp` is parsed straight out of an HTTP header, so a
+/// client picks it: with plain `now - stamp` a value near `i64::MIN` overflows —
+/// which panics outright in debug, and in release wraps to `i64::MIN`, where
+/// `.abs()` panics unconditionally. Either way one crafted header aborts the
+/// process, and the panic crosses an `extern "C"` boundary on its way out. The
+/// header is accepted from untrusted clients by design, so the arithmetic that
+/// reads it has to be total.
+///
+/// Extracted rather than left inline because inline it was untestable: the
+/// function around it returns early when no build key is embedded, which every
+/// test build is, so a test could never reach the expression.
+fn within_query_window(now: i64, stamp: i64) -> bool {
+    now.saturating_sub(stamp).saturating_abs() <= QUERY_WINDOW_SECS
 }
 
 /// Lowercase hex to bytes; `None` on anything malformed, so a truncated tag is
@@ -885,6 +919,128 @@ fn symbolize<'a>(symbols: &[(u64, &'a str)], pc: u64) -> &'a str {
 
 #[cfg(test)]
 mod tests {
+    /// The capability check must not consume a stream that is not its own.
+    ///
+    /// fd 3 is just a number: a supervisor can hand a child a connected socket
+    /// there, and this check runs on every start of every monitored binary. It
+    /// used to `recv` 16 bytes and *then* compare — measured, a 35-byte payload
+    /// came back 19 bytes long, silently, with nothing in the program able to
+    /// notice. Both ends stay open here, because closing one discards whatever
+    /// is queued and would hide the very thing being measured.
+    #[test]
+    fn the_capability_check_leaves_a_foreign_stream_intact() {
+        const PAYLOAD: &[u8] = b"HELLO-FROM-SUPERVISOR-PROTOCOL-DATA";
+        unsafe {
+            let mut fds = [0i32; 2];
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+            let (ours, theirs) = (fds[0], fds[1]);
+            assert_eq!(
+                libc::send(ours, PAYLOAD.as_ptr() as *const libc::c_void, PAYLOAD.len(), 0),
+                PAYLOAD.len() as isize
+            );
+            let saved = libc::dup(super::CONTROL_FD);
+            libc::dup2(theirs, super::CONTROL_FD);
+
+            let verdict = super::control_fd_present();
+
+            let mut buf = [0u8; 256];
+            let left = libc::recv(
+                ours,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+                libc::MSG_DONTWAIT,
+            );
+            let left = if left < 0 { 0 } else { left as usize };
+
+            if saved >= 0 {
+                libc::dup2(saved, super::CONTROL_FD);
+                libc::close(saved);
+            } else {
+                libc::close(super::CONTROL_FD);
+            }
+            libc::close(ours);
+            libc::close(theirs);
+
+            assert!(!verdict, "non-magic data must not read as a control channel");
+            assert_eq!(
+                left,
+                PAYLOAD.len(),
+                "the check consumed {} byte(s) of someone else's stream",
+                PAYLOAD.len() - left
+            );
+        }
+    }
+
+    /// ...and it must still recognise the real thing, and consume its marker.
+    #[test]
+    fn the_capability_check_still_recognises_its_own_channel() {
+        unsafe {
+            let mut fds = [0i32; 2];
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+            let (ours, theirs) = (fds[0], fds[1]);
+            let magic = super::CONTROL_MAGIC;
+            let trailing = b"AFTER";
+            libc::send(ours, magic.as_ptr() as *const libc::c_void, magic.len(), 0);
+            libc::send(ours, trailing.as_ptr() as *const libc::c_void, trailing.len(), 0);
+            let saved = libc::dup(super::CONTROL_FD);
+            libc::dup2(theirs, super::CONTROL_FD);
+
+            let verdict = super::control_fd_present();
+
+            // The marker is gone; whatever followed it is not.
+            let mut buf = [0u8; 64];
+            let left = libc::recv(
+                super::CONTROL_FD,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+                libc::MSG_DONTWAIT,
+            );
+            let left = if left < 0 { 0 } else { left as usize };
+
+            if saved >= 0 {
+                libc::dup2(saved, super::CONTROL_FD);
+                libc::close(saved);
+            } else {
+                libc::close(super::CONTROL_FD);
+            }
+            libc::close(ours);
+            libc::close(theirs);
+
+            assert!(verdict, "the real magic must be recognised");
+            assert_eq!(&buf[..left], trailing, "the marker must be consumed, and only it");
+        }
+    }
+
+    /// A client-supplied timestamp must never be able to abort the process.
+    ///
+    /// `i64::MIN + now` is the value that makes `now - stamp` overflow: it
+    /// panicked in debug at the subtraction and in release at `.abs()`, so a
+    /// single `X-Elephc-Query` header took down a `--web` service. Both extremes
+    /// are checked, plus the ordinary cases, so the window itself stays correct
+    /// while being total.
+    #[test]
+    fn a_crafted_timestamp_cannot_abort_the_window_check() {
+        let now: i64 = 1_800_000_000;
+        for stamp in [i64::MIN, i64::MAX, i64::MIN.wrapping_add(now), i64::MIN + 1] {
+            assert!(
+                !super::within_query_window(now, stamp),
+                "a forged stamp must fall outside the window, not panic"
+            );
+        }
+        // And the window still means what it says.
+        assert!(super::within_query_window(now, now));
+        assert!(super::within_query_window(now, now - super::QUERY_WINDOW_SECS));
+        assert!(super::within_query_window(now, now + super::QUERY_WINDOW_SECS));
+        assert!(!super::within_query_window(now, now - super::QUERY_WINDOW_SECS - 1));
+        assert!(!super::within_query_window(now, now + super::QUERY_WINDOW_SECS + 1));
+    }
+
     use super::*;
 
     /// The route tests mutate the process-global `REGION`/`CURRENT_ROUTE`, so

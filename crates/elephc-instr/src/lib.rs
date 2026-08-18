@@ -512,10 +512,24 @@ static TRACE_CTX: Mutex<Option<(String, String, String, u64, String)>> = Mutex::
 fn encode_field(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
-        if byte == b'%' || byte <= b' ' || byte == 0x7f {
-            out.push_str(&format!("%{byte:02X}"));
-        } else {
+        // Anything outside printable ASCII is escaped, and `%` and `=` with it.
+        //
+        // The old rule kept every byte above 0x7F and pushed it with
+        // `byte as char`, which is not a pass-through: `char` widens the byte to
+        // that Unicode scalar, and pushing it re-encodes it as UTF-8. A request
+        // for `/café` (C3 A9) reached the profile as `cafÃ©` (C3 83 C2 A9), so
+        // the operator was shown a route their server never received — silently,
+        // for every non-ASCII path.
+        //
+        // Escaping them instead is both lossless (the reader percent-decodes back
+        // to the original bytes) and safer: the field becomes pure ASCII, so no
+        // Unicode separator — U+00A0, U+2028 — can survive into a line-oriented
+        // format and split a record that a reader splits on whitespace. `=` goes
+        // the same way, since the trace line spells its fields `name=value`.
+        if byte.is_ascii_graphic() && byte != b'%' && byte != b'=' {
             out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
         }
     }
     out
@@ -938,6 +952,65 @@ pub extern "C" fn elephc_instr_dump() {
 
 #[cfg(test)]
 mod tests {
+    /// A route must come back out of the trace line exactly as it went in.
+    ///
+    /// The encoder used to push non-ASCII bytes with `byte as char`, which is a
+    /// widening, not a pass-through: `/café` (C3 A9) was written `cafÃ©`
+    /// (C3 83 C2 A9), so the profile showed a route the server never received.
+    /// Silent, and on every non-ASCII path.
+    ///
+    /// Round-trip rather than golden output: what matters is that a reader gets
+    /// the original bytes back, not which spelling the encoder chose.
+    #[test]
+    fn a_route_round_trips_through_the_trace_line() {
+        // The decoder that ships in `monitor`, restated here so this crate can
+        // test the pair without depending on the compiler crate.
+        fn decode(value: &str) -> Vec<u8> {
+            let bytes = value.as_bytes();
+            let mut out = Vec::with_capacity(bytes.len());
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'%' && i + 2 < bytes.len() {
+                    if let Some(byte) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                        .ok()
+                        .and_then(|h| u8::from_str_radix(h, 16).ok())
+                    {
+                        out.push(byte);
+                        i += 3;
+                        continue;
+                    }
+                }
+                out.push(bytes[i]);
+                i += 1;
+            }
+            out
+        }
+
+        for route in [
+            "GET /users/{id}",
+            "GET /caf\u{e9}",              // non-ASCII, the corrupted case
+            "GET /\u{1f600}/emoji",         // 4-byte scalar
+            "GET /a b\tc",                 // ASCII whitespace
+            "GET /x?q=1&r=2",              // the `=` the trace line uses
+            "GET /100%25",                 // a literal percent
+            "GET /\u{a0}nbsp",             // U+00A0: whitespace to a Unicode reader
+            "GET /line\nbreak",            // must never reach the line raw
+        ] {
+            let encoded = super::encode_field(route);
+            assert_eq!(
+                decode(&encoded),
+                route.as_bytes(),
+                "route {route:?} did not survive encoding (got {encoded:?})"
+            );
+            // Pure ASCII graphics: nothing left that a line- or field-splitting
+            // reader could mistake for a separator.
+            assert!(
+                encoded.bytes().all(|b| b.is_ascii_graphic() && b != b'='),
+                "encoded field must carry no separator or non-ASCII byte: {encoded:?}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1088,7 +1161,12 @@ mod tests {
     fn an_untrusted_route_cannot_forge_trace_line_fields() {
         let forged = encode_field("GET /x start=0 route=evil");
         assert!(!forged.contains(' '), "a space would open a new field: {forged}");
-        assert_eq!(forged, "GET%20/x%20start=0%20route=evil");
+        // `=` is escaped too. This used to assert the opposite — that
+        // `start=0` and `route=evil` survived raw — which contradicted the
+        // test's own name: the separator a `key=value` line splits on was
+        // exactly the character left under an attacker's control.
+        assert_eq!(forged, "GET%20/x%20start%3D0%20route%3Devil");
+        assert!(!forged.contains('='), "a `=` would forge a field: {forged}");
 
         // Newlines would open a whole new record, which is worse.
         let multiline = encode_field("GET /a\nelephc-instr-trace: trace=deadbeef");
