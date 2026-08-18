@@ -87,6 +87,44 @@ fn test_error_pcntl_waitid_info_must_be_variable() {
     );
 }
 
+/// Verifies PCNTL signal sets require indexed integer array storage.
+#[test]
+fn test_error_pcntl_signal_mask_requires_integer_array() {
+    expect_error(
+        "<?php pcntl_sigprocmask(SIG_BLOCK, ['SIGUSR1']);",
+        "pcntl_sigprocmask() parameter $signals must be an indexed integer array",
+    );
+}
+
+/// Verifies the prior-mask output is a writable variable.
+#[test]
+fn test_error_pcntl_signal_mask_output_must_be_variable() {
+    expect_error(
+        "<?php pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1], []);",
+        "pcntl_sigprocmask() parameter $old_signals must be passed a variable",
+    );
+}
+
+/// Verifies Linux synchronous signal info is written only through a variable.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_error_pcntl_signal_wait_info_must_be_variable() {
+    expect_error(
+        "<?php pcntl_sigwaitinfo([SIGUSR1], []);",
+        "pcntl_sigwaitinfo() parameter $info must be passed a variable",
+    );
+}
+
+/// Verifies Linux timed waits reject the default zero-duration timeout.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_error_pcntl_timed_signal_wait_requires_positive_timeout() {
+    expect_error(
+        "<?php pcntl_sigtimedwait([SIGUSR1]);",
+        "pcntl_sigtimedwait() requires a positive seconds or nanoseconds timeout",
+    );
+}
+
 /// Verifies Linux CPU affinity requires the optional-looking mask parameter.
 #[cfg(target_os = "linux")]
 #[test]

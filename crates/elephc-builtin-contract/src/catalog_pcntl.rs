@@ -169,6 +169,81 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Changes a process, process-group, or user scheduling priority.",
     ),
     pcntl_contract(
+        "pcntl_sigprocmask",
+        &[
+            ParamSpec {
+                name: "mode",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "signals",
+                ty: TypeSpec::Mixed,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "old_signals",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: true,
+            },
+        ],
+        TypeSpec::Bool,
+        "Changes the signal mask and optionally writes the prior blocked signals.",
+    ),
+    pcntl_contract(
+        "pcntl_sigtimedwait",
+        &[
+            ParamSpec {
+                name: "signals",
+                ty: TypeSpec::Mixed,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "info",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: true,
+            },
+            ParamSpec {
+                name: "seconds",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "nanoseconds",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Mixed,
+        "Waits up to a timeout for one selected Linux signal and returns its number or false.",
+    ),
+    pcntl_contract(
+        "pcntl_sigwaitinfo",
+        &[
+            ParamSpec {
+                name: "signals",
+                ty: TypeSpec::Mixed,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "info",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: true,
+            },
+        ],
+        TypeSpec::Mixed,
+        "Waits synchronously for one selected Linux signal and returns its number or false.",
+    ),
+    pcntl_contract(
         "pcntl_strerror",
         &[ParamSpec {
             name: "error_code",

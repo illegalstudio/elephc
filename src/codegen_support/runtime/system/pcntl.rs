@@ -136,7 +136,7 @@ fn emit_pcntl_siginfo_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                 // establish the helper frame
     emitter.instruction("str x0, [sp]");                                     // preserve the stable siginfo pointer
     emitter.instruction("mov x0, #32");                                      // hash capacity
-    emitter.instruction("mov x1, #0");                                       // hash value type = Int
+    emitter.instruction("mov x1, #7");                                       // hash value type = boxed Mixed
     emitter.instruction("bl __rt_hash_new");                                 // allocate the PHP associative array
     emitter.instruction("str x0, [sp, #8]");                                 // preserve the current hash pointer
     for (symbol, length, offset, bit) in SIGINFO_FIELDS {
@@ -147,9 +147,16 @@ fn emit_pcntl_siginfo_array_aarch64(emitter: &mut Emitter) {
         emitter.instruction("ldr x0, [sp, #8]");                              // C arg0 = current hash
         abi::emit_symbol_address(emitter, "x1", symbol);                      // C arg1 = string key bytes
         emitter.instruction(&format!("mov x2, #{}", length));                 // C arg2 = key length
-        emitter.instruction(&format!("ldr x3, [x9, #{}]", offset));          // C arg3 = integer value
+        emitter.instruction("ldr x9, [sp]");                                 // symbol loading may use scratch registers
+        emitter.instruction(&format!("ldr x3, [x9, #{}]", offset));          // C arg3 = stable scalar value
         emitter.instruction("mov x4, #0");                                   // unused high value word
-        emitter.instruction("mov x5, #0");                                   // runtime value tag = Int
+        if matches!(*bit, 6 | 7 | 8) {
+            emitter.instruction("scvtf d0, x3");                              // PHP exposes clock ticks and addresses as float
+            emitter.instruction("fmov x3, d0");                              // pass the double payload bits
+            emitter.instruction("mov x5, #2");                               // runtime value tag = Float
+        } else {
+            emitter.instruction("mov x5, #0");                               // runtime value tag = Int
+        }
         emitter.instruction("bl __rt_hash_set");                             // insert the present field
         emitter.instruction("str x0, [sp, #8]");                             // retain a potentially reallocated hash
         emitter.label(&skip);
@@ -171,7 +178,7 @@ fn emit_pcntl_siginfo_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                      // reserve record and hash slots, keeping call alignment
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                     // preserve the stable siginfo pointer
     emitter.instruction("mov rdi, 32");                                      // hash capacity
-    emitter.instruction("mov rsi, 0");                                       // hash value type = Int
+    emitter.instruction("mov rsi, 7");                                       // hash value type = boxed Mixed
     emitter.instruction("call __rt_hash_new");                               // allocate the PHP associative array
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                    // preserve the current hash pointer
     for (symbol, length, offset, bit) in SIGINFO_FIELDS {
@@ -182,9 +189,15 @@ fn emit_pcntl_siginfo_array_x86_64(emitter: &mut Emitter) {
         emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                // C arg0 = current hash
         abi::emit_symbol_address(emitter, "rsi", symbol);                     // C arg1 = string key bytes
         emitter.instruction(&format!("mov rdx, {}", length));                 // C arg2 = key length
-        emitter.instruction(&format!("mov rcx, QWORD PTR [rax + {}]", offset)); // C arg3 = integer value
+        emitter.instruction(&format!("mov rcx, QWORD PTR [rax + {}]", offset)); // C arg3 = stable scalar value
         emitter.instruction("mov r8, 0");                                    // unused high value word
-        emitter.instruction("mov r9, 0");                                    // runtime value tag = Int
+        if matches!(*bit, 6 | 7 | 8) {
+            emitter.instruction("cvtsi2sd xmm0, rcx");                        // PHP exposes clock ticks and addresses as float
+            emitter.instruction("movq rcx, xmm0");                           // pass the double payload bits
+            emitter.instruction("mov r9, 2");                                // runtime value tag = Float
+        } else {
+            emitter.instruction("mov r9, 0");                                // runtime value tag = Int
+        }
         emitter.instruction("call __rt_hash_set");                           // insert the present field
         emitter.instruction("mov QWORD PTR [rbp - 16], rax");                // retain a potentially reallocated hash
         emitter.label(&skip);

@@ -56,6 +56,7 @@ pub(crate) mod object_props;
 pub(crate) mod openssl;
 pub(crate) mod output_buffering;
 pub(crate) mod pcntl;
+pub(crate) mod pcntl_signals;
 pub(crate) mod pointers;
 pub(crate) mod regex;
 pub(crate) mod round_mode;

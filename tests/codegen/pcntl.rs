@@ -82,6 +82,33 @@ fn test_pcntl_getpriority_returns_int() {
     assert_eq!(out, "int");
 }
 
+/// Changes and restores the current signal mask while materializing the prior set by reference.
+#[test]
+fn test_pcntl_signal_mask_round_trip() {
+    let out = compile_and_run(
+        "<?php
+        $old = [];
+        $blocked = pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1], $old);
+        echo ($blocked ? 'blocked' : 'bad') . '|';
+        echo (is_array($old) ? 'array' : 'bad') . '|';
+        echo (pcntl_sigprocmask(SIG_SETMASK, $old) ? 'restored' : 'bad');",
+    );
+    assert_eq!(out, "blocked|array|restored");
+}
+
+/// Returns false on a Linux timed signal wait and preserves an existing info output.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_timed_signal_wait_timeout_preserves_info() {
+    let out = compile_and_run(
+        "<?php
+        $info = ['old' => 42];
+        $received = pcntl_sigtimedwait([SIGUSR1], $info, 0, 1);
+        echo (!$received ? 'timeout' : 'bad') . '|' . $info['old'];",
+    );
+    assert_eq!(out, "timeout|42");
+}
+
 /// Reads and reapplies the current Linux CPU affinity through indexed integer arrays.
 #[cfg(target_os = "linux")]
 #[test]
