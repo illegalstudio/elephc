@@ -2,7 +2,7 @@
 title: "ptr_write8() — internals"
 description: "Compiler internals for ptr_write8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 348
+  order: 380
 ---
 
 ## `ptr_write8()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_write8.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write8.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:611](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L611) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
