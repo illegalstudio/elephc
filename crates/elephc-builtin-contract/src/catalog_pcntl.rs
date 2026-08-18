@@ -63,6 +63,31 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Enables or queries automatic dispatch of pending signal callbacks.",
     ),
     pcntl_contract(
+        "pcntl_exec",
+        &[
+            ParamSpec {
+                name: "path",
+                ty: TypeSpec::Str,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "args",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "env_vars",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Replaces the current process image with a program and optional arguments and environment.",
+    ),
+    pcntl_contract(
         "pcntl_errno",
         &[],
         TypeSpec::Int,

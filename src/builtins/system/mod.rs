@@ -67,6 +67,7 @@ pub mod mktime;
 pub mod passthru;
 pub mod pcntl_alarm;
 pub mod pcntl_async_signals;
+pub mod pcntl_exec;
 pub mod pcntl_errno;
 pub mod pcntl_fork;
 pub mod pcntl_get_last_error;

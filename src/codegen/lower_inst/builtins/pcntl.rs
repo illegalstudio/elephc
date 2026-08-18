@@ -34,6 +34,7 @@ pub(crate) fn lower(
     match target {
         PcntlRuntime::Alarm => lower_unary_int_bridge(ctx, inst, "pcntl_alarm", "elephc_pcntl_alarm", false),
         PcntlRuntime::AsyncSignals => super::pcntl_handlers::lower_async_signals(ctx, inst),
+        PcntlRuntime::Exec => super::pcntl_exec::lower_exec(ctx, inst),
         PcntlRuntime::Fork => lower_zero_arg_int_bridge(ctx, inst, "pcntl_fork", "elephc_pcntl_fork"),
         PcntlRuntime::GetCpu => {
             lower_zero_arg_int_bridge(ctx, inst, "pcntl_getcpu", "elephc_pcntl_getcpu")
