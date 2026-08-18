@@ -81,3 +81,54 @@ fn test_pcntl_getpriority_returns_int() {
     );
     assert_eq!(out, "int");
 }
+
+/// Forks and reaps a real child through `pcntl_waitpid`, proving by-reference status writeback.
+#[test]
+fn test_pcntl_fork_waitpid_round_trip() {
+    let out = compile_and_run(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { exit(23); }
+        $status = 0;
+        $waited = pcntl_waitpid($pid, $status);
+        echo ($waited === $pid ? 'pid' : 'bad') . '|';
+        echo pcntl_wifexited($status) . '|' . pcntl_wexitstatus($status);",
+    );
+    assert_eq!(out, "pid|1|23");
+}
+
+/// Forks and reaps a real child through the any-child `pcntl_wait` entry point.
+#[test]
+fn test_pcntl_fork_wait_round_trip() {
+    let out = compile_and_run(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { exit(31); }
+        $status = 0;
+        $waited = pcntl_wait($status);
+        echo ($waited === $pid ? 'pid' : 'bad') . '|';
+        echo pcntl_wifexited($status) . '|' . pcntl_wexitstatus($status);",
+    );
+    assert_eq!(out, "pid|1|31");
+}
+
+/// Populates previously undefined status and usage outputs with PHP-compatible value types.
+#[test]
+fn test_pcntl_waitpid_populates_resource_usage_outputs() {
+    let out = compile_and_run(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { exit(19); }
+        $waited = pcntl_waitpid(
+            process_id: $pid,
+            status: $status,
+            flags: 0,
+            resource_usage: $usage,
+        );
+        echo ($waited === $pid ? 'pid' : 'bad') . '|';
+        echo pcntl_wexitstatus($status) . '|';
+        echo count($usage) . '|';
+        echo is_int($usage['ru_utime.tv_sec']) ? 'int' : 'bad';",
+    );
+    assert_eq!(out, "pid|19|17|int");
+}

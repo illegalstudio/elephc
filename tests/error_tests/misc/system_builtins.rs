@@ -60,6 +60,24 @@ fn test_error_pcntl_status_requires_int() {
     );
 }
 
+/// Verifies `pcntl_wait()` rejects a non-variable status output.
+#[test]
+fn test_error_pcntl_wait_status_must_be_variable() {
+    expect_error(
+        "<?php pcntl_wait(0);",
+        "pcntl_wait() parameter $status must be passed a variable",
+    );
+}
+
+/// Verifies `pcntl_waitpid()` rejects a non-variable resource-usage output.
+#[test]
+fn test_error_pcntl_waitpid_resource_usage_must_be_variable() {
+    expect_error(
+        "<?php $status = 0; pcntl_waitpid(1, $status, 0, []);",
+        "pcntl_waitpid() parameter $resource_usage must be passed a variable",
+    );
+}
+
 /// Verifies an eval barrier allows later reads of variables that eval may create dynamically.
 #[test]
 fn test_eval_barrier_allows_dynamic_variable_read() {

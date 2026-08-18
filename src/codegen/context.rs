@@ -322,7 +322,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns whether this slot receives an EIR store or a typed runtime writeback.
     pub(super) fn local_slot_has_store(&self, slot: LocalSlotId) -> bool {
-        self.local_analysis.has_store(slot) || self.openssl_encrypt_writes_local(slot)
+        self.local_analysis.has_store(slot)
+            || self.openssl_encrypt_writes_local(slot)
+            || self.pcntl_writes_local(slot)
     }
 
     /// Returns whether an `openssl_encrypt()` call writes its GCM tag into this local.
@@ -344,6 +346,27 @@ impl<'a> FunctionContext<'a> {
                     .get(5)
                     .and_then(|value| self.loaded_local_slot(*value))
                     == Some(slot)
+        })
+    }
+
+    /// Returns whether a typed PCNTL wait operation writes status or resource usage to `slot`.
+    fn pcntl_writes_local(&self, slot: LocalSlotId) -> bool {
+        self.function.instructions.iter().any(|inst| {
+            let (status_index, usage_index) = match inst.immediate {
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
+                    crate::ir::PcntlRuntime::Wait,
+                ))) => (0, 2),
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
+                    crate::ir::PcntlRuntime::WaitPid,
+                ))) => (1, 3),
+                _ => return false,
+            };
+            [status_index, usage_index].into_iter().any(|index| {
+                inst.operands
+                    .get(index)
+                    .and_then(|value| self.loaded_local_slot(*value))
+                    == Some(slot)
+            })
         })
     }
 
@@ -793,6 +816,23 @@ impl<'a> FunctionContext<'a> {
                 ty
             )));
         }
+        self.release_local_before_refcounted_writeback(slot)
+    }
+
+    /// Releases a refcounted or boxed local value before a runtime-owned output replaces it.
+    pub(super) fn release_local_before_refcounted_writeback(
+        &mut self,
+        slot: LocalSlotId,
+    ) -> Result<()> {
+        let ty = self.local_php_type(slot)?.codegen_repr();
+        if !(matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+            || ty.is_refcounted())
+        {
+            return Err(CodegenIrError::unsupported(format!(
+                "refcounted writeback into PHP type {:?}",
+                ty
+            )));
+        }
         match self.local_slot_representation(slot) {
             LocalSlotRepresentation::Raw => {
                 let offset = self.local_offset(slot)?;
@@ -801,8 +841,8 @@ impl<'a> FunctionContext<'a> {
             LocalSlotRepresentation::RefCell => self.release_ref_cell_value(slot, &ty)?,
             LocalSlotRepresentation::Dynamic => {
                 let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
-                let ref_cell = self.next_label("string_writeback_release_ref_cell");
-                let done = self.next_label("string_writeback_release_done");
+                let ref_cell = self.next_label("refcounted_writeback_release_ref_cell");
+                let done = self.next_label("refcounted_writeback_release_done");
                 let state_reg = abi::secondary_scratch_reg(self.emitter);
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {

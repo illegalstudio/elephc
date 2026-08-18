@@ -13,6 +13,8 @@ mod basics;
 mod nullable_string_return;
 #[path = "runtime_gc/parse_url.rs"]
 mod parse_url;
+#[path = "runtime_gc/pcntl.rs"]
+mod pcntl;
 #[path = "runtime_gc/regressions.rs"]
 mod regressions;
 #[path = "runtime_gc/assoc_rebind_release.rs"]

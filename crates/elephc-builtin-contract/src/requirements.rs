@@ -32,6 +32,8 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "pcntl_getpriority",
             "pcntl_setpriority",
             "pcntl_strerror",
+            "pcntl_wait",
+            "pcntl_waitpid",
             "pcntl_wexitstatus",
             "pcntl_wifcontinued",
             "pcntl_wifexited",

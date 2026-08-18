@@ -15,6 +15,57 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 static LAST_ERROR: AtomicI32 = AtomicI32::new(0);
 
+/// Stable, target-neutral copy of the PHP `getrusage` fields returned by wait operations.
+///
+/// The layout is part of the C ABI shared with generated AOT code. Every field is widened to
+/// `i64` so Darwin and Linux expose the same 17-word block even where libc uses narrower aliases.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ElephcPcntlRUsage {
+    pub ru_oublock: i64,
+    pub ru_inblock: i64,
+    pub ru_msgsnd: i64,
+    pub ru_msgrcv: i64,
+    pub ru_maxrss: i64,
+    pub ru_ixrss: i64,
+    pub ru_idrss: i64,
+    pub ru_minflt: i64,
+    pub ru_majflt: i64,
+    pub ru_nsignals: i64,
+    pub ru_nvcsw: i64,
+    pub ru_nivcsw: i64,
+    pub ru_nswap: i64,
+    pub ru_utime_tv_usec: i64,
+    pub ru_utime_tv_sec: i64,
+    pub ru_stime_tv_usec: i64,
+    pub ru_stime_tv_sec: i64,
+}
+
+impl From<libc::rusage> for ElephcPcntlRUsage {
+    /// Copies one target-native `rusage` value into the stable bridge layout.
+    fn from(usage: libc::rusage) -> Self {
+        Self {
+            ru_oublock: usage.ru_oublock as i64,
+            ru_inblock: usage.ru_inblock as i64,
+            ru_msgsnd: usage.ru_msgsnd as i64,
+            ru_msgrcv: usage.ru_msgrcv as i64,
+            ru_maxrss: usage.ru_maxrss as i64,
+            ru_ixrss: usage.ru_ixrss as i64,
+            ru_idrss: usage.ru_idrss as i64,
+            ru_minflt: usage.ru_minflt as i64,
+            ru_majflt: usage.ru_majflt as i64,
+            ru_nsignals: usage.ru_nsignals as i64,
+            ru_nvcsw: usage.ru_nvcsw as i64,
+            ru_nivcsw: usage.ru_nivcsw as i64,
+            ru_nswap: usage.ru_nswap as i64,
+            ru_utime_tv_usec: usage.ru_utime.tv_usec as i64,
+            ru_utime_tv_sec: usage.ru_utime.tv_sec as i64,
+            ru_stime_tv_usec: usage.ru_stime.tv_usec as i64,
+            ru_stime_tv_sec: usage.ru_stime.tv_sec as i64,
+        }
+    }
+}
+
 /// Records the current thread's OS errno as the last PCNTL error.
 fn record_errno() {
     let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
@@ -114,6 +165,55 @@ pub unsafe extern "C" fn elephc_pcntl_waitpid(
     let pid = libc::waitpid(process_id as libc::pid_t, status, flags);
     if pid == -1 {
         record_errno();
+    }
+    i64::from(pid)
+}
+
+/// Waits for any child and writes its opaque target-native status word.
+///
+/// A failure returns `-1` and records errno. The caller must provide writable status storage.
+///
+/// # Safety
+/// `status` must be null or point to writable `libc::c_int` storage for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_wait(
+    status: *mut libc::c_int,
+    flags: libc::c_int,
+) -> i64 {
+    elephc_pcntl_waitpid(-1, status, flags)
+}
+
+/// Waits for a matching child while collecting its stable PHP resource-usage fields.
+///
+/// A failure returns `-1` and records errno. On success the target-native `rusage` structure is
+/// copied into the fixed 17-word bridge ABI consumed by generated code.
+///
+/// # Safety
+/// `status` must be null or writable as a `libc::c_int`; `usage` must be null or writable as an
+/// `ElephcPcntlRUsage`. Both pointers must remain valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_wait4(
+    process_id: i64,
+    status: *mut libc::c_int,
+    flags: libc::c_int,
+    usage: *mut ElephcPcntlRUsage,
+) -> i64 {
+    let mut native_usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    let native_usage_ptr = if usage.is_null() {
+        std::ptr::null_mut()
+    } else {
+        native_usage.as_mut_ptr()
+    };
+    let pid = libc::wait4(
+        process_id as libc::pid_t,
+        status,
+        flags,
+        native_usage_ptr,
+    );
+    if pid == -1 {
+        record_errno();
+    } else if !usage.is_null() {
+        *usage = ElephcPcntlRUsage::from(native_usage.assume_init());
     }
     i64::from(pid)
 }
@@ -255,6 +355,40 @@ mod tests {
         assert_eq!(elephc_pcntl_wifsignaled(status), 0);
         assert_eq!(elephc_pcntl_wifstopped(status), 0);
         assert_eq!(elephc_pcntl_wexitstatus(status), 23);
+    }
+
+    /// Reaps a real child through the any-child wait entry point.
+    #[test]
+    fn fork_wait_and_status_decoding_round_trip() {
+        let pid = elephc_pcntl_fork();
+        assert!(pid >= 0, "fork failed with errno {}", elephc_pcntl_get_last_error());
+        if pid == 0 {
+            unsafe { libc::_exit(31) };
+        }
+
+        let mut status = 0;
+        let waited = unsafe { elephc_pcntl_wait(&mut status, 0) };
+        assert_eq!(waited, pid);
+        assert_eq!(elephc_pcntl_wifexited(status), 1);
+        assert_eq!(elephc_pcntl_wexitstatus(status), 31);
+    }
+
+    /// Reaps a real child through `wait4` and exposes its usage in the stable bridge layout.
+    #[test]
+    fn fork_wait4_populates_stable_resource_usage() {
+        let pid = elephc_pcntl_fork();
+        assert!(pid >= 0, "fork failed with errno {}", elephc_pcntl_get_last_error());
+        if pid == 0 {
+            unsafe { libc::_exit(19) };
+        }
+
+        let mut status = 0;
+        let mut usage = ElephcPcntlRUsage::default();
+        let waited = unsafe { elephc_pcntl_wait4(pid, &mut status, 0, &mut usage) };
+        assert_eq!(waited, pid);
+        assert_eq!(elephc_pcntl_wexitstatus(status), 19);
+        assert!(usage.ru_utime_tv_sec >= 0);
+        assert!(usage.ru_stime_tv_sec >= 0);
     }
 
     /// Reads the current process priority without confusing a valid `-1` with failure.

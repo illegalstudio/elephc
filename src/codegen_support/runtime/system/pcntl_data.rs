@@ -1,0 +1,36 @@
+//! Purpose:
+//! Emits fixed string keys used by PCNTL resource-usage and signal-info arrays.
+//!
+//! Called from:
+//! - `crate::codegen_support::runtime::data::fixed::emit_runtime_data_fixed()`.
+//!
+//! Key details:
+//! - Symbol spellings are a private assembly ABI shared with the PCNTL runtime emitters.
+
+/// Returns assembly data for PHP's 17 `pcntl_wait*()` resource-usage keys.
+pub(crate) fn emit_pcntl_data() -> String {
+    let fields = [
+        ("_pcntl_rusage_oublock", "ru_oublock"),
+        ("_pcntl_rusage_inblock", "ru_inblock"),
+        ("_pcntl_rusage_msgsnd", "ru_msgsnd"),
+        ("_pcntl_rusage_msgrcv", "ru_msgrcv"),
+        ("_pcntl_rusage_maxrss", "ru_maxrss"),
+        ("_pcntl_rusage_ixrss", "ru_ixrss"),
+        ("_pcntl_rusage_idrss", "ru_idrss"),
+        ("_pcntl_rusage_minflt", "ru_minflt"),
+        ("_pcntl_rusage_majflt", "ru_majflt"),
+        ("_pcntl_rusage_nsignals", "ru_nsignals"),
+        ("_pcntl_rusage_nvcsw", "ru_nvcsw"),
+        ("_pcntl_rusage_nivcsw", "ru_nivcsw"),
+        ("_pcntl_rusage_nswap", "ru_nswap"),
+        ("_pcntl_rusage_utime_usec", "ru_utime.tv_usec"),
+        ("_pcntl_rusage_utime_sec", "ru_utime.tv_sec"),
+        ("_pcntl_rusage_stime_usec", "ru_stime.tv_usec"),
+        ("_pcntl_rusage_stime_sec", "ru_stime.tv_sec"),
+    ];
+    let mut out = String::new();
+    for (symbol, key) in fields {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {key:?}\n"));
+    }
+    out
+}
