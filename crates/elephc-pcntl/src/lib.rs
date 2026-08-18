@@ -430,9 +430,198 @@ pub unsafe extern "C" fn elephc_pcntl_strerror(
     message.as_ptr().cast()
 }
 
+/// Returns the logical CPU on which the calling thread is currently executing.
+///
+/// A failure returns `-1` and records errno for `pcntl_get_last_error()`.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_getcpu() -> i64 {
+    let cpu = unsafe { libc::sched_getcpu() };
+    if cpu == -1 {
+        record_errno();
+    }
+    i64::from(cpu)
+}
+
+/// Copies the selected process CPU affinity into a stable array of widened CPU identifiers.
+///
+/// Returns the number of copied identifiers, or `-1` after recording errno. A process id of zero
+/// follows `sched_getaffinity()` and selects the calling process.
+///
+/// # Safety
+/// `cpus` must point to writable storage for at least `capacity` `i64` values.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_getcpuaffinity(
+    process_id: i64,
+    cpus: *mut i64,
+    capacity: usize,
+) -> i64 {
+    if cpus.is_null() || capacity == 0 {
+        LAST_ERROR.store(libc::EFAULT, Ordering::Relaxed);
+        return -1;
+    }
+    let mut mask = std::mem::zeroed::<libc::cpu_set_t>();
+    libc::CPU_ZERO(&mut mask);
+    if libc::sched_getaffinity(
+        process_id as libc::pid_t,
+        std::mem::size_of::<libc::cpu_set_t>(),
+        &mut mask,
+    ) != 0
+    {
+        record_errno();
+        return -1;
+    }
+    let configured = libc::sysconf(libc::_SC_NPROCESSORS_CONF);
+    let limit = if configured > 0 {
+        configured as usize
+    } else {
+        libc::CPU_SETSIZE as usize
+    }
+    .min(libc::CPU_SETSIZE as usize);
+    let mut count = 0usize;
+    for cpu in 0..limit {
+        if libc::CPU_ISSET(cpu, &mask) {
+            if count == capacity {
+                LAST_ERROR.store(libc::EOVERFLOW, Ordering::Relaxed);
+                return -1;
+            }
+            *cpus.add(count) = cpu as i64;
+            count += 1;
+        }
+    }
+    count as i64
+}
+
+/// Replaces the selected process CPU affinity with the supplied CPU identifier list.
+///
+/// Returns one on success or zero after recording errno. Empty masks and identifiers outside the
+/// configured CPU range are rejected with `EINVAL`, matching PHP's value validation boundary.
+///
+/// # Safety
+/// `cpus` must point to readable storage for at least `count` `i64` values.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_setcpuaffinity(
+    process_id: i64,
+    cpus: *const i64,
+    count: usize,
+) -> libc::c_int {
+    if cpus.is_null() || count == 0 {
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return 0;
+    }
+    let configured = libc::sysconf(libc::_SC_NPROCESSORS_CONF);
+    let limit = if configured > 0 {
+        configured as usize
+    } else {
+        libc::CPU_SETSIZE as usize
+    }
+    .min(libc::CPU_SETSIZE as usize);
+    let mut mask = std::mem::zeroed::<libc::cpu_set_t>();
+    libc::CPU_ZERO(&mut mask);
+    for index in 0..count {
+        let cpu = *cpus.add(index);
+        if cpu < 0 || cpu as usize >= limit {
+            LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+            return 0;
+        }
+        libc::CPU_SET(cpu as usize, &mut mask);
+    }
+    if libc::sched_setaffinity(
+        process_id as libc::pid_t,
+        std::mem::size_of::<libc::cpu_set_t>(),
+        &mask,
+    ) != 0
+    {
+        record_errno();
+        return 0;
+    }
+    1
+}
+
+/// Joins the selected process namespace identified by `namespace_type`.
+///
+/// A process id of zero selects the calling process. Returns one on success or zero after
+/// recording the `pidfd_open()` or `setns()` errno.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_setns(
+    process_id: i64,
+    namespace_type: libc::c_int,
+) -> libc::c_int {
+    let pid = if process_id == 0 {
+        unsafe { libc::getpid() }
+    } else {
+        process_id as libc::pid_t
+    };
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) as libc::c_int };
+    if fd == -1 {
+        record_errno();
+        return 0;
+    }
+    let result = unsafe { libc::setns(fd, namespace_type) };
+    let setns_error = if result == -1 {
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    } else {
+        0
+    };
+    unsafe { libc::close(fd) };
+    if result == -1 {
+        LAST_ERROR.store(setns_error, Ordering::Relaxed);
+        return 0;
+    }
+    1
+}
+
+/// Disassociates the requested Linux process execution contexts.
+///
+/// Returns one on success or zero after recording errno, matching PHP's boolean surface.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_unshare(flags: libc::c_int) -> libc::c_int {
+    if unsafe { libc::unshare(flags) } == -1 {
+        record_errno();
+        return 0;
+    }
+    1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads the current Linux CPU and affinity mask through the stable bridge ABI.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_cpu_queries_return_consistent_identifiers() {
+        let cpu = elephc_pcntl_getcpu();
+        assert!(cpu >= 0, "sched_getcpu failed with errno {}", elephc_pcntl_get_last_error());
+        let mut cpus = [0i64; libc::CPU_SETSIZE as usize];
+        let count = unsafe { elephc_pcntl_getcpuaffinity(0, cpus.as_mut_ptr(), cpus.len()) };
+        assert!(count > 0, "get affinity failed with errno {}", elephc_pcntl_get_last_error());
+        assert!(cpus[..count as usize].contains(&cpu));
+    }
+
+    /// Reapplies the current Linux affinity mask without changing process placement policy.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_cpu_affinity_round_trips_current_mask() {
+        let mut cpus = [0i64; libc::CPU_SETSIZE as usize];
+        let count = unsafe { elephc_pcntl_getcpuaffinity(0, cpus.as_mut_ptr(), cpus.len()) };
+        assert!(count > 0, "get affinity failed with errno {}", elephc_pcntl_get_last_error());
+        let success = unsafe { elephc_pcntl_setcpuaffinity(0, cpus.as_ptr(), count as usize) };
+        assert_eq!(success, 1, "set affinity failed with errno {}", elephc_pcntl_get_last_error());
+    }
+
+    /// Rejects an empty Linux affinity mask and exposes the expected `EINVAL` status.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_empty_cpu_affinity_is_rejected() {
+        let success = unsafe { elephc_pcntl_setcpuaffinity(0, std::ptr::null(), 0) };
+        assert_eq!(success, 0);
+        assert_eq!(elephc_pcntl_get_last_error(), libc::EINVAL);
+    }
 
     /// Forks a real child, reaps it, and verifies target-native wait status decoding.
     #[test]

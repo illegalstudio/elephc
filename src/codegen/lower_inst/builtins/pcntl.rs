@@ -19,6 +19,12 @@ use crate::types::PhpType;
 use super::strings::load_as_int;
 use super::{ensure_arg_count, ensure_arg_count_between, expect_operand, store_if_result};
 
+const PCNTL_CPU_CAPACITY: usize = 1024;
+const PCNTL_CPU_BUFFER_BYTES: usize = PCNTL_CPU_CAPACITY * std::mem::size_of::<i64>();
+const PCNTL_CPU_COUNT_OFFSET: usize = PCNTL_CPU_BUFFER_BYTES;
+const PCNTL_CPU_PID_OFFSET: usize = PCNTL_CPU_BUFFER_BYTES + 8;
+const PCNTL_CPU_FRAME_BYTES: usize = PCNTL_CPU_BUFFER_BYTES + 32;
+
 /// Dispatches one typed PCNTL operation without consulting its PHP source name.
 pub(crate) fn lower(
     ctx: &mut FunctionContext<'_>,
@@ -28,6 +34,10 @@ pub(crate) fn lower(
     match target {
         PcntlRuntime::Alarm => lower_unary_int_bridge(ctx, inst, "pcntl_alarm", "elephc_pcntl_alarm", false),
         PcntlRuntime::Fork => lower_zero_arg_int_bridge(ctx, inst, "pcntl_fork", "elephc_pcntl_fork"),
+        PcntlRuntime::GetCpu => {
+            lower_zero_arg_int_bridge(ctx, inst, "pcntl_getcpu", "elephc_pcntl_getcpu")
+        }
+        PcntlRuntime::GetCpuAffinity => lower_getcpuaffinity(ctx, inst),
         PcntlRuntime::GetLastError => lower_zero_arg_int_bridge(
             ctx,
             inst,
@@ -35,8 +45,24 @@ pub(crate) fn lower(
             "elephc_pcntl_get_last_error",
         ),
         PcntlRuntime::GetPriority => lower_getpriority(ctx, inst),
+        PcntlRuntime::SetCpuAffinity => lower_setcpuaffinity(ctx, inst),
+        PcntlRuntime::SetNs => lower_optional_binary_int_bridge(
+            ctx,
+            inst,
+            "pcntl_setns",
+            "elephc_pcntl_setns",
+            0,
+            0x4000_0000,
+        ),
         PcntlRuntime::SetPriority => lower_setpriority(ctx, inst),
         PcntlRuntime::StrError => lower_strerror(ctx, inst),
+        PcntlRuntime::Unshare => lower_unary_int_bridge(
+            ctx,
+            inst,
+            "pcntl_unshare",
+            "elephc_pcntl_unshare",
+            false,
+        ),
         PcntlRuntime::Wait => lower_wait(ctx, inst, false),
         PcntlRuntime::WaitId => lower_waitid(ctx, inst),
         PcntlRuntime::WaitPid => lower_wait(ctx, inst, true),
@@ -94,6 +120,124 @@ pub(crate) fn lower(
             target.as_eir(),
         ))),
     }
+}
+
+/// Lowers `pcntl_getcpuaffinity()` into a boxed indexed integer array or boxed false.
+fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "pcntl_getcpuaffinity", 0, 1)?;
+    load_optional_int(
+        ctx,
+        inst.operands.first().copied(),
+        0,
+        "pcntl_getcpuaffinity process_id",
+    )?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, PCNTL_CPU_FRAME_BYTES);
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        PCNTL_CPU_PID_OFFSET,
+    );
+    let failure = ctx.next_label("pcntl_getcpuaffinity_failure");
+    let copy_loop = ctx.next_label("pcntl_getcpuaffinity_copy");
+    let copy_done = ctx.next_label("pcntl_getcpuaffinity_copy_done");
+    let done = ctx.next_label("pcntl_getcpuaffinity_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", PCNTL_CPU_PID_OFFSET);
+            abi::emit_temporary_stack_address(ctx.emitter, "x1", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", PCNTL_CPU_CAPACITY as i64);
+            ctx.emitter.bl_c("elephc_pcntl_getcpuaffinity");
+            ctx.emitter.instruction("cmp x0, #-1");
+            ctx.emitter.instruction(&format!("b.eq {failure}"));
+            abi::emit_store_to_sp(ctx.emitter, "x0", PCNTL_CPU_COUNT_OFFSET);
+            ctx.emitter.instruction("mov x1, #8");                            // indexed integer slots are eight bytes
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", PCNTL_CPU_COUNT_OFFSET);
+            abi::emit_temporary_stack_address(ctx.emitter, "x11", 0);
+            ctx.emitter.instruction("add x12, x0, #24");                     // destination payload after the array header
+            ctx.emitter.instruction("mov x13, #0");                          // copy index
+            ctx.emitter.label(&copy_loop);
+            ctx.emitter.instruction("cmp x13, x10");
+            ctx.emitter.instruction(&format!("b.ge {copy_done}"));
+            ctx.emitter.instruction("ldr x14, [x11, x13, lsl #3]");
+            ctx.emitter.instruction("str x14, [x12, x13, lsl #3]");
+            ctx.emitter.instruction("add x13, x13, #1");
+            ctx.emitter.instruction(&format!("b {copy_loop}"));
+            ctx.emitter.label(&copy_done);
+            ctx.emitter.instruction("str x10, [x0]");                        // publish logical array length
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", PCNTL_CPU_PID_OFFSET);
+            abi::emit_temporary_stack_address(ctx.emitter, "rsi", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", PCNTL_CPU_CAPACITY as i64);
+            ctx.emitter.bl_c("elephc_pcntl_getcpuaffinity");
+            ctx.emitter.instruction("cmp rax, -1");
+            ctx.emitter.instruction(&format!("je {failure}"));
+            abi::emit_store_to_sp(ctx.emitter, "rax", PCNTL_CPU_COUNT_OFFSET);
+            ctx.emitter.instruction("mov rdi, rax");                          // capacity equals returned CPU count
+            ctx.emitter.instruction("mov rsi, 8");                           // indexed integer slots are eight bytes
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", PCNTL_CPU_COUNT_OFFSET);
+            ctx.emitter.instruction("mov r11, rsp");                          // source CPU-id buffer
+            ctx.emitter.instruction("lea r8, [rax + 24]");                    // destination array payload
+            ctx.emitter.instruction("xor ecx, ecx");                          // copy index
+            ctx.emitter.label(&copy_loop);
+            ctx.emitter.instruction("cmp rcx, r10");
+            ctx.emitter.instruction(&format!("jge {copy_done}"));
+            ctx.emitter.instruction("mov r9, QWORD PTR [r11 + rcx * 8]");
+            ctx.emitter.instruction("mov QWORD PTR [r8 + rcx * 8], r9");
+            ctx.emitter.instruction("add rcx, 1");
+            ctx.emitter.instruction(&format!("jmp {copy_loop}"));
+            ctx.emitter.label(&copy_done);
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");              // publish logical array length
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, PCNTL_CPU_FRAME_BYTES);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Int)));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {done}")),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),
+    }
+    ctx.emitter.label(&failure);
+    abi::emit_release_temporary_stack(ctx.emitter, PCNTL_CPU_FRAME_BYTES);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `pcntl_setcpuaffinity()` from an indexed integer array into the stable bridge ABI.
+fn lower_setcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "pcntl_setcpuaffinity", 2, 2)?;
+    load_optional_int(
+        ctx,
+        inst.operands.first().copied(),
+        0,
+        "pcntl_setcpuaffinity process_id",
+    )?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let cpu_ids = expect_operand(inst, 1)?;
+    let ty = ctx.load_value_to_result(cpu_ids)?.codegen_repr();
+    if !matches!(ty, PhpType::Array(ref element) if matches!(element.codegen_repr(), PhpType::Int | PhpType::Never)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "pcntl_setcpuaffinity CPU-id storage {ty:?}",
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x2, [x0]");                          // C arg2 = CPU-id count
+            ctx.emitter.instruction("add x1, x0, #24");                       // C arg1 = indexed-array payload
+            ctx.emitter.instruction("ldr x0, [sp]");                          // C arg0 = selected process id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rax]");               // C arg2 = CPU-id count
+            ctx.emitter.instruction("lea rsi, [rax + 24]");                    // C arg1 = indexed-array payload
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");               // C arg0 = selected process id
+        }
+    }
+    ctx.emitter.bl_c("elephc_pcntl_setcpuaffinity");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `pcntl_wait()` and `pcntl_waitpid()` with target-native status writeback.
@@ -451,6 +595,33 @@ fn lower_unary_int_bridge(
     if box_result {
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a bridge with two optional integer operands and fixed PHP defaults.
+fn lower_optional_binary_int_bridge(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    symbol: &str,
+    first_default: i64,
+    second_default: i64,
+) -> Result<()> {
+    ensure_arg_count_between(inst, name, 0, 2)?;
+    load_optional_int(ctx, inst.operands.first().copied(), first_default, name)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_optional_int(ctx, inst.operands.get(1).copied(), second_default, name)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                            // C arg1 = second optional integer
+            abi::emit_pop_reg(ctx.emitter, "x0");                             // C arg0 = first optional integer
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov esi, eax");                          // C arg1 = second optional integer
+            abi::emit_pop_reg(ctx.emitter, "rdi");                            // C arg0 = first optional integer
+        }
+    }
+    ctx.emitter.bl_c(symbol);
     store_if_result(ctx, inst)
 }
 
