@@ -89,6 +89,27 @@ jobs:
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 
+      - name: Build curl-aware magician staticlib
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
+
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
 
@@ -163,6 +184,27 @@ jobs:
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
 
+      - name: Build curl-aware magician staticlib
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
+
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
 
@@ -231,6 +273,27 @@ jobs:
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
+
+      - name: Build curl-aware magician staticlib
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
 
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"

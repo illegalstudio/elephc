@@ -287,12 +287,27 @@ pub(crate) fn test_linked_extensions(required_libraries: &[String]) -> Vec<Strin
     extensions
 }
 
-/// Builds any requested bridge staticlibs missing from the debug target directory.
-fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Path) {
-    let _guard = BRIDGE_STATICLIB_BUILD_LOCK
+/// Locks `BRIDGE_STATICLIB_BUILD_LOCK`, recovering the guard if an earlier holder
+/// panicked while it was held (poisoning it) instead of re-panicking on every later
+/// call. One fixture's bridge-build failure must stay that fixture's own loud,
+/// attributed failure -- it must not turn every OTHER fixture that merely shares this
+/// process into a misleading `PoisonError` that names no real cause. The guarded
+/// payload is `()`: a panic while holding this lock only ever happens mid `cargo
+/// build`/`fs::copy`, never mid-mutation of shared state, so there is nothing a panic
+/// could have left inconsistent and recovering is always safe. Mirrors the identical
+/// `lock_recover` pattern already used for FFI-facing locks in
+/// `elephc-curl`/`elephc-pdo`/`elephc-image` (F-QUAL-02), applied here to the harness's
+/// own build-serialization lock instead of a bridge's runtime state.
+fn lock_bridge_staticlib_build() -> std::sync::MutexGuard<'static, ()> {
+    BRIDGE_STATICLIB_BUILD_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("bridge staticlib build lock poisoned");
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Builds any requested bridge staticlibs missing from the debug target directory.
+fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Path) {
+    let _guard = lock_bridge_staticlib_build();
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path = bridge_staticlib_dir.join(format!("lib{}.a", bridge.lib_name));
         let requires_libpq_profile = bridge.lib_name == "elephc_pdo"
@@ -427,13 +442,36 @@ pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
 ///
 /// Guarded by `BRIDGE_STATICLIB_BUILD_LOCK` (the same lock `ensure_bridge_staticlibs`
 /// takes) so two fixtures needing this in parallel do not race the same `cargo build`.
+///
+/// Archived CI shards (`ELEPHC_TEST_PREBUILT_BRIDGES=1`) trust a prebuilt copy the
+/// build-archive job placed alongside every other bridge instead of ever attempting the
+/// `cargo build` below: those shards run from an extracted nextest archive with
+/// `CARGO_NET_OFFLINE=true` and no cargo registry cache restored, so an on-demand
+/// `cargo build -p elephc-magician --features curl` there cannot resolve its
+/// dependency graph at all -- it fails immediately with "no matching package named `X`
+/// found ... offline mode", which is exactly what happened before the build-archive
+/// jobs started producing this artifact (see .config/nextest.toml's
+/// `[[profile.ci.archive.include]]` list and the "Build curl-aware magician staticlib"
+/// step in .github/workflows/ci.yml). If the trusted copy is somehow still missing,
+/// fail loudly and immediately with a message that names the real cause instead of
+/// falling through into that same doomed, confusing offline build.
 fn ensure_magician_curl_staticlib(bridge_staticlib_dir: &Path) {
-    let _guard = BRIDGE_STATICLIB_BUILD_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("bridge staticlib build lock poisoned");
+    let _guard = lock_bridge_staticlib_build();
 
     let archive_path = bridge_staticlib_dir.join("libelephc_magician_curl.a");
+
+    if prebuilt_bridge_staticlibs_are_trusted() {
+        assert!(
+            archive_path.exists(),
+            "ELEPHC_TEST_PREBUILT_BRIDGES is set but {} is missing -- the build-archive \
+             job's nextest archive did not include the curl-aware magician staticlib. \
+             See .config/nextest.toml's [[profile.ci.archive.include]] list and the \
+             \"Build curl-aware magician staticlib\" step in .github/workflows/ci.yml.",
+            archive_path.display()
+        );
+        return;
+    }
+
     if !bridge_staticlib_needs_build(&archive_path, "elephc-magician") {
         return;
     }

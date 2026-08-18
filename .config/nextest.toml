@@ -12,7 +12,15 @@ status-level = "slow"
 # against libelephc_*.a at run time (via `ld`), so nextest can't discover them.
 # Include them explicitly so archived shards can run on a machine that never
 # rebuilt the workspace. Built into target/debug by `cargo build $BRIDGE_CRATES`
-# in the archive job before archiving.
+# in the archive job before archiving. libelephc_magician_curl.a is the odd one
+# out: it is NOT part of $BRIDGE_CRATES's plain `cargo build -p elephc-magician`
+# output (that build has no `curl` feature enabled), so the "Build curl-aware
+# magician staticlib" step in .github/workflows/ci.yml builds and copies it into
+# target/debug separately, right before this archive step runs. Without it here,
+# any curl-codegen-tests shard fixture that links BOTH elephc_magician (calls
+# eval()) and elephc_curl has no prebuilt copy to trust and — being an archived,
+# offline shard with no cargo registry cache — cannot build one on demand either
+# (see tests/codegen/support/runner.rs::ensure_magician_curl_staticlib).
 [[profile.ci.archive.include]]
 path = "debug/libelephc_tls.a"
 relative-to = "target"
@@ -42,6 +50,9 @@ path = "debug/libelephc_web.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_curl.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_magician_curl.a"
 relative-to = "target"
 
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
