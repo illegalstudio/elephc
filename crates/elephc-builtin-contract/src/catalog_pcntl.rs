@@ -125,6 +125,62 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Returns the system message for a PCNTL errno value.",
     ),
     pcntl_contract(
+        "pcntl_wait",
+        &[
+            ParamSpec {
+                name: "status",
+                ty: TypeSpec::Mixed,
+                default: None,
+                by_ref: true,
+            },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "resource_usage",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: true,
+            },
+        ],
+        TypeSpec::Int,
+        "Waits for any child process and writes its target-native status.",
+    ),
+    pcntl_contract(
+        "pcntl_waitpid",
+        &[
+            ParamSpec {
+                name: "process_id",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "status",
+                ty: TypeSpec::Mixed,
+                default: None,
+                by_ref: true,
+            },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "resource_usage",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: true,
+            },
+        ],
+        TypeSpec::Int,
+        "Waits for a selected child process and writes its target-native status.",
+    ),
+    pcntl_contract(
         "pcntl_wexitstatus",
         &[ParamSpec {
             name: "status",

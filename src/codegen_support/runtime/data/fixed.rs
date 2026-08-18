@@ -1457,6 +1457,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
     out.push_str(&system::emit_strtotime_data());
+    out.push_str(&system::emit_pcntl_data());
     out.push_str(&emit_php_uname_data());
 
     out
