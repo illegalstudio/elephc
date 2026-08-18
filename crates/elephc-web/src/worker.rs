@@ -124,6 +124,11 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
         install_exec_timeout_handler();
     }
+    // Re-arm the sampling probe in this worker: the fork disarmed the inherited
+    // timer (so exec'd children cannot die from the default SIGPROF action), and
+    // a worker keeps running elephc code, so it must sample again. No-op unless
+    // the binary was built --probe.
+    probe_route::rearm();
     let addr: SocketAddr = match listen.parse() {
         Ok(a) => a,
         Err(_) => {
@@ -203,6 +208,9 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                     let protocol = format!("{:?}", req.version());
                     // Captured for the optional access log (method/path are moved into set_request).
                     let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
+                    // The route label the sampling probe stamps onto samples taken
+                    // during this request (no-op unless the binary was built --probe).
+                    let probe_route = format!("{method} {path}");
                     let accepts_gzip = gzip
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
                             v.to_str().map(|s| s.to_ascii_lowercase().contains("gzip")).unwrap_or(false)
@@ -262,8 +270,39 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         .iter()
                         .find(|(n, _)| n.eq_ignore_ascii_case("host"))
                         .map(|(_, v)| v.clone());
+                    // Distributed profiling: continue the caller's trace when it
+                    // sent a W3C `traceparent`, else start one. Read before
+                    // `headers` is moved into set_request, like Cookie/Host.
+                    let req_traceparent = headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("traceparent"))
+                        .map(|(_, v)| v.clone());
+                    // Opt in per request, the way a profiler you can leave in
+                    // production has to work: the caller asks, and only that
+                    // request pays. Absent the header the hooks stay as the
+                    // environment left them, so `--web --instrument` without
+                    // `ELEPHC_INSTR_OFF` keeps profiling every request.
+                    // Signed, not merely present: the value is
+                    // `t=<unix seconds>,v=<hmac>` over the build key, so a header
+                    // captured from a log stops working within minutes and one
+                    // invented from scratch never does.
+                    let profile_this = headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("x-elephc-query"))
+                        .is_some_and(|(_, value)| probe_route::query_is_authentic(value));
                     request_state::set_request(method, uri, path, query, headers, body, meta);
+                    probe_route::trace_begin(req_traceparent.as_deref(), &probe_route);
+                    probe_route::set(&probe_route);
+                    if profile_this {
+                        probe_route::profile_request(true);
+                    }
                     let resp_body = run_handler(handler);
+                    if profile_this {
+                        // Ends and dumps this request's slice, so consecutive
+                        // profiled requests stay separate captures.
+                        probe_route::profile_request(false);
+                    }
+                    probe_route::clear();
                     let status = request_state::take_status();
                     let mut resp_headers = request_state::take_headers();
                     // Propagate the session id through same-origin URLs / forms when
@@ -375,6 +414,119 @@ async fn drain_with_progress(
 }
 
 /// Runs the PHP handler for one request and returns the captured response body.
+/// Optional bridge to the sampling probe's route tagging. The compiled program's
+/// core runtime always defines the `_elephc_probe_route_fn` pointer slot (a `.comm`,
+/// zero by default); under `--probe` the compiler stores `elephc_probe_set_route`
+/// into it. Reading the slot and calling through it when non-null keeps route
+/// tagging pay-for-use — a non-probe binary leaves the slot zero — with no dlsym
+/// and no compile-time coupling to the probe crate.
+mod probe_route {
+    extern "C" {
+        /// Runtime `.comm` slot holding `elephc_probe_set_route` under `--probe`,
+        /// else zero. Mangled per target like the other runtime externs.
+        static elephc_probe_route_fn: usize;
+        /// Runtime `.comm` slot holding `elephc_probe_rearm` under `--probe`, else
+        /// zero — the worker re-arm the fork disarmed.
+        static elephc_probe_rearm_fn: usize;
+        /// Runtime `.comm` slot holding `elephc_instr_trace_begin` under
+        /// `--instrument`, else zero — opens this request's W3C trace context.
+        static elephc_instr_trace_fn: usize;
+        /// Runtime `.comm` slot holding `elephc_instr_request` under
+        /// `--instrument`, else zero — brackets one request's own profile.
+        static elephc_instr_request_fn: usize;
+        /// Runtime `.comm` slot holding `elephc_probe_verify_query`, else zero —
+        /// checks that a profiling request is signed by the build key.
+        static elephc_probe_verify_fn: usize;
+    }
+
+    type SetRouteFn = unsafe extern "C" fn(*const u8, usize);
+    type RearmFn = unsafe extern "C" fn();
+    type TraceFn = unsafe extern "C" fn(*const u8, usize, *const u8, usize);
+    type RequestFn = unsafe extern "C" fn(u32);
+    type VerifyFn = unsafe extern "C" fn(*const u8, usize) -> u32;
+
+    fn resolve() -> Option<SetRouteFn> {
+        let addr = unsafe { std::ptr::addr_of!(elephc_probe_route_fn).read() };
+        if addr == 0 {
+            None
+        } else {
+            Some(unsafe { std::mem::transmute::<usize, SetRouteFn>(addr) })
+        }
+    }
+
+    /// Re-arms the probe timer in this worker, if the probe is linked.
+    pub fn rearm() {
+        let addr = unsafe { std::ptr::addr_of!(elephc_probe_rearm_fn).read() };
+        if addr != 0 {
+            let rearm = unsafe { std::mem::transmute::<usize, RearmFn>(addr) };
+            unsafe { rearm() };
+        }
+    }
+
+    /// Stamps `route` onto samples taken until `clear`.
+    pub fn set(route: &str) {
+        if let Some(set_route) = resolve() {
+            unsafe { set_route(route.as_ptr(), route.len()) };
+        }
+    }
+
+    /// Clears the active route so idle-worker samples are untagged.
+    pub fn clear() {
+        if let Some(set_route) = resolve() {
+            unsafe { set_route(std::ptr::null(), 0) };
+        }
+    }
+
+    /// Whether a profiling request carries a signature this binary accepts.
+    ///
+    /// Profiling costs the request real time and reveals the shape of the code,
+    /// so asking for it is privileged: only a holder of the build key can. An
+    /// unsigned trigger would let anyone who can set a header profile production.
+    /// A binary without the tooling answers no, which is also the right answer.
+    pub fn query_is_authentic(value: &str) -> bool {
+        let addr = unsafe { std::ptr::addr_of!(elephc_probe_verify_fn).read() };
+        if addr == 0 {
+            return false;
+        }
+        let verify = unsafe { std::mem::transmute::<usize, VerifyFn>(addr) };
+        (unsafe { verify(value.as_ptr(), value.len()) }) != 0
+    }
+
+    /// Starts or ends this request's own profile, when the binary carries hooks.
+    ///
+    /// A production binary can ship instrumented and dormant (`ELEPHC_INSTR_OFF=1`),
+    /// costing a load and a branch per call, and still answer the exact same
+    /// question a dev build answers — for the one request that asked. That is the
+    /// difference between "profiling is a dev thing" and "profiling is a thing you
+    /// can do where the problem actually is".
+    pub fn profile_request(begin: bool) {
+        let addr = unsafe { std::ptr::addr_of!(elephc_instr_request_fn).read() };
+        if addr == 0 {
+            return;
+        }
+        let bracket = unsafe { std::mem::transmute::<usize, RequestFn>(addr) };
+        unsafe { bracket(u32::from(begin)) };
+    }
+
+    /// Opens the exact profiler's trace context for this request from the
+    /// inbound W3C `traceparent` (absent → a new trace is started). Pass the
+    /// header value, or `None`. No-op unless `--instrument` filled the slot.
+    /// `route` is passed alongside so an exact capture can be broken down per
+    /// endpoint, the way the sampler's route tagging already allows.
+    pub fn trace_begin(traceparent: Option<&str>, route: &str) {
+        let addr = unsafe { std::ptr::addr_of!(elephc_instr_trace_fn).read() };
+        if addr == 0 {
+            return;
+        }
+        let begin = unsafe { std::mem::transmute::<usize, TraceFn>(addr) };
+        let (tp, tp_len) = match traceparent {
+            Some(value) => (value.as_ptr(), value.len()),
+            None => (std::ptr::null(), 0),
+        };
+        unsafe { begin(tp, tp_len, route.as_ptr(), route.len()) };
+    }
+}
+
 fn run_handler(handler: extern "C" fn()) -> Vec<u8> {
     request_state::set_capture(true);
     request_state::clear_body();
