@@ -33,6 +33,7 @@ pub(crate) fn lower(
 ) -> Result<()> {
     match target {
         PcntlRuntime::Alarm => lower_unary_int_bridge(ctx, inst, "pcntl_alarm", "elephc_pcntl_alarm", false),
+        PcntlRuntime::AsyncSignals => super::pcntl_handlers::lower_async_signals(ctx, inst),
         PcntlRuntime::Fork => lower_zero_arg_int_bridge(ctx, inst, "pcntl_fork", "elephc_pcntl_fork"),
         PcntlRuntime::GetCpu => {
             lower_zero_arg_int_bridge(ctx, inst, "pcntl_getcpu", "elephc_pcntl_getcpu")
@@ -55,6 +56,11 @@ pub(crate) fn lower(
             0x4000_0000,
         ),
         PcntlRuntime::SetPriority => lower_setpriority(ctx, inst),
+        PcntlRuntime::Signal => super::pcntl_handlers::lower_signal(ctx, inst),
+        PcntlRuntime::SignalDispatch => super::pcntl_handlers::lower_signal_dispatch(ctx, inst),
+        PcntlRuntime::SignalGetHandler => {
+            super::pcntl_handlers::lower_signal_get_handler(ctx, inst)
+        }
         PcntlRuntime::SignalMask => super::pcntl_signals::lower_sigprocmask(ctx, inst),
         PcntlRuntime::SignalTimedWait => super::pcntl_signals::lower_signal_wait(ctx, inst, true),
         PcntlRuntime::SignalWaitInfo => super::pcntl_signals::lower_signal_wait(ctx, inst, false),

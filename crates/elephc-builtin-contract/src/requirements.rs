@@ -26,6 +26,7 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
         id,
         &[
             "pcntl_alarm",
+            "pcntl_async_signals",
             "pcntl_errno",
             "pcntl_fork",
             "pcntl_get_last_error",
@@ -35,6 +36,9 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "pcntl_setcpuaffinity",
             "pcntl_setns",
             "pcntl_setpriority",
+            "pcntl_signal",
+            "pcntl_signal_dispatch",
+            "pcntl_signal_get_handler",
             "pcntl_sigprocmask",
             "pcntl_sigtimedwait",
             "pcntl_sigwaitinfo",

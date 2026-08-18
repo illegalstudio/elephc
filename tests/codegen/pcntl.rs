@@ -96,6 +96,43 @@ fn test_pcntl_signal_mask_round_trip() {
     assert_eq!(out, "blocked|array|restored");
 }
 
+/// Registers a callable, retrieves it, and dispatches SIGALRM with stable siginfo.
+#[test]
+fn test_pcntl_signal_handler_dispatch_and_lookup() {
+    let out = compile_and_run(
+        "<?php
+        function handle_alarm(int $signal, array $info): void {
+            echo 'handled:' . $signal . ':' . $info['signo'] . '|';
+        }
+        echo (pcntl_signal(SIGALRM, 'handle_alarm') ? 'set' : 'bad') . '|';
+        $handler = pcntl_signal_get_handler(SIGALRM);
+        echo (is_callable($handler) ? 'callable' : 'bad') . '|';
+        pcntl_alarm(1);
+        sleep(2);
+        echo (pcntl_signal_dispatch() ? 'dispatched' : 'bad') . '|';
+        echo (pcntl_signal(SIGALRM, SIG_DFL) ? 'reset' : 'bad');",
+    );
+    assert_eq!(out, "set|callable|handled:14:14|dispatched|reset");
+}
+
+/// Automatically dispatches a pending signal after a normal EIR safe point.
+#[test]
+fn test_pcntl_async_signals_dispatch_at_safe_points() {
+    let out = compile_and_run(
+        "<?php
+        function handle_async_alarm(int $signal, array $info): void {
+            echo 'async:' . $signal . '|';
+        }
+        pcntl_signal(SIGALRM, 'handle_async_alarm');
+        echo (pcntl_async_signals(true) ? 'old-on' : 'old-off') . '|';
+        pcntl_alarm(1);
+        sleep(2);
+        echo (pcntl_async_signals(false) ? 'was-on' : 'bad') . '|';
+        pcntl_signal(SIGALRM, SIG_DFL);",
+    );
+    assert_eq!(out, "old-off|async:14|was-on|");
+}
+
 /// Returns false on a Linux timed signal wait and preserves an existing info output.
 #[cfg(target_os = "linux")]
 #[test]

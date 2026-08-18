@@ -14,6 +14,45 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+/// Checks the signal number, handler disposition or callable, and restart flag.
+pub(super) fn check_signal(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    for (index, arg) in cx.args.iter().enumerate() {
+        let name = argument_name(arg);
+        let value = argument_value(arg);
+        if name.as_deref() == Some("handler") || (name.is_none() && index == 1) {
+            let ty = cx.checker.infer_type(value, cx.env)?;
+            if matches!(value.kind, ExprKind::IntLiteral(disposition) if !matches!(disposition, 0 | 1)) {
+                return Err(CompileError::new(
+                    value.span,
+                    "pcntl_signal() integer handler must be SIG_DFL (0) or SIG_IGN (1)",
+                ));
+            }
+            if !matches!(
+                ty.codegen_repr(),
+                PhpType::Int
+                    | PhpType::Bool
+                    | PhpType::Callable
+                    | PhpType::Str
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Object(_)
+                    | PhpType::Mixed
+                    | PhpType::Union(_)
+            ) {
+                return Err(CompileError::new(
+                    value.span,
+                    &format!(
+                        "pcntl_signal() parameter $handler must be callable or SIG_DFL/SIG_IGN, {ty:?} given"
+                    ),
+                ));
+            }
+        } else {
+            cx.checker.infer_type(value, cx.env)?;
+        }
+    }
+    Ok(PhpType::Bool)
+}
+
 /// Checks signal-mask mode, the selected signal set, and optional old-mask output.
 pub(super) fn check_sigprocmask(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     check_signal_arguments(cx, SignalCall::Mask)?;

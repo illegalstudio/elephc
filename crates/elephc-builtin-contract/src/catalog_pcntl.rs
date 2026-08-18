@@ -52,6 +52,17 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Schedules a SIGALRM and returns the prior alarm's remaining seconds.",
     ),
     pcntl_contract(
+        "pcntl_async_signals",
+        &[ParamSpec {
+            name: "enable",
+            ty: TypeSpec::Bool,
+            default: Some(DefaultSpec::Null),
+            by_ref: false,
+        }],
+        TypeSpec::Bool,
+        "Enables or queries automatic dispatch of pending signal callbacks.",
+    ),
+    pcntl_contract(
         "pcntl_errno",
         &[],
         TypeSpec::Int,
@@ -167,6 +178,48 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         ],
         TypeSpec::Bool,
         "Changes a process, process-group, or user scheduling priority.",
+    ),
+    pcntl_contract(
+        "pcntl_signal",
+        &[
+            ParamSpec {
+                name: "signal",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "handler",
+                ty: TypeSpec::Mixed,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "restart_syscalls",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(true)),
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Installs a callable, default, or ignored disposition for one signal.",
+    ),
+    pcntl_contract(
+        "pcntl_signal_dispatch",
+        &[],
+        TypeSpec::Bool,
+        "Invokes callbacks for every signal currently pending in PCNTL's queue.",
+    ),
+    pcntl_contract(
+        "pcntl_signal_get_handler",
+        &[ParamSpec {
+            name: "signal",
+            ty: TypeSpec::Int,
+            default: None,
+            by_ref: false,
+        }],
+        TypeSpec::Mixed,
+        "Returns the callable or integer disposition registered for one signal.",
     ),
     pcntl_contract(
         "pcntl_sigprocmask",

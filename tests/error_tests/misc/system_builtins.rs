@@ -96,6 +96,15 @@ fn test_error_pcntl_signal_mask_requires_integer_array() {
     );
 }
 
+/// Rejects integer signal handlers other than PHP's two disposition constants.
+#[test]
+fn test_error_pcntl_signal_rejects_invalid_integer_handler() {
+    expect_error(
+        "<?php pcntl_signal(SIGUSR1, 2);",
+        "pcntl_signal() integer handler must be SIG_DFL (0) or SIG_IGN (1)",
+    );
+}
+
 /// Verifies the prior-mask output is a writable variable.
 #[test]
 fn test_error_pcntl_signal_mask_output_must_be_variable() {
