@@ -242,3 +242,19 @@ fn test_error_extern_class_void_field() {
         "Extern class 'Bad' field $field uses an unsupported type",
     );
 }
+
+/// A statically known-wrong type into a packed `int` field stays a compile error: the
+/// runtime-guarded admission is for `Mixed` only, where the value may legitimately be an
+/// int and only the runtime tag can tell.
+#[test]
+fn test_error_packed_int_field_rejects_static_string() {
+    expect_error(
+        "<?php
+        packed class Cell { public int $id; }
+        buffer<Cell> $cells = buffer_new<Cell>(1);
+        $cells[0]->id = \"x\";
+        buffer_free($cells);
+        ",
+        "cannot assign Str to packed field Cell::id of type Int",
+    );
+}

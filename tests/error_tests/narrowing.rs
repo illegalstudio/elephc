@@ -174,3 +174,4 @@ class S {
         "return type expects Object(\"S\")",
     );
 }
+

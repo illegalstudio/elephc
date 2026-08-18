@@ -147,3 +147,151 @@ echo paint($names[1]);
     );
     assert_eq!(out, "bar");
 }
+
+/// Verifies that assigning an overflow-promoted value to an undeclared local widens the local,
+/// so the inferred return type carries the float instead of re-truncating it at the `return`.
+///
+/// Before the fix the assignment merge answered with `type_accepts`, which kept `$n` at `int`:
+/// PHP's coercive mode lets an `int` accept a `mixed` value, but that acceptance is only paid
+/// for by a runtime narrowing at a DECLARED boundary, and an inferred local has none. The
+/// narrow local then inferred an `int` return type, and codegen inserted a float-to-int
+/// conversion that truncated the promoted value. The seed arrives through a parameter so the
+/// shape pins inference, not constant folding.
+#[test]
+fn test_undeclared_return_keeps_overflow_promotion_through_a_local() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $seed) { $n = $seed; $n = $n + 1; return $n; }
+$r = f(PHP_INT_MAX);
+echo $r, "|", gettype($r);
+"#,
+    );
+    assert_eq!(out, "9.2233720368548E+18|double");
+}
+
+/// A DECLARED `int` return receiving an overflow-promoted float throws PHP's TypeError
+/// instead of silently wrapping to PHP_INT_MIN: the declared boundary runs coercive-mode
+/// verification, and a float outside the int range is not coercible.
+#[test]
+fn test_declared_int_return_overflow_float_throws_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+function f(): int { $n = PHP_INT_MAX; $n = $n + 1; return $n; }
+try {
+    var_dump(f());
+} catch (TypeError $e) {
+    echo get_class($e), ":", $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError:f(): Return value must be of type int, float returned"
+    );
+}
+
+/// The declared-int return boundary follows PHP's coercive-mode arms for a Mixed value:
+/// bool and numeric strings coerce silently, while a non-numeric string, null, and any
+/// array throw `TypeError` naming the runtime type. Expected output taken from php -n
+/// 8.5.6, not authored.
+#[test]
+fn test_declared_int_return_mixed_coercion_arms() {
+    let out = compile_and_run(
+        r#"<?php
+function mk(mixed $v) { return $v; }
+function r(): int { global $probe; return mk($probe); }
+foreach ([true, "5", "x", null, [1]] as $p) {
+    $probe = $p;
+    try { var_dump(r()); } catch (TypeError $e) { echo "TE: ", $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nint(5)\nTE: r(): Return value must be of type int, string returned\nTE: r(): Return value must be of type int, null returned\nTE: r(): Return value must be of type int, array returned\n"
+    );
+}
+
+/// An in-range integral float still passes a declared `int` return silently — the
+/// boundary verification only rejects what PHP rejects.
+#[test]
+fn test_declared_int_return_integral_float_passes() {
+    let out = compile_and_run(
+        r#"<?php
+function mk(mixed $v) { return $v; }
+function g(): int { return mk(2.0); }
+var_dump(g());
+"#,
+    );
+    assert_eq!(out, "int(2)\n");
+}
+
+/// A heterogeneous scalar reassignment widens the local instead of keeping the first
+/// type: `$x = 1; $x = 1.5;` really contains a float, and the inferred return must not
+/// re-truncate it through an int-typed slot.
+#[test]
+fn test_heterogeneous_scalar_reassignment_int_then_float() {
+    let out = compile_and_run(
+        r#"<?php
+function f() { $x = 1; $x = 1.5; return $x; }
+var_dump(f());
+"#,
+    );
+    assert_eq!(out, "float(1.5)\n");
+}
+
+/// The mirror direction: `$x = 1.5; $x = 2;` contains an int, and the inferred return
+/// must not convert it back up to float through a float-typed slot. Before the widening
+/// fix this direction only LOOKED green when constant propagation happened to bypass the
+/// env type.
+#[test]
+fn test_heterogeneous_scalar_reassignment_float_then_int() {
+    let out = compile_and_run(
+        r#"<?php
+function f() { $x = 1.5; $x = 2; return $x; }
+var_dump(f());
+"#,
+    );
+    assert_eq!(out, "int(2)\n");
+}
+
+/// The boundary TypeError spells a method's name the way PHP does: `C::m(): Return
+/// value must be of type int, float returned`.
+#[test]
+fn test_declared_int_return_boundary_names_the_method() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function m(): int { $n = PHP_INT_MAX; $n = $n + 1; return $n; }
+}
+try {
+    var_dump((new C())->m());
+} catch (TypeError $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "C::m(): Return value must be of type int, float returned");
+}
+
+/// Verifies that an if/else merge keeps the possibly-float type of a branch-assigned local:
+/// the promoted overflow survives the join instead of being re-truncated by the other
+/// branch's narrower int.
+#[test]
+fn test_branch_merged_local_keeps_overflow_promotion() {
+    let out = compile_and_run(
+        r#"<?php
+function f(int $a) {
+    if ($a > 0) {
+        $n = $a + 1;
+    } else {
+        $n = 0;
+    }
+    return $n;
+}
+$r = f(PHP_INT_MAX);
+echo $r, "|", gettype($r);
+"#,
+    );
+    assert_eq!(out, "9.2233720368548E+18|double");
+}

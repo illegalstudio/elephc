@@ -477,3 +477,66 @@ fn test_x86_64_runtime_buffer_new_carries_length_guard() {
         "x86_64 buffer size bound uses a sign-extended immediate: {buffer_new}"
     );
 }
+
+/// A packed `int` field accepts a boxed Mixed value that holds an int at runtime: the
+/// strict narrowing stores the raw payload, and int arithmetic routed through a Mixed
+/// return (its type carries the overflow-to-float promotion) can feed packed storage.
+#[test]
+fn test_packed_int_field_accepts_mixed_holding_int() {
+    let out = compile_and_run(
+        "<?php
+        packed class Cell { public int $id; }
+        function bump(int $x) { return $x + 1; }
+        buffer<Cell> $cells = buffer_new<Cell>(1);
+        $cells[0]->id = bump(41);
+        echo $cells[0]->id;
+        buffer_free($cells);
+        ",
+    );
+    assert_eq!(out, "42");
+}
+
+/// A packed `int` field receiving a Mixed value that really overflowed to float throws a
+/// catchable `TypeError` naming the runtime type — never a silent truncation, and never a
+/// box pointer written into fixed field storage.
+#[test]
+fn test_packed_int_field_mixed_float_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        packed class Cell { public int $id; }
+        function bump(int $x) { return $x + 1; }
+        buffer<Cell> $cells = buffer_new<Cell>(1);
+        try {
+            $cells[0]->id = bump(PHP_INT_MAX);
+            echo \"stored\";
+        } catch (TypeError $e) {
+            echo get_class($e), \":\", $e->getMessage();
+        }
+        buffer_free($cells);
+        ",
+    );
+    assert_eq!(
+        out,
+        "TypeError:Packed field Cell::$id must be of type int, float given"
+    );
+}
+
+/// The packed-field narrowing is strict: a Mixed string is a `TypeError`, not a numeric
+/// coercion — packed fields are a fixed-layout systems extension, not a PHP scalar slot.
+#[test]
+fn test_packed_int_field_mixed_string_throws_type_error() {
+    let out = compile_and_run(
+        "<?php
+        packed class Cell { public int $id; }
+        function pick(mixed $v) { return $v; }
+        buffer<Cell> $cells = buffer_new<Cell>(1);
+        try {
+            $cells[0]->id = pick(\"x\");
+        } catch (TypeError $e) {
+            echo $e->getMessage();
+        }
+        buffer_free($cells);
+        ",
+    );
+    assert_eq!(out, "Packed field Cell::$id must be of type int, string given");
+}
