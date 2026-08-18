@@ -1,0 +1,18 @@
+[package]
+name = "elephc-probe"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "In-process sampling probe staticlib (SIGPROF frame-pointer sampler over a compiler-embedded symbol table) for elephc-compiled PHP programs"
+publish = false
+
+# Built as a C-callable staticlib (linked into programs compiled with --probe)
+# and an rlib (unit-testable via `cargo test -p elephc-probe`). Mirrors
+# crates/elephc-tz and siblings.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+# libc provides sigaction/setitimer and the per-platform ucontext layouts the
+# SIGPROF handler reads the interrupted pc/fp from.
+[dependencies]
+libc = "0.2"
