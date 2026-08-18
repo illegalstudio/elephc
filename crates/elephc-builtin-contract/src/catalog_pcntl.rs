@@ -70,6 +70,23 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Returns the errno recorded by the most recent failing PCNTL operation.",
     ),
     pcntl_contract(
+        "pcntl_getcpu",
+        &[],
+        TypeSpec::Int,
+        "Returns the logical CPU on which the calling thread is executing.",
+    ),
+    pcntl_contract(
+        "pcntl_getcpuaffinity",
+        &[ParamSpec {
+            name: "process_id",
+            ty: TypeSpec::Int,
+            default: Some(DefaultSpec::Null),
+            by_ref: false,
+        }],
+        TypeSpec::Mixed,
+        "Returns the CPU affinity mask for a Linux process, or false on failure.",
+    ),
+    pcntl_contract(
         "pcntl_getpriority",
         &[
             ParamSpec {
@@ -87,6 +104,44 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         ],
         TypeSpec::Mixed,
         "Returns a process, process-group, or user scheduling priority, or false on failure.",
+    ),
+    pcntl_contract(
+        "pcntl_setcpuaffinity",
+        &[
+            ParamSpec {
+                name: "process_id",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "cpu_ids",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Changes the CPU affinity mask for a Linux process.",
+    ),
+    pcntl_contract(
+        "pcntl_setns",
+        &[
+            ParamSpec {
+                name: "process_id",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "nstype",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0x4000_0000)),
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Joins one Linux namespace of the selected process.",
     ),
     pcntl_contract(
         "pcntl_setpriority",
@@ -123,6 +178,17 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         }],
         TypeSpec::Str,
         "Returns the system message for a PCNTL errno value.",
+    ),
+    pcntl_contract(
+        "pcntl_unshare",
+        &[ParamSpec {
+            name: "flags",
+            ty: TypeSpec::Int,
+            default: None,
+            by_ref: false,
+        }],
+        TypeSpec::Bool,
+        "Disassociates selected Linux process execution contexts.",
     ),
     pcntl_contract(
         "pcntl_wait",

@@ -87,6 +87,26 @@ fn test_error_pcntl_waitid_info_must_be_variable() {
     );
 }
 
+/// Verifies Linux CPU affinity requires the optional-looking mask parameter.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_error_pcntl_setcpuaffinity_requires_cpu_ids() {
+    expect_error(
+        "<?php pcntl_setcpuaffinity();",
+        "pcntl_setcpuaffinity() parameter $cpu_ids must not be empty",
+    );
+}
+
+/// Verifies Linux CPU affinity rejects non-integer indexed-array storage.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_error_pcntl_setcpuaffinity_requires_integer_array() {
+    expect_error(
+        "<?php pcntl_setcpuaffinity(cpu_ids: ['zero']);",
+        "pcntl_setcpuaffinity() parameter $cpu_ids must be an indexed integer array",
+    );
+}
+
 /// Verifies an eval barrier allows later reads of variables that eval may create dynamically.
 #[test]
 fn test_eval_barrier_allows_dynamic_variable_read() {

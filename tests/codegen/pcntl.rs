@@ -82,6 +82,46 @@ fn test_pcntl_getpriority_returns_int() {
     assert_eq!(out, "int");
 }
 
+/// Reads and reapplies the current Linux CPU affinity through indexed integer arrays.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_linux_cpu_affinity_round_trip() {
+    let out = compile_and_run(
+        "<?php
+        $cpu = pcntl_getcpu();
+        $mask = pcntl_getcpuaffinity();
+        echo ($cpu >= 0 ? 'cpu' : 'bad') . '|';
+        echo (count($mask) > 0 ? 'mask' : 'bad') . '|';
+        echo (pcntl_setcpuaffinity(cpu_ids: [$cpu]) ? 'set' : 'bad') . '|';
+        echo (count($mask) > 0 ? 'mask' : 'bad');",
+    );
+    assert_eq!(out, "cpu|mask|set|mask");
+}
+
+/// Exercises safe Linux namespace entry points without changing namespace state.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_linux_namespace_operations_report_boolean_results() {
+    let out = compile_and_run(
+        "<?php
+        $unshared = pcntl_unshare(0);
+        echo (is_bool($unshared) ? 'bool' : 'bad') . '|';
+        $joined = pcntl_setns(99999999, CLONE_NEWNET);
+        echo (!$joined && pcntl_get_last_error() > 0 ? 'error' : 'bad');",
+    );
+    assert_eq!(out, "bool|error");
+}
+
+/// Keeps Linux-only PCNTL functions absent from the Darwin PHP-visible surface.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_pcntl_linux_functions_are_not_visible_on_macos() {
+    let out = compile_and_run(
+        "<?php echo function_exists('pcntl_getcpu') ? 'visible' : 'absent';",
+    );
+    assert_eq!(out, "absent");
+}
+
 /// Forks and reaps a real child through `pcntl_waitpid`, proving by-reference status writeback.
 #[test]
 fn test_pcntl_fork_waitpid_round_trip() {
