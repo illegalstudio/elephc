@@ -102,10 +102,12 @@ fn emit_aarch64_random_range(
 ) -> Result<()> {
     abi::emit_pop_reg(ctx.emitter, "x9");
     emit_inverted_range_policy(ctx, policy, "x9", "x0");
+    // INCLUSIVE width, deliberately not `+ 1`. The exclusive form wraps to zero for the full
+    // 64-bit range, and the old 32-bit helper truncated any width that was a multiple of 2^32 —
+    // either way the bound arrived as zero and every draw came back as `min`.
     ctx.emitter.instruction("sub x0, x0, x9");                                  // compute the inclusive range width as max - min
-    ctx.emitter.instruction("add x0, x0, #1");                                  // convert the width to the exclusive upper bound for the random helper
     abi::emit_push_reg(ctx.emitter, "x9");
-    abi::emit_call_label(ctx.emitter, "__rt_random_uniform");
+    abi::emit_call_label(ctx.emitter, "__rt_random_uniform64");
     abi::emit_pop_reg(ctx.emitter, "x9");
     ctx.emitter.instruction("add x0, x0, x9");                                  // shift the sampled offset back into the caller-visible range
     Ok(())
@@ -118,10 +120,11 @@ fn emit_x86_64_random_range(
 ) -> Result<()> {
     abi::emit_pop_reg(ctx.emitter, "r9");
     emit_inverted_range_policy(ctx, policy, "r9", "rax");
+    // See the AArch64 half: the width stays INCLUSIVE so it cannot wrap, and the 64-bit sampler
+    // receives all of it rather than the low half.
     ctx.emitter.instruction("sub rax, r9");                                     // compute the inclusive range width as max - min
-    ctx.emitter.instruction("add rax, 1");                                      // convert the width to the exclusive upper bound for the random helper
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the exclusive upper bound to the random helper
-    abi::emit_call_label(ctx.emitter, "__rt_random_uniform");
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the inclusive upper bound to the random helper
+    abi::emit_call_label(ctx.emitter, "__rt_random_uniform64");
     ctx.emitter.instruction("add rax, r9");                                     // shift the sampled offset back into the caller-visible range
     Ok(())
 }

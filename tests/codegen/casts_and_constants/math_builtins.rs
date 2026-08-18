@@ -90,6 +90,79 @@ fn test_random_int_range() {
     assert_eq!(out, "42");
 }
 
+/// Verifies a range wider than 2^32 actually varies instead of always returning `$min`.
+///
+/// THE BOUNDARY IS THE POINT, and it is asserted as a PAIR. The range helper took its bound in a
+/// 32-bit register, so a span that was a multiple of 2^32 arrived as zero and every draw came
+/// back as `min`: `random_int(0, PHP_INT_MAX)` answered `0` every single time, and so did
+/// `mt_rand()`. `4294967294` (span 2^32 - 1) worked while `4294967295` (span 2^32) did not,
+/// which is what distinguishes a truncated bound from a broken generator — asserting only the
+/// wide case would not have told the two apart.
+///
+/// Every test in this family used a range small enough to fit 32 bits, which is why the defect
+/// survived. Eight draws are used per range: for a span this size, eight equal draws from a
+/// working sampler is not a flake anyone will ever see.
+#[test]
+fn test_random_int_wide_span_is_not_stuck_at_min() {
+    let out = compile_and_run(
+        r#"<?php
+function varies(callable $draw): string {
+    $seen = [];
+    for ($i = 0; $i < 8; $i++) { $seen[(string) $draw()] = true; }
+    return count($seen) > 1 ? "v" : "!";
+}
+echo varies(fn() => random_int(0, PHP_INT_MAX));
+echo varies(fn() => random_int(0, 4294967295));
+echo varies(fn() => random_int(0, 4294967294));
+echo varies(fn() => random_int(PHP_INT_MIN, PHP_INT_MAX));
+echo varies(fn() => mt_rand(0, PHP_INT_MAX));
+"#,
+    );
+    assert_eq!(out, "vvvvv");
+}
+
+/// Verifies wide-range draws land inside their bounds, both endpoints included.
+///
+/// A sampler that overshoots is worse than one that is stuck, because the result still looks
+/// random. The full 64-bit span is the case that cannot be checked by eye: `max - min + 1`
+/// overflows to zero there, so it exercises a different arm of the helper than the merely-wide
+/// ranges above.
+#[test]
+fn test_random_int_wide_span_stays_in_range() {
+    let out = compile_and_run(
+        r#"<?php
+$bad = 0;
+for ($i = 0; $i < 100; $i++) {
+    $v = random_int(0, PHP_INT_MAX);
+    if ($v < 0) { $bad++; }
+    $w = random_int(-10, 10);
+    if ($w < -10 || $w > 10) { $bad++; }
+}
+echo $bad === 0 ? "in-range" : "out-of-range";
+"#,
+    );
+    assert_eq!(out, "in-range");
+}
+
+/// Verifies small ranges still reach both endpoints after the 64-bit sampler was introduced.
+///
+/// Spans below 2^32 delegate to the pre-existing 32-bit sampler, so an off-by-one in that
+/// delegation would silently drop `min` or `max` while every draw still passed a bounds check.
+/// Enumerating the values actually produced is what catches that; counting them is not enough.
+#[test]
+fn test_random_int_small_range_reaches_both_endpoints() {
+    let out = compile_and_run(
+        r#"<?php
+$seen = [];
+for ($i = 0; $i < 400; $i++) { $seen[] = random_int(1, 6); }
+$u = array_unique($seen);
+sort($u);
+echo implode(",", $u);
+"#,
+    );
+    assert_eq!(out, "1,2,3,4,5,6");
+}
+
 /// Verifies `rand()` with no arguments does not crash and returns a non-negative integer.
 #[test]
 fn test_rand_no_args() {
