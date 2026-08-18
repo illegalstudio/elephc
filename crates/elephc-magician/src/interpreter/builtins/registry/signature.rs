@@ -40,6 +40,13 @@ pub(in crate::interpreter) enum EvalBuiltinDefaultValue {
     String(&'static str),
     /// PHP empty indexed array default.
     EmptyArray,
+    /// PHP class constant or enum case default.
+    ClassConstant {
+        /// Fully qualified PHP class or enum name without a leading slash.
+        class: &'static str,
+        /// PHP-visible constant or case name.
+        name: &'static str,
+    },
 }
 
 /// Returns signature-shape metadata for one PHP-visible eval builtin.

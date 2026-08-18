@@ -66,6 +66,7 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
         DefaultSpec::Str(v) => json!(v),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
         DefaultSpec::EmptyArray => json!([]),
+        DefaultSpec::ClassConstant { class, name } => json!(format!("{class}::{name}")),
     }
 }
 

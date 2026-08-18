@@ -334,6 +334,27 @@ return PHP_INT_MAX;"#,
         vec![DEFINE_ALREADY_DEFINED_WARNING.to_string()]
     );
 }
+
+/// Verifies eval reads target-aware PCNTL constants from the shared bridge catalog.
+#[test]
+fn execute_program_reads_target_aware_pcntl_constants() {
+    let program = parse_fragment(
+        br#"echo SIGALRM; echo ":";
+echo defined("PCNTL_EAGAIN") ? "defined" : "missing"; echo ":";
+return PCNTL_EAGAIN;"#,
+    )
+    .expect("parse PCNTL constant fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "14:defined:");
+    #[cfg(target_os = "macos")]
+    assert_eq!(values.get(result), FakeValue::Int(35));
+    #[cfg(target_os = "linux")]
+    assert_eq!(values.get(result), FakeValue::Int(11));
+}
 /// Verifies missing eval dynamic constants fail through runtime status.
 #[test]
 fn execute_program_missing_constant_fetch_fails() {

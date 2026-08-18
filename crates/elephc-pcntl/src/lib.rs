@@ -10,6 +10,13 @@
 //! - Process status decoding is delegated to libc so Darwin and Linux layouts stay correct.
 //! - PHP values, callable descriptors, signal dispatch, and output arrays remain runtime-owned.
 
+mod constants;
+
+pub use constants::{
+    host_pcntl_int_constant, is_pcntl_int_constant, LINUX_PCNTL_INT_CONSTANTS,
+    MACOS_PCNTL_INT_CONSTANTS,
+};
+
 use std::ffi::{CStr, CString};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::OnceLock;
@@ -131,21 +138,32 @@ pub struct ElephcPcntlSigInfo {
     pub present: u64,
 }
 
-const SIGINFO_SIGNO: u64 = 1 << 0;
-const SIGINFO_ERRNO: u64 = 1 << 1;
-const SIGINFO_CODE: u64 = 1 << 2;
-const SIGINFO_STATUS: u64 = 1 << 3;
-const SIGINFO_PID: u64 = 1 << 4;
-const SIGINFO_UID: u64 = 1 << 5;
+/// Presence bit for `ElephcPcntlSigInfo::signo`.
+pub const SIGINFO_SIGNO: u64 = 1 << 0;
+/// Presence bit for `ElephcPcntlSigInfo::error`.
+pub const SIGINFO_ERRNO: u64 = 1 << 1;
+/// Presence bit for `ElephcPcntlSigInfo::code`.
+pub const SIGINFO_CODE: u64 = 1 << 2;
+/// Presence bit for `ElephcPcntlSigInfo::status`.
+pub const SIGINFO_STATUS: u64 = 1 << 3;
+/// Presence bit for `ElephcPcntlSigInfo::pid`.
+pub const SIGINFO_PID: u64 = 1 << 4;
+/// Presence bit for `ElephcPcntlSigInfo::uid`.
+pub const SIGINFO_UID: u64 = 1 << 5;
 #[cfg(target_os = "linux")]
-const SIGINFO_UTIME: u64 = 1 << 6;
+/// Presence bit for Linux `ElephcPcntlSigInfo::utime`.
+pub const SIGINFO_UTIME: u64 = 1 << 6;
 #[cfg(target_os = "linux")]
-const SIGINFO_STIME: u64 = 1 << 7;
-const SIGINFO_ADDRESS: u64 = 1 << 8;
+/// Presence bit for Linux `ElephcPcntlSigInfo::stime`.
+pub const SIGINFO_STIME: u64 = 1 << 7;
+/// Presence bit for `ElephcPcntlSigInfo::address`.
+pub const SIGINFO_ADDRESS: u64 = 1 << 8;
 #[cfg(target_os = "linux")]
-const SIGINFO_BAND: u64 = 1 << 9;
+/// Presence bit for Linux `ElephcPcntlSigInfo::band`.
+pub const SIGINFO_BAND: u64 = 1 << 9;
 #[cfg(target_os = "linux")]
-const SIGINFO_FD: u64 = 1 << 10;
+/// Presence bit for Linux `ElephcPcntlSigInfo::fd`.
+pub const SIGINFO_FD: u64 = 1 << 10;
 
 /// Returns one past the largest signal number accepted by the current target.
 #[cfg(target_os = "linux")]
@@ -718,6 +736,111 @@ pub extern "C" fn elephc_pcntl_setpriority(
 #[no_mangle]
 pub extern "C" fn elephc_pcntl_get_last_error() -> libc::c_int {
     LAST_ERROR.load(Ordering::Relaxed)
+}
+
+#[cfg(target_os = "macos")]
+type QosClass = u32;
+
+#[cfg(target_os = "macos")]
+const QOS_CLASS_USER_INTERACTIVE: QosClass = 0x21;
+#[cfg(target_os = "macos")]
+const QOS_CLASS_USER_INITIATED: QosClass = 0x19;
+#[cfg(target_os = "macos")]
+const QOS_CLASS_DEFAULT: QosClass = 0x15;
+#[cfg(target_os = "macos")]
+const QOS_CLASS_UTILITY: QosClass = 0x11;
+#[cfg(target_os = "macos")]
+const QOS_CLASS_BACKGROUND: QosClass = 0x09;
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    /// Reads the requested QoS class of one Darwin pthread.
+    fn pthread_get_qos_class_np(
+        thread: libc::pthread_t,
+        qos_class: *mut QosClass,
+        relative_priority: *mut libc::c_int,
+    ) -> libc::c_int;
+
+    /// Changes the calling Darwin pthread's requested QoS class.
+    fn pthread_set_qos_class_self_np(
+        qos_class: QosClass,
+        relative_priority: libc::c_int,
+    ) -> libc::c_int;
+}
+
+/// Maps one Darwin QoS value into the stable ordinal consumed by generated code.
+#[cfg(target_os = "macos")]
+const fn qos_class_ordinal(qos_class: QosClass) -> libc::c_int {
+    match qos_class {
+        QOS_CLASS_USER_INTERACTIVE => 0,
+        QOS_CLASS_USER_INITIATED => 1,
+        QOS_CLASS_UTILITY => 3,
+        QOS_CLASS_BACKGROUND => 4,
+        _ => 2,
+    }
+}
+
+/// Maps a PHP `Pcntl\QosClass` case name into its Darwin QoS value.
+#[cfg(target_os = "macos")]
+fn qos_class_from_name(name: &[u8]) -> Option<QosClass> {
+    match name {
+        b"UserInteractive" => Some(QOS_CLASS_USER_INTERACTIVE),
+        b"UserInitiated" => Some(QOS_CLASS_USER_INITIATED),
+        b"Default" => Some(QOS_CLASS_DEFAULT),
+        b"Utility" => Some(QOS_CLASS_UTILITY),
+        b"Background" => Some(QOS_CLASS_BACKGROUND),
+        _ => None,
+    }
+}
+
+/// Returns the current Darwin pthread QoS as a stable `Pcntl\QosClass` ordinal.
+///
+/// Returns `-1` and records the pthread error when inspection fails.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_getqos_class() -> libc::c_int {
+    let mut qos_class = 0;
+    let result = unsafe {
+        pthread_get_qos_class_np(libc::pthread_self(), &mut qos_class, std::ptr::null_mut())
+    };
+    if result != 0 {
+        LAST_ERROR.store(result, Ordering::Relaxed);
+        return -1;
+    }
+    qos_class_ordinal(qos_class)
+}
+
+/// Changes the current Darwin pthread QoS from a PHP enum case name.
+///
+/// Returns `1` on success, or `0` after recording `EINVAL`, `EFAULT`, or the pthread error.
+///
+/// # Safety
+/// `name` must be readable for `name_len` bytes when `name_len` is nonzero.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_setqos_class(
+    name: *const u8,
+    name_len: usize,
+) -> libc::c_int {
+    if name.is_null() && name_len != 0 {
+        LAST_ERROR.store(libc::EFAULT, Ordering::Relaxed);
+        return 0;
+    }
+    let name = if name_len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(name, name_len)
+    };
+    let Some(qos_class) = qos_class_from_name(name) else {
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return 0;
+    };
+    let result = pthread_set_qos_class_self_np(qos_class, 0);
+    if result != 0 {
+        LAST_ERROR.store(result, Ordering::Relaxed);
+        return 0;
+    }
+    1
 }
 
 /// Returns the C library's borrowed error string and writes its byte length.
@@ -1440,5 +1563,61 @@ mod tests {
         let success = unsafe { elephc_pcntl_getpriority(0, libc::PRIO_PROCESS as _, std::ptr::null_mut()) };
         assert_eq!(success, 0);
         assert_eq!(elephc_pcntl_get_last_error(), libc::EFAULT);
+    }
+
+    /// Reads Darwin's current QoS class through the stable five-case ordinal ABI.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_qos_getter_returns_a_known_case() {
+        let qos_class = elephc_pcntl_getqos_class();
+        assert!((0..=4).contains(&qos_class));
+    }
+
+    /// Rejects an unknown QoS enum case name without changing the current thread.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_qos_setter_rejects_unknown_case() {
+        let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+        let success = unsafe { elephc_pcntl_setqos_class(b"Unknown".as_ptr(), 7) };
+        assert_eq!(success, 0);
+        assert_eq!(elephc_pcntl_get_last_error(), libc::EINVAL);
+    }
+
+    /// Changes the current test thread to Default QoS through the case-name bridge.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_qos_default_setter_round_trips() {
+        let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+        let success = unsafe { elephc_pcntl_setqos_class(b"Default".as_ptr(), 7) };
+        assert_eq!(
+            success,
+            1,
+            "set Default failed with {}",
+            elephc_pcntl_get_last_error()
+        );
+        assert_eq!(elephc_pcntl_getqos_class(), 2);
+    }
+
+    /// Reapplies the current Darwin QoS case through the case-name bridge.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_qos_current_setter_round_trips() {
+        let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+        let ordinal = elephc_pcntl_getqos_class();
+        let name = [
+            &b"UserInteractive"[..],
+            &b"UserInitiated"[..],
+            &b"Default"[..],
+            &b"Utility"[..],
+            &b"Background"[..],
+        ][ordinal as usize];
+        let success = unsafe { elephc_pcntl_setqos_class(name.as_ptr(), name.len()) };
+        assert_eq!(
+            success,
+            1,
+            "set current failed with {}",
+            elephc_pcntl_get_last_error()
+        );
+        assert_eq!(elephc_pcntl_getqos_class(), ordinal);
     }
 }

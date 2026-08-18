@@ -226,36 +226,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "hexdec",
     "join",
     "octdec",
-    "pcntl_alarm",
-    "pcntl_async_signals",
-    "pcntl_exec",
-    "pcntl_errno",
-    "pcntl_fork",
-    "pcntl_get_last_error",
-    "pcntl_getcpu",
-    "pcntl_getcpuaffinity",
-    "pcntl_getpriority",
-    "pcntl_setcpuaffinity",
-    "pcntl_setns",
-    "pcntl_setpriority",
-    "pcntl_signal",
-    "pcntl_signal_dispatch",
-    "pcntl_signal_get_handler",
-    "pcntl_sigprocmask",
-    "pcntl_sigtimedwait",
-    "pcntl_sigwaitinfo",
-    "pcntl_strerror",
-    "pcntl_unshare",
-    "pcntl_wait",
-    "pcntl_waitid",
-    "pcntl_waitpid",
-    "pcntl_wexitstatus",
-    "pcntl_wifcontinued",
-    "pcntl_wifexited",
-    "pcntl_wifsignaled",
-    "pcntl_wifstopped",
-    "pcntl_wstopsig",
-    "pcntl_wtermsig",
     "serialize",
     "strncasecmp",
     "strncmp",
@@ -310,14 +280,14 @@ mod tests {
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(eval_registry, 484 + curl_surface);
+        assert_eq!(eval_registry, 516 + curl_surface);
         assert_eq!(eval_internal, 82);
-        assert_eq!(eval_pending, 61);
+        assert_eq!(eval_pending, 31);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
-        // entry points. PCNTL contributes thirty more AOT registry contracts.
-        assert_eq!(aot_registry, 614);
+        // entry points. PCNTL contributes thirty-two registry contracts.
+        assert_eq!(aot_registry, 616);
         assert_eq!(aot_external, 10 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
@@ -366,8 +336,8 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 463 + curl_surface);
-        assert_eq!(unsupported, 143);
+        assert_eq!(interpreter_adapter, 495 + curl_surface);
+        assert_eq!(unsupported, 113);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

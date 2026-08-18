@@ -19,6 +19,7 @@ use crate::ir::Instruction;
 use crate::types::PhpType;
 
 use super::super::callables;
+use super::super::predicates;
 use super::strings::load_as_int;
 use super::{ensure_arg_count_between, expect_operand, store_if_result};
 
@@ -191,39 +192,59 @@ pub(crate) fn lower_async_signals(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "pcntl_async_signals", 0, 1)?;
+    let Some(enable) = inst.operands.first().copied() else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(ctx.emitter, "x9", "__rt_pcntl_async_enabled");
+                ctx.emitter.instruction("ldr x0, [x9]");
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "r9", "__rt_pcntl_async_enabled");
+                ctx.emitter.instruction("mov rax, QWORD PTR [r9]");
+            }
+        }
+        return store_if_result(ctx, inst);
+    };
+
+    let query = ctx.next_label("pcntl_async_signals_query");
+    let done = ctx.next_label("pcntl_async_signals_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", "__rt_pcntl_async_enabled");
             ctx.emitter.instruction("ldr x10, [x9]");
-            if let Some(enable) = inst.operands.first().copied() {
-                abi::emit_push_reg(ctx.emitter, "x10");
-                load_as_int(ctx, enable, "pcntl_async_signals enable")?;
-                ctx.emitter.instruction("cmp x0, #0");
-                ctx.emitter.instruction("cset x0, ne");
-                abi::emit_symbol_address(ctx.emitter, "x9", "__rt_pcntl_async_enabled");
-                ctx.emitter.instruction("str x0, [x9]");
-                abi::emit_pop_reg(ctx.emitter, "x0");
-            } else {
-                ctx.emitter.instruction("mov x0, x10");
-            }
+            abi::emit_push_reg(ctx.emitter, "x10");
+            predicates::emit_is_null_result(ctx, enable)?;
+            ctx.emitter.instruction(&format!("cbnz x0, {query}"));
+            load_as_int(ctx, enable, "pcntl_async_signals enable")?;
+            ctx.emitter.instruction("cmp x0, #0");
+            ctx.emitter.instruction("cset x0, ne");
+            abi::emit_symbol_address(ctx.emitter, "x9", "__rt_pcntl_async_enabled");
+            ctx.emitter.instruction("str x0, [x9]");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction(&format!("b {done}"));
+            ctx.emitter.label(&query);
+            abi::emit_pop_reg(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "r9", "__rt_pcntl_async_enabled");
             ctx.emitter.instruction("mov r10, QWORD PTR [r9]");
-            if let Some(enable) = inst.operands.first().copied() {
-                abi::emit_push_reg(ctx.emitter, "r10");
-                load_as_int(ctx, enable, "pcntl_async_signals enable")?;
-                ctx.emitter.instruction("test rax, rax");
-                ctx.emitter.instruction("setne al");
-                ctx.emitter.instruction("movzx eax, al");
-                abi::emit_symbol_address(ctx.emitter, "r9", "__rt_pcntl_async_enabled");
-                ctx.emitter.instruction("mov QWORD PTR [r9], rax");
-                abi::emit_pop_reg(ctx.emitter, "rax");
-            } else {
-                ctx.emitter.instruction("mov rax, r10");
-            }
+            abi::emit_push_reg(ctx.emitter, "r10");
+            predicates::emit_is_null_result(ctx, enable)?;
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jnz {query}"));
+            load_as_int(ctx, enable, "pcntl_async_signals enable")?;
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction("setne al");
+            ctx.emitter.instruction("movzx eax, al");
+            abi::emit_symbol_address(ctx.emitter, "r9", "__rt_pcntl_async_enabled");
+            ctx.emitter.instruction("mov QWORD PTR [r9], rax");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction(&format!("jmp {done}"));
+            ctx.emitter.label(&query);
+            abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 

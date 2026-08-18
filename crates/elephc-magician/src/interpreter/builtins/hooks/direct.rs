@@ -177,6 +177,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Min,
     /// Dispatches network, host, environment, and process builtins.
     NetworkEnv,
+    /// Dispatches PCNTL process-control builtins.
+    Pcntl,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -436,6 +438,7 @@ impl EvalDirectHook {
             Self::Min => eval_builtin_min(args, context, scope, values),
             Self::MtRand => eval_builtin_mt_rand(args, context, scope, values),
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
+            Self::Pcntl => eval_builtin_pcntl_expr_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Openssl => {
                 eval_builtin_openssl_declared_call(name, args, context, scope, values)

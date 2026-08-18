@@ -16,6 +16,18 @@ const fn pcntl_contract(
     returns: TypeSpec,
     summary: &'static str,
 ) -> BuiltinContract {
+    pcntl_contract_with_min_args(name, params, returns, summary, None)
+}
+
+/// Builds a PCNTL contract whose PHP signature permits fewer arguments than its
+/// dependency-neutral parameter defaults can express.
+const fn pcntl_contract_with_min_args(
+    name: &'static str,
+    params: &'static [ParamSpec],
+    returns: TypeSpec,
+    summary: &'static str,
+    min_args: Option<usize>,
+) -> BuiltinContract {
     BuiltinContract {
         id: BuiltinId::from_canonical_name(name),
         name,
@@ -23,7 +35,7 @@ const fn pcntl_contract(
         kind: BuiltinKind::Function,
         params,
         variadic: None,
-        min_args: None,
+        min_args,
         max_args: None,
         arity_error: None,
         returns,
@@ -142,6 +154,12 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Returns a process, process-group, or user scheduling priority, or false on failure.",
     ),
     pcntl_contract(
+        "pcntl_getqos_class",
+        &[],
+        TypeSpec::Mixed,
+        "Returns the current macOS thread quality-of-service class.",
+    ),
+    pcntl_contract(
         "pcntl_setcpuaffinity",
         &[
             ParamSpec {
@@ -203,6 +221,21 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         ],
         TypeSpec::Bool,
         "Changes a process, process-group, or user scheduling priority.",
+    ),
+    pcntl_contract_with_min_args(
+        "pcntl_setqos_class",
+        &[ParamSpec {
+            name: "qos_class",
+            ty: TypeSpec::Mixed,
+            default: Some(DefaultSpec::ClassConstant {
+                class: "Pcntl\\QosClass",
+                name: "Default",
+            }),
+            by_ref: false,
+        }],
+        TypeSpec::Void,
+        "Changes the current macOS thread quality-of-service class.",
+        None,
     ),
     pcntl_contract(
         "pcntl_signal",

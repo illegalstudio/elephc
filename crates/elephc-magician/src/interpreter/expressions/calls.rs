@@ -84,6 +84,9 @@ pub(in crate::interpreter) fn eval_call(
     if name == "curl_multi_info_read" {
         return eval_builtin_curl_multi_info_read_call(args, context, scope, values);
     }
+    if name.starts_with("pcntl_") && eval_php_visible_builtin_exists(name) {
+        return eval_builtin_pcntl_call(name, args, context, scope, values);
+    }
     // `opcache_get_configuration` is prelude-provided on the native side (not a
     // catalog builtin), so eval dispatches it as a plain runtime handler rather than
     // through the PHP-visible builtin registry, keeping the two builtin sets in sync.

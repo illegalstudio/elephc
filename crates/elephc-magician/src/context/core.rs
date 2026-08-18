@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// One PHP handler retained by Magician for a process signal.
+#[derive(Clone, Copy)]
+pub enum EvalPcntlSignalHandler {
+    /// Native `SIG_DFL` or `SIG_IGN` disposition value.
+    Disposition(i64),
+    /// Runtime callable cell retained while the handler remains registered.
+    Callable(RuntimeCellHandle),
+}
+
 /// Process-level eval context passed opaquely across the C ABI.
 ///
 /// Generated code never inspects this layout directly; it only passes pointers
@@ -83,6 +92,8 @@ pub struct ElephcEvalContext {
     pub(super) call_dir: String,
     pub(super) call_line: i64,
     pub(super) file_magic_override: Option<String>,
+    pub(super) pcntl_signal_handlers: HashMap<i32, EvalPcntlSignalHandler>,
+    pub(super) pcntl_async_signals: bool,
 }
 
 impl ElephcEvalContext {
@@ -157,6 +168,8 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            pcntl_signal_handlers: HashMap::new(),
+            pcntl_async_signals: false,
         }
     }
 
@@ -232,6 +245,8 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
+            pcntl_signal_handlers: HashMap::new(),
+            pcntl_async_signals: false,
         }
     }
 

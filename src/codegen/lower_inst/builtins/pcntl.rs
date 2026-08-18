@@ -47,6 +47,7 @@ pub(crate) fn lower(
             "elephc_pcntl_get_last_error",
         ),
         PcntlRuntime::GetPriority => lower_getpriority(ctx, inst),
+        PcntlRuntime::GetQosClass => lower_getqos_class(ctx, inst),
         PcntlRuntime::SetCpuAffinity => lower_setcpuaffinity(ctx, inst),
         PcntlRuntime::SetNs => lower_optional_binary_int_bridge(
             ctx,
@@ -57,6 +58,7 @@ pub(crate) fn lower(
             0x4000_0000,
         ),
         PcntlRuntime::SetPriority => lower_setpriority(ctx, inst),
+        PcntlRuntime::SetQosClass => lower_setqos_class(ctx, inst),
         PcntlRuntime::Signal => super::pcntl_handlers::lower_signal(ctx, inst),
         PcntlRuntime::SignalDispatch => super::pcntl_handlers::lower_signal_dispatch(ctx, inst),
         PcntlRuntime::SignalGetHandler => {
@@ -125,11 +127,116 @@ pub(crate) fn lower(
             "elephc_pcntl_wtermsig",
             true,
         ),
-        _ => Err(CodegenIrError::unsupported(format!(
-            "typed PCNTL operation {}",
-            target.as_eir(),
-        ))),
     }
+}
+
+/// Lowers `pcntl_getqos_class()` into the corresponding lazy builtin enum singleton.
+fn lower_getqos_class(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    const ENUM_NAME: &str = "Pcntl\\QosClass";
+    const CASES: [(i64, &str); 5] = [
+        (0, "UserInteractive"),
+        (1, "UserInitiated"),
+        (2, "Default"),
+        (3, "Utility"),
+        (4, "Background"),
+    ];
+
+    ensure_arg_count(inst, "pcntl_getqos_class", 0)?;
+    ctx.emitter.bl_c("elephc_pcntl_getqos_class");
+    let valid = ctx.next_label("pcntl_getqos_class_valid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // reject the bridge's negative pthread error sentinel
+            ctx.emitter.instruction(&format!("b.ge {valid}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // reject the bridge's negative pthread error sentinel
+            ctx.emitter.instruction(&format!("jge {valid}"));
+        }
+    }
+    super::super::exceptions::emit_error(ctx, "invalid QOS class");
+    ctx.emitter.label(&valid);
+    let done = ctx.next_label("pcntl_getqos_class_done");
+    let case_labels = CASES
+        .iter()
+        .map(|(_, case)| ctx.next_label(&format!("pcntl_qos_{case}")))
+        .collect::<Vec<_>>();
+
+    for ((ordinal, _), label) in CASES.iter().zip(&case_labels) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", ordinal));      // select the PHP enum case for the bridge ordinal
+                ctx.emitter.instruction(&format!("b.eq {label}"));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp rax, {}", ordinal));      // select the PHP enum case for the bridge ordinal
+                ctx.emitter.instruction(&format!("je {label}"));
+            }
+        }
+    }
+    ctx.emit_branch(&case_labels[2]);
+
+    for ((_, case), label) in CASES.iter().zip(&case_labels) {
+        ctx.emitter.label(label);
+        crate::codegen::enum_singletons::emit_lazy_case_load(ctx, ENUM_NAME, case);
+        abi::emit_incref_if_refcounted(
+            ctx.emitter,
+            &PhpType::Object(ENUM_NAME.to_string()),
+        );
+        ctx.emit_branch(&done);
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `pcntl_setqos_class()` by passing the enum case's builtin `name` property to Darwin.
+fn lower_setqos_class(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    const ENUM_NAME: &str = "Pcntl\\QosClass";
+
+    ensure_arg_count_between(inst, "pcntl_setqos_class", 0, 1)?;
+    if let Some(value) = inst.operands.first().copied() {
+        let ty = ctx.load_value_to_result(value)?.codegen_repr();
+        if !matches!(ty, PhpType::Object(ref name) if crate::names::php_symbol_key(name) == crate::names::php_symbol_key(ENUM_NAME)) {
+            return Err(CodegenIrError::unsupported(format!(
+                "pcntl_setqos_class enum storage {ty:?}",
+            )));
+        }
+        let name_offset = ctx
+            .module
+            .class_infos
+            .get(ENUM_NAME)
+            .and_then(|info| info.property_offsets.get("name"))
+            .copied()
+            .ok_or_else(|| CodegenIrError::missing_entry("Pcntl\\QosClass name property", 0))?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("ldr x1, [x0, #{}]", name_offset + 8)); // C arg1 = enum case-name length
+                ctx.emitter.instruction(&format!("ldr x0, [x0, #{}]", name_offset));     // C arg0 = enum case-name bytes
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("mov rsi, QWORD PTR [rax + {}]", name_offset + 8)); // C arg1 = enum case-name length
+                ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {}]", name_offset));     // C arg0 = enum case-name bytes
+            }
+        }
+    } else {
+        let (default_label, default_len) = ctx.data.add_string(b"Default");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(ctx.emitter, "x0", &default_label);
+                abi::emit_load_int_immediate(ctx.emitter, "x1", default_len as i64);
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "rdi", &default_label);
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", default_len as i64);
+            }
+        }
+    }
+    ctx.emitter.bl_c("elephc_pcntl_setqos_class");
+    let success = ctx.next_label("pcntl_setqos_class_success");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &success);
+    super::super::exceptions::emit_error(ctx, "pcntl_setqos_class failed");
+    ctx.emitter.label(&success);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `pcntl_getcpuaffinity()` into a boxed indexed integer array or boxed false.

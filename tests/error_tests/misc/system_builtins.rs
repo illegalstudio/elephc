@@ -51,6 +51,23 @@ expect_builtin_arity_error!(
     "pcntl_setpriority() takes 1 to 3 arguments"
 );
 
+#[cfg(target_os = "macos")]
+expect_builtin_arity_error!(
+    test_error_pcntl_setqos_class_wrong_args,
+    "<?php pcntl_setqos_class(Pcntl\\QosClass::Default, Pcntl\\QosClass::Utility);",
+    "pcntl_setqos_class() takes at most 1 argument"
+);
+
+/// Verifies Darwin QoS selection accepts only the platform-injected enum type.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_error_pcntl_setqos_class_requires_enum() {
+    expect_error(
+        "<?php pcntl_setqos_class(1);",
+        "pcntl_setqos_class() parameter $qos_class must be of type Pcntl\\QosClass",
+    );
+}
+
 /// Verifies PCNTL signatures reject non-integer operands before EIR lowering.
 #[test]
 fn test_error_pcntl_status_requires_int() {

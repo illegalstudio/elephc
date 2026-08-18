@@ -133,6 +133,19 @@ fn test_pcntl_async_signals_dispatch_at_safe_points() {
     assert_eq!(out, "old-off|async:14|was-on|");
 }
 
+/// Treats an explicit nullable async-signals argument as a query without changing state.
+#[test]
+fn test_pcntl_async_signals_explicit_null_queries_state() {
+    let out = compile_and_run(
+        "<?php
+        pcntl_async_signals(true);
+        echo (pcntl_async_signals(null) ? 'old-on' : 'bad') . '|';
+        echo (pcntl_async_signals() ? 'still-on' : 'bad') . '|';
+        echo (pcntl_async_signals(false) ? 'reset' : 'bad');",
+    );
+    assert_eq!(out, "old-on|still-on|reset");
+}
+
 /// Returns false on a Linux timed signal wait and preserves an existing info output.
 #[cfg(target_os = "linux")]
 #[test]
@@ -184,6 +197,61 @@ fn test_pcntl_linux_functions_are_not_visible_on_macos() {
         "<?php echo function_exists('pcntl_getcpu') ? 'visible' : 'absent';",
     );
     assert_eq!(out, "absent");
+}
+
+/// Exercises Darwin QoS enum injection, getter identity, setter selection, and defaulting.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_pcntl_macos_qos_class_round_trip() {
+    let out = compile_and_run(
+        "<?php
+        echo (enum_exists('Pcntl\\\\QosClass') ? 'enum' : 'missing') . '|';
+        echo count(Pcntl\\QosClass::cases()) . '|';
+        $before = pcntl_getqos_class();
+        pcntl_setqos_class($before);
+        echo (pcntl_getqos_class() === $before ? 'same' : 'changed') . '|';
+        pcntl_setqos_class();
+        echo (pcntl_getqos_class() === Pcntl\\QosClass::Default ? 'default' : 'bad');",
+    );
+    assert_eq!(out, "enum|5|same|default");
+}
+
+/// Preserves php-src's catchable Error when Darwin rejects a QoS change after fork.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_pcntl_macos_qos_set_failure_throws_error() {
+    let out = compile_and_run(
+        "<?php
+        $current = pcntl_getqos_class();
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            try {
+                pcntl_setqos_class($current);
+                echo 'missing';
+            } catch (Error $error) {
+                echo $error->getMessage();
+            }
+            exit(0);
+        }
+        pcntl_waitpid($pid, $status);
+        echo '|' . pcntl_wexitstatus($status);",
+    );
+    assert_eq!(out, "pcntl_setqos_class failed|0");
+}
+
+/// Keeps Darwin-only QoS functions and their enum absent from Linux PHP-visible metadata.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_macos_qos_surface_is_not_visible_on_linux() {
+    let out = compile_and_run(
+        "<?php
+        echo function_exists('pcntl_getqos_class') ? 'visible' : 'absent';
+        echo '|';
+        echo function_exists('pcntl_setqos_class') ? 'visible' : 'absent';
+        echo '|';
+        echo enum_exists('Pcntl\\\\QosClass') ? 'visible' : 'absent';",
+    );
+    assert_eq!(out, "absent|absent|absent");
 }
 
 /// Replaces a forked child with `/bin/sh`, preserving argv order and the explicit environment.
@@ -297,4 +365,98 @@ fn test_pcntl_waitid_failure_preserves_info_output() {
         echo ($ok ? 'bad' : 'false') . '|' . $info['old'];",
     );
     assert_eq!(out, "false|41");
+}
+
+/// Executes scalar PCNTL adapters through runtime eval, including failure errno propagation.
+#[test]
+fn test_pcntl_eval_scalar_status_and_exec_failure() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $status = 29 << 8;
+            $failed = pcntl_exec("/definitely/missing/elephc-pcntl-eval");
+            pcntl_async_signals(true);
+            $nullable = pcntl_async_signals(null) && pcntl_async_signals();
+            pcntl_async_signals(false);
+            return (pcntl_wifexited($status) ? "exited" : "bad") . "|"
+                . pcntl_wexitstatus($status) . "|"
+                . (!$failed ? "false" : "bad") . "|"
+                . pcntl_get_last_error() . "|"
+                . ($nullable ? "nullable" : "bad");
+        ');"#,
+    );
+    assert_eq!(out, "exited|29|false|2|nullable");
+}
+
+/// Forks and reaps a child inside runtime eval, proving by-reference status and usage writeback.
+#[test]
+fn test_pcntl_eval_fork_waitpid_writes_reference_outputs() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $pid = pcntl_fork();
+            if ($pid === 0) { exit(43); }
+            $waited = pcntl_waitpid($pid, $status, 0, $usage);
+            return ($waited === $pid ? "pid" : "bad") . "|"
+                . pcntl_wexitstatus($status) . "|"
+                . (is_int($usage["ru_utime.tv_sec"]) ? "usage" : "bad");
+        ');"#,
+    );
+    assert_eq!(out, "pid|43|usage");
+}
+
+/// Registers and dispatches an eval closure through the signal-safe Magician queue.
+#[test]
+fn test_pcntl_eval_signal_handler_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $seen = 0;
+            $handler = function($signal, $info) use (&$seen) {
+                $seen = $signal === $info["signo"] ? $signal : -1;
+            };
+            pcntl_signal(SIGALRM, $handler);
+            pcntl_alarm(1);
+            sleep(2);
+            $ok = pcntl_signal_dispatch();
+            pcntl_signal(SIGALRM, SIG_DFL);
+            return ($ok ? "dispatch" : "bad") . "|" . $seen;
+        ');"#,
+    );
+    assert_eq!(out, "dispatch|14");
+}
+
+/// Exercises Linux-only eval adapters and confirms Darwin QoS metadata remains absent.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_eval_linux_target_surface_and_affinity() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $cpu = pcntl_getcpu();
+            $mask = pcntl_getcpuaffinity();
+            return (function_exists("pcntl_getcpu") ? "visible" : "missing") . "|"
+                . (function_exists("pcntl_getqos_class") ? "qos" : "no-qos") . "|"
+                . ($cpu >= 0 && count($mask) > 0 ? "affinity" : "bad");
+        ');"#,
+    );
+    assert_eq!(out, "visible|no-qos|affinity");
+}
+
+/// Exercises Darwin QoS enum defaults through eval and confirms Linux-only metadata stays absent.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_pcntl_eval_macos_qos_default_and_target_surface() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $before = pcntl_getqos_class();
+            pcntl_setqos_class($before);
+            pcntl_setqos_class();
+            return (function_exists("pcntl_getqos_class") ? "visible" : "missing") . "|"
+                . (function_exists("pcntl_getcpu") ? "linux" : "no-linux") . "|"
+                . (pcntl_getqos_class() === Pcntl\\QosClass::Default ? "default" : "bad");
+        ');"#,
+    );
+    assert_eq!(out, "visible|no-linux|default");
 }
