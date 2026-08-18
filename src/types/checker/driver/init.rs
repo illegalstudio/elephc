@@ -40,7 +40,7 @@ impl Checker {
     /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
-    /// * `target_platform` - The compilation target platform, stored for use in platform-specific
+    /// * `target` - The full compilation target, stored for platform- and Apple-variant-specific
     ///   type checks and library requirements.
     ///
     /// # Returns
@@ -134,7 +134,7 @@ impl Checker {
         for (name, _value) in CURL_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
-        for (name, _value) in pcntl_int_constants(target_platform) {
+        for (name, _value) in pcntl_int_constants(target.platform) {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`

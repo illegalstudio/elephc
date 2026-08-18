@@ -102,6 +102,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extension: Some("iconv"),
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_pcntl",
+        package: "elephc-pcntl",
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
         php_extension: Some("Phar"),

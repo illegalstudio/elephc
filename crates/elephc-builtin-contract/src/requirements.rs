@@ -14,6 +14,7 @@ use crate::{BuiltinId, BuiltinRequirement};
 const BCMATH: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_bcmath")];
 const CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_crypto")];
 const PHAR: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_phar")];
+const PCNTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_pcntl")];
 const TLS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_tls")];
 const ZLIB: &[BuiltinRequirement] = &[BuiltinRequirement::SystemLibrary("z")];
 const ICONV_MACOS: &[BuiltinRequirement] = &[BuiltinRequirement::MacOsLibrary("iconv")];
@@ -25,6 +26,27 @@ const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pc
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
 pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement] {
+    if matches_name(
+        id,
+        &[
+            "pcntl_alarm",
+            "pcntl_errno",
+            "pcntl_fork",
+            "pcntl_get_last_error",
+            "pcntl_getpriority",
+            "pcntl_setpriority",
+            "pcntl_strerror",
+            "pcntl_wexitstatus",
+            "pcntl_wifcontinued",
+            "pcntl_wifexited",
+            "pcntl_wifsignaled",
+            "pcntl_wifstopped",
+            "pcntl_wstopsig",
+            "pcntl_wtermsig",
+        ],
+    ) {
+        return PCNTL;
+    }
     if matches_name(
         id,
         &[

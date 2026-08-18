@@ -39,3 +39,45 @@ fn test_pcntl_macos_only_constants() {
     let out = compile_and_run("<?php echo PRIO_DARWIN_BG . '|' . PRIO_DARWIN_THREAD;");
     assert_eq!(out, "4096|3");
 }
+
+/// Verifies scalar PCNTL calls lower through the bridge and auto-load its extension identity.
+#[test]
+fn test_pcntl_scalar_bridge_and_extension_loading() {
+    let out = compile_and_run(
+        "<?php
+        $message = pcntl_strerror(PCNTL_EINVAL);
+        echo (strlen($message) > 0 ? 'message' : 'empty') . '|';
+        echo pcntl_alarm(0) . '|';
+        echo pcntl_errno() . ':' . pcntl_get_last_error() . '|';
+        echo (extension_loaded('pcntl') ? 'loaded' : 'missing');",
+    );
+    assert_eq!(out, "message|0|0:0|loaded");
+}
+
+/// Verifies target-native wait status helpers preserve boolean and mixed result encodings.
+#[test]
+fn test_pcntl_wait_status_decoders() {
+    let out = compile_and_run(
+        "<?php
+        $exit = 23 << 8;
+        echo pcntl_wifexited($exit) . '|';
+        echo pcntl_wexitstatus($exit) . '|';
+        echo pcntl_wifsignaled(15) . '|';
+        echo pcntl_wtermsig(15) . '|';
+        echo pcntl_wifstopped(127) . '|';
+        echo pcntl_wifcontinued(65535);",
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(out, "1|23|1|15|1|");
+    #[cfg(target_os = "linux")]
+    assert_eq!(out, "1|23|1|15|1|1");
+}
+
+/// Verifies priority lookup returns an integer without confusing a valid `-1` with failure.
+#[test]
+fn test_pcntl_getpriority_returns_int() {
+    let out = compile_and_run(
+        "<?php $priority = pcntl_getpriority(); echo is_int($priority) ? 'int' : 'failure';",
+    );
+    assert_eq!(out, "int");
+}
