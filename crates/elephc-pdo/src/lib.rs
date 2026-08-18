@@ -35,6 +35,78 @@
 //!   PDO_OCI loads Oracle Instant Client dynamically through ODPI-C, and PDO_CUBRID
 //!   loads the official CCI client dynamically.
 
+/// Bridges a DB round-trip to the `--instrument` exact profiler's I/O counter.
+/// The core runtime always defines the `_elephc_instr_io_fn` pointer slot (a
+/// `.comm`, zero by default); under `--instrument` the compiler stores
+/// `elephc_instr_io` into it. Reading the slot and calling through it when
+/// non-null makes query counting pay-for-use — a non-instrument binary leaves
+/// the slot zero — with no dlsym and no compile-time coupling to the instr crate.
+mod instr_io {
+    extern "C" {
+        static elephc_instr_io_fn: usize;
+        static elephc_instr_query_fn: usize;
+        static elephc_instr_wait_fn: usize;
+    }
+    type IoFn = unsafe extern "C" fn();
+    type QueryFn = unsafe extern "C" fn(*const u8, usize);
+    type WaitFn = unsafe extern "C" fn(u64);
+
+    /// Records one query with the exact profiler, if `--instrument` is linked.
+    pub fn note() {
+        let addr = unsafe { std::ptr::addr_of!(elephc_instr_io_fn).read() };
+        if addr != 0 {
+            let f = unsafe { std::mem::transmute::<usize, IoFn>(addr) };
+            unsafe { f() };
+        }
+    }
+
+    /// Whether query-text capture is linked and initialized. Lets callers skip
+    /// the cost of recovering a statement's SQL in a non-instrument binary.
+    pub fn query_active() -> bool {
+        unsafe { std::ptr::addr_of!(elephc_instr_query_fn).read() != 0 }
+    }
+
+    /// Reports one query's SQL text to the exact profiler, if linked. The bytes
+    /// are copied by the callee, so `sql` need not outlive the call.
+    pub fn note_query(sql: &str) {
+        let addr = unsafe { std::ptr::addr_of!(elephc_instr_query_fn).read() };
+        if addr != 0 && !sql.is_empty() {
+            let f = unsafe { std::mem::transmute::<usize, QueryFn>(addr) };
+            unsafe { f(sql.as_ptr(), sql.len()) };
+        }
+    }
+
+    /// Times `body` and reports how long it blocked to the exact profiler, so
+    /// the caller's self time splits into CPU and I/O wait. When the profiler
+    /// is not linked the slot is zero and `body` runs without even reading the
+    /// clock — the measurement costs nothing in a normal binary.
+    pub fn timed<T>(body: impl FnOnce() -> T) -> T {
+        let addr = unsafe { std::ptr::addr_of!(elephc_instr_wait_fn).read() };
+        if addr == 0 {
+            return body();
+        }
+        let started = std::time::Instant::now();
+        let out = body();
+        let ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        let f = unsafe { std::mem::transmute::<usize, WaitFn>(addr) };
+        unsafe { f(ns) };
+        out
+    }
+
+    // Standalone `cargo test -p elephc-pdo` has no compiled elephc program to
+    // define the runtime slots, so provide zero ones — only in the test binary,
+    // never in the staticlib, so a real program's `.comm` is not duplicated.
+    #[cfg(test)]
+    mod slot_stub {
+        #[no_mangle]
+        static elephc_instr_io_fn: usize = 0;
+        #[no_mangle]
+        static elephc_instr_query_fn: usize = 0;
+        #[no_mangle]
+        static elephc_instr_wait_fn: usize = 0;
+    }
+}
+
 mod driver;
 #[cfg(feature = "cubrid")]
 mod cubrid;
@@ -1141,14 +1213,26 @@ pub extern "C" fn elephc_pdo_release(conn_id: i64, reset_pgsql_session: i64) {
 /// `sql` must point to a NUL-terminated string valid for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i64 {
+    // PDO::exec is one direct statement execution.
+    instr_io::note();
+    if instr_io::query_active() {
+        if let Some(text) = cstr_arg(sql) {
+            instr_io::note_query(text);
+        }
+    }
     ffi_guard(-1, || {
         let sqlite_db = match lock_recover(conns()).get(&conn_id) {
             Some(Conn::Sqlite(connection)) => Some(connection.db),
             _ => None,
         };
         if let Some(db) = sqlite_db {
-            return sqlite::SqliteConn::exec_on(db, sql);
+            // Direct execution: the whole call is DB work, so time it as wait.
+            return instr_io::timed(|| sqlite::SqliteConn::exec_on(db, sql));
         }
+        // Every remaining arm is a driver call, so the dispatch is timed as a
+        // whole rather than arm by arm: a driver added later is then covered by
+        // construction, instead of silently reporting zero wait.
+        instr_io::timed(|| {
         let mut guard = lock_recover(conns());
         match guard.get_mut(&conn_id) {
             #[cfg(feature = "cubrid")]
@@ -1186,6 +1270,7 @@ pub unsafe extern "C" fn elephc_pdo_exec(conn_id: i64, sql: *const c_char) -> i6
             },
             Some(Conn::Sqlite(_)) | None => -1,
         }
+        })
     })
 }
 
@@ -3657,10 +3742,51 @@ pub extern "C" fn elephc_pdo_output_is_numeric(stmt_id: i64, idx: i64) -> i64 {
     })
 }
 
+/// The SQL text of a prepared statement, across drivers, for query profiling.
+/// SQLite recovers it from the native handle; the other drivers keep the sent
+/// SQL on the statement. Cubrid does not track it (returns `None`). An empty
+/// string is treated as "no text" so nothing meaningless is recorded.
+fn stmt_query_text(guard: &HashMap<i64, Stmt>, stmt_id: i64) -> Option<String> {
+    let text = match guard.get(&stmt_id)? {
+        #[cfg(feature = "cubrid")]
+        Stmt::Cubrid(_) => return None,
+        #[cfg(feature = "dblib")]
+        Stmt::Dblib(s) => s.sent_sql.clone(),
+        #[cfg(feature = "firebird")]
+        Stmt::Firebird(s) => s.sent_sql.clone(),
+        #[cfg(any(feature = "odbc", feature = "informix", feature = "ibm", feature = "sqlsrv"))]
+        Stmt::Odbc(s) => s.sent_sql.clone(),
+        #[cfg(feature = "oci")]
+        Stmt::Oci(s) => s.sent_sql.clone(),
+        Stmt::Postgres(s) => s.sent_sql.clone(),
+        Stmt::Mysql(s) => s.sent_sql.clone(),
+        Stmt::Sqlite(s) => s.query_text(),
+    };
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
 /// Resets a statement, keeping its parameter bindings. Returns `1`/`0`; a caught
 /// panic reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
+    // execute() resets before each run, so one reset ~ one statement execution.
+    instr_io::note();
+    // Report the statement's SQL text (once per execution) so the exact
+    // profiler can aggregate distinct queries — the N+1 view. Recovered in a
+    // short scoped lock so the reset below re-locks cleanly.
+    if instr_io::query_active() {
+        let text = {
+            let guard = lock_recover(stmts());
+            stmt_query_text(&guard, stmt_id)
+        };
+        if let Some(t) = text {
+            instr_io::note_query(&t);
+        }
+    }
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
         match guard.get_mut(&stmt_id) {
@@ -3766,10 +3892,15 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
             }
         };
         if let Some(statement) = sqlite_statement {
-            let result = statement.step();
+            // The step is where SQLite actually runs the query, so this is the
+            // span that counts as I/O wait for the exact profiler.
+            let result = instr_io::timed(|| statement.step());
             lock_recover(stmts()).insert(stmt_id, Stmt::Sqlite(statement));
             return result;
         }
+        // As in exec: every remaining arm is a driver call, so the dispatch is
+        // timed as a whole and a driver added later is covered by construction.
+        instr_io::timed(|| {
         let mut sguard = lock_recover(stmts());
         match sguard.get_mut(&stmt_id) {
             #[cfg(feature = "cubrid")]
@@ -3869,6 +4000,7 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
             }
             Some(Stmt::Sqlite(_)) | None => -1,
         }
+        })
     })
 }
 
