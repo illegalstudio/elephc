@@ -378,16 +378,19 @@ impl<'a> FunctionContext<'a> {
     /// Returns whether a typed PCNTL wait operation writes status or resource usage to `slot`.
     fn pcntl_writes_local(&self, slot: LocalSlotId) -> bool {
         self.function.instructions.iter().any(|inst| {
-            let (status_index, usage_index) = match inst.immediate {
+            let output_indices: &[usize] = match inst.immediate {
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
                     crate::ir::PcntlRuntime::Wait,
-                ))) => (0, 2),
+                ))) => &[0, 2],
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
                     crate::ir::PcntlRuntime::WaitPid,
-                ))) => (1, 3),
+                ))) => &[1, 3],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
+                    crate::ir::PcntlRuntime::WaitId,
+                ))) => &[2],
                 _ => return false,
             };
-            [status_index, usage_index].into_iter().any(|index| {
+            output_indices.iter().copied().any(|index| {
                 inst.operands
                     .get(index)
                     .and_then(|value| self.loaded_local_slot(*value))

@@ -12,8 +12,12 @@
 
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, Ordering};
+#[cfg(test)]
+use std::sync::Mutex;
 
 static LAST_ERROR: AtomicI32 = AtomicI32::new(0);
+#[cfg(test)]
+static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Stable, target-neutral copy of the PHP `getrusage` fields returned by wait operations.
 ///
@@ -63,6 +67,66 @@ impl From<libc::rusage> for ElephcPcntlRUsage {
             ru_stime_tv_usec: usage.ru_stime.tv_usec as i64,
             ru_stime_tv_sec: usage.ru_stime.tv_sec as i64,
         }
+    }
+}
+
+/// Stable, target-neutral signal-information record shared with generated AOT code.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ElephcPcntlSigInfo {
+    pub signo: i64,
+    pub error: i64,
+    pub code: i64,
+    pub status: i64,
+    pub pid: i64,
+    pub uid: i64,
+    pub utime: i64,
+    pub stime: i64,
+    pub address: i64,
+    pub band: i64,
+    pub fd: i64,
+    pub present: u64,
+}
+
+const SIGINFO_SIGNO: u64 = 1 << 0;
+const SIGINFO_ERRNO: u64 = 1 << 1;
+const SIGINFO_CODE: u64 = 1 << 2;
+const SIGINFO_STATUS: u64 = 1 << 3;
+const SIGINFO_PID: u64 = 1 << 4;
+const SIGINFO_UID: u64 = 1 << 5;
+#[cfg(target_os = "linux")]
+const SIGINFO_UTIME: u64 = 1 << 6;
+#[cfg(target_os = "linux")]
+const SIGINFO_STIME: u64 = 1 << 7;
+
+/// Copies child-state signal information into the stable PCNTL record.
+unsafe fn copy_child_siginfo(info: &libc::siginfo_t) -> ElephcPcntlSigInfo {
+    let stable = ElephcPcntlSigInfo {
+        signo: i64::from(info.si_signo),
+        error: i64::from(info.si_errno),
+        code: i64::from(info.si_code),
+        status: i64::from(info.si_status()),
+        pid: i64::from(info.si_pid()),
+        uid: i64::from(info.si_uid()),
+        present: SIGINFO_SIGNO
+            | SIGINFO_ERRNO
+            | SIGINFO_CODE
+            | SIGINFO_STATUS
+            | SIGINFO_PID
+            | SIGINFO_UID,
+        ..ElephcPcntlSigInfo::default()
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let mut stable = stable;
+        stable.utime = info.si_utime() as i64;
+        stable.stime = info.si_stime() as i64;
+        stable.present |= SIGINFO_UTIME | SIGINFO_STIME;
+        stable
+    }
+    #[cfg(target_os = "macos")]
+    {
+        stable
     }
 }
 
@@ -218,6 +282,37 @@ pub unsafe extern "C" fn elephc_pcntl_wait4(
     i64::from(pid)
 }
 
+/// Waits for a child state change and writes PHP's stable signal-information record.
+///
+/// Returns one on success or zero after recording errno on failure.
+///
+/// # Safety
+/// `info` must be null or point to writable `ElephcPcntlSigInfo` storage for the duration of
+/// the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_waitid(
+    id_type: libc::c_int,
+    id: i64,
+    info: *mut ElephcPcntlSigInfo,
+    flags: libc::c_int,
+) -> libc::c_int {
+    let mut native_info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    let result = libc::waitid(
+        id_type as libc::idtype_t,
+        id as libc::id_t,
+        native_info.as_mut_ptr(),
+        flags,
+    );
+    if result == -1 {
+        record_errno();
+        return 0;
+    }
+    if !info.is_null() {
+        *info = copy_child_siginfo(&native_info.assume_init());
+    }
+    1
+}
+
 /// Reports whether a wait status represents normal child termination.
 #[no_mangle]
 pub extern "C" fn elephc_pcntl_wifexited(status: libc::c_int) -> libc::c_int {
@@ -342,6 +437,7 @@ mod tests {
     /// Forks a real child, reaps it, and verifies target-native wait status decoding.
     #[test]
     fn fork_waitpid_and_status_decoding_round_trip() {
+        let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
         let pid = elephc_pcntl_fork();
         assert!(pid >= 0, "fork failed with errno {}", elephc_pcntl_get_last_error());
         if pid == 0 {
@@ -360,6 +456,7 @@ mod tests {
     /// Reaps a real child through the any-child wait entry point.
     #[test]
     fn fork_wait_and_status_decoding_round_trip() {
+        let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
         let pid = elephc_pcntl_fork();
         assert!(pid >= 0, "fork failed with errno {}", elephc_pcntl_get_last_error());
         if pid == 0 {
@@ -376,6 +473,7 @@ mod tests {
     /// Reaps a real child through `wait4` and exposes its usage in the stable bridge layout.
     #[test]
     fn fork_wait4_populates_stable_resource_usage() {
+        let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
         let pid = elephc_pcntl_fork();
         assert!(pid >= 0, "fork failed with errno {}", elephc_pcntl_get_last_error());
         if pid == 0 {
@@ -389,6 +487,26 @@ mod tests {
         assert_eq!(elephc_pcntl_wexitstatus(status), 19);
         assert!(usage.ru_utime_tv_sec >= 0);
         assert!(usage.ru_stime_tv_sec >= 0);
+    }
+
+    /// Reaps a real child through `waitid` and copies its portable PHP information fields.
+    #[test]
+    fn fork_waitid_populates_stable_siginfo() {
+        let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+        let pid = elephc_pcntl_fork();
+        assert!(pid >= 0, "fork failed with errno {}", elephc_pcntl_get_last_error());
+        if pid == 0 {
+            unsafe { libc::_exit(29) };
+        }
+
+        let mut info = ElephcPcntlSigInfo::default();
+        let success = unsafe {
+            elephc_pcntl_waitid(libc::P_PID as libc::c_int, pid, &mut info, libc::WEXITED)
+        };
+        assert_eq!(success, 1);
+        assert_eq!(info.pid, pid);
+        assert_eq!(info.status, 29);
+        assert_ne!(info.present & SIGINFO_STATUS, 0);
     }
 
     /// Reads the current process priority without confusing a valid `-1` with failure.

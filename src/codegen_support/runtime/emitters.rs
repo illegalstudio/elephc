@@ -166,6 +166,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_mktime(emitter);
     system::emit_strtotime(emitter);
     system::emit_pcntl_rusage_array(emitter);
+    system::emit_pcntl_siginfo_array(emitter);
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);

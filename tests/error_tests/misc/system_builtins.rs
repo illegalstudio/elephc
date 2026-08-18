@@ -78,6 +78,15 @@ fn test_error_pcntl_waitpid_resource_usage_must_be_variable() {
     );
 }
 
+/// Verifies `pcntl_waitid()` rejects a non-variable signal-information output.
+#[test]
+fn test_error_pcntl_waitid_info_must_be_variable() {
+    expect_error(
+        "<?php pcntl_waitid(P_ALL, null, []);",
+        "pcntl_waitid() parameter $info must be passed a variable",
+    );
+}
+
 /// Verifies an eval barrier allows later reads of variables that eval may create dynamically.
 #[test]
 fn test_eval_barrier_allows_dynamic_variable_read() {
