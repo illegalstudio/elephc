@@ -111,7 +111,7 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving refcounted array-chunk spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source array, chunk size, outer array, source index, and current inner array
-    emitter.instruction("sub rsp, 56");                                         // reserve aligned spill slots for the refcounted array-chunk bookkeeping, including the inner chunk index, while keeping nested calls 16-byte aligned
+    emitter.instruction("sub rsp, 64");                                         // ROUNDED UP to a 16-byte multiple: the bookkeeping (including the inner chunk index main added) needs 56 bytes, but `push rbp` already landed rsp on a 16-byte boundary, so reserving a non-16-multiple would leave every `call` in this body misaligned and hand the callee a stack SysV x86_64 forbids. Pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`; see arrays/array_free_deep.rs for the curl SIGSEGV that class of bug produced.
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across nested constructor and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested chunk size across nested constructor and append helper calls
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // load the source indexed-array logical length before computing the number of chunks
@@ -175,7 +175,7 @@ fn emit_array_chunk_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_chunk_ref_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the outer indexed-array pointer in the standard x86_64 integer result register
-    emitter.instruction("add rsp, 56");                                         // release the refcounted array-chunk spill slots before returning
+    emitter.instruction("add rsp, 64");                                         // release the refcounted array-chunk spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the outer indexed-array pointer in rax
 }

@@ -171,7 +171,7 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving JSON-array scratch space
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source array and concat-buffer cursors
-    emitter.instruction("sub rsp, 40");                                         // reserve local slots for the array pointer, output pointers, array length, and loop index
+    emitter.instruction("sub rsp, 48");                                         // ROUNDED UP to a 16-byte multiple: `push rbp` already landed rsp on a 16-byte boundary, so reserving an odd multiple of 8 here would leave every `call` in this body misaligned and hand the callee a stack SysV x86_64 forbids. Pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`; see arrays/array_free_deep.rs for the curl SIGSEGV that class of bug produced.
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source integer array pointer across itoa calls and concat-buffer copies
 
     // Enter the recursion-depth check.
@@ -251,7 +251,7 @@ fn emit_json_encode_array_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r11");                                        // copy the final concat-buffer write pointer before converting it into an absolute offset
     emitter.instruction("sub rcx, r10");                                        // compute the new absolute concat-buffer offset after the encoded JSON array
     abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // publish the updated concat-buffer offset so later writers append after this JSON array
-    emitter.instruction("add rsp, 40");                                         // release the local JSON-array scratch frame before returning to generated code
+    emitter.instruction("add rsp, 48");                                         // release the local JSON-array scratch frame before returning to generated code
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the encoded JSON integer array slice in the x86_64 string result registers
 }

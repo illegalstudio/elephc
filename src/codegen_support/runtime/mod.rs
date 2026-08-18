@@ -38,6 +38,10 @@ mod resource_ids;
 mod round_mode;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
+/// The whole-runtime System V call-alignment audit (x86_64). Test-only: it walks the
+/// emitted runtime and fails when a `call` would hand its callee a misaligned stack.
+#[cfg(test)]
+mod sysv_call_alignment;
 mod strings;
 mod system;
 /// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
