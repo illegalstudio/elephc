@@ -73,6 +73,7 @@ pub mod pcntl_getpriority;
 pub mod pcntl_setpriority;
 pub mod pcntl_strerror;
 pub mod pcntl_wait;
+pub mod pcntl_waitid;
 pub mod pcntl_waitpid;
 mod pcntl_wait_support;
 pub mod pcntl_wexitstatus;

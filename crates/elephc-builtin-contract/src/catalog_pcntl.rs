@@ -150,6 +150,37 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         "Waits for any child process and writes its target-native status.",
     ),
     pcntl_contract(
+        "pcntl_waitid",
+        &[
+            ParamSpec {
+                name: "idtype",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "id",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "info",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: true,
+            },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(4)),
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Waits for a child state change and writes its signal information.",
+    ),
+    pcntl_contract(
         "pcntl_waitpid",
         &[
             ParamSpec {

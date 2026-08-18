@@ -100,7 +100,7 @@ pub(crate) use mktime::emit_mktime;
 pub(crate) use php_uname::emit_php_uname;
 pub(crate) use mb_ereg_match::emit_mb_ereg_match;
 pub(crate) use pcre_to_posix::emit_pcre_to_posix;
-pub(crate) use pcntl::emit_pcntl_rusage_array;
+pub(crate) use pcntl::{emit_pcntl_rusage_array, emit_pcntl_siginfo_array};
 pub(crate) use pcntl_data::emit_pcntl_data;
 pub(crate) use preg_match::emit_preg_match;
 pub(crate) use preg_match_all::emit_preg_match_all;

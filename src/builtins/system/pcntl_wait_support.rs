@@ -2,7 +2,7 @@
 //! Validates PCNTL wait output parameters without reading their pre-call values.
 //!
 //! Called from:
-//! - The `pcntl_wait` and `pcntl_waitpid` builtin checker hooks.
+//! - The `pcntl_wait`, `pcntl_waitpid`, and `pcntl_waitid` builtin checker hooks.
 //!
 //! Key details:
 //! - `$status` and `$resource_usage` are write-only by-reference outputs and may name
@@ -22,6 +22,25 @@ pub(super) fn check_wait(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileErr
 /// Checks `pcntl_waitpid()` inputs while leaving its two write-only outputs unread.
 pub(super) fn check_waitpid(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     check_wait_outputs(cx, true)
+}
+
+/// Checks `pcntl_waitid()` inputs while leaving its optional info output unread.
+pub(super) fn check_waitid(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    for (index, arg) in cx.args.iter().enumerate() {
+        let parameter = waitid_parameter_name(arg, index);
+        if parameter.as_deref() == Some("info") {
+            let value = named_argument_value(arg);
+            if !matches!(value.kind, ExprKind::Variable(_)) {
+                return Err(CompileError::new(
+                    value.span,
+                    "pcntl_waitid() parameter $info must be passed a variable",
+                ));
+            }
+        } else {
+            cx.checker.infer_type(arg, cx.env)?;
+        }
+    }
+    Ok(PhpType::Bool)
 }
 
 /// Validates the shared wait-family argument shape and infers only input operands.
@@ -61,6 +80,16 @@ fn wait_parameter_name(arg: &Expr, index: usize, selected_child: bool) -> Option
         &["status", "flags", "resource_usage"]
     };
     parameters.get(index).map(|name| (*name).to_string())
+}
+
+/// Resolves one `pcntl_waitid()` source argument to its PHP parameter name.
+fn waitid_parameter_name(arg: &Expr, index: usize) -> Option<String> {
+    if let ExprKind::NamedArg { name, .. } = &arg.kind {
+        return Some(php_symbol_key(name));
+    }
+    ["idtype", "id", "info", "flags"]
+        .get(index)
+        .map(|name| (*name).to_string())
 }
 
 /// Unwraps a named argument to the value PHP passes to the selected parameter.

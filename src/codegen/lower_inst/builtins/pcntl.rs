@@ -38,6 +38,7 @@ pub(crate) fn lower(
         PcntlRuntime::SetPriority => lower_setpriority(ctx, inst),
         PcntlRuntime::StrError => lower_strerror(ctx, inst),
         PcntlRuntime::Wait => lower_wait(ctx, inst, false),
+        PcntlRuntime::WaitId => lower_waitid(ctx, inst),
         PcntlRuntime::WaitPid => lower_wait(ctx, inst, true),
         PcntlRuntime::WIfContinued => lower_unary_int_bridge(
             ctx,
@@ -210,6 +211,70 @@ fn lower_wait(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `pcntl_waitid()` through a stable bridge siginfo record and conditional writeback.
+fn lower_waitid(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "pcntl_waitid", 0, 4)?;
+    let info_slot = inst
+        .operands
+        .get(2)
+        .copied()
+        .map(|value| pcntl_siginfo_output_local_slot(ctx, value, "pcntl_waitid"))
+        .transpose()?;
+    let no_writeback = ctx.next_label("pcntl_waitid_no_info_writeback");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #128");                      // reserve stable siginfo, scalar inputs, and result storage
+            load_optional_int(ctx, inst.operands.first().copied(), 0, "pcntl_waitid idtype")?;
+            ctx.emitter.instruction("str x0, [sp, #96]");                    // preserve idtype while materializing the remaining inputs
+            load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_waitid id")?;
+            ctx.emitter.instruction("str x0, [sp, #104]");                   // preserve selected id
+            load_optional_int(ctx, inst.operands.get(3).copied(), 4, "pcntl_waitid flags")?;
+            ctx.emitter.instruction("mov x3, x0");                           // C arg3 = wait flags
+            ctx.emitter.instruction("ldr x0, [sp, #96]");                    // C arg0 = id type
+            ctx.emitter.instruction("ldr x1, [sp, #104]");                   // C arg1 = selected id
+            ctx.emitter.instruction("mov x2, sp");                           // C arg2 = stable siginfo output
+            ctx.emitter.bl_c("elephc_pcntl_waitid");
+            ctx.emitter.instruction("str x0, [sp, #112]");                   // preserve boolean result across optional array creation
+            if let Some(slot) = info_slot {
+                ctx.emitter.instruction(&format!("cbz x0, {no_writeback}"));  // leave caller output unchanged on failure
+                ctx.release_local_before_refcounted_writeback(slot)?;
+                ctx.emitter.instruction("mov x0, sp");                       // pass the stable siginfo record to the array builder
+                abi::emit_call_label(ctx.emitter, "__rt_pcntl_siginfo_array");
+                store_pcntl_siginfo_array(ctx, slot)?;
+                ctx.emitter.label(&no_writeback);
+            }
+            ctx.emitter.instruction("ldr x0, [sp, #112]");                   // restore boolean success result
+            ctx.emitter.instruction("add sp, sp, #128");                     // release stable output storage
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 128");                          // reserve stable siginfo, scalar inputs, and result storage
+            load_optional_int(ctx, inst.operands.first().copied(), 0, "pcntl_waitid idtype")?;
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 96], rax");        // preserve idtype while materializing the remaining inputs
+            load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_waitid id")?;
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 104], rax");       // preserve selected id
+            load_optional_int(ctx, inst.operands.get(3).copied(), 4, "pcntl_waitid flags")?;
+            ctx.emitter.instruction("mov ecx, eax");                         // C arg3 = wait flags
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 96]");        // C arg0 = id type
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 104]");       // C arg1 = selected id
+            ctx.emitter.instruction("mov rdx, rsp");                         // C arg2 = stable siginfo output
+            ctx.emitter.bl_c("elephc_pcntl_waitid");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 112], rax");       // preserve boolean result across optional array creation
+            if let Some(slot) = info_slot {
+                ctx.emitter.instruction("test eax, eax");                    // leave caller output unchanged on failure
+                ctx.emitter.instruction(&format!("jz {no_writeback}"));
+                ctx.release_local_before_refcounted_writeback(slot)?;
+                ctx.emitter.instruction("mov rdi, rsp");                     // pass the stable siginfo record to the array builder
+                abi::emit_call_label(ctx.emitter, "__rt_pcntl_siginfo_array");
+                store_pcntl_siginfo_array(ctx, slot)?;
+                ctx.emitter.label(&no_writeback);
+            }
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 112]");        // restore boolean success result
+            ctx.emitter.instruction("add rsp, 128");                         // release stable output storage
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Resolves a PCNTL integer output argument to a writable local or ref-cell slot.
 fn pcntl_int_output_local_slot(
     ctx: &FunctionContext<'_>,
@@ -267,6 +332,26 @@ fn pcntl_rusage_output_local_slot(
     }
 }
 
+/// Resolves a PCNTL signal-information output to writable associative or boxed storage.
+fn pcntl_siginfo_output_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    name: &str,
+) -> Result<LocalSlotId> {
+    let slot = pcntl_output_local_slot(ctx, value, name, "info")?;
+    match ctx.local_php_type(slot)?.codegen_repr() {
+        PhpType::AssocArray { key, value }
+            if key.codegen_repr() == PhpType::Str && value.codegen_repr() == PhpType::Int =>
+        {
+            Ok(slot)
+        }
+        PhpType::Mixed => Ok(slot),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{name} info local with incompatible storage {other:?}",
+        ))),
+    }
+}
+
 /// Resolves one write-only PCNTL operand to its source local slot.
 fn pcntl_output_local_slot(
     ctx: &FunctionContext<'_>,
@@ -302,6 +387,20 @@ fn pcntl_output_local_slot(
 
 /// Stores a fresh resource-usage hash into its typed or boxed PHP output local.
 fn store_pcntl_rusage_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+    if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            },
+        );
+    }
+    ctx.store_current_result_to_local(slot)
+}
+
+/// Stores a fresh signal-information hash into its typed or boxed PHP output local.
+fn store_pcntl_siginfo_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
     if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
         emit_box_current_owned_value_as_mixed(
             ctx.emitter,

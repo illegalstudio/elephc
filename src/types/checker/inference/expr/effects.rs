@@ -581,6 +581,7 @@ fn pcntl_wait_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<Php
         "pcntl_waitpid" => ["process_id", "status", "flags", "resource_usage"]
             .get(index)
             .copied(),
+        "pcntl_waitid" => ["idtype", "id", "info", "flags"].get(index).copied(),
         _ => return None,
     };
     let parameter = match &arg.kind {
@@ -590,6 +591,10 @@ fn pcntl_wait_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<Php
     match parameter.as_str() {
         "status" => Some(PhpType::Int),
         "resource_usage" => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Int),
+        }),
+        "info" => Some(PhpType::AssocArray {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Int),
         }),

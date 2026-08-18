@@ -32,5 +32,21 @@ pub(crate) fn emit_pcntl_data() -> String {
     for (symbol, key) in fields {
         out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {key:?}\n"));
     }
+    let siginfo_fields = [
+        ("_pcntl_siginfo_signo", "signo"),
+        ("_pcntl_siginfo_errno", "errno"),
+        ("_pcntl_siginfo_code", "code"),
+        ("_pcntl_siginfo_status", "status"),
+        ("_pcntl_siginfo_pid", "pid"),
+        ("_pcntl_siginfo_uid", "uid"),
+        ("_pcntl_siginfo_utime", "utime"),
+        ("_pcntl_siginfo_stime", "stime"),
+        ("_pcntl_siginfo_addr", "addr"),
+        ("_pcntl_siginfo_band", "band"),
+        ("_pcntl_siginfo_fd", "fd"),
+    ];
+    for (symbol, key) in siginfo_fields {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii {key:?}\n"));
+    }
     out
 }

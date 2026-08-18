@@ -132,3 +132,34 @@ fn test_pcntl_waitpid_populates_resource_usage_outputs() {
     );
     assert_eq!(out, "pid|19|17|int");
 }
+
+/// Reaps a real child through `pcntl_waitid()` and exposes target-aware siginfo fields.
+#[test]
+fn test_pcntl_waitid_populates_signal_info() {
+    let out = compile_and_run(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { exit(37); }
+        $ok = pcntl_waitid(idtype: P_PID, id: $pid, info: $info, flags: WEXITED);
+        echo ($ok ? 'ok' : 'bad') . '|';
+        echo $info['status'] . '|';
+        echo ($info['pid'] === $pid ? 'pid' : 'bad') . '|';
+        echo count($info) . '|' . $info['signo'];",
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(out, "ok|37|pid|6|20");
+    #[cfg(target_os = "linux")]
+    assert_eq!(out, "ok|37|pid|8|17");
+}
+
+/// Leaves an existing info output untouched when `pcntl_waitid()` fails.
+#[test]
+fn test_pcntl_waitid_failure_preserves_info_output() {
+    let out = compile_and_run(
+        "<?php
+        $info = ['old' => 41];
+        $ok = pcntl_waitid(P_PID, 99999999, $info, WEXITED | WNOHANG);
+        echo ($ok ? 'bad' : 'false') . '|' . $info['old'];",
+    );
+    assert_eq!(out, "false|41");
+}
