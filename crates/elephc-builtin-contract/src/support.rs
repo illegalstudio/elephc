@@ -226,36 +226,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "hexdec",
     "join",
     "octdec",
-    "pcntl_alarm",
-    "pcntl_async_signals",
-    "pcntl_exec",
-    "pcntl_errno",
-    "pcntl_fork",
-    "pcntl_get_last_error",
-    "pcntl_getcpu",
-    "pcntl_getcpuaffinity",
-    "pcntl_getpriority",
-    "pcntl_setcpuaffinity",
-    "pcntl_setns",
-    "pcntl_setpriority",
-    "pcntl_signal",
-    "pcntl_signal_dispatch",
-    "pcntl_signal_get_handler",
-    "pcntl_sigprocmask",
-    "pcntl_sigtimedwait",
-    "pcntl_sigwaitinfo",
-    "pcntl_strerror",
-    "pcntl_unshare",
-    "pcntl_wait",
-    "pcntl_waitid",
-    "pcntl_waitpid",
-    "pcntl_wexitstatus",
-    "pcntl_wifcontinued",
-    "pcntl_wifexited",
-    "pcntl_wifsignaled",
-    "pcntl_wifstopped",
-    "pcntl_wstopsig",
-    "pcntl_wtermsig",
     "serialize",
     "strncasecmp",
     "strncmp",
@@ -307,12 +277,12 @@ mod tests {
             }
         }
 
-        assert_eq!(eval_registry, 474);
+        assert_eq!(eval_registry, 506);
         assert_eq!(eval_internal, 39);
-        assert_eq!(eval_pending, 61);
+        assert_eq!(eval_pending, 31);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry.
-        assert_eq!(aot_registry, 561);
+        assert_eq!(aot_registry, 563);
         assert_eq!(aot_external, 10);
         assert_eq!(aot_unsupported, 3);
     }
@@ -360,8 +330,8 @@ mod tests {
 
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 453);
-        assert_eq!(unsupported, 100);
+        assert_eq!(interpreter_adapter, 485);
+        assert_eq!(unsupported, 70);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

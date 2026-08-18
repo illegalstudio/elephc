@@ -20,6 +20,7 @@ pub(in crate::interpreter) fn execute_statements(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     for stmt in statements {
+        eval_pcntl_maybe_dispatch(context, values)?;
         match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
             control => return Ok(control),

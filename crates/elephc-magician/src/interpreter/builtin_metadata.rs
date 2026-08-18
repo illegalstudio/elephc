@@ -224,6 +224,9 @@ fn default_value_php_repr(value: EvalBuiltinDefaultValue) -> String {
         EvalBuiltinDefaultValue::Float(value) => format!("{:?}", value),
         EvalBuiltinDefaultValue::String(value) => format!("\"{}\"", value.escape_default()),
         EvalBuiltinDefaultValue::EmptyArray => "[]".to_string(),
+        EvalBuiltinDefaultValue::ClassConstant { class, name } => {
+            format!("{class}::{name}")
+        }
     }
 }
 

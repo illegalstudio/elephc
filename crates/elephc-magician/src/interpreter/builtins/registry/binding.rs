@@ -111,6 +111,9 @@ fn eval_builtin_default_arg(
         EvalBuiltinDefaultValue::Float(value) => values.float(value),
         EvalBuiltinDefaultValue::String(value) => values.string(value),
         EvalBuiltinDefaultValue::EmptyArray => values.array_new(0),
+        EvalBuiltinDefaultValue::ClassConstant { class, name } => values
+            .class_constant_get(class, name)?
+            .ok_or(EvalStatus::RuntimeFatal),
     }
 }
 

@@ -167,9 +167,14 @@ impl PcntlRuntime {
             | Self::GetCpuAffinity
             | Self::GetLastError
             | Self::GetPriority
-            | Self::GetQosClass
             | Self::SignalGetHandler => E::from_bits_retain(
                 E::READS_PROCESS.bits() | E::READS_HEAP.bits() | E::ALLOC_HEAP.bits(),
+            ),
+            Self::GetQosClass => E::from_bits_retain(
+                E::READS_PROCESS.bits()
+                    | E::READS_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::MAY_THROW.bits(),
             ),
             Self::Exec => E::from_bits_retain(
                 E::READS_HEAP.bits()
@@ -182,6 +187,12 @@ impl PcntlRuntime {
                     | E::WRITES_HEAP.bits()
                     | E::READS_PROCESS.bits()
                     | E::WRITES_PROCESS.bits()
+                    | E::MAY_THROW.bits(),
+            ),
+            Self::SetQosClass => E::from_bits_retain(
+                E::READS_PROCESS.bits()
+                    | E::WRITES_PROCESS.bits()
+                    | E::READS_HEAP.bits()
                     | E::MAY_THROW.bits(),
             ),
             Self::Wait | Self::WaitId | Self::WaitPid => E::from_bits_retain(
@@ -212,7 +223,7 @@ impl PcntlRuntime {
             | Self::WExitStatus
             | Self::WStopSig
             | Self::WTermSig => BuiltinResultOwnership::Fresh,
-            Self::GetQosClass => BuiltinResultOwnership::Borrowed,
+            Self::GetQosClass => BuiltinResultOwnership::Fresh,
             _ => BuiltinResultOwnership::NonHeap,
         }
     }

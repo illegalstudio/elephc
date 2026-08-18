@@ -61,6 +61,9 @@ flate2 = "1"
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
 elephc-phar = { path = "crates/elephc-phar" }
+# PCNTL's small rlib surface owns the target constant catalog shared by AOT and runtime eval;
+# emitted programs still link its staticlib only when PCNTL usage is detected.
+elephc-pcntl = { path = "crates/elephc-pcntl" }
 # indicatif drives the live per-phase spinner and cargo-style "Linking" event
 # lines shown while compiling; console (indicatif's own transitive color/TTY
 # crate) is added directly too since errors/report.rs and timings.rs style text
@@ -69,7 +72,7 @@ elephc-phar = { path = "crates/elephc-phar" }
 indicatif = "0.17"
 console = "0.15"
 
-# Bridge crates are runtime staticlibs, not used by the Rust compiler itself,
+# Most bridge crates are runtime staticlibs, not used by the Rust compiler itself,
 # but codegen tests link their libelephc_*.a artifacts into compiled PHP
 # programs. They ship as dev-dependencies so `cargo test` / `cargo nextest run`
 # build them automatically. Without this, staticlibs are only built by `cargo
@@ -83,7 +86,6 @@ elephc-phar = { path = "crates/elephc-phar" }
 elephc-tz = { path = "crates/elephc-tz" }
 elephc-image = { path = "crates/elephc-image" }
 elephc-web = { path = "crates/elephc-web" }
-elephc-pcntl = { path = "crates/elephc-pcntl" }
 elephc-magician = { path = "crates/elephc-magician" }
 # flate2 lets the phar:// codegen tests build gzip (raw-DEFLATE) fixture entries
 # with the same encoder the compiler decodes, guaranteeing a version-stable

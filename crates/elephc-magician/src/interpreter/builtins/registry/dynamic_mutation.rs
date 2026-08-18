@@ -62,6 +62,14 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         "stream_socket_recvfrom" => {
             eval_dynamic_stream_socket_recvfrom_call(evaluated_args, context, values)?
         }
+        _ if name.starts_with("pcntl_") && eval_php_visible_builtin_exists(name) => {
+            Some(eval_pcntl_evaluated_call(
+                name,
+                evaluated_args,
+                context,
+                values,
+            )?)
+        }
         _ => return Ok(None),
     };
     Ok(result)

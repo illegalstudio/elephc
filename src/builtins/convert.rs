@@ -13,7 +13,8 @@
 //! - This module is intentionally private (`mod convert;` without `pub`).
 
 use crate::builtins::spec::{DefaultSpec, TypeSpec};
-use crate::parser::ast::{Expr, ExprKind};
+use crate::names::{Name, NameKind};
+use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
 use crate::types::PhpType;
 
@@ -50,6 +51,16 @@ pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr {
         DefaultSpec::Str(s) => Expr::new(ExprKind::StringLiteral(s.to_string()), Span::dummy()),
         DefaultSpec::IntMax => Expr::new(ExprKind::IntLiteral(i64::MAX), Span::dummy()),
         DefaultSpec::EmptyArray => Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
+        DefaultSpec::ClassConstant { class, name } => Expr::new(
+            ExprKind::ScopedConstantAccess {
+                receiver: StaticReceiver::Named(Name::from_parts(
+                    NameKind::FullyQualified,
+                    class.split('\\').map(str::to_string).collect(),
+                )),
+                name: (*name).to_string(),
+            },
+            Span::dummy(),
+        ),
     }
 }
 

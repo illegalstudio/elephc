@@ -74,7 +74,11 @@ fn eval_predefined_constant(
 pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
-    match name.trim_start_matches('\\') {
+    let name = name.trim_start_matches('\\');
+    if let Some(value) = elephc_pcntl::host_pcntl_int_constant(name) {
+        return Some(EvalPredefinedConstant::Int(value));
+    }
+    match name {
         "PHP_URL_SCHEME" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_SCHEME)),
         "PHP_URL_HOST" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_HOST)),
         "PHP_URL_PORT" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PORT)),
