@@ -140,16 +140,14 @@ pub enum BuiltinTargetSupport {
 }
 
 impl BuiltinTargetSupport {
-    /// Returns whether this semantic contract is implemented for `platform`.
-    pub const fn supports(self, platform: crate::codegen_support::platform::Platform) -> bool {
-        match (self, platform) {
-            (Self::All, crate::codegen_support::platform::Platform::MacOS | crate::codegen_support::platform::Platform::Linux)
-            | (Self::Linux, crate::codegen_support::platform::Platform::Linux)
-            | (Self::MacOs, crate::codegen_support::platform::Platform::MacOS) => true,
-            (_, crate::codegen_support::platform::Platform::Windows)
-            | (Self::Linux, crate::codegen_support::platform::Platform::MacOS)
-            | (Self::MacOs, crate::codegen_support::platform::Platform::Linux) => false,
-        }
+    /// Returns whether this semantic contract is implemented on macOS.
+    pub const fn supports_macos(self) -> bool {
+        matches!(self, Self::All | Self::MacOs)
+    }
+
+    /// Returns whether this semantic contract is implemented on Linux.
+    pub const fn supports_linux(self) -> bool {
+        matches!(self, Self::All | Self::Linux)
     }
 }
 

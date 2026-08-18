@@ -116,12 +116,7 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
-            if !def
-                .spec
-                .semantics
-                .target_support
-                .supports(self.target_platform)
-            {
+            if !catalog::builtin_is_available_for_target(name, self.target_platform) {
                 return Err(CompileError::new(
                     span,
                     &format!(

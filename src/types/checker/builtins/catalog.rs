@@ -177,12 +177,20 @@ pub(crate) fn is_php_visible_builtin_function_for_target(
 }
 
 /// Returns whether a registry builtin is implemented for `platform`.
-fn builtin_is_available_for_target(
+pub(super) fn builtin_is_available_for_target(
     name: &str,
     platform: crate::codegen_support::platform::Platform,
 ) -> bool {
     crate::builtins::registry::lookup(name)
-        .map(|def| def.spec.semantics.target_support.supports(platform))
+        .map(|def| match platform {
+            crate::codegen_support::platform::Platform::MacOS => {
+                def.spec.semantics.target_support.supports_macos()
+            }
+            crate::codegen_support::platform::Platform::Linux => {
+                def.spec.semantics.target_support.supports_linux()
+            }
+            crate::codegen_support::platform::Platform::Windows => false,
+        })
         .unwrap_or(true)
 }
 
