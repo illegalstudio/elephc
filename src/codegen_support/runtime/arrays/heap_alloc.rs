@@ -31,7 +31,8 @@ use crate::codegen_support::platform::Arch;
 /// Output: `x0` / `rax` = user pointer (header + 16).
 ///
 /// Updates `_gc_allocs`, `_gc_live`, and `_gc_peak` counters on every allocation.
-/// On heap exhaustion, prints a fatal message to stderr and exits with code 1.
+/// On heap exhaustion, a cdylib call with an active native boundary unwinds
+/// with `STATUS_ALLOCATION_FAILURE`; ordinary executables retain the fatal exit.
 pub fn emit_heap_alloc(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_heap_alloc_linux_x86_64(emitter);
@@ -260,6 +261,24 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
+    if emitter.pic_data_refs {
+        crate::codegen_support::abi::emit_symbol_address(
+            emitter,
+            "x9",
+            crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+        );
+        emitter.instruction("ldr x9, [x9]");                                    // read whether a native recovery boundary is active
+        emitter.instruction("cbz x9, __rt_heap_exhausted_fatal");               // retain executable fatal behavior without a boundary
+        crate::codegen_support::abi::emit_store_imm_to_symbol(
+            emitter,
+            crate::codegen_support::cdylib::BOUNDARY_STATUS,
+            0,
+            crate::codegen_support::cdylib::STATUS_ALLOCATION_FAILURE as i64,
+        );
+        crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+        emitter.instruction("b __rt_throw_current");                            // unwind to the cdylib handler with allocation status recorded
+        emitter.label("__rt_heap_exhausted_fatal");
+    }
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_err_msg");
     emitter.instruction("mov x2, #35");                                         // message length: "Fatal error: heap memory exhausted\n"
@@ -492,6 +511,29 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
+    if emitter.pic_data_refs {
+        crate::codegen_support::abi::emit_symbol_address(
+            emitter,
+            "r8",
+            crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+        );
+        emitter.instruction("mov r8, QWORD PTR [r8]");                          // read whether a native recovery boundary is active
+        emitter.instruction("test r8, r8");                                     // distinguish cdylib recovery from executable fatal handling
+        emitter.instruction("jz __rt_heap_exhausted_fatal");                    // retain executable fatal behavior without a boundary
+        emitter.instruction(&format!(                                           // materialize the boundary allocation-failure status
+            "mov r8, {}",
+            crate::codegen_support::cdylib::STATUS_ALLOCATION_FAILURE
+        ));
+        crate::codegen_support::abi::emit_store_reg_to_symbol(
+            emitter,
+            "r8",
+            crate::codegen_support::cdylib::BOUNDARY_STATUS,
+            0,
+        );
+        crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+        emitter.instruction("jmp __rt_throw_current");                          // unwind to the cdylib handler with allocation status recorded
+        emitter.label("__rt_heap_exhausted_fatal");
+    }
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the heap exhaustion fatal error message
     crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_err_msg");
     emitter.instruction("mov edx, 35");                                         // pass the exact heap exhaustion message length to the Linux write syscall
@@ -521,6 +563,22 @@ mod tests {
         assert!(asm.contains("lsr x9, x0, #32\n"));
         assert!(asm.contains("cbnz x9, __rt_heap_alloc_size_overflow\n"));
         assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
+    }
+
+    /// Verifies PIC allocators recover through the cdylib boundary instead of exiting.
+    #[test]
+    fn pic_heap_allocator_routes_exhaustion_to_cdylib_boundary() {
+        let mut arm = Emitter::new_pic(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_heap_alloc(&mut arm);
+        let arm_asm = arm.output();
+        assert!(arm_asm.contains(crate::codegen_support::cdylib::BOUNDARY_ACTIVE));
+        assert!(arm_asm.contains("b __rt_throw_current"));
+
+        let mut x86 = Emitter::new_pic(Target::new(Platform::Linux, Arch::X86_64));
+        emit_heap_alloc(&mut x86);
+        let x86_asm = x86.output();
+        assert!(x86_asm.contains(crate::codegen_support::cdylib::BOUNDARY_STATUS));
+        assert!(x86_asm.contains("jmp __rt_throw_current"));
     }
 
     /// Verifies the x86_64 allocator rejects payload sizes that cannot be

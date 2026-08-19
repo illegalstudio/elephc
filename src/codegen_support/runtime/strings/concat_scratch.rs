@@ -15,9 +15,9 @@
 //!   inside `[_concat_buf, _concat_buf + 65536)` move `_concat_off`, so heap-backed results
 //!   leave the shared scratch offset untouched with no extra flag register.
 //! - Requests larger than the configured heap capacity (`_heap_max`), including the wrapped
-//!   or negative sizes produced by an overflowing size computation, terminate through
-//!   `__rt_alloc_overflow` with PHP's "Possible integer overflow in memory allocation" class
-//!   of fatal error instead of corrupting memory.
+//!   or negative sizes produced by an overflowing size computation, reach
+//!   `__rt_alloc_overflow`; an active cdylib boundary recovers with allocation
+//!   status, while executables retain PHP's fatal behavior.
 //! - `__rt_alloc_overflow` is a `.globl` fatal trampoline: callers must reach it with an
 //!   UNCONDITIONAL branch from a local label so macOS atom splitting can never put a
 //!   conditional branch out of range.
@@ -62,7 +62,8 @@ pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
 /// - Releases the superseded buffer through `__rt_heap_free_safe` (a no-op for scratch).
 ///
 /// # `__rt_alloc_overflow`
-/// - Writes PHP's allocation-overflow fatal message to stderr and exits with status 1.
+/// - Recovers through an active cdylib boundary, otherwise writes PHP's
+///   allocation-overflow fatal message and exits with status 1.
 pub fn emit_concat_scratch(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_concat_scratch_linux_x86_64(emitter);
@@ -205,6 +206,8 @@ fn emit_alloc_overflow_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: alloc_overflow (fatal) ---");
     emitter.label_global("__rt_alloc_overflow");
 
+    emit_cdylib_allocation_escape(emitter);
+
     emitter.instruction("mov x0, #2");                                          // fd = stderr for the allocation-overflow diagnostic
     abi::emit_symbol_address(emitter, "x1", "_alloc_overflow_msg");
     emitter.instruction(&format!("mov x2, #{}", ALLOC_OVERFLOW_MSG.len()));     // pass the exact allocation-overflow diagnostic byte count
@@ -320,6 +323,8 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: alloc_overflow (fatal) ---");
     emitter.label_global("__rt_alloc_overflow");
 
+    emit_cdylib_allocation_escape(emitter);
+
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the allocation-overflow diagnostic
     abi::emit_symbol_address(emitter, "rsi", "_alloc_overflow_msg");
     emitter.instruction(&format!("mov edx, {}", ALLOC_OVERFLOW_MSG.len()));     // pass the exact allocation-overflow diagnostic byte count
@@ -328,4 +333,50 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // exit code 1 for the allocation-overflow abort path
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // terminate the process after reporting the impossible allocation
+}
+
+/// Converts an impossible allocation into a recoverable cdylib boundary escape.
+fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
+    if !emitter.pic_data_refs {
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(
+                emitter,
+                "x9",
+                crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+            );
+            emitter.instruction("ldr x9, [x9]");                                // read whether a native recovery boundary is active
+            emitter.instruction("cbz x9, __rt_alloc_overflow_fatal");           // retain executable fatal behavior without a boundary
+            abi::emit_store_imm_to_symbol(
+                emitter,
+                crate::codegen_support::cdylib::BOUNDARY_STATUS,
+                0,
+                crate::codegen_support::cdylib::STATUS_ALLOCATION_FAILURE as i64,
+            );
+            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("b __rt_throw_current");                        // unwind to the cdylib handler with allocation status recorded
+            emitter.label("__rt_alloc_overflow_fatal");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(
+                emitter,
+                "r8",
+                crate::codegen_support::cdylib::BOUNDARY_ACTIVE,
+            );
+            emitter.instruction("mov r8, QWORD PTR [r8]");                      // read whether a native recovery boundary is active
+            emitter.instruction("test r8, r8");                                 // distinguish cdylib recovery from executable fatal handling
+            emitter.instruction("jz __rt_alloc_overflow_fatal");                // retain executable fatal behavior without a boundary
+            abi::emit_store_imm_to_symbol(
+                emitter,
+                crate::codegen_support::cdylib::BOUNDARY_STATUS,
+                0,
+                crate::codegen_support::cdylib::STATUS_ALLOCATION_FAILURE as i64,
+            );
+            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+            emitter.instruction("jmp __rt_throw_current");                      // unwind to the cdylib handler with allocation status recorded
+            emitter.label("__rt_alloc_overflow_fatal");
+        }
+    }
 }

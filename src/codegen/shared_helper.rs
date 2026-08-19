@@ -57,7 +57,9 @@ pub(super) fn emit_shared_helper(
     body: impl FnOnce(&mut FunctionContext<'_>) -> Result<()>,
 ) -> Result<()> {
     let function = helper_function(label, return_php_type);
-    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear);
+    // Shared helpers own no cleanup-tracked locals, so an exception can skip
+    // their synthetic frame and unwind through the caller's activation record.
+    let layout = frame::layout_for_function(&function, emitter.target, regalloc_linear, false);
     let mut ctx = FunctionContext::new(
         module, &function, emitter, data, shared, layout, false, false, false, None,
     );

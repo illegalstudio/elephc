@@ -18,6 +18,7 @@ pub(super) struct OutputPaths {
     pub(super) obj: PathBuf,
     pub(super) bin: PathBuf,
     pub(super) source_map: PathBuf,
+    pub(super) header: Option<PathBuf>,
 }
 
 /// Returns the post-link reminder for dynamic eval without optional regex support.
@@ -55,5 +56,6 @@ pub(super) fn output_paths(filename: &str, target: Target, emit: Emit) -> Output
         obj: parent.join(format!("{}.o", stem)),
         bin: parent.join(bin_name),
         source_map: parent.join(format!("{}.map", stem)),
+        header: matches!(emit, Emit::Cdylib).then(|| parent.join(format!("lib{}.h", stem))),
     }
 }

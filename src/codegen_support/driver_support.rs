@@ -105,10 +105,8 @@ pub fn generate_runtime_with_features_pic(
     };
     output.push('\n');
     output.push_str(&runtime::emit_runtime_data_fixed(heap_size, target));
-    // The PIC runtime object only ever links into an ELF cdylib, where every
-    // runtime global must bind locally: hidden visibility prevents dynamic
-    // preemption (two loaded elephc modules aliasing one runtime state) and
-    // keeps the .so's dynamic symbol table down to the public ABI.
+    // PIC runtime globals are implementation details on every shared-library
+    // target. ELF uses hidden visibility; Mach-O uses private extern visibility.
     if pic {
         output = crate::codegen_support::visibility::append_hidden_directives(
             &output,
