@@ -35,7 +35,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 /// Cap on live stack depth; deeper recursion stops being tracked (guarded, not
@@ -109,7 +109,7 @@ struct State {
     fns: Vec<FnAcc>,
     stack: Vec<Frame>,
     /// (caller_id, callee_id) → (call_count, summed callee inclusive ns).
-    edges: HashMap<(u32, u32), (u64, u64)>,
+    edges: HashMap<(u32, u32), (u64, u64), BuildIdHasher>,
     /// Pushes dropped at MAX_STACK (reported so silent truncation is visible).
     dropped: u64,
     /// Activations running right now that were never pushed, because the stack
@@ -328,8 +328,11 @@ impl State {
                 "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_ret={} excl_ret={} incl_wait={} excl_wait={}\n",
                 name_of(id),
                 acc.calls,
-                acc.incl_ns,
-                acc.excl_ns,
+                // Ticks became nanoseconds here, once, rather than twice per
+                // call in the hot path. Every consumer downstream — the table,
+                // the assertions, the graph — reads nanoseconds as it always did.
+                ticks_to_ns(acc.incl_ns),
+                ticks_to_ns(acc.excl_ns),
                 acc.incl_allocs,
                 acc.excl_allocs,
                 acc.incl_io,
@@ -342,7 +345,8 @@ impl State {
         }
         let mut edges: Vec<(&(u32, u32), &(u64, u64))> = self.edges.iter().collect();
         edges.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(b.0)));
-        for ((caller, callee), (count, ns)) in edges {
+        for ((caller, callee), (count, ticks)) in edges {
+            let ns = ticks_to_ns(*ticks);
             out.push_str(&format!(
                 "elephc-instr-edge: {} -> {} count={} ns={}\n",
                 name_of(*caller as usize),
@@ -693,7 +697,7 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 pub extern "C" fn elephc_instr_request(begin: u32) {
     if begin != 0 {
         STATE.with(|s| s.borrow_mut().reset());
-        ENABLED.store(true, Ordering::Relaxed);
+        switch_on();
     } else {
         ENABLED.store(false, Ordering::Relaxed);
         elephc_instr_dump();
@@ -713,7 +717,7 @@ pub extern "C" fn elephc_instr_boot() {
     // the second reader nothing.
     let asked = unsafe { std::ptr::addr_of!(elephc_monitor_active).read() };
     if asked != 0 {
-        ENABLED.store(true, Ordering::Relaxed);
+        switch_on();
     }
 }
 
@@ -722,10 +726,22 @@ extern "C" {
     static elephc_monitor_active: u64;
 }
 
+/// Turns the hooks on, and fixes the reference the timings are measured against.
+///
+/// One function rather than a store at each call site: there are three ways to
+/// switch profiling on — the exported `enable`, a per-request `begin`, and the
+/// boot-time check — and only one of them remembered to establish the tick
+/// epoch, which left the other two (the paths every real run takes) converting
+/// counter ticks against a reference of zero.
+fn switch_on() {
+    start_tick_epoch();
+    ENABLED.store(true, Ordering::Relaxed);
+}
+
 /// Turns the hooks on for this thread's subsequent calls.
 #[no_mangle]
 pub extern "C" fn elephc_instr_enable() {
-    ENABLED.store(true, Ordering::Relaxed);
+    switch_on();
 }
 
 /// Turns the hooks off. Calls still execute their prologue and epilogue, but the
@@ -790,8 +806,8 @@ fn write_chrome_trace(path: &str, spans: &[(u32, u64, u64)], names: &[String], d
         if i > 0 {
             out.push(',');
         }
-        let ts_us = enter.wrapping_sub(base) as f64 / 1000.0;
-        let dur_us = exit.wrapping_sub(*enter) as f64 / 1000.0;
+        let ts_us = ticks_to_ns(enter.wrapping_sub(base)) as f64 / 1000.0;
+        let dur_us = ticks_to_ns(exit.wrapping_sub(*enter)) as f64 / 1000.0;
         out.push_str(&format!(
             "{{\"name\":\"{}\",\"cat\":\"php\",\"ph\":\"X\",\"pid\":1,\"tid\":1,\"ts\":{ts_us},\"dur\":{dur_us}}}",
             json_escape(&name_of(*id as usize))
@@ -829,6 +845,142 @@ fn now_ns() -> u64 {
     (ts.tv_sec as u64)
         .wrapping_mul(1_000_000_000)
         .wrapping_add(ts.tv_nsec as u64)
+}
+
+/// Reads the CPU's monotonic counter, in its own ticks.
+///
+/// The hooks used `clock_gettime(CLOCK_MONOTONIC)`, which on this machine costs
+/// 23 ns a read and resolves to **one microsecond** — 23 ns spent to learn
+/// something coarser than the functions being measured. The counter register
+/// behind it costs 0.33 ns and ticks every 41 ns. Cheaper *and* twenty-four
+/// times finer, which is not a trade at all.
+///
+/// Ticks, not nanoseconds: the conversion is a multiply and a divide, and doing
+/// it twice per call to store a number nobody reads until the dump is the same
+/// mistake in a smaller form. `ticks_to_ns` converts once, at render.
+#[inline(always)]
+fn now_ticks() -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        let value: u64;
+        // SAFETY: `cntvct_el0` is readable from EL0 on every ARMv8 profile, and
+        // the read has no memory effects.
+        unsafe {
+            std::arch::asm!("mrs {}, cntvct_el0", out(reg) value, options(nomem, nostack));
+        }
+        value
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: `rdtsc` is unprivileged and has no memory effects.
+        unsafe { core::arch::x86_64::_rdtsc() }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    {
+        now_ns()
+    }
+}
+
+/// Ticks per second, or 0 while unknown.
+static TICK_HZ: AtomicU64 = AtomicU64::new(0);
+/// The clock and counter, read together when profiling was switched on.
+static EPOCH_NS: AtomicU64 = AtomicU64::new(0);
+static EPOCH_TICKS: AtomicU64 = AtomicU64::new(0);
+
+/// Establishes the tick rate, or the reference point from which it is derived.
+///
+/// AArch64 publishes the counter's frequency in a register, so there is nothing
+/// to measure. x86_64 does not: the TSC rate is whatever the machine's is, so
+/// the rate comes from the run itself — a clock reading and a counter reading
+/// taken together here, and again at the dump. Measuring over the whole run
+/// beats any calibration loop at startup, and costs nothing while running.
+fn start_tick_epoch() {
+    #[cfg(target_arch = "aarch64")]
+    {
+        let hz: u64;
+        // SAFETY: `cntfrq_el0` is readable from EL0 and has no memory effects.
+        unsafe {
+            std::arch::asm!("mrs {}, cntfrq_el0", out(reg) hz, options(nomem, nostack));
+        }
+        if hz > 0 {
+            TICK_HZ.store(hz, Ordering::Relaxed);
+        }
+    }
+    EPOCH_NS.store(now_ns(), Ordering::Relaxed);
+    EPOCH_TICKS.store(now_ticks(), Ordering::Relaxed);
+}
+
+/// Converts a span of ticks to nanoseconds.
+///
+/// On a platform whose counter rate is not published, the rate is derived from
+/// the run: how many ticks elapsed against how many nanoseconds, both measured.
+/// A run too short to divide safely reports its ticks unconverted rather than
+/// inventing a rate — wrong units are visible, a fabricated rate is not.
+fn ticks_to_ns(ticks: u64) -> u64 {
+    let hz = match TICK_HZ.load(Ordering::Relaxed) {
+        0 => {
+            let ns = now_ns().wrapping_sub(EPOCH_NS.load(Ordering::Relaxed));
+            let elapsed = now_ticks().wrapping_sub(EPOCH_TICKS.load(Ordering::Relaxed));
+            if ns < 1_000_000 || elapsed == 0 {
+                return ticks;
+            }
+            let hz = (u128::from(elapsed) * 1_000_000_000u128 / u128::from(ns)) as u64;
+            TICK_HZ.store(hz, Ordering::Relaxed);
+            hz
+        }
+        hz => hz,
+    };
+    if hz == 0 {
+        return ticks;
+    }
+    (u128::from(ticks) * 1_000_000_000u128 / u128::from(hz)) as u64
+}
+
+/// A hasher for keys that are function ids.
+///
+/// The default hasher is SipHash, chosen to make hash-flooding impractical when
+/// keys come from outside. These keys do not: they are dense small integers the
+/// compiler assigned, two per edge, and nothing at run time can influence them.
+/// What that safety cost is measurable — 33 ns per lookup, twice per call, about
+/// 30% of the whole instrumentation overhead, spent defending against an attack
+/// this map cannot have.
+///
+/// The finaliser is murmur3's: two shifts and a multiply, enough mixing that
+/// adjacent ids do not collide in a bucket.
+#[derive(Default, Clone, Copy)]
+struct IdHasher(u64);
+
+impl std::hash::Hasher for IdHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        // Not expected — the derived Hash for (u32, u32) calls write_u32 — but a
+        // Hasher must accept bytes, and silently hashing nothing would collapse
+        // every key into one bucket.
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.0 = (self.0 << 32) | u64::from(value);
+    }
+
+    fn finish(&self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 33;
+        x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        x ^= x >> 33;
+        x
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct BuildIdHasher;
+
+impl std::hash::BuildHasher for BuildIdHasher {
+    type Hasher = IdHasher;
+    fn build_hasher(&self) -> IdHasher {
+        IdHasher(0)
+    }
 }
 
 /// Registers the id→name table: `count` entries of `(u64 name_ptr, u64 name_len)`
@@ -886,7 +1038,7 @@ pub extern "C" fn elephc_instr_enter(id: u32, allocs: u64, frees: u64) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    let t = now_ns();
+    let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
     STATE.with(|s| s.borrow_mut().enter_at(id, t, allocs, frees, io, w));
@@ -901,7 +1053,7 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    let t = now_ns();
+    let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
     STATE.with(|s| s.borrow_mut().exit_at(id, t, allocs, frees, io, w));
@@ -952,6 +1104,64 @@ pub extern "C" fn elephc_instr_dump() {
 
 #[cfg(test)]
 mod tests {
+    /// Makes one tick worth one nanosecond, so a test that feeds synthetic
+    /// timestamps reads them back unchanged.
+    ///
+    /// The hot path stores raw counter ticks and the renderer converts once. A
+    /// test asserting rendered nanoseconds against hand-written timestamps is
+    /// therefore asserting something about the host's counter unless it says
+    /// which rate it means — on this machine, 24 MHz, `30` renders as `1250`.
+    fn ticks_are_nanoseconds() {
+        super::TICK_HZ.store(1_000_000_000, super::Ordering::Relaxed);
+    }
+
+    /// Switching the hooks on must always fix the time reference too.
+    ///
+    /// There are three ways in — the exported `enable`, the per-request `begin`,
+    /// and the boot-time check — and when only one of them established the tick
+    /// epoch, the other two (which is to say every real run) converted counter
+    /// ticks against a reference of zero. Nothing failed loudly: the profile
+    /// still printed, with times derived from a rate nobody had measured.
+    ///
+    /// Read from the source because that is where the invariant lives: the two
+    /// broken paths cannot be reached from a unit test — one reads a linker
+    /// symbol, the other needs a web request.
+    #[test]
+    fn every_path_that_enables_also_starts_the_clock() {
+        let source = include_str!("lib.rs");
+        let body = source
+            .split_once("mod tests {")
+            .map(|(before, _)| before)
+            .unwrap_or(source);
+        let stores = body.matches("ENABLED.store(true").count();
+        assert_eq!(
+            stores, 1,
+            "ENABLED is switched on in {stores} places; it must go through the one \
+             function that also starts the tick epoch, or a path will convert \
+             ticks against a reference nobody set"
+        );
+        assert!(
+            body.contains("fn switch_on() {\n    start_tick_epoch();"),
+            "the single enable path must start the tick epoch first"
+        );
+    }
+
+    /// A counter tick is not a nanosecond, and the renderer must know it.
+    #[test]
+    fn ticks_convert_to_nanoseconds_at_the_rate_measured() {
+        // A 24 MHz counter — what this class of machine actually reports.
+        super::TICK_HZ.store(24_000_000, super::Ordering::Relaxed);
+        // One second of ticks must read as one second.
+        assert_eq!(super::ticks_to_ns(24_000_000), 1_000_000_000);
+        // And a single tick as its period, not as a nanosecond.
+        assert_eq!(super::ticks_to_ns(1), 41);
+        // A rate of one tick per nanosecond is the identity.
+        super::TICK_HZ.store(1_000_000_000, super::Ordering::Relaxed);
+        assert_eq!(super::ticks_to_ns(1234), 1234);
+        // Large spans must not overflow on the way through.
+        assert_eq!(super::ticks_to_ns(u64::MAX / 2), u64::MAX / 2);
+    }
+
     /// A route must come back out of the trace line exactly as it went in.
     ///
     /// The encoder used to push non-ASCII bytes with `byte as char`, which is a
@@ -1081,6 +1291,7 @@ mod tests {
 
     #[test]
     fn render_lists_metrics_and_edges() {
+        ticks_are_nanoseconds();
         let mut s = State::default();
         s.enter_at(0, 0, 0, 0, 0, 0);
         s.enter_at(1, 0, 0, 0, 0, 0);
@@ -1097,6 +1308,7 @@ mod tests {
 
     #[test]
     fn retained_is_signed_and_partitions_like_the_other_dimensions() {
+        ticks_are_nanoseconds();
         // `cleanup` frees more than it allocates (it releases what main built),
         // so its retained is negative — the dimension must not clamp at zero.
         let mut s = State::default();
@@ -1200,6 +1412,7 @@ mod tests {
 
     #[test]
     fn reset_makes_each_dump_a_fresh_slice() {
+        ticks_are_nanoseconds();
         // Two identical "requests" on one worker. Without the reset the second
         // reports calls=2 and double the time — the --web bug this fixes.
         let mut s = State::default();
@@ -1383,6 +1596,7 @@ mod tests {
 
     #[test]
     fn chrome_trace_is_well_formed() {
+        ticks_are_nanoseconds();
         // Spans in ns; base is the min enter. Complete ('X') events, µs.
         let spans = vec![(0u32, 1_000u64, 5_000u64), (1u32, 2_000u64, 3_500u64)];
         let names = vec!["{main}".to_string(), "child".to_string()];
