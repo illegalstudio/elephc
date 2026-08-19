@@ -29,7 +29,13 @@ pub(super) fn eval_pcntl_scalar_result(
             if args.iter().any(Option::is_some) {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            values.int(elephc_pcntl::elephc_pcntl_fork())?
+            let process_id = elephc_pcntl::elephc_pcntl_fork();
+            if process_id == -1 {
+                values.warning(&elephc_pcntl::pcntl_last_error_warning(
+                    elephc_pcntl::PCNTL_WARNING_FORK,
+                ))?;
+            }
+            values.int(process_id)?
         }
         "pcntl_errno" | "pcntl_get_last_error" => {
             if args.iter().any(Option::is_some) {

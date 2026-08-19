@@ -53,7 +53,10 @@ pub(crate) fn emit_pcntl_data() -> String {
     out.push_str(".globl __rt_pcntl_handler_descriptor\n__rt_pcntl_handler_descriptor:\n    .zero 1024\n");
     out.push_str(".globl __rt_pcntl_async_enabled\n__rt_pcntl_async_enabled:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_dispatching\n__rt_pcntl_dispatching:\n    .quad 0\n");
+    out.push_str(".globl __rt_pcntl_dispatch_mask\n__rt_pcntl_dispatch_mask:\n    .zero 128\n");
     out.push_str(".globl __rt_pcntl_signal_fn\n__rt_pcntl_signal_fn:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_signal_next_fn\n__rt_pcntl_signal_next_fn:\n    .quad 0\n");
+    out.push_str(".globl __rt_pcntl_dispatch_begin_fn\n__rt_pcntl_dispatch_begin_fn:\n    .quad 0\n");
+    out.push_str(".globl __rt_pcntl_dispatch_end_fn\n__rt_pcntl_dispatch_end_fn:\n    .quad 0\n");
     out
 }

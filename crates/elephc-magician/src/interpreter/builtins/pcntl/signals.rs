@@ -10,7 +10,7 @@
 
 use super::*;
 use crate::context::EvalPcntlSignalHandler;
-use elephc_pcntl::ElephcPcntlSigInfo;
+use elephc_pcntl::{ElephcPcntlSigInfo, ElephcPcntlSignalMask};
 
 /// Evaluates signal-related PCNTL functions.
 pub(super) fn eval_pcntl_signal_result(
@@ -84,21 +84,40 @@ fn eval_pcntl_signal(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signal = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
+    let signal_limit = i64::from(elephc_pcntl::elephc_pcntl_signal_limit());
+    if signal < 1 {
+        return eval_throw_builtin_value_error(
+            "pcntl_signal(): Argument #1 ($signal) must be greater than or equal to 1",
+            context,
+            values,
+        );
+    }
+    if signal >= signal_limit {
+        return eval_throw_builtin_value_error(
+            &format!(
+                "pcntl_signal(): Argument #1 ($signal) must be less than {signal_limit}"
+            ),
+            context,
+            values,
+        );
+    }
     let handler = eval_pcntl_required_arg(args, 1)?.value;
     let restart = eval_pcntl_arg(args, 2)
         .map(|arg| values.truthy(arg.value))
         .transpose()?
-        .unwrap_or(true);
+        .unwrap_or_else(|| default_restart_syscalls(signal));
     let (disposition, stored) = if matches!(values.type_tag(handler)?, EVAL_TAG_INT | EVAL_TAG_BOOL)
     {
         let disposition = eval_int_value(handler, values)?;
-        let bridge_disposition = if (0..=1).contains(&disposition) {
-            disposition as libc::c_int
-        } else {
-            3
-        };
+        if !(0..=1).contains(&disposition) {
+            return eval_throw_builtin_value_error(
+                "pcntl_signal(): Argument #2 ($handler) must be either SIG_DFL or SIG_IGN when an integer value is given",
+                context,
+                values,
+            );
+        }
         (
-            bridge_disposition,
+            disposition as libc::c_int,
             EvalPcntlSignalHandler::Disposition(disposition),
         )
     } else {
@@ -115,6 +134,9 @@ fn eval_pcntl_signal(
         if let EvalPcntlSignalHandler::Callable(handler) = stored {
             values.release(handler)?;
         }
+        values.warning(&elephc_pcntl::pcntl_last_error_warning(
+            elephc_pcntl::PCNTL_WARNING_SIGNAL,
+        ))?;
         return values.bool_value(false);
     }
     if let Some(previous) = context.set_pcntl_signal_handler(signal as libc::c_int, stored) {
@@ -125,6 +147,11 @@ fn eval_pcntl_signal(
     values.bool_value(true)
 }
 
+/// Returns PHP's omitted-argument restart policy for one signal.
+fn default_restart_syscalls(signal: i64) -> bool {
+    signal != i64::from(libc::SIGALRM)
+}
+
 /// Returns the retained callable or integer disposition registered for a signal.
 fn eval_pcntl_signal_get_handler(
     args: &[Option<EvaluatedCallArg>],
@@ -133,7 +160,14 @@ fn eval_pcntl_signal_get_handler(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signal = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
     if signal < 1 || signal >= i64::from(elephc_pcntl::elephc_pcntl_signal_limit()) {
-        return values.bool_value(false);
+        return eval_throw_builtin_value_error(
+            &format!(
+                "pcntl_signal_get_handler(): Argument #1 ($signal) must be between 1 and {}",
+                elephc_pcntl::elephc_pcntl_signal_limit() - 1
+            ),
+            context,
+            values,
+        );
     }
     match context.pcntl_signal_handler(signal as libc::c_int) {
         Some(EvalPcntlSignalHandler::Callable(handler)) => values.retain(handler),
@@ -241,8 +275,44 @@ fn eval_pcntl_signal_wait(
     values.int(signal)
 }
 
-/// Drains every complete signal record and invokes its registered PHP callback.
+/// Drains one masked signal snapshot and invokes its registered PHP callbacks.
 fn eval_pcntl_dispatch_pending(
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if !context.begin_pcntl_dispatch() {
+        return Ok(true);
+    }
+    let mut previous_mask = ElephcPcntlSignalMask::default();
+    if unsafe { elephc_pcntl::elephc_pcntl_dispatch_begin(&mut previous_mask) } == 0 {
+        context.end_pcntl_dispatch();
+        return Ok(false);
+    }
+    let published = values.set_pcntl_dispatching(true);
+    let result = match published {
+        Ok(()) => eval_pcntl_dispatch_masked_snapshot(context, values),
+        Err(status) => Err(status),
+    };
+    if result.is_err() {
+        eval_pcntl_discard_masked_snapshot();
+    }
+    let restored = unsafe { elephc_pcntl::elephc_pcntl_dispatch_end(&previous_mask) } != 0;
+    context.end_pcntl_dispatch();
+    let unpublished = values.set_pcntl_dispatching(false);
+    match result {
+        Ok(success) => {
+            unpublished?;
+            Ok(success && restored)
+        }
+        Err(status) => {
+            let _ = unpublished;
+            Err(status)
+        }
+    }
+}
+
+/// Invokes every callable record already present after signal delivery has been masked.
+fn eval_pcntl_dispatch_masked_snapshot(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
@@ -262,13 +332,26 @@ fn eval_pcntl_dispatch_pending(
         let callback = values.retain(handler)?;
         let signal = values.int(info.signo)?;
         let info = eval_pcntl_siginfo_array(&info, values)?;
-        let result = eval_call_user_func_with_values(
-            vec![callback, signal, info],
-            context,
-            values,
-        );
+        let result = eval_call_user_func_with_values(vec![callback, signal, info], context, values);
         values.release(callback)?;
-        let result = result?;
-        values.release(result)?;
+        values.release(result?)?;
+    }
+}
+
+/// Discards the rest of a masked snapshot after one handler propagates a Throwable.
+fn eval_pcntl_discard_masked_snapshot() {
+    let mut info = ElephcPcntlSigInfo::default();
+    while unsafe { elephc_pcntl::elephc_pcntl_signal_next(&mut info) } == 1 {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_restart_syscalls;
+
+    /// Keeps SIGALRM interruptible while retaining PHP's restart default for other signals.
+    #[test]
+    fn omitted_restart_syscalls_is_false_only_for_sigalrm() {
+        assert!(!default_restart_syscalls(i64::from(libc::SIGALRM)));
+        assert!(default_restart_syscalls(i64::from(libc::SIGUSR1)));
     }
 }

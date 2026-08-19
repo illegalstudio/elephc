@@ -231,6 +231,11 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
     emitter.instruction("b __rt_diag_warning");                                 // emit or suppress one eval runtime warning
 
+    label_c_global(emitter, "__elephc_eval_set_pcntl_dispatching");
+    abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
+    emitter.instruction("str x0, [x9]");                                        // publish Magician handler execution to the Fiber guard
+    emitter.instruction("ret");                                                 // return to the Rust interpreter
+
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("b __rt_decref_mixed");                                 // release one eval-owned boxed Mixed cell
 }

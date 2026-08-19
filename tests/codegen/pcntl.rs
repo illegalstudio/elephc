@@ -277,12 +277,59 @@ fn test_pcntl_exec_replaces_child_with_arguments_and_environment() {
 /// Returns false and preserves the bridge errno when process replacement fails.
 #[test]
 fn test_pcntl_exec_failure_returns_false_and_records_errno() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         "<?php
         $ok = pcntl_exec('/definitely/missing/elephc-pcntl');
         echo (!$ok ? 'false' : 'bad') . '|' . pcntl_get_last_error();",
     );
-    assert_eq!(out, "false|2");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|2");
+    assert!(
+        out.stderr.contains(
+            "Warning: pcntl_exec(): Error has occurred: (errno 2) No such file or directory"
+        ),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+/// Emits a warning when the OS rejects a valid but uncatchable signal disposition.
+#[test]
+fn test_pcntl_signal_os_failure_warns_and_returns_false() {
+    let out = compile_and_run_capture(
+        "<?php echo pcntl_signal(SIGKILL, SIG_IGN) ? 'bad' : 'false';",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert!(
+        out.stderr
+            .contains("Warning: pcntl_signal(): Error assigning signal"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+/// Throws PHP's target-aware `ValueError` for an invalid handler-lookup signal.
+#[test]
+fn test_pcntl_signal_get_handler_rejects_invalid_signal() {
+    let out = compile_and_run_capture("<?php pcntl_signal_get_handler(999999);");
+    assert!(!out.success, "invalid signal unexpectedly succeeded");
+    #[cfg(target_os = "macos")]
+    assert!(
+        out.stderr.contains(
+            "Uncaught ValueError: pcntl_signal_get_handler(): Argument #1 ($signal) must be between 1 and 31"
+        ),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+    #[cfg(target_os = "linux")]
+    assert!(
+        out.stderr.contains(
+            "Uncaught ValueError: pcntl_signal_get_handler(): Argument #1 ($signal) must be between 1 and 64"
+        ),
+        "unexpected stderr: {}",
+        out.stderr
+    );
 }
 
 /// Forks and reaps a real child through `pcntl_waitpid`, proving by-reference status writeback.
@@ -336,6 +383,105 @@ fn test_pcntl_waitpid_populates_resource_usage_outputs() {
     assert_eq!(out, "pid|19|17|int");
 }
 
+/// Preserves status and replaces resource usage with an empty array when `waitpid()` fails.
+#[test]
+fn test_pcntl_waitpid_failure_preserves_status_and_empties_usage() {
+    let out = compile_and_run(
+        "<?php
+        $status = 41;
+        $usage = ['old' => 1];
+        $pid = pcntl_waitpid(99999999, $status, WNOHANG, $usage);
+        echo $pid . '|' . $status . '|' . count($usage) . '|';
+        echo (array_key_exists('old', $usage) ? 'old' : 'noold') . '|';
+        echo (array_key_exists('ru_maxrss', $usage) ? 'rss' : 'norss');",
+    );
+    assert_eq!(out, "-1|41|0|noold|norss");
+}
+
+/// Gives the forked child a private signal queue so its alarm cannot be dispatched by the parent.
+#[test]
+fn test_pcntl_fork_child_signal_queue_is_process_local() {
+    let out = compile_and_run(
+        "<?php
+        $parentSeen = 0;
+        pcntl_signal(SIGALRM, function(int $signal) use (&$parentSeen): void {
+            $parentSeen = $signal;
+        });
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            pcntl_alarm(1);
+            sleep(2);
+            exit(0);
+        }
+        pcntl_waitpid($pid, $status);
+        pcntl_signal_dispatch();
+        pcntl_signal(SIGALRM, SIG_DFL);
+        echo 'parent_seen=' . $parentSeen . '|child_exit=' . pcntl_wexitstatus($status);",
+    );
+    assert_eq!(out, "parent_seen=0|child_exit=0");
+}
+
+/// Restores dispatch state after a handler throws so a later signal can invoke it again.
+#[test]
+fn test_pcntl_handler_exception_restores_dispatch_state() {
+    let out = compile_and_run(
+        "<?php
+        pcntl_signal(SIGALRM, function(): void { throw new RuntimeException('alarm'); });
+        pcntl_alarm(1);
+        sleep(2);
+        try { pcntl_signal_dispatch(); } catch (RuntimeException $error) { echo 'caught|'; }
+        pcntl_alarm(1);
+        sleep(2);
+        try { pcntl_signal_dispatch(); } catch (RuntimeException $error) { echo 'caught2'; }
+        pcntl_signal(SIGALRM, SIG_DFL);",
+    );
+    assert_eq!(out, "caught|caught2");
+}
+
+/// Rejects a Fiber context switch while a signal handler owns dispatch state.
+#[test]
+fn test_pcntl_handler_cannot_switch_fibers() {
+    let out = compile_and_run(
+        "<?php
+        pcntl_signal(SIGALRM, function(): void {
+            $fiber = new Fiber(function(): void {});
+            try { $fiber->start(); }
+            catch (FiberError $error) { echo $error->getMessage(); }
+        });
+        pcntl_alarm(1);
+        sleep(2);
+        pcntl_signal_dispatch();
+        pcntl_signal(SIGALRM, SIG_DFL);",
+    );
+    assert_eq!(out, "Cannot switch fibers in current execution context");
+}
+
+/// Defers signals raised by a handler until the next explicit snapshot dispatch.
+#[test]
+fn test_pcntl_dispatch_defers_nested_signal_arrivals() {
+    let out = compile_and_run(
+        "<?php
+        extern \"System\" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        $seen = '';
+        pcntl_signal(SIGUSR1, function() use (&$seen): void {
+            $seen .= 'first';
+            kill(getpid(), SIGUSR2);
+        });
+        pcntl_signal(SIGUSR2, function() use (&$seen): void { $seen .= ':second'; });
+        kill(getpid(), SIGUSR1);
+        pcntl_signal_dispatch();
+        echo $seen . '|';
+        pcntl_signal_dispatch();
+        echo $seen;
+        pcntl_signal(SIGUSR1, SIG_DFL);
+        pcntl_signal(SIGUSR2, SIG_DFL);",
+    );
+    assert_eq!(out, "first|first:second");
+}
+
 /// Reaps a real child through `pcntl_waitid()` and exposes target-aware siginfo fields.
 #[test]
 fn test_pcntl_waitid_populates_signal_info() {
@@ -370,7 +516,7 @@ fn test_pcntl_waitid_failure_preserves_info_output() {
 /// Executes scalar PCNTL adapters through runtime eval, including failure errno propagation.
 #[test]
 fn test_pcntl_eval_scalar_status_and_exec_failure() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
         echo eval('
             $status = 29 << 8;
@@ -385,7 +531,15 @@ fn test_pcntl_eval_scalar_status_and_exec_failure() {
                 . ($nullable ? "nullable" : "bad");
         ');"#,
     );
-    assert_eq!(out, "exited|29|false|2|nullable");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "exited|29|false|2|nullable");
+    assert!(
+        out.stderr.contains(
+            "Warning: pcntl_exec(): Error has occurred: (errno 2) No such file or directory"
+        ),
+        "unexpected stderr: {}",
+        out.stderr
+    );
 }
 
 /// Forks and reaps a child inside runtime eval, proving by-reference status and usage writeback.
@@ -403,6 +557,23 @@ fn test_pcntl_eval_fork_waitpid_writes_reference_outputs() {
         ');"#,
     );
     assert_eq!(out, "pid|43|usage");
+}
+
+/// Preserves failed-wait outputs through the Magician by-reference adapter.
+#[test]
+fn test_pcntl_eval_waitpid_failure_preserves_outputs() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $status = 41;
+            $usage = ["old" => 1];
+            $pid = pcntl_waitpid(99999999, $status, WNOHANG, $usage);
+            return $pid . "|" . $status . "|" . count($usage) . "|"
+                . (array_key_exists("old", $usage) ? "old" : "noold") . "|"
+                . (array_key_exists("ru_maxrss", $usage) ? "rss" : "norss");
+        ');"#,
+    );
+    assert_eq!(out, "-1|41|0|noold|norss");
 }
 
 /// Registers and dispatches an eval closure through the signal-safe Magician queue.
@@ -424,6 +595,28 @@ fn test_pcntl_eval_signal_handler_dispatch() {
         ');"#,
     );
     assert_eq!(out, "dispatch|14");
+}
+
+/// Restores Magician dispatch state after a handler exception and invokes the next alarm.
+#[test]
+fn test_pcntl_eval_handler_exception_restores_dispatch_state() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $handler = function(): void { throw new RuntimeException("alarm"); };
+            pcntl_signal(SIGALRM, $handler);
+            pcntl_alarm(1);
+            sleep(2);
+            try { pcntl_signal_dispatch(); }
+            catch (RuntimeException $error) { echo "caught|"; }
+            pcntl_alarm(1);
+            sleep(2);
+            try { pcntl_signal_dispatch(); }
+            catch (RuntimeException $error) { echo "caught2"; }
+            pcntl_signal(SIGALRM, SIG_DFL);
+        ');"#,
+    );
+    assert_eq!(out, "caught|caught2");
 }
 
 /// Exercises Linux-only eval adapters and confirms Darwin QoS metadata remains absent.

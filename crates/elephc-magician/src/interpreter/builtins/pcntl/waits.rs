@@ -38,7 +38,7 @@ fn eval_pcntl_wait(
     let status_arg = eval_pcntl_required_arg(args, 0)?;
     let flags = eval_pcntl_optional_int(eval_pcntl_arg(args, 1), 0, values)?;
     let usage_arg = eval_pcntl_arg(args, 2);
-    let mut status = 0;
+    let mut status = eval_int_value(status_arg.value, values)? as libc::c_int;
     let mut usage = ElephcPcntlRUsage::default();
     let pid = unsafe {
         if usage_arg.is_some() {
@@ -64,7 +64,11 @@ fn eval_pcntl_wait(
         values,
     )?;
     if let Some(usage_arg) = usage_arg {
-        let usage = eval_pcntl_rusage_array(&usage, values)?;
+        let usage = if pid > 0 {
+            eval_pcntl_rusage_array(&usage, values)?
+        } else {
+            values.assoc_new(0)?
+        };
         eval_pcntl_write_ref(
             "pcntl_wait",
             3,
@@ -90,7 +94,7 @@ fn eval_pcntl_waitpid(
     let status_arg = eval_pcntl_required_arg(args, 1)?;
     let flags = eval_pcntl_optional_int(eval_pcntl_arg(args, 2), 0, values)?;
     let usage_arg = eval_pcntl_arg(args, 3);
-    let mut status = 0;
+    let mut status = eval_int_value(status_arg.value, values)? as libc::c_int;
     let mut usage = ElephcPcntlRUsage::default();
     let pid = unsafe {
         if usage_arg.is_some() {
@@ -120,7 +124,11 @@ fn eval_pcntl_waitpid(
         values,
     )?;
     if let Some(usage_arg) = usage_arg {
-        let usage = eval_pcntl_rusage_array(&usage, values)?;
+        let usage = if pid > 0 {
+            eval_pcntl_rusage_array(&usage, values)?
+        } else {
+            values.assoc_new(0)?
+        };
         eval_pcntl_write_ref(
             "pcntl_waitpid",
             4,

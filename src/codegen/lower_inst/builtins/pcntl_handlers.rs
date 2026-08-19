@@ -20,6 +20,7 @@ use crate::types::PhpType;
 
 use super::super::callables;
 use super::super::predicates;
+use super::pcntl::{emit_pcntl_last_error_warning, PCNTL_WARNING_SIGNAL};
 use super::strings::load_as_int;
 use super::{ensure_arg_count_between, expect_operand, store_if_result};
 
@@ -34,6 +35,7 @@ pub(crate) fn lower_signal(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     let handler = expect_operand(inst, 1)?;
     emit_initialize_signal_bridge_slots(ctx);
     load_as_int(ctx, signal, "pcntl_signal signal")?;
+    emit_validate_signal_number(ctx);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     emit_push_handler_kind_and_descriptor(ctx, inst, handler)?;
     emit_signal_restart_flag(ctx, inst)?;
@@ -51,8 +53,11 @@ pub(crate) fn lower_signal(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             ctx.emitter.instruction(&format!("b {success}"));
             ctx.emitter.label(&failure);
             ctx.emitter.instruction("ldr x0, [sp]");
-            ctx.emitter.instruction(&format!("cbz x0, {done}"));
+            let warning = ctx.next_label("pcntl_signal_warning");
+            ctx.emitter.instruction(&format!("cbz x0, {warning}"));
             callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+            ctx.emitter.label(&warning);
+            emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_SIGNAL);
             ctx.emitter.instruction("mov x0, #0");
             ctx.emitter.instruction(&format!("b {done}"));
             ctx.emitter.label(&success);
@@ -70,8 +75,11 @@ pub(crate) fn lower_signal(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             ctx.emitter.label(&failure);
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");
             ctx.emitter.instruction("test rax, rax");
-            ctx.emitter.instruction(&format!("jz {done}"));
+            let warning = ctx.next_label("pcntl_signal_warning");
+            ctx.emitter.instruction(&format!("jz {warning}"));
             callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+            ctx.emitter.label(&warning);
+            emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_SIGNAL);
             ctx.emitter.instruction("xor eax, eax");
             ctx.emitter.instruction(&format!("jmp {done}"));
             ctx.emitter.label(&success);
@@ -84,11 +92,60 @@ pub(crate) fn lower_signal(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
+/// Validates a dynamic signal number with PHP's target-specific `ValueError` diagnostics.
+fn emit_validate_signal_number(ctx: &mut FunctionContext<'_>) {
+    let below_range = ctx.next_label("pcntl_signal_below_range");
+    let above_range = ctx.next_label("pcntl_signal_above_range");
+    let valid = ctx.next_label("pcntl_signal_number_valid");
+    let upper_bound = match ctx.emitter.target.platform {
+        Platform::MacOS => 32,
+        Platform::Linux => 65,
+        Platform::Windows => 1,
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // reject signal numbers below PHP's valid range
+            ctx.emitter.instruction(&format!("b.lt {below_range}"));
+            ctx.emitter.instruction(&format!("cmp x0, #{upper_bound}"));        // reject the target's one-past-last signal number
+            ctx.emitter.instruction(&format!("b.ge {above_range}"));
+            ctx.emitter.instruction(&format!("b {valid}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // reject signal numbers below PHP's valid range
+            ctx.emitter.instruction(&format!("jl {below_range}"));
+            ctx.emitter.instruction(&format!("cmp rax, {upper_bound}"));        // reject the target's one-past-last signal number
+            ctx.emitter.instruction(&format!("jge {above_range}"));
+            ctx.emitter.instruction(&format!("jmp {valid}"));
+        }
+    }
+    ctx.emitter.label(&below_range);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "pcntl_signal(): Argument #1 ($signal) must be greater than or equal to 1",
+    );
+    ctx.emitter.label(&above_range);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!("pcntl_signal(): Argument #1 ($signal) must be less than {upper_bound}"),
+    );
+    ctx.emitter.label(&valid);
+}
+
 /// Installs bridge function pointers into fixed runtime slots without coupling the runtime cache.
 fn emit_initialize_signal_bridge_slots(ctx: &mut FunctionContext<'_>) {
-    let (signal_symbol, next_symbol) = match ctx.emitter.target.platform {
-        Platform::MacOS => ("_elephc_pcntl_signal", "_elephc_pcntl_signal_next"),
-        Platform::Linux => ("elephc_pcntl_signal", "elephc_pcntl_signal_next"),
+    let (signal_symbol, next_symbol, begin_symbol, end_symbol) = match ctx.emitter.target.platform {
+        Platform::MacOS => (
+            "_elephc_pcntl_signal",
+            "_elephc_pcntl_signal_next",
+            "_elephc_pcntl_dispatch_begin",
+            "_elephc_pcntl_dispatch_end",
+        ),
+        Platform::Linux => (
+            "elephc_pcntl_signal",
+            "elephc_pcntl_signal_next",
+            "elephc_pcntl_dispatch_begin",
+            "elephc_pcntl_dispatch_end",
+        ),
         Platform::Windows => return,
     };
     match ctx.emitter.target.arch {
@@ -99,6 +156,12 @@ fn emit_initialize_signal_bridge_slots(ctx: &mut FunctionContext<'_>) {
             abi::emit_extern_symbol_address(ctx.emitter, "x9", next_symbol);
             abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_signal_next_fn");
             ctx.emitter.instruction("str x9, [x10]");
+            abi::emit_extern_symbol_address(ctx.emitter, "x9", begin_symbol);
+            abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_dispatch_begin_fn");
+            ctx.emitter.instruction("str x9, [x10]");
+            abi::emit_extern_symbol_address(ctx.emitter, "x9", end_symbol);
+            abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_dispatch_end_fn");
+            ctx.emitter.instruction("str x9, [x10]");
         }
         Arch::X86_64 => {
             abi::emit_extern_symbol_address(ctx.emitter, "r9", signal_symbol);
@@ -106,6 +169,12 @@ fn emit_initialize_signal_bridge_slots(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov QWORD PTR [r10], r9");
             abi::emit_extern_symbol_address(ctx.emitter, "r9", next_symbol);
             abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_signal_next_fn");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");
+            abi::emit_extern_symbol_address(ctx.emitter, "r9", begin_symbol);
+            abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_dispatch_begin_fn");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");
+            abi::emit_extern_symbol_address(ctx.emitter, "r9", end_symbol);
+            abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_dispatch_end_fn");
             ctx.emitter.instruction("mov QWORD PTR [r10], r9");
         }
     }
@@ -122,6 +191,17 @@ pub(crate) fn lower_signal_get_handler(
     let callable = ctx.next_label("pcntl_signal_get_handler_callable");
     let invalid = ctx.next_label("pcntl_signal_get_handler_invalid");
     let done = ctx.next_label("pcntl_signal_get_handler_done");
+    let invalid_message = match ctx.emitter.target.platform {
+        Platform::MacOS => {
+            "pcntl_signal_get_handler(): Argument #1 ($signal) must be between 1 and 31"
+        }
+        Platform::Linux => {
+            "pcntl_signal_get_handler(): Argument #1 ($signal) must be between 1 and 64"
+        }
+        Platform::Windows => {
+            "pcntl_signal_get_handler(): Argument #1 ($signal) is invalid"
+        }
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
@@ -144,8 +224,7 @@ pub(crate) fn lower_signal_get_handler(
             emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Callable);
             ctx.emitter.instruction(&format!("b {done}"));
             ctx.emitter.label(&invalid);
-            ctx.emitter.instruction("mov x0, #0");
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            super::super::exceptions::emit_value_error(ctx, invalid_message);
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
@@ -168,8 +247,7 @@ pub(crate) fn lower_signal_get_handler(
             emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Callable);
             ctx.emitter.instruction(&format!("jmp {done}"));
             ctx.emitter.label(&invalid);
-            ctx.emitter.instruction("xor eax, eax");
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            super::super::exceptions::emit_value_error(ctx, invalid_message);
         }
     }
     ctx.emitter.label(&done);
@@ -344,21 +422,27 @@ fn emit_push_mixed_handler_pair(
     Ok(())
 }
 
-/// Maps a runtime integer to disposition zero/one, or the bridge-invalid sentinel three.
+/// Accepts only PHP's integer dispositions and throws `ValueError` for every other integer.
 fn emit_normalize_integer_disposition(ctx: &mut FunctionContext<'_>) {
     let valid = ctx.next_label("pcntl_signal_integer_handler_valid");
+    let invalid = ctx.next_label("pcntl_signal_integer_handler_invalid");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #1");
             ctx.emitter.instruction(&format!("b.ls {valid}"));
-            ctx.emitter.instruction("mov x0, #3");
+            ctx.emitter.instruction(&format!("b {invalid}"));
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 1");
             ctx.emitter.instruction(&format!("jbe {valid}"));
-            ctx.emitter.instruction("mov rax, 3");
+            ctx.emitter.instruction(&format!("jmp {invalid}"));
         }
     }
+    ctx.emitter.label(&invalid);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "pcntl_signal(): Argument #2 ($handler) must be either SIG_DFL or SIG_IGN when an integer value is given",
+    );
     ctx.emitter.label(&valid);
 }
 
