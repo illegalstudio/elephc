@@ -601,6 +601,7 @@ When cutting a release:
 - Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.
 - Zero compiler warnings policy (`cargo build` must be clean)
 - Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.
+- Bridge C-ABI return buffers are never process-global: a `static Mutex<CString>` handing out `as_ptr()` is a cross-thread use-after-free (the next call frees what an earlier caller is still reading). Use `thread_local!` cells or caller-owned allocations. Enforced by `tests/ffi_buffer_hygiene.rs`; rationale in CONTRIBUTING.md § "Expose a stable C ABI".
 
 ## Cursor Cloud specific instructions
 

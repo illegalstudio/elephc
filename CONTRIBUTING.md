@@ -546,6 +546,22 @@ null; never unwind into generated code). Keep the surface small and explicit —
 pass pointers + lengths for strings/buffers, return primitive status values. Name
 exports `elephc_<name>_*` so they are easy to find and namespace-clean.
 
+**Returned buffers must never live in process-global cells.** A bridge function
+that hands back `*const c_char` (or pointer+length) data must keep those bytes
+valid until the caller has read them — and a `static` `Mutex<CString>` /
+`Mutex<Vec<u8>>` cannot: the next call, from *any* thread, assigns the cell,
+which drops the previous contents and frees the exact bytes a previously
+handed-out pointer still references. The mutex serializes the write; it does
+nothing for the lifetime of the read. This exact shape shipped as an
+intermittent use-after-free in the PDO bridge (garbage SQLSTATE whenever two
+tests hammered `elephc_pdo_sqlstate` concurrently) and was then swept out of
+the tz/image/phar bridges too. Use a `thread_local!` cell — a thread can only
+invalidate pointers it was itself handed — or make the caller own the
+allocation. Id-keyed handle registries that hand out *owned values* (no
+interior pointers escape) may stay process-global. The rule is enforced by
+`tests/ffi_buffer_hygiene.rs`; a genuinely justified exception goes on that
+test's named allowlist with its reason, not silently past it.
+
 Every supported target must build and link the crate: `macos-aarch64`,
 `linux-aarch64`, `linux-x86_64`. A bridge that only works on one target is not
 acceptable (see the supported-target policy in `CLAUDE.md`).
