@@ -223,6 +223,15 @@ evidence = "tests/codegen/image"
 notes    = "Enabled with --with-image"
 
 [[extensions]]
+feature  = "PCNTL"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.pcntl.php"
+docs     = "docs/php/pcntl.md"
+evidence = "tests/codegen/pcntl.rs"
+modules  = ["pcntl"]
+notes    = "Target-aware Unix process control; auto-linked or forced with --with-pcntl"
+
+[[extensions]]
 feature  = "OpenSSL"
 status   = "partial"
 php      = "https://www.php.net/manual/en/book.openssl.php"

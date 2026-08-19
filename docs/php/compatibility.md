@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **473 / 2030** (23%).
+Overall builtin coverage: **498 / 2030** (25%).
 
 ## Builtin coverage by PHP module
 
@@ -41,7 +41,7 @@ Overall builtin coverage: **473 / 2030** (23%).
 | `mbstring` | 2 / 65 | 3% | 2 | 2 |
 | `mysqli` | 0 / 106 | 0% | 0 | 0 |
 | `openssl` | 4 / 66 | 6% | 4 | 4 |
-| `pcntl` | 0 / 25 | 0% | 0 | 0 |
+| `pcntl`† | 25 / 25 | 100% | 25 | 25 |
 | `pcre` | 5 / 11 | 45% | 5 | 5 |
 | `pdo`† | 0 / 1 | 0% | 0 | 0 |
 | `pgsql` | 0 / 122 | 0% | 0 | 0 |
@@ -73,6 +73,8 @@ The remaining 10 baseline extensions expose classes but no procedural functions,
 7 extensions bundled with php-src were not loaded by the PHP build that produced this snapshot and are not counted: `enchant`, `odbc`, `pdo_dblib`, `pdo_firebird`, `pdo_odbc`, `snmp`, `tidy`.
 
 In addition, elephc implements 3 PHP language constructs that PHP does not count as functions: `empty()`, `isset()`, `unset()`.
+
+The pinned `macos-aarch64` PHP baseline does not expose 7 target-specific PHP functions that elephc supports on other targets, so they are excluded from the percentages above: `pcntl_getcpu()`, `pcntl_getcpuaffinity()`, `pcntl_setcpuaffinity()`, `pcntl_setns()`, `pcntl_sigtimedwait()`, `pcntl_sigwaitinfo()`, `pcntl_unshare()`.
 
 ## Language constructs
 
@@ -112,6 +114,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 | [DateTime](./datetime.md) ([PHP](https://www.php.net/manual/en/book.datetime.php)) | 🟡 Partial |  |
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
+| [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
 
