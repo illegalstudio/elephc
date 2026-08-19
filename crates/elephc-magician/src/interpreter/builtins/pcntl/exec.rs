@@ -49,6 +49,11 @@ pub(super) fn eval_pcntl_exec_result(
     }
     guard.0 = std::ptr::null_mut();
     let success = unsafe { elephc_pcntl::elephc_pcntl_exec_run(builder) };
+    if success == 0 {
+        values.warning(&elephc_pcntl::pcntl_last_error_warning(
+            elephc_pcntl::PCNTL_WARNING_EXEC,
+        ))?;
+    }
     values.bool_value(success != 0)
 }
 

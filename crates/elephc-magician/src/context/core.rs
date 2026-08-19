@@ -94,6 +94,7 @@ pub struct ElephcEvalContext {
     pub(super) file_magic_override: Option<String>,
     pub(super) pcntl_signal_handlers: HashMap<i32, EvalPcntlSignalHandler>,
     pub(super) pcntl_async_signals: bool,
+    pub(super) pcntl_dispatching: bool,
 }
 
 impl ElephcEvalContext {
@@ -170,6 +171,7 @@ impl ElephcEvalContext {
             file_magic_override: None,
             pcntl_signal_handlers: HashMap::new(),
             pcntl_async_signals: false,
+            pcntl_dispatching: false,
         }
     }
 
@@ -247,6 +249,7 @@ impl ElephcEvalContext {
             file_magic_override: None,
             pcntl_signal_handlers: HashMap::new(),
             pcntl_async_signals: false,
+            pcntl_dispatching: false,
         }
     }
 

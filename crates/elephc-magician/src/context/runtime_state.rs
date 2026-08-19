@@ -36,6 +36,21 @@ impl ElephcEvalContext {
         std::mem::replace(&mut self.pcntl_async_signals, enabled)
     }
 
+    /// Enters the non-reentrant signal-dispatch region and reports whether entry succeeded.
+    pub fn begin_pcntl_dispatch(&mut self) -> bool {
+        if self.pcntl_dispatching {
+            false
+        } else {
+            self.pcntl_dispatching = true;
+            true
+        }
+    }
+
+    /// Leaves the signal-dispatch region after normal completion or exception cleanup.
+    pub fn end_pcntl_dispatch(&mut self) {
+        self.pcntl_dispatching = false;
+    }
+
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name) || self.native_functions.contains_key(name)

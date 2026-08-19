@@ -63,6 +63,14 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(())
     }
 
+    /// Mirrors eval handler execution into the generated runtime Fiber-switch guard.
+    fn set_pcntl_dispatching(&mut self, active: bool) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_set_pcntl_dispatching(u64::from(active));
+        }
+        Ok(())
+    }
+
     /// Creates a boxed null Mixed cell through the generated runtime wrapper.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_null() })

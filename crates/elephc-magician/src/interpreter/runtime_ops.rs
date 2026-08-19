@@ -499,6 +499,11 @@ pub trait RuntimeValueOps {
     /// Emits or suppresses one PHP runtime warning through the target runtime.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;
 
+    /// Publishes whether eval is invoking a signal handler so Fiber switches can be rejected.
+    fn set_pcntl_dispatching(&mut self, _active: bool) -> Result<(), EvalStatus> {
+        Ok(())
+    }
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 
