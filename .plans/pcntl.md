@@ -1,19 +1,19 @@
 # PHP PCNTL parity
 
-- [ ] Register target-aware PCNTL availability for the PHP 8.4 surface.
-- [ ] Add the `elephc-pcntl` bridge and stable panic-free process-control ABI.
-- [ ] Add target-aware PCNTL predefined constants and `Pcntl\\QosClass` on macOS.
-- [ ] Add shared builtin contracts, AOT home files, typed EIR targets, and backend lowering.
-- [ ] Implement process lifecycle calls: fork, exec, wait, waitpid, and waitid.
-- [ ] Implement wait-status inspection and resource-usage/siginfo output arrays.
-- [ ] Implement last-error, strerror, alarm, getpriority, and setpriority.
-- [ ] Implement queued signal handlers, manual dispatch, async safe points, and handler lookup.
-- [ ] Implement signal masks, sigwaitinfo, and sigtimedwait with target-specific siginfo.
-- [ ] Implement Linux namespaces, CPU affinity, and CPU queries.
-- [ ] Implement macOS QoS enum and get/set calls.
-- [ ] Add Magician/eval bindings with the same contracts and process-global semantics.
-- [ ] Add examples, generated builtin docs, the PHP PCNTL guide, CLI/linking docs, and limitations.
-- [ ] Run focused macOS, Linux AArch64, and Linux x86_64 tests plus builtin parity audits.
+- [x] Register target-aware PCNTL availability for the PHP 8.4 surface.
+- [x] Add the `elephc-pcntl` bridge and stable panic-free process-control ABI.
+- [x] Add target-aware PCNTL predefined constants and `Pcntl\\QosClass` on macOS.
+- [x] Add shared builtin contracts, AOT home files, typed EIR targets, and backend lowering.
+- [x] Implement process lifecycle calls: fork, exec, wait, waitpid, and waitid.
+- [x] Implement wait-status inspection and resource-usage/siginfo output arrays.
+- [x] Implement last-error, strerror, alarm, getpriority, and setpriority.
+- [x] Implement queued signal handlers, manual dispatch, async safe points, and handler lookup.
+- [x] Implement signal masks, sigwaitinfo, and sigtimedwait with target-specific siginfo.
+- [x] Implement Linux namespaces, CPU affinity, and CPU queries.
+- [x] Implement macOS QoS enum and get/set calls.
+- [x] Add Magician/eval bindings with the same contracts and process-global semantics.
+- [x] Add examples, generated builtin docs, the PHP PCNTL guide, CLI/linking docs, and limitations.
+- [x] Run focused macOS, Linux AArch64, and Linux x86_64 tests plus builtin parity audits.
 
 ## Scope and authoritative baseline
 
