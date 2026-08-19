@@ -69,13 +69,14 @@ pub struct Function {
     /// PHP lexical class scope inherited by methods and closures declared inside them.
     pub lexical_class: Option<String>,
     pub flags: FunctionFlags,
-    /// Slots the epilogue must never release: values this frame BORROWS rather than owns.
+    /// Slots the epilogue must never release: values this frame borrows or already moved.
     ///
-    /// The inliner transplants a callee's parameter slots (and its directly-returned slots)
-    /// into the host, where they hold a +0 borrow the host never acquired. It used to signal
-    /// that by remapping their `LocalKind` to `HiddenTemp` — but `local_kind_needs_epilogue_cleanup`
-    /// sweeps `HiddenTemp` too, so the exclusion was a no-op and the host released a reference it
-    /// did not own. A read-only `array` parameter called in a loop therefore died with
+    /// The inliner transplants a callee's parameter slots and directly-returned slots into
+    /// the host. Parameters hold a +0 borrow the host never acquired; returned slots have
+    /// transferred their ownership to the continuation result. It used to signal that by
+    /// remapping their `LocalKind` to `HiddenTemp` — but `local_kind_needs_epilogue_cleanup`
+    /// sweeps `HiddenTemp` too, so the exclusion was a no-op and the host released a reference
+    /// it did not own. A read-only `array` parameter called in a loop therefore died with
     /// `heap debug detected bad refcount` under `-O`, while `-O0` was clean.
     pub no_epilogue_cleanup_slots: std::collections::HashSet<LocalSlotId>,
 }

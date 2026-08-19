@@ -799,6 +799,104 @@ fn inliner_inlines_destructor_free_string_helper() {
     assert!(validate_module(&module).is_ok());
 }
 
+/// Verifies an unwindable helper that directly returns an owned local remains a real call,
+/// preserving the callee frame that releases the local if allocation or PHP execution throws.
+#[test]
+fn inliner_skips_unwindable_owned_direct_return_local() {
+    let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
+    let source_data = module.data.intern_string("owned");
+
+    let mut callee = Function::new("owned_or_throw".to_string(), IrType::Str, PhpType::Str);
+    let owned_slot = callee.add_local(
+        Some("owned".to_string()),
+        IrType::Str,
+        PhpType::Str,
+        LocalKind::PhpLocal,
+    );
+    {
+        let mut builder = Builder::new(&mut callee);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let source = builder.emit_const_str(source_data);
+        let owned = builder
+            .emit(
+                Op::StrPersist,
+                vec![source],
+                None,
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Owned,
+            )
+            .unwrap();
+        builder.emit(
+            Op::StoreLocal,
+            vec![owned],
+            Some(Immediate::LocalSlot(owned_slot)),
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        let one = builder.emit_const_i64(1);
+        let shift = builder.emit_const_i64(-1);
+        let _ = builder.emit(
+            Op::IShl,
+            vec![one, shift],
+            None,
+            IrType::I64,
+            PhpType::Int,
+            Ownership::NonHeap,
+        );
+        let returned = builder
+            .emit(
+                Op::LoadLocal,
+                vec![],
+                Some(Immediate::LocalSlot(owned_slot)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Borrowed,
+            )
+            .unwrap();
+        builder.terminate(Terminator::Return {
+            value: Some(returned),
+        });
+    }
+    module.add_function(callee);
+
+    let mut caller = Function::new("call_owned_or_throw".to_string(), IrType::Str, PhpType::Str);
+    {
+        let mut builder = Builder::new(&mut caller);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let callee_name = module.data.intern_function_name("owned_or_throw");
+        let result = builder
+            .emit(
+                Op::Call,
+                vec![],
+                Some(Immediate::Data(callee_name)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Owned,
+            )
+            .unwrap();
+        builder.terminate(Terminator::Return {
+            value: Some(result),
+        });
+    }
+    module.add_function(caller);
+
+    let changed = inline_small_functions(&mut module);
+    assert!(!changed, "unwindable owned return local must preserve its callee frame");
+    let caller = module
+        .functions
+        .iter()
+        .find(|function| function.name == "call_owned_or_throw")
+        .unwrap();
+    assert!(caller.instructions.iter().any(|instruction| instruction.op == Op::Call));
+    assert!(validate_module(&module).is_ok());
+}
+
 /// Verifies the inliner rejects a callee whose return cleanup is path-sensitive:
 /// one branch returns a local string slot directly, while another returns an
 /// unrelated string value. The coarse local-kind remap cannot model that safely.
