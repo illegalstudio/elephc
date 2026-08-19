@@ -14,9 +14,7 @@ function token_min_length(): int {
 
 #[Export]
 function validate_token(string $token): int {
-    // Returns 0 on accept, 1 on reject. Matches the v1 error-channel convention
-    // (`int32_t` status, outparams for richer data, `elephc_last_error()` for a
-    // human-readable message — none of which we need for this trivial demo).
+    // Returns 0 on accept, 1 on reject through the unchanged scalar export ABI.
     if (strlen($token) >= token_min_length()) {
         return 0;
     }
@@ -26,4 +24,13 @@ function validate_token(string $token): int {
 #[Export]
 function add_i64(int $a, int $b): int {
     return $a + $b;
+}
+
+#[Export]
+function roundtrip(string $input): string {
+    if ($input === "__elephc_fail__") {
+        throw new RuntimeException("requested roundtrip failure");
+    }
+
+    return $input;
 }

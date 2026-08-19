@@ -2,4 +2,5 @@
 *.o
 *.so
 *.dylib
+lib*.h
 host

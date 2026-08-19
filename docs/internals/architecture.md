@@ -367,8 +367,8 @@ src/
 │   │   ├── target.rs          Platform / Arch / Target definitions and derived codegen properties
 │   │   ├── linux_transform.rs Linux post-emit transforms, syscall mapping, C-symbol remapping
 │   │   └── toolchain.rs       Assembler / linker invocation
-│   ├── cdylib.rs              C-ABI export trampolines + lifecycle symbols for --emit cdylib
-│   ├── visibility.rs          ELF .hidden directives for internal globals in cdylib emission
+│   ├── cdylib.rs              Scalar/owned-string C-ABI boundaries + lifecycle/error/memory symbols
+│   ├── visibility.rs          ELF hidden / Mach-O private visibility for internal cdylib globals
 │   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
 │   ├── data_section.rs        String/float literal .data section
 │   ├── emit.rs                Assembly text buffer

@@ -1074,10 +1074,10 @@ statics, and static class properties all reset between requests). Run it with
 - [x] `.dylib` / `.so` output on all supported targets (macOS aarch64, Linux aarch64, Linux x86_64)
 - [ ] `.a` static library output
 - [ ] Multi-file library compilation
-- [x] Symbol visibility control — ELF cdylibs hide every internal global; the dynamic symbol table exposes only `#[Export]` trampolines and the `elephc_init`/`elephc_shutdown`/`elephc_last_error`/`elephc_free` lifecycle entry points
-- [ ] String return values from exported functions (host frees via `elephc_free`)
-- [ ] Auto-generated C header file
-- [ ] Null-terminated string convention for C interop
+- [x] Symbol visibility control — ELF hidden and Mach-O private-extern directives keep every compiler/runtime/CRT implementation symbol private; the public table contains only `#[Export]` trampolines plus `elephc_abi_version`, `elephc_init`, `elephc_shutdown`, `elephc_last_error`, and `elephc_free`
+- [x] Binary-safe string return values for the exact `string -> string` export ABI — status/out-parameters, independent caller ownership through `elephc_free`, and recoverable PHP-exception/allocation failures
+- [x] Deterministic auto-generated C header beside each cdylib, including ABI/status constants, resolved prototypes, C++ guards, and ownership/lifetime comments
+- [ ] Null-terminated string convention for C interop (owned string results currently include a convenience trailing NUL, but pointer/length remains the authoritative binary-safe ABI)
 - [x] Stateful FFI callback trampolines — generate C-ABI-compatible trampoline symbols for descriptor-backed callables passed to extern `callable` parameters, retaining descriptor/capture/receiver environments for supported scalar/ptr signatures and documenting constraints for C APIs without userdata/context slots
 - [ ] `pkg-config` generation
 - [ ] FFI documentation for C, Rust, Python, Go

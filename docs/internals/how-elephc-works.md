@@ -179,7 +179,7 @@ If you tried `$x = "hello"` after `$x = 10`, the type checker would reject it �
 
 On successful type checking, elephc also runs a warning pass that reports issues such as unused variables and unreachable code. On failing compilations, the parser and checker both try to recover conservatively so they can often report more than one independent error in a single run.
 
-After checking, an exports scan (`src/exports.rs`) collects every top-level function marked `#[Export]` and validates its signature against the C-ABI marshaling rules. The result only matters when compiling with `--emit cdylib` — in the default executable mode any `#[Export]` attributes are reported with a warning and ignored. See [Shared Libraries](../beyond-php/cdylib.md).
+After checking, an exports scan (`src/exports.rs`) collects every top-level function marked `#[Export]`, validates its signature against the C-ABI marshaling rules, and assigns a collision-checked C identifier (`Demo\add` becomes `Demo_add`). For exact `string -> string` exports, the post-lowering call-graph check traverses free functions, fixed constructors, methods, and statically invoked closures; it rejects transitively reachable `exit`/`die`, `eval`, dynamic construction, foreign calls, and other opaque invocation paths that cannot prove process termination unreachable. The result only matters when compiling with `--emit cdylib` — in the default executable mode any `#[Export]` attributes are reported with a warning and ignored. See [Shared Libraries](../beyond-php/cdylib.md).
 
 ## Phase 11: Post-typecheck constant propagation
 
@@ -376,7 +376,7 @@ On Linux, elephc invokes the native assembler/linker for the requested target.
 
 The `.o` file is deleted after linking. The result is a standalone executable.
 
-With `--emit cdylib` the same flow produces a shared library instead: codegen emits position-independent code with no `main` entry, a PIC variant of the runtime object is prepared (cached separately by its assembly hash), and the linker is invoked with `-dylib` (macOS) or `-shared` (Linux) to produce `lib<name>.dylib` / `lib<name>.so`.
+With `--emit cdylib` the same flow produces a shared library instead: codegen emits position-independent code with no `main` entry, a PIC variant of the runtime object is prepared (cached separately by its assembly hash), and the linker is invoked with `-dylib` (macOS) or `-shared` (Linux) to produce `lib<name>.dylib` / `lib<name>.so`. A deterministic `lib<name>.h` is written beside the linked artifact with the resolved public prototypes, status constants, and ownership contract.
 
 ## Phase 18: Execution
 
