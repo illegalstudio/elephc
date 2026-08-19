@@ -799,3 +799,95 @@ return function_exists("extension_loaded");"#,
     assert_eq!(values.output, format!("110{curl_digit}"));
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// REGRESSION (CI flake, `curl-feature-contract` job): a shell command that could not be
+/// SPAWNED must not be reported as a command that ran and printed nothing.
+///
+/// The runner used to end in `.output().map(|o| o.stdout).unwrap_or_default()`, collapsing
+/// the two. On a loaded runner `posix_spawn` fails with `EAGAIN`, so one `exec()` in an
+/// otherwise-passing test silently answered `""` — measured here directly: 2560 concurrent
+/// `/bin/sh -c "printf spread"` spawns under `ulimit -u 900` produced 1177 `EAGAIN`s, every
+/// one of which the old code called "printed nothing". `false` is php-src's own failure
+/// value (`php_exec` returning `FAILURE` ends in `RETURN_FALSE`).
+///
+/// Driven through `eval_process_outcome_result` rather than by inducing a real spawn
+/// failure, so the test is DETERMINISTIC: reproducing the failure for real needs
+/// process-table pressure, which is precisely the nondeterminism a regression test must not
+/// depend on.
+#[test]
+fn a_failed_spawn_reports_false_rather_than_an_empty_command() {
+    for name in ["exec", "shell_exec", "system", "passthru"] {
+        let mut values = FakeOps::default();
+        let result = eval_process_outcome_result(name, EvalShellOutcome::SpawnFailed, &mut values)
+            .expect("spawn failure must be a value, not a fatal");
+        assert_eq!(
+            values.get(result),
+            FakeValue::Bool(false),
+            "{name}() must report a failed spawn as false"
+        );
+        assert_eq!(
+            values.output, "",
+            "{name}() must not echo anything for a command that never ran"
+        );
+    }
+}
+
+/// NEGATIVE CONTROL for the test above, and the one that makes it meaningful: a command that
+/// genuinely RAN and printed nothing keeps every answer it always had. Without this, a fix
+/// that simply reported `false` whenever the output was empty would pass the regression test
+/// while breaking `system()`/`passthru()`, whose normal successful return is exactly the
+/// empty-output shape.
+#[test]
+fn a_successful_command_with_no_output_keeps_its_php_return_value() {
+    // All three string answers land as `String("")` in the fake — `string_bytes_value` on
+    // empty, UTF-8-clean bytes and `string("")` converge — while `passthru` is PHP `null`.
+    let cases: [(&str, FakeValue); 4] = [
+        ("exec", FakeValue::String(String::new())),
+        ("shell_exec", FakeValue::String(String::new())),
+        ("system", FakeValue::String(String::new())),
+        ("passthru", FakeValue::Null),
+    ];
+    for (name, expected) in cases {
+        let mut values = FakeOps::default();
+        let result =
+            eval_process_outcome_result(name, EvalShellOutcome::Ran(Vec::new()), &mut values)
+                .expect("a successful empty command must be a value");
+        assert_eq!(
+            values.get(result),
+            expected,
+            "{name}() must keep its documented return for a command that printed nothing"
+        );
+        assert_eq!(values.output, "", "{name}() must echo nothing for empty output");
+    }
+}
+
+/// The same regression as `a_failed_spawn_reports_false_rather_than_an_empty_command`, but
+/// driven END TO END through real PHP source and a REAL spawn failure, so it exercises the
+/// runner itself rather than only the outcome mapping.
+///
+/// The failure is induced deterministically with an over-long argument: `posix_spawn` rejects
+/// it with `E2BIG` (`ArgumentListTooLong`, raw os error 7) every time, on every machine, with
+/// no process-table pressure and no timing involved. `E2BIG` is a standing condition, so the
+/// runner classifies it as non-transient and fails immediately without burning the retry
+/// budget — which this test also pins by construction, since a retried command would still
+/// end in the same answer but take five sleeps to get there.
+///
+/// BEFORE THE FIX this asserted `""`: the runner's `.unwrap_or_default()` reported a command
+/// that could not be created as one that ran and printed nothing.
+#[test]
+fn a_command_that_cannot_be_spawned_is_false_not_an_empty_string() {
+    // Comfortably past `ARG_MAX` on every supported platform.
+    let oversized = "x".repeat(4 * 1024 * 1024);
+    let source = format!("return exec(\"printf {oversized}\");");
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.get(result),
+        FakeValue::Bool(false),
+        "a command that could not be spawned must be false, never an empty string"
+    );
+}
