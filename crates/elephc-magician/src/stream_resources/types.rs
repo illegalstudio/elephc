@@ -463,7 +463,12 @@ impl EvalOpenMode {
     }
 }
 
-/// Builds a unique temporary path for eval `tmpfile()`.
+/// Builds a unique temporary path for eval `tmpfile()` and every ephemeral stream.
+///
+/// `open_ephemeral_stream` backs `php://memory`, `data:` and buffered `phar://` writes
+/// with a file created here and unlinked immediately, so this is on the path of far more
+/// eval streams than `tmpfile()` alone — which is why its uniqueness has to hold under
+/// concurrency. See `eval_tmpfile_nonce`.
 pub(super) fn eval_tmpfile_path() -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(
@@ -474,10 +479,143 @@ pub(super) fn eval_tmpfile_path() -> PathBuf {
     path
 }
 
-/// Returns a monotonic-ish nonce for temporary file names.
-pub(super) fn eval_tmpfile_nonce() -> u128 {
-    std::time::SystemTime::now()
+/// Returns a nonce for temporary file names that no other call in this process repeats.
+///
+/// THE WALL CLOCK ALONE IS NOT A NONCE. `SystemTime::now()` is *reported* in
+/// nanoseconds, but `CLOCK_REALTIME` only ADVANCES in whole microseconds on macOS (and
+/// at a granularity of its own, coarser than a nanosecond, elsewhere), so `as_nanos()`
+/// hands the same number to every caller inside one tick. Two threads opening an
+/// ephemeral eval stream in the same tick therefore built the SAME path, and the loser's
+/// `create_new` failed with `AlreadyExists` in the window between the winner's create and
+/// its `remove_file` — which `open_ephemeral_stream` turns into `None`, i.e. an eval
+/// `fopen("php://memory")` answering `false` for a stream with nothing wrong with it.
+///
+/// The process-wide sequence is what makes the nonce unique: `fetch_add` gives every
+/// caller a distinct number no matter how many threads ask at once. The clock stays
+/// because the sequence restarts at zero in each process, so it is the clock — with the
+/// process id — that separates one run of the compiler from the next.
+pub(super) fn eval_tmpfile_nonce() -> String {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let clock = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{clock}-{sequence}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    /// Threads: enough to have several callers inside one clock tick.
+    const RACING_THREADS: usize = 8;
+
+    /// Barrier-aligned attempts per thread.
+    const RACING_ROUNDS: usize = 256;
+
+    /// Runs `body` on `RACING_THREADS` threads, realigned on a barrier every round.
+    ///
+    /// The barrier is what turns a probabilistic race into a forced one: every round
+    /// releases all the threads at the same instant, so they call the code under test
+    /// inside the same microsecond rather than whenever the scheduler feels like it.
+    ///
+    /// `body` MUST NOT PANIC. A thread that unwinds never reaches the next
+    /// `Barrier::wait`, which hangs its siblings forever instead of failing the test —
+    /// so the callers below record what they saw and assert after the join.
+    fn race<T: Send + 'static>(
+        body: impl Fn(&mut EvalStreamResources) -> T + Send + Clone + 'static,
+    ) -> Vec<Vec<T>> {
+        let barrier = Arc::new(Barrier::new(RACING_THREADS));
+        let mut handles = Vec::with_capacity(RACING_THREADS);
+        for _ in 0..RACING_THREADS {
+            let barrier = Arc::clone(&barrier);
+            let body = body.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut observed = Vec::with_capacity(RACING_ROUNDS);
+                for _ in 0..RACING_ROUNDS {
+                    barrier.wait();
+                    // A fresh table per round so the round's file is closed and
+                    // dropped before the next one opens, keeping the fd count at
+                    // one per thread instead of one per round.
+                    let mut resources = EvalStreamResources::default();
+                    observed.push(body(&mut resources));
+                }
+                observed
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("racing thread"))
+            .collect()
+    }
+
+    /// Two threads must never build the SAME temporary path.
+    ///
+    /// This is the mechanism itself, with no filesystem in the way. The wall clock is
+    /// not a nonce: `SystemTime::now()` is *reported* in nanoseconds, but
+    /// `CLOCK_REALTIME` only ADVANCES in whole microseconds on macOS, so a name built
+    /// from the clock alone is identical for every caller inside one tick. Against a
+    /// clock-only nonce the barrier makes duplicates near-certain over these rounds;
+    /// with the sequence counter no interleaving can produce one.
+    #[test]
+    fn concurrent_temporary_paths_are_all_distinct() {
+        let observed = race(|_| eval_tmpfile_path());
+        let total = observed.iter().map(Vec::len).sum::<usize>();
+        let distinct: HashSet<&PathBuf> = observed.iter().flatten().collect();
+        assert_eq!(distinct.len(), total, "two threads built the same temporary path");
+    }
+
+    /// Concurrent eval `fopen("php://memory")` calls must all return a stream.
+    ///
+    /// The PHP-visible symptom of the same defect, through the real opener. The loser
+    /// of a path collision failed `create_new` with `AlreadyExists` in the window
+    /// between the winner's create and its `remove_file`, and `open_ephemeral_stream`
+    /// turns any such error into `None` — an eval `fopen()` answering `false` for a
+    /// stream that has nothing wrong with it. Counted rather than asserted inside the
+    /// threads, because a panic there would deadlock the barrier.
+    #[test]
+    fn concurrent_ephemeral_streams_never_fail_to_open() {
+        let failures = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&failures);
+        let observed = race(move |resources: &mut EvalStreamResources| {
+            if resources.open_path("php://memory", "w+").is_none() {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let total = observed.iter().map(Vec::len).sum::<usize>();
+        assert_eq!(
+            failures.load(Ordering::Relaxed),
+            0,
+            "php://memory failed to open in {total} concurrent attempts"
+        );
+    }
+
+    /// A temporary path must stay inside the temp directory and carry this process id.
+    ///
+    /// The NEGATIVE CONTROL for the two tests above: a bare global counter would make
+    /// every path distinct within this process and pass both, while colliding with
+    /// every OTHER elephc process on the machine. The sequence restarts at zero in each
+    /// process, so the process id is what keeps concurrent processes apart, and the
+    /// directory is what keeps the file out of the compiling project.
+    #[test]
+    fn temporary_paths_stay_scoped_to_this_process_and_the_temp_directory() {
+        let path = eval_tmpfile_path();
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "{} is not in the temp directory",
+            path.display()
+        );
+        let name = path
+            .file_name()
+            .expect("temporary file name")
+            .to_string_lossy()
+            .into_owned();
+        let prefix = format!("elephc-magician-tmpfile-{}-", std::process::id());
+        assert!(name.starts_with(&prefix), "{name} does not start with {prefix}");
+        assert!(name.len() > prefix.len(), "{name} carries no nonce");
+    }
 }
