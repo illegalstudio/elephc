@@ -331,21 +331,52 @@ one resource (the graph) and serves nothing else.
 
 A program you launch is profiled by launching it. A program already serving
 traffic is profiled by **connecting to it** — same command, an address instead of
-a path:
+a path.
 
-```bash
-# On the server:
-ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./app     # or a Unix socket path
+Three things are separate here, and the whole model is easier to hold once you
+have seen them apart. Compiling gives the binary the **capability**. Starting it
+with an address opens the **endpoint**. Reading it takes the **key** — always,
+whatever the transport:
 
-# From your machine, with the build key in hand:
-elephc monitor 127.0.0.1:9411 --key app.key
-elephc monitor https://app.internal:9411 --key app.key
-elephc monitor /run/app.sock --key app.key
+```console
+$ elephc --with-monitoring service.php
+probe build fingerprint: 9b28f463
+Compiled 'service.php' -> 'service'
+
+$ ls service*
+service   service.key   service.php          # a binary and a key. No socket.
+
+$ ./service &                                # runs like any other binary
+$ ls /tmp/app.sock
+ls: /tmp/app.sock: No such file or directory
+
+$ ELEPHC_PROBE_ADDR=/tmp/app.sock ./service &        # now the endpoint opens
+$ ls -l /tmp/app.sock
+srw-------  1 you  wheel  0 Aug 19 10:45 /tmp/app.sock
+
+$ elephc monitor /tmp/app.sock --key service.key
+connected to probe build 9b28f463
+samples: 86
+...
 ```
 
-Nothing about the binary changes: the same `--with-monitoring` artifact you run
-in CI is the one serving here. `ELEPHC_PROBE_ADDR` decides whether it *listens*,
-not whether it can be profiled.
+The fingerprint printed at compile time and the one printed on connecting are the
+same value, which is the point of printing it twice: it says you reached the
+build you think you reached, and it appears *after* the handshake, so it reports
+what was proven rather than what was claimed.
+
+`ELEPHC_PROBE_ADDR` takes a `host:port` just as happily, which is the same flow
+with the socket replaced by a listening port:
+
+```bash
+ELEPHC_PROBE_ADDR=127.0.0.1:9411 ./app       # on the server
+
+elephc monitor 127.0.0.1:9411 --key app.key            # from your machine
+elephc monitor https://app.internal:9411 --key app.key # across a network
+```
+
+Nothing about the binary changes between those runs: the same
+`--with-monitoring` artifact you run in CI is the one serving here.
 
 `--with-monitoring` generates a **32-byte build key**, embeds it in the binary,
 writes it to a `<binary>.key` sidecar, and prints its public fingerprint at
@@ -371,7 +402,7 @@ program a **control channel** — a socket on fd 3 — and possession of that ch
 is the credential: there is nothing to copy, leak, or replay, because it exists
 only for as long as the two processes are connected.
 
-`ELEPHC_PROBE_ADDR` needs stating plainly, because it does two things. It opens
+`ELEPHC_PROBE_ADDR` does two things, and only one of them is obvious. It opens
 the endpoint — which still refuses everyone who cannot prove the build key, so
 that half is a deployment decision like binding a port. But it also **arms the
 sampler**, and a run started with it writes a profile to stderr at exit whether
