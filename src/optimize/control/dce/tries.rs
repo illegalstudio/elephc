@@ -13,6 +13,7 @@ use super::guards::clear_guards_for_name;
 use super::state::GuardState;
 use super::tail::append_tail_to_fallthrough_path;
 use super::writes::{invalidated_guards_for_finally_paths, invalidated_guards_for_throw_paths};
+use crate::optimize::exception_flow::{active_catch_reachability, with_caught_throw_binding};
 
 /// Applies DCE to a `try` statement, processing try-body, catch clauses, and finally-body
 /// with appropriate guard state.
@@ -29,26 +30,37 @@ pub(super) fn dce_try_stmt(
     guards: &GuardState,
 ) -> Vec<Stmt> {
     let try_body = dce_block_with_guards(try_body, guards.clone());
-    let catch_guards = invalidated_guards_for_throw_paths(guards, &try_body);
+    let catch_reachability = active_catch_reachability(&try_body, &catches);
     let catches: Vec<_> = catches
         .into_iter()
-        .map(|catch| {
-            let mut body_guards = catch_guards.clone();
+        .zip(catch_reachability)
+        .filter_map(|(catch, reachability)| {
+            if !reachability.is_reachable() {
+                return None;
+            }
+            let mut body_guards = invalidated_guards_for_throw_paths(
+                guards,
+                &try_body,
+                Some(&reachability.incoming),
+            );
             if let Some(variable) = catch.variable.as_deref() {
                 clear_guards_for_name(&mut body_guards, variable);
             }
-            crate::parser::ast::CatchClause {
+            let variable = catch.variable.clone();
+            let body = with_caught_throw_binding(
+                variable.as_deref(),
+                &reachability.incoming,
+                || dce_block_with_guards(catch.body, body_guards),
+            );
+            Some(crate::parser::ast::CatchClause {
                 exception_types: catch.exception_types,
-                variable: catch.variable,
-                body: dce_block_with_guards(catch.body, body_guards),
-            }
+                variable,
+                body,
+            })
         })
         .collect();
-    let catches = if block_may_throw(&try_body) {
-        normalize_catch_clauses(drop_shadowed_catch_clauses(normalize_catch_clauses(catches)))
-    } else {
-        Vec::new()
-    };
+    let catches =
+        normalize_catch_clauses(drop_shadowed_catch_clauses(normalize_catch_clauses(catches)));
     let finally_guards = invalidated_guards_for_finally_paths(guards, &try_body, &catches);
     let finally_body =
         normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, finally_guards)));
@@ -107,26 +119,37 @@ pub(super) fn dce_try_stmt_with_tail(
     guards: &GuardState,
 ) -> Vec<Stmt> {
     let try_body = dce_block_with_guards(try_body, guards.clone());
-    let catch_guards = invalidated_guards_for_throw_paths(guards, &try_body);
+    let catch_reachability = active_catch_reachability(&try_body, &catches);
     let catches: Vec<_> = catches
         .into_iter()
-        .map(|catch| {
-            let mut body_guards = catch_guards.clone();
+        .zip(catch_reachability)
+        .filter_map(|(catch, reachability)| {
+            if !reachability.is_reachable() {
+                return None;
+            }
+            let mut body_guards = invalidated_guards_for_throw_paths(
+                guards,
+                &try_body,
+                Some(&reachability.incoming),
+            );
             if let Some(variable) = catch.variable.as_deref() {
                 clear_guards_for_name(&mut body_guards, variable);
             }
-            crate::parser::ast::CatchClause {
+            let variable = catch.variable.clone();
+            let body = with_caught_throw_binding(
+                variable.as_deref(),
+                &reachability.incoming,
+                || dce_block_with_guards(catch.body, body_guards),
+            );
+            Some(crate::parser::ast::CatchClause {
                 exception_types: catch.exception_types,
-                variable: catch.variable,
-                body: dce_block_with_guards(catch.body, body_guards),
-            }
+                variable,
+                body,
+            })
         })
         .collect();
-    let catches = if block_may_throw(&try_body) {
-        normalize_catch_clauses(drop_shadowed_catch_clauses(normalize_catch_clauses(catches)))
-    } else {
-        Vec::new()
-    };
+    let catches =
+        normalize_catch_clauses(drop_shadowed_catch_clauses(normalize_catch_clauses(catches)));
     let finally_guards = invalidated_guards_for_finally_paths(guards, &try_body, &catches);
     let finally_body =
         normalize_optional_block(finally_body.map(|body| dce_block_with_guards(body, finally_guards)));

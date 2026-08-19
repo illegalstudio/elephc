@@ -28,6 +28,7 @@ use switches::dce_switch_stmt;
 use tail::dce_stmt_with_tail;
 use tries::dce_try_stmt;
 use writes::*;
+use crate::optimize::exception_flow::invalidate_active_caught_throw_bindings_for_stmt;
 
 /// Applies DCE to a statement block with default guard state.
 pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
@@ -72,6 +73,7 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
             .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
         for stmt in &dce_stmt {
             advance_guards_after_stmt(stmt, &mut guards);
+            invalidate_active_caught_throw_bindings_for_stmt(stmt);
         }
         eliminated.extend(dce_stmt);
         if stops_here {
@@ -703,7 +705,9 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                     variadic_by_ref,
                     variadic_type,
                     return_type,
-                    body: dce_block_with_guards(body, function_guards),
+                    body: with_function_scope(|| {
+                        dce_block_with_guards(body, function_guards)
+                    }),
                 },
                 span,
                 source_mode,
