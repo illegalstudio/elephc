@@ -363,6 +363,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_global_epilogue_cleanup(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
+    // Everything below is a call on a torn-down frame, and on x86_64 that frame
+    // is 8 bytes off what the ABI promises a callee.
+    abi::emit_teardown_call_alignment(ctx.emitter);
     emit_probe_dump(ctx);
     if ctx.gc_stats {
         emit_gc_stats(ctx);

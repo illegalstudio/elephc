@@ -353,6 +353,71 @@ echo "ok";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// The teardown calls in main's epilogue must run on an aligned stack (x86_64).
+///
+/// System V AMD64 wants `rsp` 16-byte aligned AT the call. After `leave`, `rsp`
+/// holds its entry value — already 8 past alignment — so every call emitted
+/// after the frame restore is off by 8. The hand-written runtime helpers
+/// tolerate that; compiled Rust does not, because an aligned SSE store to a
+/// stack temporary faults.
+///
+/// It cost a CI shard on linux-x86_64 alone: `main` ran, printed its output, and
+/// died in the profiler's exit dump — the last call before the exit syscall and
+/// the first one made of Rust. AArch64 keeps `sp` aligned by construction, so
+/// the same commit was green there and the failure looked like a profiler bug
+/// for an afternoon.
+///
+/// Read from the assembly because that is where the property lives, and because
+/// this host cannot execute the architecture that has it.
+#[test]
+fn test_cli_x86_64_epilogue_aligns_before_its_teardown_calls() {
+    let dir = make_cli_test_dir("elephc_cli_x86_epilogue_align");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php\nfunction f(int $n): int { return $n + 1; }\necho f(1);\n").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit x86_64 assembly");
+    assert!(
+        output.status.success(),
+        "cross-target --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected target assembly output");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+
+    // Anchor on the teardown calls themselves, walk BACK to the frame restore
+    // that precedes them, and require the realignment in between. Scanning
+    // forward from `leave` and stopping at the first alignment was the version
+    // that asserted nothing at all — it never reached a call.
+    let teardown = lines
+        .iter()
+        .position(|line| line.starts_with("call elephc_probe_dump")
+            || line.starts_with("call elephc_instr_dump"))
+        .expect("a monitored build must emit its exit dump");
+    let restore = lines[..teardown]
+        .iter()
+        .rposition(|line| *line == "leave")
+        .expect("the exit dump follows main's frame restore");
+    let between = &lines[restore + 1..teardown];
+    assert!(
+        between.iter().any(|line| line.starts_with("and rsp, -16")),
+        "`{}` is called after `leave` with no realignment between them, so it \
+         runs 8 bytes off the alignment the ABI promises it. Between:\n{}",
+        lines[teardown],
+        between.join("\n")
+    );
+    assert!(
+        !between.iter().any(|line| line.starts_with("call ")),
+        "nothing may be called between the frame restore and the realignment"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies cross-target `--emit-asm` stops before preparing a host-incompatible runtime object.
 #[test]
 fn test_cli_emit_asm_does_not_require_target_assembler() {

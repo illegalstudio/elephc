@@ -1089,6 +1089,38 @@ fn compile_php_monitored(source: &str) -> Result<PathBuf, String> {
     Ok(spawnable_path(source.trim_end_matches(".php")))
 }
 
+/// Explains an empty capture by what the run actually did.
+///
+/// One message covered every cause: "was the target built with
+/// --with-monitoring". For a program that crashed after printing its output —
+/// which is what a CI shard showed, on one architecture only — that is a
+/// confident diagnosis of the wrong thing, and it sent the investigation at the
+/// build flags for an hour. The exit status was there the whole time and nobody
+/// looked at it.
+fn no_profile_reason(status: &process::ExitStatus, binary: &Path) -> String {
+    use std::os::unix::process::ExitStatusExt as _;
+    if let Some(signal) = status.signal() {
+        return format!(
+            "{} was killed by signal {signal} before it could write a profile. \
+             The capture is lost because the run is: the profile is written at exit.",
+            binary.display()
+        );
+    }
+    match status.code() {
+        Some(0) | None => format!(
+            "{} ran and exited cleanly but wrote no profile, so the capability \
+             never switched on. It carries the monitoring marker, so the build is \
+             not the problem — the control channel is.",
+            binary.display()
+        ),
+        Some(code) => format!(
+            "{} exited with status {code} and wrote no profile. Whatever went \
+             wrong there went wrong before the profile was written.",
+            binary.display()
+        ),
+    }
+}
+
 /// Reads a target that carries the monitoring capability exactly: run it, and
 /// render the profile it prints to stderr — the deterministic counterpart to
 /// sampling. Honors `--dot` / `--html`.
@@ -1160,10 +1192,7 @@ fn run_instrument(cmd: &MonitorCommand) -> i32 {
     }
     let mut graph = parse_instrument_dump(&stderr);
     if graph.nodes.is_empty() {
-        eprintln!(
-            "elephc monitor: no profile on stderr — was the target built with \
-             --with-monitoring, and did it reach any PHP function?"
-        );
+        eprintln!("elephc monitor: {}", no_profile_reason(&output.status, &binary));
         return 1;
     }
     print!("{}", instrument_table(&graph));

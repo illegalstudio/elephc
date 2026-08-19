@@ -33,6 +33,7 @@ pub use calls::{
 };
 pub use frame::{
     emit_frame_prologue, emit_frame_restore, emit_frame_slot_address, emit_load_from_address,
+    emit_teardown_call_alignment,
     emit_reg_move, emit_return, emit_store_to_address, emit_store_zero_to_address,
     emit_store_zero_to_local_slot, load_at_offset, load_at_offset_scratch, load_from_caller_stack,
     store_at_offset, store_at_offset_scratch,
