@@ -75,11 +75,12 @@ echo function_exists("StRlEn") ? "M" : "m";');
     assert_eq!(out, "SCM");
 }
 
-/// Verifies eval `function_exists()` sees every compiler-catalog builtin name.
+/// Verifies eval `function_exists()` sees every compiler builtin available on the host target.
 #[test]
 fn test_eval_function_exists_covers_static_builtin_catalog() {
     let mut fragment = String::new();
-    for name in elephc::builtin_metadata::php_visible_builtin_names() {
+    let platform = elephc::codegen_support::platform::Platform::detect_host();
+    for name in elephc::builtin_metadata::php_visible_builtin_names_for_target(platform) {
         let contract = elephc_builtin_contract::lookup(name)
             .expect("compiler-visible builtin must have a shared contract");
         if !matches!(

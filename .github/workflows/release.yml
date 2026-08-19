@@ -172,7 +172,7 @@ jobs:
       # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
       # rather than letting the two lists drift again.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-magician -p elephc-curl
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-magician -p elephc-curl
 
       - name: Build curl-aware Magician staticlib
         run: |
@@ -201,6 +201,7 @@ jobs:
             libelephc_probe.a \
             libelephc_instr.a \
             libelephc_web.a \
+            libelephc_pcntl.a \
             libelephc_magician.a \
             libelephc_curl.a \
             libelephc_magician_curl.a
@@ -364,6 +365,7 @@ jobs:
               lib.install "libelephc_probe.a"
               lib.install "libelephc_instr.a"
               lib.install "libelephc_web.a"
+              lib.install "libelephc_pcntl.a"
               lib.install "libelephc_magician.a"
               lib.install "libelephc_curl.a"
               lib.install "libelephc_magician_curl.a"
@@ -412,6 +414,11 @@ jobs:
               (testpath/"img.php").write('<?php \$im = imagecreatetruecolor(3, 2); echo imagesx(\$im) . "x" . imagesy(\$im);')
               system bin/"elephc", "img.php"
               assert_equal "3x2", shell_output("#{testpath}/img")
+
+              # Exercise the PCNTL bridge from the Homebrew lib/ layout.
+              (testpath/"pcntl.php").write('<?php echo pcntl_getpriority();')
+              system bin/"elephc", "pcntl.php"
+              assert_match(/\A-?\d+\z/, shell_output("#{testpath}/pcntl").strip)
 
               # Exercise the web bridge link path from the Homebrew lib/ layout.
               (testpath/"web.php").write('<?php echo "web-ok";')

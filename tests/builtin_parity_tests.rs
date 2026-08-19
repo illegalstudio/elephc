@@ -289,6 +289,29 @@ fn backend_public_name_sets_derive_from_shared_support() {
     assert_eq!(actual_eval, expected_eval);
 }
 
+/// Verifies target-filtered metadata follows PCNTL's Linux and macOS availability contracts.
+#[test]
+fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
+    use elephc::codegen_support::platform::Platform;
+
+    let macos = elephc::builtin_metadata::php_visible_builtin_names_for_target(Platform::MacOS)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let linux = elephc::builtin_metadata::php_visible_builtin_names_for_target(Platform::Linux)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+    assert!(macos.contains("pcntl_getqos_class"));
+    assert!(macos.contains("pcntl_setqos_class"));
+    assert!(!macos.contains("pcntl_getcpu"));
+    assert!(!macos.contains("pcntl_unshare"));
+
+    assert!(!linux.contains("pcntl_getqos_class"));
+    assert!(!linux.contains("pcntl_setqos_class"));
+    assert!(linux.contains("pcntl_getcpu"));
+    assert!(linux.contains("pcntl_unshare"));
+}
+
 /// Verifies each backend exposes exactly the signature profile selected by the contract.
 #[test]
 fn backend_signature_shapes_derive_from_shared_contracts() {
