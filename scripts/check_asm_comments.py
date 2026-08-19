@@ -33,7 +33,10 @@ def check_file(path: Path) -> list[str]:
     problems: list[str] = []
     for lineno, line in enumerate(text.splitlines(), 1):
         stripped = line.rstrip()
-        if "emitter.instruction" not in stripped or "//" not in stripped:
+        if "emitter.instruction" not in stripped:
+            continue
+        if "//" not in stripped:
+            problems.append(f"{path}:{lineno}: missing inline // comment")
             continue
         pos = stripped.index("//")  # 0-indexed position of the comment
         # The `//` must sit at column 81 (index 80). Lines whose code already
