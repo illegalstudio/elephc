@@ -88,6 +88,16 @@ repository, which is worth knowing before reading it as a regression.
 The first row against the second is the one that decides whether you ship it
 everywhere, and against the release runtime it does not register: a dormant
 binary's cost is a flag check per call, below what this measurement resolves.
+The +3% is paid only while a profile is being taken — every other run, and every
+other request, is the first row.
+
+**Read that percentage as a property of the program, not of the profiler.** What
+profiling actually costs is about **30 ns per PHP function call**; what fraction
+of your wall time that is depends entirely on how much work your functions do.
+The demo service makes 135,351 profiled calls in ~250 ms, which is 4.1 ms — the
++3% above. A program that is almost nothing but calls (two million of them in
+130 ms) pays **+48%** with the same runtime on the same machine. Neither number
+generalizes; `30 ns × your call count` does.
 
 Two things about the method, both learned by getting them wrong. All variants
 are built first and then timed round-robin, each keeping its minimum: timed one
