@@ -65,34 +65,49 @@ It refuses rather than falling back to a lesser profile on purpose. A degraded
 answer that looks like the real one is worse than no answer: you would read the
 numbers as exact and act on them.
 
-What it costs, measured on the demo service (35 functions, ~550 queries):
+What it costs, measured on the demo service (35 instrumented functions, ~550
+queries) running twenty orders:
 
-| | wall time | overhead |
+| | installed elephc | source checkout |
 |---|---|---|
-| built without it | 16.1 ms | — |
-| `--with-monitoring`, nobody asked | 17.1 ms | +6% |
-| `--with-monitoring`, profiling | 20.0 ms | +24% |
-| `--with-monitoring=` 3 functions, profiling | 18.2 ms | +13% |
+| built without it | 247 ms | 252 ms |
+| `--with-monitoring`, nobody asked | +0% | +3% |
+| `--with-monitoring`, profiling | **+3%** | +22% |
+| `--with-monitoring=` 3 functions, profiling | +1% | +6% |
+| what it adds to the binary | +219 KB (+0.6%) | +964 KB (+2.6%) |
+
+Two columns because there are two runtimes. The bridge archive is resolved from
+the directory the compiler itself lives in, so an **installed** elephc links the
+release build of `elephc-instr` and a **source checkout** links the debug one —
+the same instrumentation, one of them unoptimized. The gap is not small: a
+profiled call costs about 30 ns against the release archive and about 165 ns
+against the debug one. The left column is what you pay in production; the right
+column is what you will measure if you benchmark this inside a clone of this
+repository, which is worth knowing before reading it as a regression.
 
 The first row against the second is the one that decides whether you ship it
-everywhere; the binary grows by 985 KB (38.1 → 39.1 MB, +2.6%) on that service.
+everywhere, and against the release runtime it does not register: a dormant
+binary's cost is a flag check per call, below what this measurement resolves.
 
-All four are built first and then timed round-robin, each keeping its minimum.
-Timed one after another instead, this machine drifted far enough between the
-first variant and the last that three named functions came out *slower* than
-instrumenting all thirty-five — an ordering that cannot be true, and a useful
-reminder that a single pass measures the machine as much as the code.
+Two things about the method, both learned by getting them wrong. All variants
+are built first and then timed round-robin, each keeping its minimum: timed one
+after another instead, this machine drifted far enough between the first variant
+and the last that three named functions came out *slower* than instrumenting all
+thirty-five — an ordering that cannot be true. And the figures are CPU time, not
+wall clock. On a busy machine wall clock counts the time a process spent waiting
+for a core, which is the neighbours' work rather than this one's; measured that
+way the same release column moved from +1% to −3% between two passes, and a
+build cannot be faster than the build without it.
 
-What a profiled call costs, measured on a program that is almost nothing but
-calls: **121 ns per call**, down from 149 ns. Two things paid for that. The
-caller→callee map hashed its keys with SipHash — the default, chosen to make
-hash flooding impractical when keys come from outside — and these keys are
-function ids the compiler assigned, which nothing at run time can influence; the
-defence cost more than everything it defended. And the clock was
-`clock_gettime`, 23 ns a read for a value that resolves to one microsecond,
-where the counter register behind it costs 0.33 ns and ticks every 41 ns —
-cheaper *and* twenty-four times finer, which is not a trade at all. Ticks are
-converted to nanoseconds once, at render.
+What a profiled call costs, on a program that is almost nothing but calls:
+**about 30 ns**, from about 43 ns before the two changes below. The caller→callee
+map hashed its keys with SipHash — the default, chosen to make hash flooding
+impractical when keys come from outside — and these keys are function ids the
+compiler assigned, which nothing at run time can influence; the defence cost more
+than everything it defended. And the clock was `clock_gettime`, 23 ns a read for
+a value that resolves to one microsecond, where the counter register behind it
+costs 0.33 ns and ticks every 41 ns — cheaper *and* twenty-four times finer,
+which is not a trade at all. Ticks are converted to nanoseconds once, at render.
 
 ## Quick local profile
 
@@ -508,8 +523,9 @@ elephc --with-monitoring=@hot-functions.txt app.php
 
 Hooks land only on the functions you name; a trailing `*` matches by prefix, and
 `@file` reads one name per line. Everything else runs at full speed — on the demo
-service, profiling all 35 functions costs +24% while three named ones cost +13%
-(full table [above](#building-a-program-that-can-be-profiled)).
+service, profiling all 35 functions costs +3% while three named ones cost +1%
+(+22% and +6% against a source checkout's debug runtime; full table
+[above](#building-a-program-that-can-be-profiled)).
 
 A natural way to build the list is to let a first, whole-program profile pick it:
 profile once, take the functions that dominate, and name those.
@@ -961,7 +977,7 @@ Because both captures are exact, a call-count change of `+1` is a real `+1`
 (the sampled `--baseline` above is the statistical equivalent for a `--live` capture).
 
 The trade-off is overhead: two clock reads and a bookkeeping update per call.
-That is the +24% in the table above, and it is why the hooks stay dormant until
+That is the +3% in the table above, and it is why the hooks stay dormant until
 asked and why `--with-monitoring=<names>` exists — a production service profiles
 what matters and leaves the rest at full speed. Inlined functions fold into their
 caller (they have no prologue to hook), exactly as with `--counters`; and time

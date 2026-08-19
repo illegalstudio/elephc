@@ -626,20 +626,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&output);
     }
 
-    /// Every bridge crate must appear in the lists CI and the Docker scripts build.
+    /// Every bridge crate must appear in the lists CI, the Docker scripts and the
+    /// release workflow build.
     ///
-    /// The archives are produced by an explicit `cargo build -p …` list that lives in
-    /// six places outside Rust, and `cargo test` alone never emits a staticlib. So a
-    /// bridge added to the table above but not to those lists compiles fine, passes
+    /// The archives are produced by explicit `cargo build -p …` lists that live
+    /// outside Rust, and `cargo test` alone never emits a staticlib. So a bridge
+    /// added to the table above but not to those lists compiles fine, passes
     /// review, and then fails only in CI with `required Elephc bridge X could not be
     /// found` — which is exactly how `elephc-instr` and `elephc-probe` shipped
     /// unbuildable. Deriving the expectation from the table is the point: the next
     /// bridge is covered without anyone remembering this test exists.
+    ///
+    /// `release.yml` was the list nobody checked, and it is the one users meet:
+    /// it built eight of eleven, so every published tarball carried a compiler
+    /// that refused `--with-monitoring`.
     #[test]
     fn every_bridge_crate_is_in_the_build_lists() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let lists = [
             ".github/workflows/ci.yml",
+            ".github/workflows/release.yml",
             "scripts/test-linux-arm64.sh",
             "scripts/test-linux-x86_64.sh",
         ];
@@ -686,6 +692,58 @@ mod tests {
                 "{rel} never archives `{}`, so a sharded run compiling with --{} \
                  fails with `required Elephc bridge {} could not be found`",
                 bridge.archive_filename(),
+                bridge.flag_name,
+                bridge.lib_name
+            );
+        }
+    }
+
+    /// Every bridge's staticlib must be PACKED into both shipping channels.
+    ///
+    /// Building it and shipping it are two lists again, and here the second one
+    /// is what a user receives: the archive is resolved from the directory the
+    /// compiler lives in (or its sibling `lib/`, which is the Homebrew layout),
+    /// so an installed elephc finds only what was packed. Eight of eleven were —
+    /// `elephc_probe`, `elephc_instr` and `elephc_magician` were in none of the
+    /// three lists — so every published release answered `elephc
+    /// --with-monitoring app.php` with `required Elephc bridge elephc_instr could
+    /// not be found`: a whole feature that worked in every checkout and
+    /// throughout CI, and in no release at all. `elephc_magician` had been
+    /// missing since before v0.26.4.
+    ///
+    /// Nothing that runs inside this repository can notice that, because the
+    /// archives are always present in `target/`. Only the shipped artifact is
+    /// short, so the packing lists themselves are what have to be checked — and
+    /// checked SEPARATELY: the tarball and the Homebrew formula are two lists in
+    /// one file, and a name present in one reads as present to any test that
+    /// searches the whole file.
+    #[test]
+    fn every_bridge_staticlib_ships_in_the_release_tarball() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let rel = ".github/workflows/release.yml";
+        let Ok(body) = std::fs::read_to_string(root.join(rel)) else {
+            panic!("cannot read {rel}; the release packaging moved");
+        };
+        let marker = "Update Homebrew tap";
+        let split = body
+            .find(marker)
+            .unwrap_or_else(|| panic!("{rel} no longer has an `{marker}` step to split on"));
+        let (tarball, formula) = body.split_at(split);
+        for bridge in BRIDGES {
+            let archive = bridge.archive_filename();
+            assert!(
+                tarball.contains(&archive),
+                "{rel} never packs `{archive}` into the tarball, so an elephc \
+                 installed from a release fails --{} with `required Elephc bridge \
+                 {} could not be found`",
+                bridge.flag_name,
+                bridge.lib_name
+            );
+            assert!(
+                formula.contains(&format!("lib.install \"{archive}\"")),
+                "{rel} never installs `{archive}` in the Homebrew formula, so an \
+                 elephc installed with brew fails --{} with `required Elephc \
+                 bridge {} could not be found`",
                 bridge.flag_name,
                 bridge.lib_name
             );
