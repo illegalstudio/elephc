@@ -36,9 +36,17 @@ pub(super) const MAX_PHAR_ENTRY_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
 /// Absolute ceiling for a whole gzip/bzip2 wrapped archive after decompression.
 pub(super) const MAX_PHAR_ARCHIVE_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
 
-pub(super) static EXTRACT_BUFFER: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 pub(super) static WRITE_STREAMS: OnceLock<Mutex<Vec<Option<WriteStream>>>> = OnceLock::new();
 thread_local! {
+    /// Result buffer holding the bytes of the most recent extract/list/read call,
+    /// whose pointer [`publish_result`] hands to the caller. Per-thread rather than
+    /// process-global for a lifetime reason: refilling it reallocates, freeing the
+    /// bytes any pointer handed out of it still points at, so a shared buffer would
+    /// let one thread's call invalidate a pointer another thread is still reading
+    /// (`elephc-pdo` shipped that bug and it reached CI as garbage bytes).
+    pub(super) static EXTRACT_BUFFER: std::cell::RefCell<Vec<u8>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+
     /// Password used to read and write traditional-PKWARE (ZipCrypto) encrypted ZIP
     /// entries, set through [`elephc_phar_set_zip_password`]; `None` until provided.
     /// When set, zip phars are written with their entries encrypted. Thread-local:

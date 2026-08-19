@@ -20,15 +20,16 @@
 //!   a JPEG begins just after the `Exif\0\0` APP1 prefix; the extractor locates
 //!   that prefix to rebase the offset, then slices the original bytes.
 
+use std::cell::RefCell;
 use std::io::Cursor;
 use std::os::raw::c_char;
-use std::sync::{Mutex, OnceLock};
+use std::thread::LocalKey;
 
 use exif::{In, Value};
 
 use crate::exif_tags::php_tag_name;
 use crate::xfer::{set_kv, set_out};
-use crate::{ffi_guard, lock_recover, cstr_arg, format_to_imagetype};
+use crate::{ffi_guard, cstr_arg, format_to_imagetype};
 
 /// Dimensions and IMAGETYPE code of the most recently extracted thumbnail.
 #[derive(Clone, Copy, Default)]
@@ -38,10 +39,23 @@ struct ThumbMeta {
     image_type: i64,
 }
 
-/// Static cell holding the last thumbnail's metadata, read back by the accessors.
-fn thumb_meta() -> &'static Mutex<ThumbMeta> {
-    static CELL: OnceLock<Mutex<ThumbMeta>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(ThumbMeta::default()))
+impl ThumbMeta {
+    /// The "no thumbnail extracted yet" value, spelled as a `const` so the
+    /// per-thread cell initializes without a lazy-init check on every access.
+    const ZERO: Self = Self {
+        width: 0,
+        height: 0,
+        image_type: 0,
+    };
+}
+
+/// Per-thread cell holding the last thumbnail's metadata, read back by the
+/// accessors.
+fn thumb_meta() -> &'static LocalKey<RefCell<ThumbMeta>> {
+    thread_local! {
+        static CELL: RefCell<ThumbMeta> = const { RefCell::new(ThumbMeta::ZERO) };
+    }
+    &CELL
 }
 
 /// Renders one rational `num/den` component as PHP does.
@@ -160,7 +174,7 @@ pub unsafe extern "C" fn elephc_exif_thumbnail(path: *const c_char) -> i64 {
         let Some((thumb, meta)) = extract_thumbnail(&bytes) else {
             return -1;
         };
-        *lock_recover(thumb_meta()) = meta;
+        thumb_meta().with(|slot| *slot.borrow_mut() = meta);
         set_out(thumb)
     })
 }
@@ -228,7 +242,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_width() -> i64 {
     ffi_guard(-1, move || {
-        lock_recover(thumb_meta()).width
+        thumb_meta().with(|slot| slot.borrow().width)
     })
 }
 
@@ -236,7 +250,7 @@ pub extern "C" fn elephc_exif_thumb_width() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_height() -> i64 {
     ffi_guard(-1, move || {
-        lock_recover(thumb_meta()).height
+        thumb_meta().with(|slot| slot.borrow().height)
     })
 }
 
@@ -244,6 +258,6 @@ pub extern "C" fn elephc_exif_thumb_height() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_exif_thumb_type() -> i64 {
     ffi_guard(-1, move || {
-        lock_recover(thumb_meta()).image_type
+        thumb_meta().with(|slot| slot.borrow().image_type)
     })
 }

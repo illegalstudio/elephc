@@ -1,6 +1,6 @@
 //! Purpose:
 //! Shared binary-transfer plumbing for the metadata bridges (Exif + IPTC). Holds
-//! three process-global cells — an input staging buffer, an output buffer, and a
+//! three per-thread cells — an input staging buffer, an output buffer, and a
 //! key/value result list — plus the C ABI accessors the prelude uses to move
 //! bytes across the boundary without raw PHP-owned pointers.
 //!
@@ -15,46 +15,56 @@
 //! Key details:
 //! - elephc programs are single-threaded and every transfer is a synchronous
 //!   fill→consume pair, so a pointer returned here stays valid until the next call
-//!   that rewrites the same cell. The prelude always copies (`ptr_read_string`)
-//!   before issuing another bridge call.
+//!   that rewrites the same cell ON THAT THREAD. The prelude always copies
+//!   (`ptr_read_string`) before issuing another bridge call. The cells are
+//!   per-thread because rewriting one reallocates it: a process-global cell would
+//!   let one thread's `resize` free the buffer another thread is still writing
+//!   into or reading from.
 //! - Values are arbitrary bytes (IPTC datasets are binary, EXIF UserComment may
 //!   contain NULs), so the key/value accessors report a length and the prelude
 //!   uses the length-based `ptr_read_string`, never NUL scanning.
 
-use std::sync::{Mutex, OnceLock};
+use std::cell::RefCell;
+use std::thread::LocalKey;
 
-use crate::{ffi_guard, lock_recover};
+use crate::ffi_guard;
 
-/// Input staging buffer: the prelude resizes it via `elephc_img_in_ptr`, copies a
-/// PHP string into it with `ptr_write_string`, then calls a parser/embedder that
-/// reads the first `len` bytes back through [`in_bytes`].
-fn in_cell() -> &'static Mutex<Vec<u8>> {
-    static CELL: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
-    CELL.get_or_init(Mutex::default)
+/// Per-thread input staging buffer: the prelude resizes it via `elephc_img_in_ptr`,
+/// copies a PHP string into it with `ptr_write_string`, then calls a
+/// parser/embedder that reads the first `len` bytes back through [`in_bytes`].
+fn in_cell() -> &'static LocalKey<RefCell<Vec<u8>>> {
+    thread_local! {
+        static CELL: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+    &CELL
 }
 
-/// Output buffer holding the most recent produced bytes (an EXIF field value, a
-/// tag name, an extracted thumbnail, or an embedded-IPTC JPEG). The producer
+/// Per-thread output buffer holding the most recent produced bytes (an EXIF field
+/// value, a tag name, an extracted thumbnail, or an embedded-IPTC JPEG). The producer
 /// returns the byte length and the prelude copies it out via `elephc_img_out_ptr`
 /// + `ptr_read_string`.
-fn out_cell() -> &'static Mutex<Vec<u8>> {
-    static CELL: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
-    CELL.get_or_init(Mutex::default)
+fn out_cell() -> &'static LocalKey<RefCell<Vec<u8>>> {
+    thread_local! {
+        static CELL: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+    &CELL
 }
 
-/// Parsed `key => value` result list, populated by an EXIF or IPTC parse and
-/// enumerated by the prelude. A key may repeat (IPTC datasets such as keywords
+/// Per-thread parsed `key => value` result list, populated by an EXIF or IPTC parse
+/// and enumerated by the prelude. A key may repeat (IPTC datasets such as keywords
 /// occur multiple times); the prelude appends repeats into a sub-array.
-fn kv_list() -> &'static Mutex<Vec<(String, Vec<u8>)>> {
-    static CELL: OnceLock<Mutex<Vec<(String, Vec<u8>)>>> = OnceLock::new();
-    CELL.get_or_init(Mutex::default)
+fn kv_list() -> &'static LocalKey<RefCell<Vec<(String, Vec<u8>)>>> {
+    thread_local! {
+        static CELL: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    }
+    &CELL
 }
 
 /// Replaces the output buffer with `bytes` and returns its length, the value the
 /// producing entry point hands back to the prelude.
 pub(crate) fn set_out(bytes: Vec<u8>) -> i64 {
     let len = bytes.len() as i64;
-    *lock_recover(out_cell()) = bytes;
+    out_cell().with(|slot| *slot.borrow_mut() = bytes);
     len
 }
 
@@ -64,19 +74,21 @@ pub(crate) fn in_bytes(len: i64) -> Option<Vec<u8>> {
     if len < 0 {
         return None;
     }
-    let guard = lock_recover(in_cell());
     let len = len as usize;
-    if guard.len() < len {
-        return None;
-    }
-    Some(guard[..len].to_vec())
+    in_cell().with(|slot| {
+        let slot = slot.borrow();
+        if slot.len() < len {
+            return None;
+        }
+        Some(slot[..len].to_vec())
+    })
 }
 
 /// Stores a freshly parsed `key => value` list, returning the entry count for the
 /// parser to return to the prelude.
 pub(crate) fn set_kv(list: Vec<(String, Vec<u8>)>) -> i64 {
     let n = list.len() as i64;
-    *lock_recover(kv_list()) = list;
+    kv_list().with(|slot| *slot.borrow_mut() = list);
     n
 }
 
@@ -89,10 +101,12 @@ pub extern "C" fn elephc_img_in_ptr(len: i64) -> *mut u8 {
         if len <= 0 {
             return std::ptr::null_mut();
         }
-        let mut guard = lock_recover(in_cell());
-        guard.clear();
-        guard.resize(len as usize, 0);
-        guard.as_mut_ptr()
+        in_cell().with(|slot| {
+            let mut slot = slot.borrow_mut();
+            slot.clear();
+            slot.resize(len as usize, 0);
+            slot.as_mut_ptr()
+        })
     })
 }
 
@@ -102,7 +116,7 @@ pub extern "C" fn elephc_img_in_ptr(len: i64) -> *mut u8 {
 #[no_mangle]
 pub extern "C" fn elephc_img_out_ptr() -> *const u8 {
     ffi_guard(std::ptr::null(), move || {
-        lock_recover(out_cell()).as_ptr()
+        out_cell().with(|slot| slot.borrow().as_ptr())
     })
 }
 
@@ -110,7 +124,7 @@ pub extern "C" fn elephc_img_out_ptr() -> *const u8 {
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_count() -> i64 {
     ffi_guard(-1, move || {
-        lock_recover(kv_list()).len() as i64
+        kv_list().with(|slot| slot.borrow().len() as i64)
     })
 }
 
@@ -119,12 +133,13 @@ pub extern "C" fn elephc_img_kv_count() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_key(index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = lock_recover(kv_list());
-        let Some((key, _)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
+        let Some(bytes) = kv_list().with(|slot| {
+            let slot = slot.borrow();
+            let (key, _) = usize::try_from(index).ok().and_then(|i| slot.get(i))?;
+            Some(key.clone().into_bytes())
+        }) else {
             return -1;
         };
-        let bytes = key.clone().into_bytes();
-        drop(guard);
         set_out(bytes)
     })
 }
@@ -134,12 +149,13 @@ pub extern "C" fn elephc_img_kv_key(index: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_img_kv_val(index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = lock_recover(kv_list());
-        let Some((_, val)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
+        let Some(bytes) = kv_list().with(|slot| {
+            let slot = slot.borrow();
+            let (_, val) = usize::try_from(index).ok().and_then(|i| slot.get(i))?;
+            Some(val.clone())
+        }) else {
             return -1;
         };
-        let bytes = val.clone();
-        drop(guard);
         set_out(bytes)
     })
 }

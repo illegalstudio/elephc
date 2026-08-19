@@ -16,33 +16,37 @@
 //!   sub-unit coefficients (rotation/scale) and pixel translations round-trip with
 //!   ample precision without ever passing an `f64` through the extern ABI.
 //! - elephc programs are single-threaded and each use is a synchronous
-//!   reset → push×N → consume sequence, so the static buffer needs no per-call
-//!   identity.
+//!   reset → push×N → consume sequence, so the buffer needs no per-call identity.
+//!   It is per-thread all the same, so that two threads describing a matrix at once
+//!   cannot interleave their pushes into one another's.
 
-use std::sync::{Mutex, OnceLock};
+use std::cell::RefCell;
+use std::thread::LocalKey;
 
-use crate::{ffi_guard, lock_recover};
+use crate::ffi_guard;
 
 /// Scale factor for the 16.16 fixed-point values pushed across the ABI.
 const FIXED_ONE: f64 = 65536.0;
 
-/// Static buffer holding the most recently pushed matrix, in row-major order.
-fn fbuf_cell() -> &'static Mutex<Vec<f64>> {
-    static FBUF: OnceLock<Mutex<Vec<f64>>> = OnceLock::new();
-    FBUF.get_or_init(Mutex::default)
+/// Per-thread buffer holding the most recently pushed matrix, in row-major order.
+fn fbuf_cell() -> &'static LocalKey<RefCell<Vec<f64>>> {
+    thread_local! {
+        static FBUF: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    }
+    &FBUF
 }
 
 /// Returns a copy of the buffered matrix values (in push order) for the consuming
 /// bridge call to apply.
 pub(crate) fn values() -> Vec<f64> {
-    lock_recover(fbuf_cell()).clone()
+    fbuf_cell().with(|slot| slot.borrow().clone())
 }
 
 /// Clears the float buffer before a new matrix is described.
 #[no_mangle]
 pub extern "C" fn elephc_img_fbuf_reset() {
     ffi_guard((), move || {
-        lock_recover(fbuf_cell()).clear();
+        fbuf_cell().with(|slot| slot.borrow_mut().clear());
     })
 }
 
@@ -50,6 +54,6 @@ pub extern "C" fn elephc_img_fbuf_reset() {
 #[no_mangle]
 pub extern "C" fn elephc_img_fbuf_push(fixed16: i64) {
     ffi_guard((), move || {
-        lock_recover(fbuf_cell()).push(fixed16 as f64 / FIXED_ONE);
+        fbuf_cell().with(|slot| slot.borrow_mut().push(fixed16 as f64 / FIXED_ONE));
     })
 }

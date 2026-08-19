@@ -22,18 +22,22 @@
 //!   rather than via the integer midpoint algorithm; this is visually equivalent
 //!   for the supported sizes and keeps the code compact.
 
+use std::cell::RefCell;
 use std::f64::consts::PI;
-use std::sync::{Mutex, OnceLock};
+use std::thread::LocalKey;
 
 use image::{Rgba, RgbaImage};
 
 use crate::{ffi_guard, lock_recover, blend_over, images, unpack_color, unpack_pair};
 
-/// Static point buffer for the polygon builder, filled by `elephc_img_poly_add`
-/// and consumed by `elephc_img_poly_line` / `elephc_img_poly_fill`.
-fn poly_cell() -> &'static Mutex<Vec<(i64, i64)>> {
-    static POLY: OnceLock<Mutex<Vec<(i64, i64)>>> = OnceLock::new();
-    POLY.get_or_init(Mutex::default)
+/// Per-thread point buffer for the polygon builder, filled by `elephc_img_poly_add`
+/// and consumed by `elephc_img_poly_line` / `elephc_img_poly_fill`. Per-thread so
+/// two threads building a polygon at once cannot interleave their points.
+fn poly_cell() -> &'static LocalKey<RefCell<Vec<(i64, i64)>>> {
+    thread_local! {
+        static POLY: RefCell<Vec<(i64, i64)>> = const { RefCell::new(Vec::new()) };
+    }
+    &POLY
 }
 
 /// Plots a single pixel with bounds checking, compositing over the existing
@@ -488,7 +492,7 @@ pub extern "C" fn elephc_img_fill_to_border(handle: i64, x: i64, y: i64, border:
 #[no_mangle]
 pub extern "C" fn elephc_img_poly_reset() {
     ffi_guard((), move || {
-        lock_recover(poly_cell()).clear();
+        poly_cell().with(|slot| slot.borrow_mut().clear());
     })
 }
 
@@ -496,7 +500,7 @@ pub extern "C" fn elephc_img_poly_reset() {
 #[no_mangle]
 pub extern "C" fn elephc_img_poly_add(x: i64, y: i64) {
     ffi_guard((), move || {
-        lock_recover(poly_cell()).push((x, y));
+        poly_cell().with(|slot| slot.borrow_mut().push((x, y)));
     })
 }
 
@@ -505,7 +509,7 @@ pub extern "C" fn elephc_img_poly_add(x: i64, y: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_poly_line(handle: i64, color: i64, closed: i64) {
     ffi_guard((), move || {
-        let pts = lock_recover(poly_cell()).clone();
+        let pts = poly_cell().with(|slot| slot.borrow().clone());
         if pts.len() < 2 {
             return;
         }
@@ -528,7 +532,7 @@ pub extern "C" fn elephc_img_poly_line(handle: i64, color: i64, closed: i64) {
 #[no_mangle]
 pub extern "C" fn elephc_img_poly_fill(handle: i64, color: i64) {
     ffi_guard((), move || {
-        let pts = lock_recover(poly_cell()).clone();
+        let pts = poly_cell().with(|slot| slot.borrow().clone());
         let mut guard = lock_recover(images());
         if let Some(obj) = guard.get_mut(&handle) {
             let b = obj.alpha_blending;
