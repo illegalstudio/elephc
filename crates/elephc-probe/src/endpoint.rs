@@ -111,8 +111,28 @@ fn serve(path: &str) {
         return;
     }
     let _ = std::fs::remove_file(path);
-    let Ok(listener) = UnixListener::bind(path) else {
-        return;
+    let listener = match UnixListener::bind(path) {
+        Ok(listener) => listener,
+        Err(error) => {
+            // Say so. Failing silently here means the operator set
+            // ELEPHC_PROBE_ADDR, watched nothing happen, and had no way to tell
+            // a refused bind from a program that ignores the variable — and the
+            // commonest cause is invisible: a `sockaddr_un` path holds about 104
+            // bytes, and a path longer than that fails with nothing to read.
+            eprintln!(
+                "elephc-probe: cannot serve on {path}: {error}{}",
+                if path.len() > 100 {
+                    format!(
+                        " (the path is {} bytes; a Unix socket address holds about 104, \
+                         so keep it in /tmp or /run)",
+                        path.len()
+                    )
+                } else {
+                    String::new()
+                }
+            );
+            return;
+        }
     };
     // Restrict the socket to the owner: the handshake authenticates, but there
     // is no reason to let other local users even reach it.

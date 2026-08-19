@@ -371,12 +371,21 @@ program a **control channel** — a socket on fd 3 — and possession of that ch
 is the credential: there is nothing to copy, leak, or replay, because it exists
 only for as long as the two processes are connected.
 
-`ELEPHC_PROBE_ADDR` is worth being precise about: it decides whether the program
-*listens*, not whether it can be profiled. Setting it exposes an endpoint that
-still refuses everyone who cannot prove the build key, so it is a deployment
-decision like binding a port — but it is a decision, and an endpoint that exists
-is an endpoint someone can knock on. Nothing you can put in the environment
-turns profiling on by itself.
+`ELEPHC_PROBE_ADDR` needs stating plainly, because it does two things. It opens
+the endpoint — which still refuses everyone who cannot prove the build key, so
+that half is a deployment decision like binding a port. But it also **arms the
+sampler**, and a run started with it writes a profile to stderr at exit whether
+or not anyone ever connects. Measured, not inferred: a program run with the
+variable set prints `elephc-probe:` lines on its way out.
+
+So it is the one switch that turns collection on without a key. It cannot read
+anything back — that still takes the handshake — but if a stray profile on stderr
+would surprise you, do not set it and use `elephc monitor <binary>` instead, which
+asks over the control channel and leaves the environment alone.
+
+If the address is a path and the bind fails, the program says so on stderr. The
+commonest cause is invisible otherwise: a `sockaddr_un` holds about 104 bytes, so
+a socket under a deep directory never binds.
 
 ### One request in production
 
