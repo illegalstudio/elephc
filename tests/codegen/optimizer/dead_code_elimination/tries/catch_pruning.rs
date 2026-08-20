@@ -785,3 +785,74 @@ run(true);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies caught-variable rebinds in `for` initialization and update positions do not retain
+/// the stale incoming exception domain. Both runtime `B` handlers remain reachable.
+#[test]
+fn test_dead_code_elimination_invalidates_caught_domain_inside_for() {
+    let out = compile_and_run(
+        r#"<?php
+class A extends Exception {}
+class B extends Exception {}
+try {
+    throw new A("a");
+} catch (Exception $e) {
+    try {
+        for ($e = new B("b"); ; ) {
+            throw $e;
+        }
+    } catch (A $nested) {
+        echo "stale";
+    } catch (B $nested) {
+        echo "b";
+    }
+}
+try {
+    throw new A("a");
+} catch (Exception $e) {
+    $i = 0;
+    try {
+        for (; $i < 2; $e = new B("b")) {
+            if ($i === 1) {
+                throw $e;
+            }
+            $i++;
+        }
+    } catch (A $nested) {
+        echo "stale-update";
+    } catch (B $nested) {
+        echo "u";
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "bu");
+}
+
+/// Verifies a caught variable rebound while evaluating an `if` condition cannot retain its
+/// incoming exception domain in the branch body. The reachable `B` handler prints "b".
+#[test]
+fn test_dead_code_elimination_invalidates_caught_domain_after_condition_rebind() {
+    let out = compile_and_run(
+        r#"<?php
+class A extends Exception {}
+class B extends Exception {}
+try {
+    throw new A("a");
+} catch (Exception $e) {
+    try {
+        if (($e = new B("b")) instanceof B) {
+            throw $e;
+        }
+    } catch (A $nested) {
+        echo "stale";
+    } catch (B $nested) {
+        echo "b";
+    }
+}
+"#,
+    );
+
+    assert_eq!(out, "b");
+}

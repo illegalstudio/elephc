@@ -325,14 +325,7 @@ impl ExceptionFlowAnalysis {
             },
             _ => None,
         };
-        match stmt_invalidation(stmt) {
-            Invalidation::Names(names) => {
-                for name in names {
-                    bindings.remove(&name);
-                }
-            }
-            Invalidation::All => bindings.clear(),
-        }
+        invalidate_throw_bindings(bindings, stmt_invalidation(stmt));
         if let Some((name, thrown)) = replacement {
             bindings.insert(name, thrown);
         }
@@ -345,6 +338,9 @@ impl ExceptionFlowAnalysis {
         bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
+        let mut effective_bindings = bindings.clone();
+        invalidate_throw_bindings(&mut effective_bindings, stmt_invalidation(stmt));
+        let bindings = &effective_bindings;
         match &stmt.kind {
             StmtKind::Synthetic(body)
             | StmtKind::NamespaceBlock { body, .. }
@@ -523,6 +519,9 @@ impl ExceptionFlowAnalysis {
         bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
+        let mut effective_bindings = bindings.clone();
+        invalidate_throw_bindings(&mut effective_bindings, expr_invalidation(expr));
+        let bindings = &effective_bindings;
         match &expr.kind {
             ExprKind::Throw(inner) => self
                 .expr_throws(inner, bindings, class_context)
@@ -907,6 +906,21 @@ impl ExceptionFlowAnalysis {
                 domains_overlap(&self.hierarchy, left_domain, right_domain)
             })
         })
+    }
+}
+
+/// Removes caught-variable domains that a statement or expression may rewrite.
+fn invalidate_throw_bindings(
+    bindings: &mut HashMap<String, ThrownTypes>,
+    invalidation: Invalidation,
+) {
+    match invalidation {
+        Invalidation::Names(names) => {
+            for name in names {
+                bindings.remove(&name);
+            }
+        }
+        Invalidation::All => bindings.clear(),
     }
 }
 
