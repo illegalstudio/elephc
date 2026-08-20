@@ -543,6 +543,32 @@ impl BridgeStaticlib {
 mod tests {
     use super::*;
 
+    /// Every bridge must be built and archived by CI, or its shards cannot link.
+    ///
+    /// A shard runs from a nextest archive with no source tree, so a bridge missing from
+    /// either list fails at link time on CI while passing locally, where the compiler
+    /// builds bridges on demand.
+    #[test]
+    fn every_bridge_is_built_and_archived_by_ci() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+            .expect("read ci workflow");
+        let archive = std::fs::read_to_string(root.join(".config/nextest.toml"))
+            .expect("read nextest config");
+        for bridge in BRIDGES {
+            assert!(
+                workflow.contains(&format!("-p {}", bridge.crate_name)),
+                "{} is missing from BRIDGE_CRATES in .github/workflows/ci.yml",
+                bridge.crate_name
+            );
+            assert!(
+                archive.contains(&format!("debug/lib{}.a", bridge.lib_name)),
+                "lib{}.a is missing from the archive include list in .config/nextest.toml",
+                bridge.lib_name
+            );
+        }
+    }
+
     /// Creates an empty directory unique across parallel test threads.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

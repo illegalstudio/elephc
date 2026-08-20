@@ -26,6 +26,9 @@ relative-to = "target"
 path = "debug/libelephc_bcmath.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_iconv.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_phar.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
