@@ -15,6 +15,7 @@ use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
+use crate::types::iconv_constants::ICONV_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
@@ -92,6 +93,11 @@ impl Checker {
         for (name, _value) in ARRAY_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in ICONV_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        constants.insert("ICONV_IMPL".to_string(), PhpType::Str);
+        constants.insert("ICONV_VERSION".to_string(), PhpType::Str);
         for (name, _value) in JSON_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }

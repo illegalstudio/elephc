@@ -75,6 +75,18 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
     match name.trim_start_matches('\\') {
+        "ICONV_MIME_DECODE_STRICT" => {
+            Some(EvalPredefinedConstant::Int(EVAL_ICONV_MIME_DECODE_STRICT))
+        }
+        "ICONV_MIME_DECODE_CONTINUE_ON_ERROR" => Some(EvalPredefinedConstant::Int(
+            EVAL_ICONV_MIME_DECODE_CONTINUE_ON_ERROR,
+        )),
+        // The runtime iconv provider is fixed by the platform: Apple ships GNU libiconv,
+        // and elephc's Linux support targets glibc.
+        "ICONV_IMPL" => Some(EvalPredefinedConstant::String(
+            elephc_iconv::implementation_name(cfg!(target_os = "macos")),
+        )),
+        "ICONV_VERSION" => Some(EvalPredefinedConstant::String(elephc_iconv::ICONV_VERSION)),
         "PHP_URL_SCHEME" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_SCHEME)),
         "PHP_URL_HOST" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_HOST)),
         "PHP_URL_PORT" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PORT)),
