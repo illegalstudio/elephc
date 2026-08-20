@@ -17,6 +17,16 @@ use crate::codegen::WebIsolation;
 use crate::codegen::platform::Target;
 use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
 
+/// The bridge crates `--with-monitoring` turns on.
+///
+/// They are also the two the `--with-<name>` surface must not offer by name.
+/// Both are ordinary bridges, so the accepted set — derived from the bridge
+/// table — would list `instrument` and `probe` for free, and the error text for
+/// a mistyped capability would advertise the two names this whole flag exists to
+/// retire. Naming them once here keeps the flag and its exclusion from drifting
+/// apart.
+const MONITORING_BRIDGES: [&str; 2] = ["instrument", "probe"];
+
 /// Non-bridge runtime capabilities accepted by `--with-<name>`.
 const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex"];
 
@@ -95,6 +105,11 @@ Version: ", env!("CARGO_PKG_VERSION"), "
 Arguments:
   <source-file>           Tagged .php or tagless .lfc source file to compile
 
+Subcommands:
+  native <COMMAND>        Native dependency management (see `elephc native --help`)
+  monitor <PROGRAM>       Sample a compiled program into a PHP-level Speedscope
+                          profile (see `elephc monitor --help`)
+
 Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
@@ -116,6 +131,14 @@ Codegen:
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
   --gc-stats              Print GC statistics at exit
+  --counters              Embed per-function call counters (BSS) and print exact call
+                          counts to stderr at exit
+  --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
+                          asks. Exact per-function time, allocations, retained
+                          objects, DB queries, wait and call counts. Inlined
+                          functions fold into their caller (as with --counters).
+  --with-monitoring=NAMES Embed it for the named functions only (comma list, trailing
+                          `*` matches by prefix, or @file with one name per line)
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
@@ -125,7 +148,7 @@ Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex)
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex, monitoring)
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
@@ -145,6 +168,12 @@ pub(crate) struct CliConfig {
     pub(crate) filename: String,
     pub(crate) heap_size: usize,
     pub(crate) gc_stats: bool,
+    /// Embed per-function call counters and print exact counts to stderr at exit.
+    pub(crate) counters: bool,
+    /// Embed exact per-function instrumentation (enter/exit timing + edges);
+    /// prints an exact profile to stderr at exit. Inlined functions fold into
+    /// their caller, exactly as with `--counters`.
+    pub(crate) instrument: crate::codegen::Instrumentation,
     pub(crate) heap_debug: bool,
     /// Opt-in: make the one documented OPcache divergence (D5) LOUD instead of silent.
     ///
@@ -205,10 +234,21 @@ pub(crate) enum Command {
     Compile(CliConfig),
     /// One validated `elephc native` subcommand.
     Native(NativeCommand),
+    /// One validated `elephc monitor` sampling invocation.
+    Monitor(crate::monitor::MonitorCommand),
 }
 
 /// Parses the exact top-level `native` selector before falling back to legacy compilation.
 pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) == Some("monitor") {
+        return match crate::monitor::parse_monitor_args(&args[2..]) {
+            Ok(command) => Command::Monitor(command),
+            Err(error) => {
+                eprintln!("{error}\n\n{}", crate::monitor::MONITOR_USAGE);
+                process::exit(1);
+            }
+        };
+    }
     if args.get(1).map(String::as_str) != Some("native") {
         return Command::Compile(parse_compile_args(args));
     }
@@ -242,6 +282,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
 
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
+    let mut counters = false;
+    let mut instrument = crate::codegen::Instrumentation::Off;
     let mut heap_debug = false;
     let mut strict_opcache = false;
     let mut emit_ir = false;
@@ -305,6 +347,35 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             php_version_provenance = crate::php_profile::Provenance::Flag;
         } else if arg == "--gc-stats" {
             gc_stats = true;
+        } else if arg == "--counters" {
+            counters = true;
+        } else if let Some(spec) = arg.strip_prefix("--with-monitoring=") {
+            // Selective instrumentation: exactness where it was asked for, full
+            // speed everywhere else. `@file` reads one name per line, because a
+            // useful set outgrows a command line quickly — and a set produced by
+            // a previous sampled run is exactly how you would build one.
+            let names = match spec.strip_prefix('@') {
+                Some(path) => match std::fs::read_to_string(path) {
+                    Ok(text) => text
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>(),
+                    Err(error) => fail(&format!("--with-monitoring=@{path}: {error}")),
+                },
+                None => spec
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>(),
+            };
+            if names.is_empty() {
+                fail("--with-monitoring=<names> needs at least one function name");
+            }
+            instrument = crate::codegen::Instrumentation::Only(names);
+            with_crates.extend(MONITORING_BRIDGES.iter().map(|s| s.to_string()));
         } else if arg == "--heap-debug" {
             heap_debug = true;
         } else if arg == "--strict-opcache" {
@@ -407,6 +478,15 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             // so a typo never silently no-ops.
             if name == "web" {
                 web = true;
+            } else if name == "monitoring" {
+                // One flag for the whole capability. `--probe` and `--instrument`
+                // used to be two ways to ask a related question, and the answer to
+                // "which one do I want" was always "it depends where I am running"
+                // — which is exactly the distinction this removes. The binary
+                // carries both mechanisms and stays dormant; `monitor` decides at
+                // run time what to collect.
+                instrument = crate::codegen::Instrumentation::All;
+                with_crates.extend(MONITORING_BRIDGES.iter().map(|s| s.to_string()));
             } else if with_flag_is_known(name) {
                 with_crates.insert(name.to_string());
             } else {
@@ -467,6 +547,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         filename,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         strict_opcache,
         emit_ir,
@@ -496,7 +578,13 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
 }
 
 /// Returns whether a `--with-<name>` suffix selects a bridge or runtime capability.
+///
+/// The monitoring bridges are excluded: they are how `--with-monitoring` is
+/// built, not something to ask for by mechanism.
 fn with_flag_is_known(name: &str) -> bool {
+    if MONITORING_BRIDGES.contains(&name) {
+        return false;
+    }
     crate::linker::bridge_lib_for_flag(name).is_some()
         || RUNTIME_CAPABILITY_FLAGS.contains(&name)
 }
@@ -505,7 +593,9 @@ fn with_flag_is_known(name: &str) -> bool {
 fn with_flag_names() -> Vec<&'static str> {
     crate::linker::crate_flag_names()
         .into_iter()
+        .filter(|name| !MONITORING_BRIDGES.contains(name))
         .chain(RUNTIME_CAPABILITY_FLAGS.iter().copied())
+        .chain(std::iter::once("monitoring"))
         .collect()
 }
 
@@ -673,6 +763,36 @@ fn fail(message: &str) -> ! {
 
 #[cfg(test)]
 mod tests {
+    /// `--with-<name>` must not offer the two mechanism names by another door.
+    ///
+    /// `instrument` and `probe` are ordinary bridges, and the accepted set is
+    /// derived from the bridge table — so without an explicit exclusion the CLI
+    /// keeps accepting `--with-instrument` and, worse, *advertises* both names in
+    /// the error text every user sees after a typo. That is the surface the
+    /// single `--with-monitoring` flag exists to replace, reachable by a route
+    /// nobody thought to check.
+    #[test]
+    fn the_with_surface_offers_the_capability_not_its_mechanisms() {
+        let names = super::with_flag_names();
+        for hidden in super::MONITORING_BRIDGES {
+            assert!(
+                !names.contains(&hidden),
+                "--with-{hidden} is still offered; the accepted set is what the \
+                 error text advertises"
+            );
+            assert!(
+                !super::with_flag_is_known(hidden),
+                "--with-{hidden} is still accepted"
+            );
+        }
+        assert!(
+            names.contains(&"monitoring"),
+            "the capability that replaced them must be listed"
+        );
+        // The exclusion must be surgical: every other bridge stays offered.
+        assert!(names.contains(&"pdo") && names.contains(&"tls"));
+    }
+
     use super::*;
 
     /// Extracts the compile configuration returned for a legacy invocation.

@@ -279,7 +279,7 @@ fn static_string_callback_entry(
 
 /// Emits a descriptor callback wrapper that adapts regex matches to callable descriptors.
 fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
-    let wrapper_label = ctx.next_label("preg_replace_descriptor_callback_wrapper");
+    let wrapper_label = ctx.next_global_label("preg_replace_descriptor_callback_wrapper");
     let done_label = ctx.next_label("preg_replace_descriptor_callback_after_wrapper");
     let wrapper = DeferredCallbackWrapper {
         label: wrapper_label.clone(),

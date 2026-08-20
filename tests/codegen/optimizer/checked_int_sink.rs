@@ -116,7 +116,10 @@ buffer_free($values);
     assert!(unoptimized.contains("= ichecked_add "));
     assert!(preheader.contains("= ichecked_add_to_int "));
     assert!(preheader.contains("origin: licm"));
-    assert!(!body.contains("= ichecked_add_to_int "));
+    // The loop counter's own `$i++` is scalar as well, so an `ichecked_add_to_int` in the
+    // body is expected and says nothing about hoisting. What must not be there is the
+    // invariant index computation, which LICM stamps with its own origin when it moves it.
+    assert!(!body.contains("origin: licm"));
     assert_eq!(compile_and_run(source), "777");
 }
 

@@ -1538,6 +1538,24 @@ unsafe extern "C" fn x_destroy_agg(p_arg: *mut c_void) {
 }
 
 impl SqliteStmt {
+    /// The original SQL text of this prepared statement (with `?` placeholders,
+    /// not the bound values), recovered from the native handle — no need to
+    /// store it at prepare time. Empty if the statement was already finalized.
+    /// Used by the exact profiler to list distinct statements and their counts.
+    pub fn query_text(&self) -> String {
+        if self.ptr.is_null() {
+            return String::new();
+        }
+        unsafe {
+            let value = ffi::sqlite3_sql(self.ptr);
+            if value.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(value).to_string_lossy().into_owned()
+            }
+        }
+    }
+
     /// Returns SQLite's source table name for result column `i`, or an empty
     /// string for expressions and out-of-range columns.
     pub fn column_table_name(&self, i: i64) -> String {

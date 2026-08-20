@@ -64,6 +64,12 @@ pub fn inject_line_directives(asm: &str, source_path: &str, platform: Platform) 
             continue;
         }
         if let Some(marker) = line.split("@fn ").nth(1) {
+            // Compiler-generated bodies (`_class_propinit_*`, …) have no user-written PHP
+            // source; a DW_TAG_subprogram for them only buries the real functions — they
+            // were 47 of the 54 subprograms a small program emitted.
+            if marker.contains("synthetic=1") {
+                continue;
+            }
             if let (Some(name), Some(symbol)) =
                 (marker_value(marker, "name"), marker_value(marker, "symbol"))
             {

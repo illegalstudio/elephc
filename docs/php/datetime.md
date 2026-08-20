@@ -46,7 +46,7 @@ $abbr = DateTimeZone::listAbbreviations();
 echo $abbr["cest"][0]["timezone_id"];               // Europe/Berlin
 ```
 
-The identifier is resolved against the system timezone database, so `getOffset()` is DST-correct and `DateTime::format()` honors the zone (see [`setTimezone()`](#datetime--datetimeimmutable) and [Limitations](#limitations)).
+The identifier is resolved against the system timezone database, so `getOffset()` is DST-correct and `DateTime::format()` honors the zone (see [`setTimezone()`](#datetime-and-datetimeimmutable) and [Limitations](#limitations)).
 
 The `getLocation()`, `getTransitions()`, and `listAbbreviations()` tables are baked from PHP's own timelib data (so they are byte-for-byte identical to PHP) and ship in a small bridge that is linked **only** into programs that call one of these three methods (or their `timezone_location_get()` / `timezone_transitions_get()` / `timezone_abbreviations_list()` procedural aliases).
 

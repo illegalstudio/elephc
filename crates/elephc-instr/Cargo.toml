@@ -1,0 +1,16 @@
+[package]
+name = "elephc-instr"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Exact per-function instrumentation runtime (deterministic enter/exit accounting: inclusive/exclusive time, call counts, caller->callee edges) for elephc programs compiled with --instrument"
+publish = false
+
+# C-callable staticlib (linked into programs compiled with --instrument) and an
+# rlib (unit-testable via `cargo test -p elephc-instr`). Mirrors elephc-probe.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+# libc provides clock_gettime(CLOCK_MONOTONIC) for the low-overhead timer.
+[dependencies]
+libc = "0.2"

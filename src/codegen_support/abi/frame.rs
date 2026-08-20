@@ -85,6 +85,28 @@ pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
     }
 }
 
+/// Aligns the stack for calls made after the frame has been torn down.
+///
+/// System V AMD64 requires `rsp` to be 16-byte aligned AT the call, so the
+/// callee sees `rsp % 16 == 8` once the return address is pushed. After `leave`,
+/// `rsp` holds the value it had on entry — already 8 past alignment — so every
+/// call emitted after the frame restore is off by 8. Hand-written runtime
+/// helpers survive that; compiled Rust does not, because an aligned SSE store to
+/// a stack temporary faults.
+///
+/// That is what took a CI shard down on linux-x86_64 alone: `main` ran, printed
+/// its output, and died in the profiler's exit dump — the last call before the
+/// exit syscall, and the first one made of Rust. AArch64 keeps `sp` 16-aligned
+/// by construction, which is why the same commit was green there.
+///
+/// Only valid where the path does not return: it discards the low bits of `rsp`.
+/// Every caller is on the way to `exit`.
+pub fn emit_teardown_call_alignment(emitter: &mut Emitter) {
+    if matches!(emitter.target.arch, Arch::X86_64) {
+        emitter.instruction("and rsp, -16");                                  // realign for the teardown calls below (this path never returns)
+    }
+}
+
 /// Emits the function return sequence using the platform `ret` instruction.
 pub fn emit_return(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller using the platform return instruction

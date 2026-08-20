@@ -18,15 +18,19 @@ pub(super) fn emit_runtime_callable_invoker_inline(
     if let Some(label) = ctx.shared.runtime_callable_invoker(sig, captures) {
         return label;
     }
-    let label = ctx.next_label("callable_invoker");
+    let label = ctx.next_global_label("callable_invoker");
     let done_label = ctx.next_label("callable_invoker_done");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
         label: &label,
         sig,
         captures,
     };
+    // The thunk's global entry opens its own `.text` section on ELF; put the
+    // enclosing function back before continuing it, or its tail lands in there.
+    let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     super::super::runtime_callable_invoker::emit_runtime_callable_invoker(ctx.emitter, ctx.data, &invoker);
+    ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     ctx.shared
         .cache_runtime_callable_invoker(sig, captures, &label);
@@ -97,10 +101,11 @@ fn emit_runtime_call_wrapper_inline(
         RuntimeCallWrapperKind::Builtin { .. } => "callable_builtin",
         RuntimeCallWrapperKind::Extern => "callable_extern",
     };
-    let label = ctx.next_label(label_prefix);
+    let label = ctx.next_global_label(label_prefix);
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
     let mut wrapper_module = ctx.module.clone();
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
+    let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     super::super::block_emit::emit_synthetic_function_with_label(
         &wrapper_module,
@@ -111,6 +116,7 @@ fn emit_runtime_call_wrapper_inline(
         ctx.shared,
         false,
     )?;
+    ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     match kind {
         RuntimeCallWrapperKind::Builtin { strict_php } => {

@@ -10,6 +10,80 @@
 
 use crate::support::*;
 
+/// End-to-end `elephc monitor`: compiles a busy fixture, samples it with
+/// /usr/bin/sample, and writes a two-view Speedscope document whose frames are
+/// PHP names — not EIR block labels, not runtime helpers in the folded view.
+///
+/// The export matters as much as the table. `--out` and `--pprof` were once
+/// wired only to the sampled capture, so when the exact profile became the
+/// default they wrote nothing at all — silently, including for the CI
+/// regression gate, which is documented as `--out` a baseline and `--baseline`
+/// it back. A test that only read the table would not have noticed.
+#[test]
+fn test_cli_monitor_writes_php_level_speedscope_profile() {
+    let dir = make_cli_test_dir("elephc_cli_monitor");
+    // The hot function is RECURSIVE on purpose: a self-recursive body cannot be
+    // fully inlined away, so its frame is guaranteed in the samples — the test
+    // must not depend on the best-effort inlined-frame recovery, whose address
+    // bucketing varies run to run.
+    fs::write(
+        dir.join("busy.php"),
+        "<?php\nfunction burn(int $depth) { $n = 0; for ($i = 0; $i < 2000000; $i = $i + 1) { $n = ($n + $i) % 1000003; } if ($depth > 0) { $n = ($n + burn($depth - 1)) % 1000003; } return $n; }\necho burn(4);\n",
+    )
+    .expect("failed to write the monitor fixture");
+
+    let output = elephc_cli_command(&dir)
+        .args(["monitor", "busy.php", "--out", "busy.prof.json"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "monitor should succeed\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("exact profile") && stdout.contains("burn"),
+        "the table should be the exact profile and name the PHP function: {stdout}"
+    );
+
+    let raw = fs::read_to_string(dir.join("busy.prof.json"))
+        .expect("monitor should write the speedscope file");
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("valid JSON");
+    let profiles = doc["profiles"].as_array().expect("profiles array");
+    assert_eq!(profiles.len(), 2, "one folded view and one why view");
+    for profile in profiles {
+        let weights: u64 = profile["weights"]
+            .as_array()
+            .expect("weights")
+            .iter()
+            .map(|w| w.as_u64().expect("integer weight"))
+            .sum();
+        assert_eq!(
+            weights,
+            profile["endValue"].as_u64().expect("endValue"),
+            "weights must partition the profile total"
+        );
+    }
+    let frames = doc["shared"]["frames"].as_array().expect("frames");
+    // `burn` may still appear as `burn (inlined)` for partially inlined
+    // shallow calls; either spelling proves the PHP-level attribution worked.
+    assert!(
+        frames
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n.starts_with("burn"))),
+        "frames should carry the demangled PHP name: {raw}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|f| f["name"].as_str().is_some_and(|n| n.contains("eir_"))),
+        "no EIR block label may leak into the profile: {raw}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies both compiler version flags print the Cargo package version and exit successfully.
 #[test]
 fn test_cli_version_flags_report_package_version() {
@@ -274,6 +348,71 @@ echo "ok";
     assert!(
         !dir.join("main").exists(),
         "--emit-asm should not emit binaries"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The teardown calls in main's epilogue must run on an aligned stack (x86_64).
+///
+/// System V AMD64 wants `rsp` 16-byte aligned AT the call. After `leave`, `rsp`
+/// holds its entry value — already 8 past alignment — so every call emitted
+/// after the frame restore is off by 8. The hand-written runtime helpers
+/// tolerate that; compiled Rust does not, because an aligned SSE store to a
+/// stack temporary faults.
+///
+/// It cost a CI shard on linux-x86_64 alone: `main` ran, printed its output, and
+/// died in the profiler's exit dump — the last call before the exit syscall and
+/// the first one made of Rust. AArch64 keeps `sp` aligned by construction, so
+/// the same commit was green there and the failure looked like a profiler bug
+/// for an afternoon.
+///
+/// Read from the assembly because that is where the property lives, and because
+/// this host cannot execute the architecture that has it.
+#[test]
+fn test_cli_x86_64_epilogue_aligns_before_its_teardown_calls() {
+    let dir = make_cli_test_dir("elephc_cli_x86_epilogue_align");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php\nfunction f(int $n): int { return $n + 1; }\necho f(1);\n").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit x86_64 assembly");
+    assert!(
+        output.status.success(),
+        "cross-target --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected target assembly output");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+
+    // Anchor on the teardown calls themselves, walk BACK to the frame restore
+    // that precedes them, and require the realignment in between. Scanning
+    // forward from `leave` and stopping at the first alignment was the version
+    // that asserted nothing at all — it never reached a call.
+    let teardown = lines
+        .iter()
+        .position(|line| line.starts_with("call elephc_probe_dump")
+            || line.starts_with("call elephc_instr_dump"))
+        .expect("a monitored build must emit its exit dump");
+    let restore = lines[..teardown]
+        .iter()
+        .rposition(|line| *line == "leave")
+        .expect("the exit dump follows main's frame restore");
+    let between = &lines[restore + 1..teardown];
+    assert!(
+        between.iter().any(|line| line.starts_with("and rsp, -16")),
+        "`{}` is called after `leave` with no realignment between them, so it \
+         runs 8 bytes off the alignment the ABI promises it. Between:\n{}",
+        lines[teardown],
+        between.join("\n")
+    );
+    assert!(
+        !between.iter().any(|line| line.starts_with("call ")),
+        "nothing may be called between the frame restore and the realignment"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -926,6 +1065,68 @@ greet();
         .expect("failed to run the compiled binary");
     assert!(run.status.success(), "compiled binary did not run");
     assert_eq!(String::from_utf8_lossy(&run.stdout), "escaped\n");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+
+/// End-to-end `--with-monitoring`: a binary that carries the tooling is silent
+/// until asked, and reports fully when `monitor` asks.
+///
+/// Both halves matter. The silence is the property that makes the capability
+/// safe to ship — a program that starts emitting profiler output on its own
+/// stderr would be a surprise its author cannot explain. And the reporting is
+/// what the capability is for. Asserting only one of them would let the other
+/// break unnoticed.
+///
+/// macOS-only: the fixture is CPU-bound so SIGPROF samples are guaranteed.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_cli_probe_embeds_in_process_sampler() {
+    let dir = make_cli_test_dir("elephc_cli_probe");
+    fs::write(
+        dir.join("burn.php"),
+        "<?php\nfunction burn(int $depth): int { $n = 0; for ($i = 0; $i < 6000000; $i = $i + 1) { $n = ($n + $i) % 1000003; } if ($depth > 0) { $n = ($n + burn($depth - 1)) % 1000003; } return $n; }\necho burn(4);\n",
+    )
+    .expect("failed to write the probe fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--with-monitoring", "burn.php"])
+        .output()
+        .expect("failed to run elephc --probe");
+    assert!(
+        compile.status.success(),
+        "probe compile failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    // Run on its own: capable, but nobody asked.
+    let alone = std::process::Command::new(dir.join("burn"))
+        .output()
+        .expect("failed to run the monitored binary");
+    assert!(alone.status.success(), "monitored binary did not run");
+    assert_eq!(String::from_utf8_lossy(&alone.stdout), "855");
+    let quiet = String::from_utf8_lossy(&alone.stderr);
+    assert!(
+        !quiet.contains("elephc-probe") && !quiet.contains("elephc-instr"),
+        "a binary nobody asked must not announce a profiler: {quiet}"
+    );
+
+    // Run through `monitor`, which asks over the control channel.
+    let watched = elephc_cli_command(&dir)
+        .args(["monitor", "./burn"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&watched.stdout),
+        String::from_utf8_lossy(&watched.stderr)
+    );
+    assert!(
+        report.contains("burn"),
+        "the profile should name the PHP function, symbolized from the embedded table: {report}"
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

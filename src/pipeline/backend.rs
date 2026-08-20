@@ -26,6 +26,8 @@ pub(super) struct BackendInputs<'a> {
     pub(super) emit: Emit,
     pub(super) heap_size: usize,
     pub(super) gc_stats: bool,
+    pub(super) counters: bool,
+    pub(super) instrument: crate::codegen::Instrumentation,
     pub(super) heap_debug: bool,
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
     pub(super) regalloc_linear: bool,
@@ -37,6 +39,18 @@ pub(super) struct BackendInputs<'a> {
 }
 
 /// Generates user assembly, resolves native requirements, and links the requested artifact.
+/// Restricts a file to its owner (0600).
+///
+/// The build key is written with whatever the umask allows, which on a normal
+/// system is world-readable — and possession of that file is the entire remote
+/// credential. Anyone on the host could read the key out of the deployed binary
+/// too, which is by design, but a sidecar sitting at 0644 next to it makes that
+/// a `cat` rather than a hex dump.
+fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
 pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let BackendInputs {
         filename,
@@ -52,6 +66,8 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         emit,
         heap_size,
         gc_stats,
+        counters,
+        instrument,
         heap_debug,
         exported_functions,
         regalloc_linear,
@@ -67,6 +83,26 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // lets eval setup register that managed provider with Magician.
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
+    }
+    let probe = with_crates.contains("probe");
+    if probe {
+        // A build that cannot produce a real key does not produce a binary. The
+        // key is the only thing standing between a production endpoint and
+        // anyone who can reach it, so a weaker one is worse than none: it looks
+        // like a credential in every message and holds like nothing.
+        let key = match crate::probe_key::build_key() {
+            Ok(key) => key,
+            Err(error) => {
+                crate::progress::clear();
+                eprintln!(
+                    "Error: --with-monitoring needs a build key and {error}.\n  \
+                     Set ELEPHC_PROBE_KEY to 64 hex characters to supply one."
+                );
+                process::exit(1);
+            }
+        };
+        eprintln!("probe build fingerprint: {}", crate::probe_key::fingerprint(&key));
+        ir_module.probe_key = Some(key);
     }
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
@@ -142,6 +178,9 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     let user_asm = match codegen::generate_user_asm_from_ir_with_options(
         &ir_module,
         gc_stats,
+        counters,
+        instrument,
+        probe,
         heap_debug,
         requires_elephc_tls,
         emit,
@@ -293,6 +332,22 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         emit_debug_info && !linker::bake_debug_info(target, &output_paths.bin);
     if !keep_obj_for_debug {
         let _ = fs::remove_file(&output_paths.obj);
+    }
+
+    // Write the build key next to the binary: `elephc monitor <address> --key`
+    // reads it to run the HMAC handshake. Keep it like a `.env` secret.
+    if let Some(key) = ir_module.probe_key {
+        let sidecar = output_paths.bin.with_extension("key");
+        if let Err(err) = fs::write(&sidecar, crate::probe_key::to_hex(&key)) {
+            eprintln!("warning: could not write the build key {}: {err}", sidecar.display());
+        } else if let Err(err) = restrict_to_owner(&sidecar) {
+            // Not fatal — the key is still usable — but say it, because the
+            // whole point of the file is that only its owner can read it.
+            eprintln!(
+                "warning: could not restrict {} to its owner: {err}",
+                sidecar.display()
+            );
+        }
     }
 
     crate::progress::clear();

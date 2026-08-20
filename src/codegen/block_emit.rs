@@ -14,6 +14,7 @@ use std::fmt::Write as _;
 
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
+use crate::codegen_support::data_section::DataWord;
 use crate::codegen::emit::Emitter;
 use crate::codegen::emit_fiber_wrapper;
 use crate::codegen::platform::Arch;
@@ -59,6 +60,9 @@ pub(super) fn emit_module(
     emitter: &mut Emitter,
     data: &mut DataSection,
     gc_stats: bool,
+    counters: bool,
+    instrument: crate::codegen::Instrumentation,
+    probe: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
     emit: Emit,
@@ -67,6 +71,20 @@ pub(super) fn emit_module(
     web_isolation: WebIsolation,
 ) -> Result<()> {
     let mut shared = SharedCodegenState::default();
+    shared.counters = counters;
+    shared.instrument = instrument;
+    if probe {
+        let main_symbol = if web {
+            frame::WEB_HANDLER_SYMBOL
+        } else {
+            emitter.entry_symbol()
+        };
+        shared.probe_table = Some(emit_probe_symbol_table(module, data, main_symbol));
+        if let Some(key) = module.probe_key {
+            let symbol = emitter.target.extern_symbol("elephc_probe_build_key");
+            data.add_named_symbol(symbol, &key);
+        }
+    }
     function_variants::emit_dispatchers(module, emitter, data);
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
@@ -123,6 +141,11 @@ pub(super) fn emit_module(
     // `bl __rt_web_reset` forward-references the label emitted here.
     if web {
         super::web::emit_web_reset(emitter, module, data);
+    }
+    // The probe symbol table's terminating sentinel resolves to this label,
+    // emitted after every function so it bounds the last real function's range.
+    if probe {
+        emitter.raw(&format!("{PROBE_TEXT_END_LABEL}:"));
     }
     Ok(())
 }
@@ -249,6 +272,63 @@ pub(super) fn emit_synthetic_function_with_label(
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
     Ok(())
+}
+
+/// Text-section label marking the end of user code, used as the probe symbol
+/// table's terminating sentinel so a PC in a runtime helper or libc — past the
+/// last real function — resolves to `<native>` instead of the last function.
+const PROBE_TEXT_END_LABEL: &str = "_elephc_probe_text_end";
+
+/// Builds the `--probe` symbol table in the data section: one
+/// `[entry address, name pointer, name length]` triple per non-synthetic PHP
+/// function (main included, named `{main}`), address-sorted at dump time by the
+/// probe, then a final sentinel triple at `PROBE_TEXT_END_LABEL`. Returns the
+/// table's data label and its entry count for `elephc_probe_init`.
+fn emit_probe_symbol_table(
+    module: &Module,
+    data: &mut DataSection,
+    main_symbol: &str,
+) -> (String, usize) {
+    let mut words = Vec::new();
+    let mut count = 0usize;
+    let push = |data: &mut DataSection, words: &mut Vec<DataWord>, entry: String, name: &str| {
+        let (name_label, name_len) = data.add_string(name.as_bytes());
+        words.push(DataWord::Symbol(entry));
+        words.push(DataWord::Symbol(name_label));
+        words.push(DataWord::U64(name_len as u64));
+    };
+    for function in &module.functions {
+        if function.flags.is_synthetic {
+            continue;
+        }
+        if is_main(function) {
+            push(data, &mut words, main_symbol.to_string(), "{main}");
+        } else {
+            push(data, &mut words, user_function_entry_symbol(function), &function.name);
+        }
+        count += 1;
+    }
+    for method in &module.class_methods {
+        if method.flags.is_synthetic {
+            continue;
+        }
+        if let Ok(entry) = class_method_entry_symbol(method) {
+            push(data, &mut words, entry, &method.name);
+            count += 1;
+        }
+    }
+    for closure in &module.closures {
+        if closure.flags.is_synthetic {
+            continue;
+        }
+        push(data, &mut words, user_function_entry_symbol(closure), &closure.name);
+        count += 1;
+    }
+    // Terminating sentinel: bounds the last real function's address range.
+    push(data, &mut words, PROBE_TEXT_END_LABEL.to_string(), "<end>");
+    count += 1;
+    let label = data.add_words(words);
+    (label, count)
 }
 
 /// Returns the assembly entry label for a user or synthetic EIR function.

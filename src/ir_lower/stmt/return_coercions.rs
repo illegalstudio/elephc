@@ -22,7 +22,12 @@ pub(super) fn coerce_to_return_type(
         return value;
     }
     match ctx.return_type {
-        IrType::I64 => coerce_return_scalar_source(ctx, value, span, coerce_to_int),
+        IrType::I64 => {
+            if let Some(verified) = declared_int_return_boundary(ctx, value, span) {
+                return verified;
+            }
+            coerce_return_scalar_source(ctx, value, span, coerce_to_int)
+        }
         IrType::F64 => coerce_return_scalar_source(ctx, value, span, coerce_to_float),
         IrType::Str => coerce_return_scalar_source(ctx, value, span, coerce_to_string),
         IrType::TaggedScalar => {
@@ -41,6 +46,45 @@ pub(super) fn coerce_to_return_type(
         ),
         IrType::Void => value,
     }
+}
+
+/// Verifies a dynamically-typed value against a DECLARED `int` return boundary.
+///
+/// A declared boundary carries PHP's coercive-mode verification: an in-range float
+/// truncates, but a float outside the int range, a non-numeric string, null, or any
+/// container throws `TypeError` — where the plain `coerce_to_int` path silently wrapped
+/// the value. Applies only when the source type still needs a runtime decision (boxed
+/// Mixed, or a raw F64 left by constant folding); statically-int sources keep the direct
+/// path, and INFERRED int returns are untouched — an undeclared function must never throw
+/// on its own return value.
+fn declared_int_return_boundary(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    if !ctx.return_type_is_declared || ctx.return_php_type != PhpType::Int {
+        return None;
+    }
+    if !matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Float
+    ) {
+        return None;
+    }
+    let prefix = format!("{}(): Return value must be of type int, ", ctx.owner_name());
+    let data = ctx.intern_string(&prefix);
+    let verified = ctx.emit_value(
+        Op::ReturnBoundaryMixedToInt,
+        vec![value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Int,
+        Op::ReturnBoundaryMixedToInt.default_effects(),
+        span,
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    Some(verified)
 }
 
 /// Coerces a return value and releases the old owning temporary when replaced.

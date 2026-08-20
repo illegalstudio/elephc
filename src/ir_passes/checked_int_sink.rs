@@ -11,11 +11,16 @@
 //!   and unknown/future opcodes reject the candidate.
 //! - Rewritten producers yield non-owning I64 values through `IChecked*ToInt`; removable casts
 //!   and ownership instructions are neutralized only after every use has been proven safe.
+//! - A second phase narrows boxed `mixed` integer locals. The per-producer phase cannot reach
+//!   a loop counter: `store_local` only counts as an integer sink once the slot is `I64`, and
+//!   the slot is only `mixed` because its sole writer is the boxed producer. Neither end can
+//!   move first, so the slot and its producers are proven together and committed at once.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{
-    DataPool, Function, Immediate, InstId, IrType, LocalSlotId, Op, Ownership, ValueId,
+    DataPool, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind,
+    LocalSlotId, Op, Ownership, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -31,52 +36,59 @@ impl IrPass for CheckedIntSink {
         "checked_int_sink"
     }
 
-    /// Skips functions without an integer sink reachable from checked arithmetic.
+    /// Skips functions with neither an integer sink nor a narrowable boxed integer local.
     fn is_applicable(&self, function: &Function) -> bool {
-        has_potential_integer_sink(function)
+        has_potential_integer_sink(function) || has_narrowable_integer_slot(function)
     }
 
-    /// Specializes every independently proven checked-arithmetic producer in the function.
+    /// Specializes every independently proven producer, then every provable boxed int local.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
-        let candidates: Vec<InstId> = function
-            .instructions
-            .iter()
-            .enumerate()
-            .filter_map(|(raw, inst)| checked_to_int_op(inst.op).map(|_| InstId::from_raw(raw as u32)))
-            .collect();
-        if candidates.is_empty() {
-            return false;
-        }
-
-        let uses = instruction_uses(function);
-        let terminator_uses = terminator_used_values(function);
-        let mut changed = false;
-
-        for candidate in candidates {
-            let Some(inst) = function.instruction(candidate) else {
-                continue;
-            };
-            let Some(result) = inst.result else {
-                continue;
-            };
-            let mut rewrite = SinkRewrite::default();
-            if !analyze_sink_graph(
-                function,
-                result,
-                &uses,
-                &terminator_uses,
-                &mut HashSet::new(),
-                &mut rewrite,
-            ) || !rewrite.saw_integer_sink
-            {
-                continue;
-            }
-
-            apply_specialization(function, candidate, result, rewrite);
-            changed = true;
-        }
+        let mut changed = sink_proven_producers(function);
+        changed |= sink_integer_slots(function);
         changed
     }
+}
+
+/// Specializes every checked-arithmetic producer whose own use graph observes only an int.
+fn sink_proven_producers(function: &mut Function) -> bool {
+    let candidates: Vec<InstId> = function
+        .instructions
+        .iter()
+        .enumerate()
+        .filter_map(|(raw, inst)| checked_to_int_op(inst.op).map(|_| InstId::from_raw(raw as u32)))
+        .collect();
+    if candidates.is_empty() {
+        return false;
+    }
+
+    let uses = instruction_uses(function);
+    let terminator_uses = terminator_used_values(function);
+    let mut changed = false;
+
+    for candidate in candidates {
+        let Some(inst) = function.instruction(candidate) else {
+            continue;
+        };
+        let Some(result) = inst.result else {
+            continue;
+        };
+        let mut rewrite = SinkRewrite::default();
+        if !analyze_sink_graph(
+            function,
+            result,
+            &uses,
+            &terminator_uses,
+            &mut HashSet::new(),
+            &mut rewrite,
+        ) || !rewrite.saw_integer_sink
+        {
+            continue;
+        }
+
+        apply_specialization(function, candidate, result, rewrite);
+        changed = true;
+    }
+    changed
 }
 
 /// Deferred mutations collected while proving one candidate's entire use graph.
@@ -265,10 +277,22 @@ fn apply_specialization(
         }
     }
 
-    let replacement_op = function
-        .instruction(candidate)
-        .and_then(|inst| checked_to_int_op(inst.op))
+    specialize_checked_producer(function, candidate)
         .expect("checked-int sink candidate retained its opcode until commit");
+    if let Some(value) = function.value_mut(result) {
+        value.ir_type = IrType::I64;
+        value.php_type = PhpType::Int;
+        value.ownership = Ownership::NonHeap;
+    }
+}
+
+/// Rewrites one boxed checked producer into its allocation-free int-observing counterpart.
+///
+/// Returns `None` when the instruction is no longer a boxed checked operation, which lets
+/// callers distinguish an already-specialized producer from a commit-time inconsistency.
+fn specialize_checked_producer(function: &mut Function, candidate: InstId) -> Option<()> {
+    let replacement_op = checked_to_int_op(function.instruction(candidate)?.op)?;
+    let result = function.instruction(candidate)?.result;
     if let Some(inst) = function.instruction_mut(candidate) {
         inst.op = replacement_op;
         inst.result_type = IrType::I64;
@@ -276,9 +300,247 @@ fn apply_specialization(
         inst.result_ownership = Ownership::NonHeap;
         inst.effects = replacement_op.default_effects();
     }
-    if let Some(value) = function.value_mut(result) {
+    if let Some(value) = result.and_then(|result| function.value_mut(result)) {
         value.ir_type = IrType::I64;
         value.php_type = PhpType::Int;
         value.ownership = Ownership::NonHeap;
+    }
+    Some(())
+}
+
+/// Deferred mutations collected while proving one boxed integer local can hold a raw int.
+#[derive(Default)]
+struct SlotRewrite {
+    /// Boxed checked producers feeding the slot, rewritten to their `IChecked*ToInt` form.
+    producers: Vec<InstId>,
+    /// Acquire, release, and old-value load scaffolding the scalar slot no longer needs.
+    neutralize: HashSet<InstId>,
+    /// Acquire results redirected to the now-scalar result of their own producer.
+    replacements: HashMap<ValueId, ValueId>,
+}
+
+/// Narrows every boxed `mixed` integer local whose complete access graph observes an int.
+fn sink_integer_slots(function: &mut Function) -> bool {
+    let candidates = narrowable_integer_slots(function);
+    if candidates.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for slot in candidates {
+        // Recomputed per slot: committing one retype rewrites operands the next proof reads.
+        let uses = instruction_uses(function);
+        let terminator_uses = terminator_used_values(function);
+        let Some(plan) = plan_slot_specialization(function, slot, &uses, &terminator_uses) else {
+            continue;
+        };
+        apply_slot_specialization(function, slot, plan);
+        changed = true;
+    }
+    changed
+}
+
+/// Returns true when the function holds a boxed integer local a retype could narrow.
+fn has_narrowable_integer_slot(function: &Function) -> bool {
+    !narrowable_integer_slots(function).is_empty()
+        && function
+            .instructions
+            .iter()
+            .any(|inst| checked_to_int_op(inst.op).is_some())
+}
+
+/// Returns the ordinary PHP locals currently stored as a boxed `mixed` cell.
+///
+/// Parameter slots are excluded because their representation is the calling convention, not
+/// a local storage choice; every other local kind carries aliasing or lifetime rules
+/// (ref cells, captures, statics, generator state) that a representation change would break.
+fn narrowable_integer_slots(function: &Function) -> Vec<LocalSlotId> {
+    let param_count = function.params.len();
+    function
+        .locals
+        .iter()
+        .enumerate()
+        .filter(|(raw, local)| {
+            *raw >= param_count
+                && local.kind == LocalKind::PhpLocal
+                && local.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        })
+        .map(|(raw, _)| LocalSlotId::from_raw(raw as u32))
+        .collect()
+}
+
+/// Proves every access to `slot` observes a PHP int, collecting the rewrite that follows.
+///
+/// Returns `None` at the first unprovable access, so a rejected slot leaves the function
+/// untouched. At least one boxed producer must be removed for the retype to be worth it.
+fn plan_slot_specialization(
+    function: &Function,
+    slot: LocalSlotId,
+    uses: &HashMap<ValueId, Vec<InstId>>,
+    terminator_uses: &HashSet<ValueId>,
+) -> Option<SlotRewrite> {
+    let mut plan = SlotRewrite::default();
+    for (raw, inst) in function.instructions.iter().enumerate() {
+        if !instruction_mentions_slot(inst, slot) {
+            continue;
+        }
+        let inst_id = InstId::from_raw(raw as u32);
+        match inst.op {
+            Op::StoreLocal => {
+                accept_slot_writer(function, inst, slot, uses, terminator_uses, &mut plan)?
+            }
+            Op::LoadLocal => {
+                accept_slot_reader(function, inst, inst_id, uses, terminator_uses, &mut plan)?
+            }
+            // `unset`, ref-cell promotion, by-ref exposure, and every future slot-naming
+            // opcode can observe the boxed representation, so the slot keeps it.
+            _ => return None,
+        }
+    }
+    (!plan.producers.is_empty()).then_some(plan)
+}
+
+/// Returns true when an instruction names `slot` through either slot-carrying immediate.
+fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
+    match inst.immediate {
+        Some(Immediate::LocalSlot(named)) => named == slot,
+        Some(Immediate::LocalSlotPair { first, second }) => first == slot || second == slot,
+        _ => false,
+    }
+}
+
+/// Accepts one `store_local` into the candidate slot.
+///
+/// A store is provable when it writes a value that is already a raw `I64`, or the `acquire`
+/// of a boxed checked producer whose remaining readers are release scaffolding — the exact
+/// shape `$i++` lowers to.
+fn accept_slot_writer(
+    function: &Function,
+    store: &Instruction,
+    slot: LocalSlotId,
+    uses: &HashMap<ValueId, Vec<InstId>>,
+    terminator_uses: &HashSet<ValueId>,
+    plan: &mut SlotRewrite,
+) -> Option<()> {
+    let stored = *store.operands.first()?;
+    if value_is_scalar_int(function, stored) {
+        return Some(());
+    }
+    let acquire_id = defining_instruction_id(function, stored)?;
+    let acquire = function.instruction(acquire_id)?;
+    if acquire.op != Op::Acquire || acquire.immediate.is_some() {
+        return None;
+    }
+    let produced = *acquire.operands.first()?;
+    let producer_id = defining_instruction_id(function, produced)?;
+    checked_to_int_op(function.instruction(producer_id)?.op)?;
+
+    let context = ScaffoldContext { slot, acquire_id };
+    accept_ownership_scaffold(function, stored, &context, uses, terminator_uses, plan)?;
+    accept_ownership_scaffold(function, produced, &context, uses, terminator_uses, plan)?;
+
+    plan.replacements.insert(stored, produced);
+    plan.neutralize.insert(acquire_id);
+    plan.producers.push(producer_id);
+    Some(())
+}
+
+/// The one store and one acquire an ownership scaffold is allowed to feed.
+struct ScaffoldContext {
+    slot: LocalSlotId,
+    acquire_id: InstId,
+}
+
+/// Accepts the acquire/release scaffolding around a boxed value the retype makes scalar.
+///
+/// Every reader must be the store into the candidate slot, the acquire being folded away, or
+/// a `release` that the scalar slot renders dead. Anything else — a second store, a call, a
+/// terminator — can still observe the boxed cell, so the slot keeps its representation.
+fn accept_ownership_scaffold(
+    function: &Function,
+    value: ValueId,
+    context: &ScaffoldContext,
+    uses: &HashMap<ValueId, Vec<InstId>>,
+    terminator_uses: &HashSet<ValueId>,
+    plan: &mut SlotRewrite,
+) -> Option<()> {
+    if terminator_uses.contains(&value) {
+        return None;
+    }
+    for use_id in uses.get(&value).map(Vec::as_slice).unwrap_or_default() {
+        if *use_id == context.acquire_id {
+            continue;
+        }
+        let user = function.instruction(*use_id)?;
+        match user.op {
+            Op::Release => {
+                plan.neutralize.insert(*use_id);
+            }
+            Op::StoreLocal if instruction_mentions_slot(user, context.slot) => {}
+            _ => return None,
+        }
+    }
+    Some(())
+}
+
+/// Accepts one `load_local` from the candidate slot.
+///
+/// A read that already narrows to `I64` needs nothing: the retype only deletes the unbox its
+/// coercion would have emitted. A boxed read is provable only when it exists solely to
+/// release the previous value — ownership traffic a scalar slot no longer generates.
+fn accept_slot_reader(
+    function: &Function,
+    load: &Instruction,
+    load_id: InstId,
+    uses: &HashMap<ValueId, Vec<InstId>>,
+    terminator_uses: &HashSet<ValueId>,
+    plan: &mut SlotRewrite,
+) -> Option<()> {
+    let result = load.result?;
+    if value_is_scalar_int(function, result) {
+        return Some(());
+    }
+    if terminator_uses.contains(&result) {
+        return None;
+    }
+    for use_id in uses.get(&result).map(Vec::as_slice).unwrap_or_default() {
+        if function.instruction(*use_id)?.op != Op::Release {
+            return None;
+        }
+        plan.neutralize.insert(*use_id);
+    }
+    plan.neutralize.insert(load_id);
+    Some(())
+}
+
+/// Returns true when an SSA value already carries the unboxed PHP integer representation.
+fn value_is_scalar_int(function: &Function, value: ValueId) -> bool {
+    function.value(value).is_some_and(|value| {
+        value.ir_type == IrType::I64 && matches!(value.php_type.codegen_repr(), PhpType::Int)
+    })
+}
+
+/// Returns the id of the instruction defining `value`, when it has an instruction definition.
+fn defining_instruction_id(function: &Function, value: ValueId) -> Option<InstId> {
+    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
+        return None;
+    };
+    Some(inst)
+}
+
+/// Commits a proven slot retype: scalar storage, sunk producers, and no ownership traffic.
+fn apply_slot_specialization(function: &mut Function, slot: LocalSlotId, plan: SlotRewrite) {
+    let replacements = resolve_chains(&plan.replacements);
+    replace_all_uses(function, &replacements);
+    for inst_id in &plan.neutralize {
+        if let Some(inst) = function.instruction_mut(*inst_id) {
+            neutralize_to_nop(inst);
+        }
+    }
+    for producer in &plan.producers {
+        specialize_checked_producer(function, *producer);
+    }
+    if let Some(local) = function.locals.get_mut(slot.as_raw() as usize) {
+        local.ir_type = IrType::I64;
+        local.php_type = PhpType::Int;
     }
 }

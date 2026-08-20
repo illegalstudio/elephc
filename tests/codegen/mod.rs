@@ -59,6 +59,7 @@ mod pdo_pgsql;
 mod image;
 mod arrays;
 mod calendar;
+mod call_counters;
 mod callables;
 mod system;
 mod json;

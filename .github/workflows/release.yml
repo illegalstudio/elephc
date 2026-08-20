@@ -153,8 +153,12 @@ jobs:
           fi
           echo "Verified release binary version: ${ACTUAL}"
 
+      # Every bridge in `BRIDGES` (src/linker/bridges.rs), in that order. A bridge
+      # missing here ships a compiler that refuses the flag it advertises;
+      # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
+      # rather than letting the two lists drift again.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-magician
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -172,7 +176,10 @@ jobs:
             libelephc_phar.a \
             libelephc_tz.a \
             libelephc_image.a \
-            libelephc_web.a
+            libelephc_probe.a \
+            libelephc_instr.a \
+            libelephc_web.a \
+            libelephc_magician.a
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
@@ -245,7 +252,10 @@ jobs:
               lib.install "libelephc_phar.a"
               lib.install "libelephc_tz.a"
               lib.install "libelephc_image.a"
+              lib.install "libelephc_probe.a"
+              lib.install "libelephc_instr.a"
               lib.install "libelephc_web.a"
+              lib.install "libelephc_magician.a"
             end
 
             test do

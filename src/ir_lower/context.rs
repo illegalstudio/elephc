@@ -232,6 +232,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     speculating: bool,
     pub return_type: IrType,
     pub return_php_type: PhpType,
+    /// `true` when the function SOURCE declares a return type, as opposed to one inferred
+    /// from the body. Only a declared boundary carries PHP's coercive-mode verification
+    /// (TypeError on a non-coercible runtime value); an inferred return must never throw.
+    pub return_type_is_declared: bool,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
     /// so a `return $obj->prop` yields the property's ref-cell pointer instead of a value copy.
     pub by_ref_return: bool,
@@ -331,6 +335,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             speculating: false,
             return_type,
             return_php_type,
+            return_type_is_declared: false,
             by_ref_return: false,
             in_main,
             all_global_var_names,
@@ -1045,6 +1050,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the hidden owner slot for a promoted local ref-cell, if any.
     fn ref_cell_owner_slot(&self, variable: &str) -> Option<LocalSlotId> {
         self.ref_cell_owner_locals.get(variable).copied()
+    }
+
+    /// PHP-visible name of the body being lowered (`"Class::method"` for methods), as
+    /// runtime error messages spell it.
+    pub(crate) fn owner_name(&self) -> &str {
+        &self.owner_name
     }
 
     /// Returns a deterministic EIR function name for the next closure literal in this body.

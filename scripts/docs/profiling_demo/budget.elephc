@@ -1,0 +1,11 @@
+# .elephc — performance budget for the order service.
+# One assertion per line: <metric>:<function><op><value>
+# `*` targets the whole run. Text after `#` labels the assertion.
+#
+# Deliberately red against shop.php and green against shop_v2.php: the
+# screenshots need a Checks panel that shows both outcomes.
+
+calls:PDO::prepare    <= 10       # prepare once per request, not per row
+retained:record_audit <= 1000     # the audit log must not hoard
+queries:*             <= 100      # whole-run query budget
+wait_ms:*             <= 50       # and the database must not dominate

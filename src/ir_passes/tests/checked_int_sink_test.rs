@@ -294,16 +294,21 @@ fn rejects_mixed_output_observer() {
     );
 }
 
-/// A store into Mixed frame storage keeps the checked box even through an acquire.
+/// A Mixed slot no reader observes as a box is narrowed to `int` along with its producer.
+///
+/// The per-producer phase cannot reach this: the store only counts as an integer sink once
+/// the slot is `I64`, and the slot is `mixed` only because this producer writes it. Proving
+/// the slot and the producer together is what removes the per-write allocation behind `$i++`.
 #[test]
-fn rejects_mixed_local_store() {
+fn narrows_mixed_local_store_without_boxed_readers() {
     let mut function = Function::new("mixed_store".to_string(), IrType::Void, PhpType::Void);
+    let slot;
     {
         let mut builder = Builder::new(&mut function);
         let entry = builder.create_named_block("entry", vec![]);
         builder.set_entry(entry);
         builder.position_at_end(entry);
-        let slot = builder.add_local(
+        slot = builder.add_local(
             Some("result".to_string()),
             IrType::Heap(IrHeapKind::Mixed),
             PhpType::Mixed,
@@ -326,12 +331,68 @@ fn rejects_mixed_local_store() {
         builder.terminate(Terminator::Return { value: None });
     }
 
+    assert!(specialize(&mut function));
+    assert_eq!(function.instructions[2].op, Op::ICheckedAddToInt);
+    assert_eq!(function.instructions[3].op, Op::Nop);
+    let narrowed = &function.locals[slot.as_raw() as usize];
+    assert_eq!(narrowed.ir_type, IrType::I64);
+    assert_eq!(narrowed.php_type, PhpType::Int);
+    assert!(
+        validate_function(&function).is_ok(),
+        "narrowed store fixture invalid: {:?}",
+        validate_function(&function)
+    );
+}
+
+/// A Mixed slot whose boxed value still escapes keeps its boxed frame storage.
+///
+/// This is the boundary the narrowing must not cross: a reader that observes the cell itself
+/// — rather than an already-`int` load — can still see PHP's overflow-to-float promotion.
+#[test]
+fn rejects_mixed_local_store_observed_by_a_boxed_reader() {
+    let mut function =
+        Function::new("mixed_escape".to_string(), IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+    let slot;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        slot = builder.add_local(
+            Some("result".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let lhs = builder.emit_const_i64(7);
+        let rhs = builder.emit_const_i64(2);
+        let checked = emit_checked(&mut builder, Op::ICheckedAdd, lhs, rhs);
+        let acquired = builder
+            .emit(
+                Op::Acquire,
+                vec![checked],
+                None,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                Ownership::Owned,
+            )
+            .expect("acquired result");
+        builder.emit_store_local(slot, acquired);
+        let loaded =
+            builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+        builder.terminate(Terminator::Return {
+            value: Some(loaded),
+        });
+    }
+
     assert!(!specialize(&mut function));
     assert_eq!(function.instructions[2].op, Op::ICheckedAdd);
     assert_eq!(function.instructions[3].op, Op::Acquire);
+    let untouched = &function.locals[slot.as_raw() as usize];
+    assert_eq!(untouched.ir_type, IrType::Heap(IrHeapKind::Mixed));
     assert!(
         validate_function(&function).is_ok(),
-        "mixed store fixture invalid: {:?}",
+        "mixed escape fixture invalid: {:?}",
         validate_function(&function)
     );
 }

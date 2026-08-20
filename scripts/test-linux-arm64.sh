@@ -86,7 +86,7 @@ if [ "$TEST_ARG_COUNT" -eq 0 ]; then
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-magician && cargo test'
+        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-magician -p elephc-instr -p elephc-probe && cargo test'
 else
     echo "Running tests matching '${TEST_ARGS[*]}' on Linux ARM64 with RUST_TEST_THREADS=$TEST_THREADS using temporary target volume '$TARGET_VOLUME'..."
     docker run \
@@ -101,5 +101,5 @@ else
         -v "$TARGET_VOLUME:/cargo-target" \
         -w /app \
         "$IMAGE" \
-        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-magician && cargo test "$@"' sh "${TEST_ARGS[@]}"
+        sh -c 'cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-magician -p elephc-instr -p elephc-probe && cargo test "$@"' sh "${TEST_ARGS[@]}"
 fi

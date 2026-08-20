@@ -22,8 +22,8 @@ categories = ["compilers", "command-line-utilities"]
 # (optional eval runtime) into target/<profile>/, where linker.rs locates them
 # for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]
@@ -48,6 +48,11 @@ bitflags = "2"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
+# `elephc monitor https://…` verifies the certificate before speaking the probe
+# protocol. Same rustls/ring pair the TLS bridge already pins, so the workspace
+# keeps one TLS stack and stays musl-friendly for the Docker test images.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "0.26"
 toml = "0.9"
 toml_edit = "0.25"
 tar = "0.4"
@@ -60,6 +65,7 @@ flate2 = "1"
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
 elephc-phar = { path = "crates/elephc-phar" }
+elephc-probe = { path = "crates/elephc-probe" }
 # indicatif drives the live per-phase spinner and cargo-style "Linking" event
 # lines shown while compiling; console (indicatif's own transitive color/TTY
 # crate) is added directly too since errors/report.rs and timings.rs style text
@@ -87,6 +93,9 @@ elephc-magician = { path = "crates/elephc-magician" }
 # with the same encoder the compiler decodes, guaranteeing a version-stable
 # round-trip without shelling out to php.
 flate2 = "1"
+# serde_json lets the `elephc monitor` CLI test validate the emitted Speedscope
+# document structurally instead of substring-matching raw JSON.
+serde_json = "1"
 # The streams codegen tests host a local HTTPS fixture so https:// wrapper
 # success coverage does not depend on outbound network access.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }

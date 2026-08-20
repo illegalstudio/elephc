@@ -55,6 +55,11 @@ pub(super) fn lower_property_assign(
         Some(ty) => coerce_typed_assign_value(ctx, value, &ty, span),
         None => value,
     };
+    // A packed `int` field accepts a boxed Mixed value only through a strict runtime
+    // narrowing (int tag → raw payload, anything else → TypeError). Without it the packed
+    // store would write the box POINTER into fixed field storage; with a coercion it would
+    // silently truncate the overflow promotion the box exists to carry.
+    let value = narrow_mixed_value_for_packed_int_field(ctx, object.value, property, value, span);
     if magic_set_receiver_has_method(ctx, object.value, property) {
         lower_magic_property_set(ctx, object.value, property, value, span);
         return;
@@ -78,6 +83,59 @@ pub(super) fn lower_property_assign(
     if let Some(property_ty) = object_property_type(ctx, object.value, property) {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
     }
+}
+
+/// Narrows a boxed Mixed value assigned to a packed `int` field into its raw `I64` payload.
+///
+/// Emits `Op::PackedFieldMixedToInt` (int tag passes, every other runtime tag throws a
+/// catchable `TypeError` naming the runtime type) and releases the source box right after:
+/// the payload is a raw copy, so the box's lifetime ends at the narrowing, not at the store.
+/// Non-packed receivers, non-Mixed values, and non-int fields pass through untouched.
+fn narrow_mixed_value_for_packed_int_field(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let PhpType::Packed(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return value;
+    };
+    if !matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed
+    ) {
+        return value;
+    }
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(field_ty) = ctx
+        .packed_classes
+        .get(normalized)
+        .and_then(|info| info.fields.iter().find(|field| field.name == property))
+        .map(|field| field.php_type.codegen_repr())
+    else {
+        return value;
+    };
+    if field_ty != PhpType::Int {
+        return value;
+    }
+    let message = format!(
+        "Packed field {}::${} must be of type int, ",
+        normalized, property
+    );
+    let data = ctx.intern_string(&message);
+    let narrowed = ctx.emit_value(
+        Op::PackedFieldMixedToInt,
+        vec![value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Int,
+        Op::PackedFieldMixedToInt.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    narrowed
 }
 
 /// Returns true when a property write should dispatch to `__set`.

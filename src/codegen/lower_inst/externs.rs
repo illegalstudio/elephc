@@ -337,9 +337,11 @@ fn emit_stateful_extern_callback_trampoline(
     ctx: &mut FunctionContext<'_>,
     callback_sig: &FunctionSig,
 ) {
-    let slot_name = ctx.next_label("extern_callback_descriptor");
+    // A `.comm` slot is a real (non-local) symbol; an assembler-local name would leave
+    // the reference undefined.
+    let slot_name = ctx.next_global_label("extern_callback_descriptor");
     let slot_label = ctx.data.add_comm(slot_name, 8);
-    let trampoline_label = ctx.next_label("extern_callback_trampoline");
+    let trampoline_label = ctx.next_global_label("extern_callback_trampoline");
     let done_label = ctx.next_label("extern_callback_trampoline_done");
     let trampoline = DeferredExternCallbackTrampoline {
         label: trampoline_label.clone(),

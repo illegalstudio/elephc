@@ -197,6 +197,7 @@ pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use property_store_values::lower_packed_field_mixed_to_int;
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,
     raw_value_php_type,

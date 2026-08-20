@@ -58,8 +58,11 @@ impl Checker {
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
-            // PHP coercive mode: scalars accept Mixed with runtime narrowing.
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
+            // PHP coercive mode: scalars accept Mixed with runtime narrowing. `False`
+            // belongs here alongside `Bool` — it is the same runtime representation, and
+            // leaving it out would make a `T|false` contract stricter than the `T|bool`
+            // one it replaces, rejecting bodies that both accepted before.
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
                 if matches!(actual, PhpType::Mixed) =>
             {
                 true
@@ -167,13 +170,44 @@ impl Checker {
     /// Computes the merged type when assigning `new_ty` to a variable that already has
     /// `existing` type. Returns `Some(merged)` when types are compatible for compound assignment
     /// (e.g., `+=`), or `None` when the types cannot be merged (e.g., two incompatible scalars).
+    /// Returns whether every runtime value of `actual` is representable in `expected`
+    /// WITHOUT a runtime narrowing.
+    ///
+    /// This is the containment question an inferred local's assignment merge asks, as
+    /// opposed to the assignability question `type_accepts` answers. The two differ exactly
+    /// on PHP's coercive acceptances: a declared `int` parameter accepts a `mixed` argument
+    /// because the runtime narrows it at that declared boundary, but an inferred local has
+    /// no boundary — a `mixed` value assigned to it (int arithmetic carries the
+    /// overflow-to-float promotion) really is the local's content from then on. Answering
+    /// the merge with `type_accepts` kept such locals narrow, which re-truncated promoted
+    /// floats at every typed read.
+    ///
+    /// Delegating the non-Mixed cases to `type_accepts` knowingly keeps its structural
+    /// array arms, so an `array<int>` still "contains" an `array<mixed>` — the element-level
+    /// instance of the same lie. That family has its own storage-contract machinery
+    /// (`loop_carried_storage_types`) and is left for a separate audit.
+    fn type_contains_values(&self, expected: &PhpType, actual: &PhpType) -> bool {
+        match actual {
+            PhpType::Mixed => matches!(expected, PhpType::Mixed),
+            PhpType::Union(members) => members
+                .iter()
+                .all(|member| self.type_contains_values(expected, member)),
+            _ => self.type_accepts(expected, actual),
+        }
+    }
+
     pub(crate) fn merged_assignment_type(
         &self,
         existing: &PhpType,
         new_ty: &PhpType,
     ) -> Option<PhpType> {
-        if self.type_accepts(existing, new_ty) {
+        if self.type_contains_values(existing, new_ty) {
             return Some(existing.clone());
+        }
+        // A Mixed side that reaches here failed containment, so the merge widens: the
+        // variable's content can no longer be represented by the narrower side.
+        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
+            return Some(PhpType::Mixed);
         }
         if matches!(existing, PhpType::Union(_)) {
             return None;
@@ -191,19 +225,26 @@ impl Checker {
         {
             return Some(existing.clone());
         }
-        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
-            return Some(PhpType::Mixed);
-        }
         if *new_ty == PhpType::Void {
             return Some(existing.clone());
         }
         if *existing == PhpType::Void {
             return Some(new_ty.clone());
         }
+        if matches!((existing, new_ty), (PhpType::False, PhpType::Bool)) {
+            // `false` is a bool value: Bool holds everything both sides can produce.
+            return Some(PhpType::Bool);
+        }
         if matches!(existing, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float)
             && matches!(new_ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float)
         {
-            return Some(existing.clone());
+            // Heterogeneous scalar pairs widen: keeping `existing` made the merge lie in
+            // BOTH directions — `$x = 1; $x = 1.5;` kept Int and the inferred-int return
+            // re-truncated the float, while `$x = 1.5; $x = 2;` kept Float and the
+            // inferred-float return converted the int back up. Homogeneous pairs never
+            // reach here (the containment shortcut returns them), so this arm's old
+            // `existing` answer only ever served the lying cases.
+            return Some(PhpType::Mixed);
         }
         if Self::pointer_types_compatible(existing, new_ty) {
             return Some(match (existing, new_ty) {

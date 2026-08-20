@@ -36,6 +36,9 @@ fn generate_project_asm(
     let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
         &ir_module,
         gc_stats,
+        false, // counters
+        elephc::codegen::Instrumentation::Off, // instrument
+        false, // probe
         heap_debug,
         requires_elephc_tls,
         elephc::codegen::Emit::Executable,

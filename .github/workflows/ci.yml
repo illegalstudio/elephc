@@ -28,6 +28,8 @@ env:
     -p elephc-image
     -p elephc-magician
     -p elephc-web
+    -p elephc-instr
+    -p elephc-probe
 
 jobs:
   # Compile each platform once, then let that platform's tests start as soon as

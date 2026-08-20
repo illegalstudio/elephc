@@ -80,6 +80,56 @@ use crate::exports::ExportedFunction;
 use crate::ir::Module;
 use crate::types::PhpType;
 
+/// Which PHP functions carry `--instrument` hooks.
+///
+/// Instrumenting everything is exact but costs two clock reads and a bookkeeping
+/// update on every call, which is why it is a dev-build tool. Instrumenting a
+/// chosen few keeps that exactness where it was asked for and leaves the rest of
+/// the program at full speed — the shape production tracers use.
+///
+/// The trade is real and is reported rather than hidden: with a partial set, an
+/// uninstrumented callee's time lands in its instrumented caller's SELF, so self
+/// values stop partitioning the root's inclusive. The runtime is told, and says so.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Instrumentation {
+    /// No hooks at all.
+    #[default]
+    Off,
+    /// Every non-synthetic PHP function.
+    All,
+    /// Only the named functions. A trailing `*` matches by prefix, so
+    /// `PDOStatement::*` covers a class.
+    Only(Vec<String>),
+}
+
+impl Instrumentation {
+    /// Whether any hook is emitted at all.
+    pub fn is_on(&self) -> bool {
+        !matches!(self, Instrumentation::Off)
+    }
+
+    /// Whether this function should carry hooks.
+    pub fn covers(&self, name: &str) -> bool {
+        match self {
+            Instrumentation::Off => false,
+            Instrumentation::All => true,
+            Instrumentation::Only(names) => names.iter().any(|pattern| {
+                match pattern.strip_suffix('*') {
+                    Some(prefix) => name.starts_with(prefix),
+                    None => name == pattern,
+                }
+            }),
+        }
+    }
+
+    /// Whether the set is a subset, which is what makes the numbers need a caveat.
+    pub fn is_partial(&self) -> bool {
+        matches!(self, Instrumentation::Only(_))
+    }
+}
+
+
+
 /// Output artifact kind selected by the compiler's `--emit` flag.
 ///
 /// `Executable` produces a standalone native binary with a process entry point.
@@ -172,6 +222,9 @@ pub fn generate_user_asm_from_ir(
     generate_user_asm_from_ir_with_options(
         module,
         gc_stats,
+        false, // counters
+        Instrumentation::Off, // instrument
+        false, // probe
         heap_debug,
         false,
         Emit::Executable,
@@ -195,6 +248,9 @@ pub fn generate_user_asm_from_ir(
 pub fn generate_user_asm_from_ir_with_options(
     module: &Module,
     gc_stats: bool,
+    counters: bool,
+    instrument: Instrumentation,
+    probe: bool,
     heap_debug: bool,
     requires_elephc_tls: bool,
     emit: Emit,
@@ -216,6 +272,9 @@ pub fn generate_user_asm_from_ir_with_options(
         &mut emitter,
         &mut data,
         gc_stats,
+        counters,
+        instrument,
+        probe,
         heap_debug,
         requires_elephc_tls,
         emit,
@@ -353,4 +412,46 @@ fn finalize_user_asm(
         return crate::codegen::visibility::append_hidden_directives(&user_asm, &exported);
     }
     user_asm
+}
+
+#[cfg(test)]
+mod instrumentation_tests {
+    use super::Instrumentation;
+
+    /// Selection decides who pays the per-call cost, so a pattern matching too much
+    /// silently reinstates the overhead the flag exists to avoid — and one matching
+    /// too little leaves a hole in the profile with nothing to show for it.
+    #[test]
+    fn selection_matches_exactly_or_by_prefix() {
+        let only = Instrumentation::Only(vec![
+            "process_order".to_string(),
+            "PDOStatement::*".to_string(),
+        ]);
+        assert!(only.covers("process_order"));
+        assert!(only.covers("PDOStatement::execute"));
+        assert!(only.covers("PDOStatement::"), "the bare prefix still matches");
+        // A name that merely CONTAINS a pattern is not a match: substring matching
+        // would sweep in unrelated functions and quietly restore the full cost.
+        assert!(!only.covers("run_process_order"));
+        assert!(!only.covers("PDO::execute"));
+        assert!(!only.covers("format_money"));
+
+        assert!(Instrumentation::All.covers("anything"));
+        assert!(!Instrumentation::Off.covers("anything"));
+    }
+
+    /// Only a subset changes what "self" means, so only a subset carries the caveat.
+    #[test]
+    fn partiality_is_what_triggers_the_caveat() {
+        assert!(!Instrumentation::Off.is_partial());
+        assert!(
+            !Instrumentation::All.is_partial(),
+            "full coverage needs no caveat"
+        );
+        assert!(Instrumentation::Only(vec!["a".to_string()]).is_partial());
+
+        assert!(!Instrumentation::Off.is_on());
+        assert!(Instrumentation::All.is_on());
+        assert!(Instrumentation::Only(vec!["a".to_string()]).is_on());
+    }
 }
