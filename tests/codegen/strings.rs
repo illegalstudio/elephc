@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for search, transform, encoding, formatting, interpolation and hashes, and related suites.
+//! - Submodules group focused fixtures for search, transform, encoding, iconv, formatting, interpolation and hashes, and related suites.
 
 use crate::support::*;
 
@@ -15,6 +15,8 @@ mod search;
 mod transform;
 #[path = "strings/encoding.rs"]
 mod encoding;
+#[path = "strings/iconv.rs"]
+mod iconv;
 #[path = "strings/formatting.rs"]
 mod formatting;
 #[path = "strings/interpolation_and_hashes.rs"]

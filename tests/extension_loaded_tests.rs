@@ -300,3 +300,30 @@ fn get_loaded_extensions_dynamic_flag_tracks_linked_bridges() {
         "with --with-pdo the regular list gains PDO while the Zend list is unaffected"
     );
 }
+
+/// Verifies a bridge-free program does not report iconv merely because its names are known.
+#[test]
+fn unused_iconv_reports_extension_not_loaded() {
+    let dir = make_test_dir("ext_no_iconv");
+    let src = "<?php echo extension_loaded('iconv') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "no");
+}
+
+/// Verifies calling `iconv_strlen()` auto-links the bridge and reports its extension name.
+#[test]
+fn iconv_usage_reports_iconv_extension_loaded() {
+    let dir = make_test_dir("ext_iconv_auto");
+    let src = "<?php echo iconv_strlen('abc'), '|', extension_loaded('iconv') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "3|yes");
+}
+
+/// Verifies `--with-iconv` reports the extension even when no iconv function is called.
+#[test]
+fn with_iconv_reports_extension_loaded() {
+    let dir = make_test_dir("ext_iconv_forced");
+    let src = "<?php echo extension_loaded('iconv') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &["--with-iconv"]);
+    assert_eq!(run_binary(&bin), "yes");
+}
