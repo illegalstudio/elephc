@@ -12,7 +12,8 @@ use super::{
     ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
+    MB_STRLEN_UNKNOWN_ENCODING_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
@@ -420,6 +421,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         SPRINTF_UNKNOWN_SPEC_MSG
     ));
     out.push_str(&format!(
+        ".globl _iconv_strpos_offset_msg\n_iconv_strpos_offset_msg:\n    .ascii {:?}\n",
+        ICONV_STRPOS_OFFSET_MSG
+    ));
+    out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",
         HASH_UNKNOWN_ALGO_MSG
     ));
@@ -699,6 +704,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // only at a hash() call site so the shared runtime __rt_hash can call through
     // it without the runtime itself naming elephc-crypto. Programs that never
     // call hash() leave the slot null and do not pull in -lelephc_crypto.
+    // _elephc_iconv_call_fn / _elephc_iconv_release_fn: indirect pointers to the iconv
+    // bridge, published only at an iconv*() call site so the shared runtime never names
+    // elephc-iconv. Programs that never call one leave the slots null and do not pull in
+    // -lelephc_iconv.
+    out.push_str(&comm_directive("_elephc_iconv_call_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_iconv_release_fn", 8, target));
     out.push_str(&comm_directive("_elephc_crypto_hash_fn", 8, target));
     // _elephc_crypto_hmac_fn: indirect pointer to elephc_crypto_hmac, published
     // only at a hash_hmac() call site so the shared runtime __rt_hash_hmac can call

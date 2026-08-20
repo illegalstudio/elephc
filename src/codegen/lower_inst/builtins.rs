@@ -40,6 +40,7 @@ pub(crate) mod ctype;
 pub(crate) mod debug;
 mod eval;
 mod eval_facade;
+pub(crate) mod iconv;
 pub(crate) mod io;
 mod isset;
 mod count_empty;

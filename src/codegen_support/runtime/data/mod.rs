@@ -164,6 +164,9 @@ pub(crate) const SPRINTF_ARGCOUNT_MSG: &str =
 /// `snprintf` (that would expose `%n` and friends), so it reports PHP's `ValueError` instead.
 pub(crate) const SPRINTF_UNKNOWN_SPEC_MSG: &str =
     "Fatal error: Uncaught ValueError: Unknown format specifier\n";
+/// Catchable `\ValueError` message when `iconv_strpos()` receives an out-of-range offset.
+pub(crate) const ICONV_STRPOS_OFFSET_MSG: &str =
+    "iconv_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)";
 /// Catchable `\ValueError` message when `hash()` receives an unknown algorithm name.
 pub(crate) const HASH_UNKNOWN_ALGO_MSG: &str =
     "hash(): Argument #1 ($algo) must be a valid hashing algorithm";
