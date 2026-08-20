@@ -94,24 +94,20 @@ pub(super) fn lower_try_with_finally(
     span: Span,
 ) {
     if catches.is_empty() {
-        lower_try_finally_without_catches(ctx, try_body, finally_body);
+        lower_try_finally_without_catches(ctx, try_body, finally_body, span);
     } else {
         lower_try_catch_finally(ctx, try_body, catches, finally_body, span);
     }
 }
 
-/// Lowers a `try`/`finally` statement with no catch clauses.
+/// Lowers `try`/`finally` with a runtime handler so call-induced throws run the finalizer.
 pub(super) fn lower_try_finally_without_catches(
     ctx: &mut LoweringContext<'_, '_>,
     try_body: &[Stmt],
     finally_body: &[Stmt],
+    span: Span,
 ) {
-    let depth = push_finally_frame(ctx, finally_body, true, None);
-    lower_block(ctx, try_body);
-    pop_finally_frame_if_active(ctx, depth);
-    if !ctx.builder.insertion_block_is_terminated() {
-        lower_block(ctx, finally_body);
-    }
+    lower_try_catch_finally(ctx, try_body, &[], finally_body, span);
 }
 
 /// Lowers a `try`/`catch`/`finally` statement while preserving catch-before-finally order.
@@ -329,4 +325,3 @@ pub(super) fn catch_variable_type(catch: &CatchClause) -> PhpType {
     }
     PhpType::Object("Throwable".to_string())
 }
-

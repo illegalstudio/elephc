@@ -227,3 +227,38 @@ run(true, false);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies an exception thrown while evaluating an `exit` argument still enters `finally`
+/// with by-reference argument writes reflected in its guard state. Confirms "fc".
+#[test]
+fn test_dead_code_elimination_preserves_throwing_exit_argument_path_to_finally() {
+    let out = compile_and_run(
+        r#"<?php
+class Boom extends Exception {}
+function mutate_then_throw(bool &$flag): int {
+    $flag = false;
+    throw new Boom("boom");
+}
+function run(bool $flag): void {
+    if ($flag) {
+        try {
+            exit(mutate_then_throw($flag));
+        } finally {
+            if ($flag) {
+                echo "stale";
+            } else {
+                echo "f";
+            }
+        }
+    }
+}
+try {
+    run(true);
+} catch (Boom $e) {
+    echo "c";
+}
+"#,
+    );
+
+    assert_eq!(out, "fc");
+}
