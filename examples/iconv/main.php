@@ -10,7 +10,8 @@ echo "latin-1 : ", bin2hex($latin1), "\n";
 echo "back    : ", iconv("ISO-8859-1", "UTF-8", $latin1), "\n\n";
 
 // The target charset accepts libc's suffixes: //TRANSLIT approximates characters
-// the target cannot represent, and //IGNORE drops them.
+// the target cannot represent, and //IGNORE drops them. The approximation is the
+// platform iconv's own, so glibc prints "cafe" where GNU libiconv prints "caf'e".
 echo "translit: ", iconv("UTF-8", "ASCII//TRANSLIT", $utf8), "\n";
 echo "ignore  : ", iconv("UTF-8", "ASCII//IGNORE", $utf8), "\n\n";
 

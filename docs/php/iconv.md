@@ -25,9 +25,13 @@ call. See
 
 `$to_encoding` accepts the two suffixes the platform `iconv` defines:
 
-- `//TRANSLIT` approximates characters the target charset cannot represent
-  (`é` becomes `e` when converting to `ASCII//TRANSLIT`).
+- `//TRANSLIT` approximates characters the target charset cannot represent.
 - `//IGNORE` drops them instead.
+
+The approximation `//TRANSLIT` chooses belongs to the platform's `iconv`, not to PHP,
+so it differs between targets: glibc renders `é` as `e`, while GNU libiconv renders it
+as `'e`. PHP behaves the same way, reporting whatever its own provider produces. Only
+`//IGNORE` reads identically everywhere, because dropping a character has one spelling.
 
 ```php
 $utf8   = "Prüfung café";
@@ -35,7 +39,7 @@ $latin1 = iconv("UTF-8", "ISO-8859-1", $utf8);
 
 echo bin2hex($latin1);                        // 5072fc66756e6720636166e9
 echo iconv("ISO-8859-1", "UTF-8", $latin1);   // Prüfung café
-echo iconv("UTF-8", "ASCII//TRANSLIT", $utf8); // Prufung cafe
+echo iconv("UTF-8", "ASCII//TRANSLIT", $utf8); // Prufung cafe   (glibc)
 echo iconv("UTF-8", "ASCII//IGNORE", $utf8);   // Prfung caf
 ```
 

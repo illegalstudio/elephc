@@ -53,12 +53,17 @@ fn malformed_input_reports_notices() {
 ///
 /// `//IGNORE` needs php-src's own skip loop because glibc still reports `EILSEQ`, and
 /// `//TRANSLIT` needs a UTF-8 `LC_CTYPE`, which opening a converter installs.
+///
+/// The replacement text `//TRANSLIT` picks is the platform iconv's, not PHP's: glibc
+/// approximates `\u{e9}` as `e`, GNU libiconv as `'e`. PHP reports whichever its own
+/// provider produces, so both spellings are pinned rather than one of them asserted
+/// everywhere. What matters on either platform is that the character was approximated
+/// instead of replaced by `?`, which is what the `LC_CTYPE` setup buys.
 #[test]
 fn honors_translit_and_ignore_suffixes() {
-    assert_eq!(
-        convert::convert(b"UTF-8", b"ASCII//TRANSLIT", "h\u{e9}llo".as_bytes()).unwrap(),
-        b"hello"
-    );
+    let translit =
+        convert::convert(b"UTF-8", b"ASCII//TRANSLIT", "h\u{e9}llo".as_bytes()).unwrap();
+    assert_eq!(translit, if cfg!(target_os = "macos") { &b"h'ello"[..] } else { &b"hello"[..] });
     assert_eq!(
         convert::convert(b"UTF-8", b"ISO-8859-1//IGNORE", "a\u{65e5}\u{672c}b".as_bytes())
             .unwrap(),

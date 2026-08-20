@@ -24,13 +24,18 @@ echo bin2hex($latin1), ':', iconv('ISO-8859-1', 'UTF-8', $latin1);",
 }
 
 /// Verifies `iconv()` honors libc's `//IGNORE` and `//TRANSLIT` target suffixes.
+///
+/// `//TRANSLIT`'s approximation comes from the platform's iconv, exactly as it does for
+/// PHP: glibc renders `é` as `e`, GNU libiconv as `'e`. `//IGNORE` drops the character
+/// outright, so it reads the same everywhere.
 #[test]
 fn test_iconv_supports_translit_and_ignore_suffixes() {
     let out = compile_and_run(
         "<?php echo iconv('UTF-8', 'ASCII//TRANSLIT', 'héllo'), ':',
 iconv('UTF-8', 'ISO-8859-1//IGNORE', 'a日本b');",
     );
-    assert_eq!(out, "hello:ab");
+    let expected = if cfg!(target_os = "macos") { "h'ello:ab" } else { "hello:ab" };
+    assert_eq!(out, expected);
 }
 
 /// Verifies a case-insensitive and a namespaced call reach the same builtin.
@@ -292,8 +297,11 @@ $encode('Subject', 'Prüfung'), '|', $decode('=?UTF-8?Q?a?='), '|',
 $headers('A: 1')['A'], '|', $get('internal_encoding'), '|',
 var_export($set('internal_encoding', 'UTF-8'), true);",
     );
+    // `//TRANSLIT` spells its approximation the way the platform's iconv does; see
+    // `test_iconv_supports_translit_and_ignore_suffixes`.
+    let cafe = if cfg!(target_os = "macos") { "caf'e" } else { "cafe" };
     assert_eq!(
         out,
-        "5|cafe|éll|2|false|4|Subject: =?UTF-8?B?UHLDvGZ1bmc=?=|a|1|UTF-8|true"
+        format!("5|{cafe}|éll|2|false|4|Subject: =?UTF-8?B?UHLDvGZ1bmc=?=|a|1|UTF-8|true")
     );
 }
