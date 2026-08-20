@@ -22,6 +22,7 @@ struct CallbackParameters {
 }
 
 const CALLBACK: &[&str] = &["callback"];
+const HANDLER: &[&str] = &["handler"];
 
 const CALLBACK_PARAMETERS: &[CallbackParameters] = &[
     callback_parameters("array_all", CALLBACK),
@@ -38,6 +39,7 @@ const CALLBACK_PARAMETERS: &[CallbackParameters] = &[
     callback_parameters("call_user_func_array", CALLBACK),
     callback_parameters("iterator_apply", CALLBACK),
     callback_parameters("ob_start", CALLBACK),
+    callback_parameters("pcntl_signal", HANDLER),
     callback_parameters("preg_replace_callback", CALLBACK),
     callback_parameters("spl_autoload_register", CALLBACK),
     callback_parameters("spl_autoload_unregister", CALLBACK),
@@ -86,6 +88,10 @@ mod tests {
         assert_eq!(
             names(BuiltinId::from_canonical_name("array_map")),
             &["callback"]
+        );
+        assert_eq!(
+            names(BuiltinId::from_canonical_name("pcntl_signal")),
+            &["handler"]
         );
         assert!(names(BuiltinId::from_canonical_name("strlen")).is_empty());
         let differently_named = callback_parameters("future_builtin", &["handler"]);
