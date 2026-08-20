@@ -17,6 +17,10 @@ const PHAR: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_phar")]
 const TLS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_tls")];
 const ZLIB: &[BuiltinRequirement] = &[BuiltinRequirement::SystemLibrary("z")];
 const ICONV_MACOS: &[BuiltinRequirement] = &[BuiltinRequirement::MacOsLibrary("iconv")];
+const ICONV_BRIDGE: &[BuiltinRequirement] = &[
+    BuiltinRequirement::Bridge("elephc_iconv"),
+    BuiltinRequirement::MacOsLibrary("iconv"),
+];
 const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pcre2")];
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
@@ -100,6 +104,23 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
     }
     if matches_name(id, &["mb_strlen"]) {
         return ICONV_MACOS;
+    }
+    if matches_name(
+        id,
+        &[
+            "iconv",
+            "iconv_get_encoding",
+            "iconv_mime_decode",
+            "iconv_mime_decode_headers",
+            "iconv_mime_encode",
+            "iconv_set_encoding",
+            "iconv_strlen",
+            "iconv_strpos",
+            "iconv_strrpos",
+            "iconv_substr",
+        ],
+    ) {
+        return ICONV_BRIDGE;
     }
     if matches_name(
         id,
