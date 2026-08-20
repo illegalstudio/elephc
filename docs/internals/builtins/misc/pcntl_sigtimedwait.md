@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
 - **Result ownership**: `fresh`
-- **Effects**: `static (5 declared effects)`
+- **Effects**: `static (6 declared effects)`
 - **Requirements**: `static (1 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `linux-aarch64`, `linux-x86_64`

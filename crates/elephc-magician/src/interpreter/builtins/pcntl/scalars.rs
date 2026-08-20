@@ -17,6 +17,7 @@ const PCNTL_CPU_CAPACITY: usize = 1024;
 pub(super) fn eval_pcntl_scalar_result(
     name: &str,
     args: &[Option<EvaluatedCallArg>],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let result = match name {
@@ -43,8 +44,8 @@ pub(super) fn eval_pcntl_scalar_result(
             }
             values.int(i64::from(elephc_pcntl::elephc_pcntl_get_last_error()))?
         }
-        "pcntl_getpriority" => eval_pcntl_getpriority(args, values)?,
-        "pcntl_setpriority" => eval_pcntl_setpriority(args, values)?,
+        "pcntl_getpriority" => eval_pcntl_getpriority(args, context, values)?,
+        "pcntl_setpriority" => eval_pcntl_setpriority(args, context, values)?,
         "pcntl_strerror" => eval_pcntl_strerror(args, values)?,
         "pcntl_wifcontinued" | "pcntl_wifexited" | "pcntl_wifsignaled"
         | "pcntl_wifstopped" | "pcntl_wexitstatus" | "pcntl_wstopsig"
@@ -59,11 +60,11 @@ pub(super) fn eval_pcntl_scalar_result(
         #[cfg(target_os = "linux")]
         "pcntl_getcpuaffinity" => eval_pcntl_getcpuaffinity(args, values)?,
         #[cfg(target_os = "linux")]
-        "pcntl_setcpuaffinity" => eval_pcntl_setcpuaffinity(args, values)?,
+        "pcntl_setcpuaffinity" => eval_pcntl_setcpuaffinity(args, context, values)?,
         #[cfg(target_os = "linux")]
-        "pcntl_setns" => eval_pcntl_setns(args, values)?,
+        "pcntl_setns" => eval_pcntl_setns(args, context, values)?,
         #[cfg(target_os = "linux")]
-        "pcntl_unshare" => eval_pcntl_unshare(args, values)?,
+        "pcntl_unshare" => eval_pcntl_unshare(args, context, values)?,
         _ => return Ok(None),
     };
     Ok(Some(result))
@@ -85,10 +86,12 @@ pub(super) fn eval_pcntl_optional_int(
 /// Returns a priority or PHP false without conflating a valid `-1` priority with failure.
 fn eval_pcntl_getpriority(
     args: &[Option<EvaluatedCallArg>],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let process_id = eval_pcntl_optional_int(eval_pcntl_arg(args, 0), 0, values)?;
     let mode = eval_pcntl_optional_int(eval_pcntl_arg(args, 1), 0, values)?;
+    eval_validate_priority_mode("pcntl_getpriority", 2, mode, context, values)?;
     let mut priority = 0;
     let success = unsafe {
         elephc_pcntl::elephc_pcntl_getpriority(process_id, mode as libc::c_int, &mut priority)
@@ -103,11 +106,13 @@ fn eval_pcntl_getpriority(
 /// Changes a process priority and returns the bridge success flag.
 fn eval_pcntl_setpriority(
     args: &[Option<EvaluatedCallArg>],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let priority = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
     let process_id = eval_pcntl_optional_int(eval_pcntl_arg(args, 1), 0, values)?;
     let mode = eval_pcntl_optional_int(eval_pcntl_arg(args, 2), 0, values)?;
+    eval_validate_priority_mode("pcntl_setpriority", 3, mode, context, values)?;
     values.bool_value(
         elephc_pcntl::elephc_pcntl_setpriority(
             priority as libc::c_int,
@@ -115,6 +120,35 @@ fn eval_pcntl_setpriority(
             mode as libc::c_int,
         ) != 0,
     )
+}
+
+/// Raises PHP's target-specific `ValueError` for an unsupported priority selector.
+fn eval_validate_priority_mode(
+    name: &str,
+    argument: usize,
+    mode: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    #[cfg(target_os = "macos")]
+    let (valid, allowed) = (
+        (0..=3).contains(&mode),
+        "PRIO_PGRP, PRIO_USER, PRIO_PROCESS or PRIO_DARWIN_THREAD",
+    );
+    #[cfg(target_os = "linux")]
+    let (valid, allowed) = (
+        (0..=2).contains(&mode),
+        "PRIO_PGRP, PRIO_USER, or PRIO_PROCESS",
+    );
+    if valid {
+        return Ok(());
+    }
+    let _: RuntimeCellHandle = eval_throw_builtin_value_error(
+        &format!("{name}(): Argument #{argument} ($mode) must be one of {allowed}"),
+        context,
+        values,
+    )?;
+    Ok(())
 }
 
 /// Copies libc's borrowed `strerror` bytes into a PHP string cell.
@@ -195,37 +229,104 @@ fn eval_pcntl_getcpuaffinity(
 #[cfg(target_os = "linux")]
 fn eval_pcntl_setcpuaffinity(
     args: &[Option<EvaluatedCallArg>],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let process_id = eval_pcntl_optional_int(eval_pcntl_arg(args, 0), 0, values)?;
     let cpus = eval_pcntl_int_array(eval_pcntl_required_arg(args, 1)?.value, values)?;
-    let success = unsafe {
+    let result = unsafe {
         elephc_pcntl::elephc_pcntl_setcpuaffinity(process_id, cpus.as_ptr(), cpus.len())
     };
-    values.bool_value(success != 0)
+    match result {
+        1 => values.bool_value(true),
+        -4..=-1 => eval_throw_builtin_value_error(
+            &elephc_pcntl::pcntl_cpu_affinity_value_error(result, process_id),
+            context,
+            values,
+        ),
+        _ => {
+            values.warning(&elephc_pcntl::pcntl_last_error_warning(
+                elephc_pcntl::PCNTL_WARNING_CPU_AFFINITY,
+            ))?;
+            values.bool_value(false)
+        }
+    }
 }
 
 /// Joins the selected Linux process namespace.
 #[cfg(target_os = "linux")]
 fn eval_pcntl_setns(
     args: &[Option<EvaluatedCallArg>],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let process_id = eval_pcntl_optional_int(eval_pcntl_arg(args, 0), 0, values)?;
+    let process_arg = eval_pcntl_arg(args, 0);
+    let use_current_process = match process_arg {
+        None => true,
+        Some(arg) => values.is_null(arg.value)?,
+    };
+    let process_id = if use_current_process {
+        i64::from(unsafe { libc::getpid() })
+    } else {
+        eval_pcntl_optional_int(process_arg, 0, values)?
+    };
     let namespace_type =
         eval_pcntl_optional_int(eval_pcntl_arg(args, 1), 0x4000_0000, values)?;
-    values.bool_value(
-        elephc_pcntl::elephc_pcntl_setns(process_id, namespace_type as libc::c_int) != 0,
-    )
+    let result =
+        elephc_pcntl::elephc_pcntl_setns(process_id, namespace_type as libc::c_int);
+    match result {
+        1 => values.bool_value(true),
+        -1 => eval_throw_builtin_value_error(
+            &format!(
+                "pcntl_setns(): Argument #1 ($process_id) is not a valid process ({process_id})"
+            ),
+            context,
+            values,
+        ),
+        -2 => eval_throw_builtin_value_error(
+            &format!(
+                "pcntl_setns(): Argument #1 ($process_id) process no longer available ({process_id})"
+            ),
+            context,
+            values,
+        ),
+        -3 => eval_throw_builtin_value_error(
+            &format!(
+                "pcntl_setns(): Argument #2 ($nstype) is an invalid nstype ({namespace_type})"
+            ),
+            context,
+            values,
+        ),
+        _ => {
+            values.warning(&elephc_pcntl::pcntl_last_error_warning(
+                elephc_pcntl::PCNTL_WARNING_SETNS,
+            ))?;
+            values.bool_value(false)
+        }
+    }
 }
 
 /// Disassociates the requested Linux execution contexts.
 #[cfg(target_os = "linux")]
 fn eval_pcntl_unshare(
     args: &[Option<EvaluatedCallArg>],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let flags = eval_pcntl_required_arg(args, 0)?;
     let flags = eval_int_value(flags.value, values)?;
-    values.bool_value(elephc_pcntl::elephc_pcntl_unshare(flags as libc::c_int) != 0)
+    match elephc_pcntl::elephc_pcntl_unshare(flags as libc::c_int) {
+        1 => values.bool_value(true),
+        -1 => eval_throw_builtin_value_error(
+            "pcntl_unshare(): Argument #1 ($flags) must be a combination of CLONE_* flags, or at least one flag is unsupported by the kernel",
+            context,
+            values,
+        ),
+        _ => {
+            values.warning(&elephc_pcntl::pcntl_last_error_warning(
+                elephc_pcntl::PCNTL_WARNING_UNSHARE,
+            ))?;
+            values.bool_value(false)
+        }
+    }
 }

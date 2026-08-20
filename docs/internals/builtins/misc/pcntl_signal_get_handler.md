@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `shared`
 - **Result type source**: `declared`
 - **Result ownership**: `fresh`
-- **Effects**: `static (3 declared effects)`
+- **Effects**: `static (4 declared effects)`
 - **Requirements**: `static (1 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`

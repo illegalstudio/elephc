@@ -25,10 +25,16 @@ pub use signals::*;
 
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, Ordering};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::AtomicI64;
 #[cfg(test)]
 use std::sync::Mutex;
 
 static LAST_ERROR: AtomicI32 = AtomicI32::new(0);
+#[cfg(target_os = "linux")]
+static LAST_CPU_AFFINITY_ID: AtomicI64 = AtomicI64::new(0);
+#[cfg(target_os = "linux")]
+static LAST_CPU_AFFINITY_LIMIT: AtomicI64 = AtomicI64::new(0);
 #[cfg(test)]
 static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -38,6 +44,12 @@ pub const PCNTL_WARNING_FORK: libc::c_int = 0;
 pub const PCNTL_WARNING_EXEC: libc::c_int = 1;
 /// Selects PHP's `pcntl_signal()` failure warning in the stable formatting ABI.
 pub const PCNTL_WARNING_SIGNAL: libc::c_int = 2;
+/// Selects PHP's `pcntl_setns()` failure warning in the stable formatting ABI.
+pub const PCNTL_WARNING_SETNS: libc::c_int = 3;
+/// Selects PHP's `pcntl_unshare()` failure warning in the stable formatting ABI.
+pub const PCNTL_WARNING_UNSHARE: libc::c_int = 4;
+/// Selects PHP's CPU-affinity failure warning in the stable formatting ABI.
+pub const PCNTL_WARNING_CPU_AFFINITY: libc::c_int = 5;
 
 /// Reads the current thread's OS errno without mutating PCNTL state.
 fn current_errno() -> libc::c_int {
@@ -47,6 +59,15 @@ fn current_errno() -> libc::c_int {
 /// Records the current thread's OS errno as the last PCNTL error.
 fn record_errno() {
     LAST_ERROR.store(current_errno(), Ordering::Relaxed);
+}
+
+/// Returns whether a positive Linux process id is already absent without changing its state.
+#[cfg(target_os = "linux")]
+fn linux_process_id_is_missing(process_id: i64) -> bool {
+    if process_id <= 0 || process_id > i64::from(libc::pid_t::MAX) {
+        return process_id != 0;
+    }
+    unsafe { libc::kill(process_id as libc::pid_t, 0) == -1 && current_errno() == libc::ESRCH }
 }
 
 /// Returns a writable pointer to the target C library's thread-local errno.
@@ -183,6 +204,39 @@ pub fn pcntl_last_error_warning(kind: libc::c_int) -> String {
             format!("Warning: pcntl_exec(): Error has occurred: (errno {error}) {detail}\n")
         }
         PCNTL_WARNING_SIGNAL => "Warning: pcntl_signal(): Error assigning signal\n".to_string(),
+        PCNTL_WARNING_SETNS => {
+            let detail = match error {
+                libc::ENFILE => "File descriptors per-process limit reached",
+                libc::ENODEV => "Anonymous inode fs unsupported",
+                libc::ENOMEM => "Insufficient memory for pidfd_open",
+                libc::EPERM => "No required capability for this process",
+                _ => return format!("Warning: pcntl_setns(): Error {error}\n"),
+            };
+            format!("Warning: pcntl_setns(): Error {error}: {detail}\n")
+        }
+        PCNTL_WARNING_UNSHARE => {
+            let detail = match error {
+                libc::ENOMEM => "Insufficient memory for unshare",
+                libc::EPERM => "No privilege to use these flags",
+                libc::ENOSPC => {
+                    "Reached the maximum nesting limit for one of the specified namespaces"
+                }
+                libc::EUSERS => "Reached the maximum nesting limit for the user namespace",
+                _ => {
+                    return format!(
+                        "Warning: pcntl_unshare(): Unknown error {error} has occurred\n"
+                    )
+                }
+            };
+            format!("Warning: pcntl_unshare(): Error {error}: {detail}\n")
+        }
+        PCNTL_WARNING_CPU_AFFINITY => {
+            let detail = match error {
+                libc::EPERM => "Calling process not having the proper privileges".to_string(),
+                _ => format!("Error {error}"),
+            };
+            format!("Warning: pcntl_setcpuaffinity(): {detail}\n")
+        }
         _ => "Warning: PCNTL operation failed\n".to_string(),
     }
 }
@@ -203,6 +257,47 @@ pub unsafe extern "C" fn elephc_pcntl_format_last_error_warning(
     let warning = pcntl_last_error_warning(kind);
     let copied = warning.len().min(capacity);
     std::ptr::copy_nonoverlapping(warning.as_ptr(), buffer, copied);
+    copied
+}
+
+/// Formats the PHP `ValueError` selected by a CPU-affinity bridge classification.
+#[cfg(target_os = "linux")]
+pub fn pcntl_cpu_affinity_value_error(kind: libc::c_int, process_id: i64) -> String {
+    match kind {
+        -1 => {
+            "pcntl_setcpuaffinity(): Argument #2 ($cpu_ids) must not be empty".to_string()
+        }
+        -2 => format!(
+            "pcntl_setcpuaffinity(): Argument #2 ($cpu_ids) cpu id must be between 0 and {} ({})",
+            LAST_CPU_AFFINITY_LIMIT.load(Ordering::Relaxed),
+            LAST_CPU_AFFINITY_ID.load(Ordering::Relaxed),
+        ),
+        -3 => format!(
+            "pcntl_setcpuaffinity(): Argument #1 ($process_id) invalid process ({process_id})"
+        ),
+        -4 => "pcntl_setcpuaffinity(): Argument #2 ($cpu_ids) invalid cpu affinity mask size or unmapped cpu id(s)".to_string(),
+        _ => "pcntl_setcpuaffinity(): Invalid CPU affinity arguments".to_string(),
+    }
+}
+
+/// Copies one formatted CPU-affinity `ValueError` into caller-owned storage.
+///
+/// # Safety
+/// `buffer` must be writable for `capacity` bytes when `capacity` is nonzero.
+#[cfg(target_os = "linux")]
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_format_cpu_affinity_value_error(
+    kind: libc::c_int,
+    process_id: i64,
+    buffer: *mut u8,
+    capacity: usize,
+) -> usize {
+    if buffer.is_null() || capacity == 0 {
+        return 0;
+    }
+    let message = pcntl_cpu_affinity_value_error(kind, process_id);
+    let copied = message.len().min(capacity);
+    std::ptr::copy_nonoverlapping(message.as_ptr(), buffer, copied);
     copied
 }
 
@@ -401,8 +496,8 @@ pub unsafe extern "C" fn elephc_pcntl_getcpuaffinity(
 
 /// Replaces the selected process CPU affinity with the supplied CPU identifier list.
 ///
-/// Returns one on success or zero after recording errno. Empty masks and identifiers outside the
-/// configured CPU range are rejected with `EINVAL`, matching PHP's value validation boundary.
+/// Returns one on success, a negative PHP `ValueError` classification for invalid inputs, or zero
+/// after recording an errno that PHP reports as a warning.
 ///
 /// # Safety
 /// `cpus` must point to readable storage for at least `count` `i64` values.
@@ -415,7 +510,7 @@ pub unsafe extern "C" fn elephc_pcntl_setcpuaffinity(
 ) -> libc::c_int {
     if cpus.is_null() || count == 0 {
         LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
-        return 0;
+        return -1;
     }
     let configured = libc::sysconf(libc::_SC_NPROCESSORS_CONF);
     let limit = if configured > 0 {
@@ -424,15 +519,21 @@ pub unsafe extern "C" fn elephc_pcntl_setcpuaffinity(
         libc::CPU_SETSIZE as usize
     }
     .min(libc::CPU_SETSIZE as usize);
+    LAST_CPU_AFFINITY_LIMIT.store(limit as i64, Ordering::Relaxed);
     let mut mask = std::mem::zeroed::<libc::cpu_set_t>();
     libc::CPU_ZERO(&mut mask);
     for index in 0..count {
-        let cpu = *cpus.add(index);
+        let cpu = std::ptr::read_unaligned(cpus.add(index));
         if cpu < 0 || cpu as usize >= limit {
             LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
-            return 0;
+            LAST_CPU_AFFINITY_ID.store(cpu, Ordering::Relaxed);
+            return -2;
         }
         libc::CPU_SET(cpu as usize, &mut mask);
+    }
+    if linux_process_id_is_missing(process_id) {
+        LAST_ERROR.store(libc::ESRCH, Ordering::Relaxed);
+        return -3;
     }
     if libc::sched_setaffinity(
         process_id as libc::pid_t,
@@ -441,6 +542,12 @@ pub unsafe extern "C" fn elephc_pcntl_setcpuaffinity(
     ) != 0
     {
         record_errno();
+        if current_errno() == libc::ESRCH {
+            return -3;
+        }
+        if current_errno() == libc::EINVAL {
+            return -4;
+        }
         return 0;
     }
     1
@@ -448,22 +555,30 @@ pub unsafe extern "C" fn elephc_pcntl_setcpuaffinity(
 
 /// Joins the selected process namespace identified by `namespace_type`.
 ///
-/// A process id of zero selects the calling process. Returns one on success or zero after
-/// recording the `pidfd_open()` or `setns()` errno.
+/// The caller resolves PHP's omitted/null first argument to its current process id. Returns one
+/// on success, zero for an OS warning, or a negative value classifying PHP's argument
+/// `ValueError` cases while preserving the underlying errno.
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub extern "C" fn elephc_pcntl_setns(
     process_id: i64,
     namespace_type: libc::c_int,
 ) -> libc::c_int {
-    let pid = if process_id == 0 {
-        unsafe { libc::getpid() }
-    } else {
-        process_id as libc::pid_t
-    };
+    if process_id <= 0 || process_id > i64::from(libc::pid_t::MAX) {
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    if linux_process_id_is_missing(process_id) {
+        LAST_ERROR.store(libc::ESRCH, Ordering::Relaxed);
+        return -1;
+    }
+    let pid = process_id as libc::pid_t;
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) as libc::c_int };
     if fd == -1 {
         record_errno();
+        if matches!(current_errno(), libc::EINVAL | libc::ESRCH) {
+            return -1;
+        }
         return 0;
     }
     let result = unsafe { libc::setns(fd, namespace_type) };
@@ -475,6 +590,12 @@ pub extern "C" fn elephc_pcntl_setns(
     unsafe { libc::close(fd) };
     if result == -1 {
         LAST_ERROR.store(setns_error, Ordering::Relaxed);
+        if setns_error == libc::ESRCH {
+            return -2;
+        }
+        if setns_error == libc::EINVAL {
+            return -3;
+        }
         return 0;
     }
     1
@@ -482,12 +603,27 @@ pub extern "C" fn elephc_pcntl_setns(
 
 /// Disassociates the requested Linux process execution contexts.
 ///
-/// Returns one on success or zero after recording errno, matching PHP's boolean surface.
+/// Returns one on success, minus one for PHP's invalid-flags `ValueError`, or zero after
+/// recording an errno that PHP reports as a warning.
 #[cfg(target_os = "linux")]
 #[no_mangle]
 pub extern "C" fn elephc_pcntl_unshare(flags: libc::c_int) -> libc::c_int {
+    let supported = libc::CLONE_NEWCGROUP
+        | libc::CLONE_NEWIPC
+        | libc::CLONE_NEWNET
+        | libc::CLONE_NEWNS
+        | libc::CLONE_NEWPID
+        | libc::CLONE_NEWUSER
+        | libc::CLONE_NEWUTS;
+    if flags & !supported != 0 {
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return -1;
+    }
     if unsafe { libc::unshare(flags) } == -1 {
         record_errno();
+        if current_errno() == libc::EINVAL {
+            return -1;
+        }
         return 0;
     }
     1

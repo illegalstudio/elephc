@@ -106,8 +106,15 @@ fn eval_pcntl_signal(
         .map(|arg| values.truthy(arg.value))
         .transpose()?
         .unwrap_or_else(|| default_restart_syscalls(signal));
-    let (disposition, stored) = if matches!(values.type_tag(handler)?, EVAL_TAG_INT | EVAL_TAG_BOOL)
-    {
+    let handler_tag = values.type_tag(handler)?;
+    if handler_tag == EVAL_TAG_BOOL {
+        return eval_throw_type_error(
+            "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given",
+            context,
+            values,
+        );
+    }
+    let (disposition, stored) = if handler_tag == EVAL_TAG_INT {
         let disposition = eval_int_value(handler, values)?;
         if !(0..=1).contains(&disposition) {
             return eval_throw_builtin_value_error(
@@ -185,6 +192,24 @@ fn eval_pcntl_sigprocmask(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let how = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
     let signals = eval_pcntl_int_array(eval_pcntl_required_arg(args, 1)?.value, values)?;
+    if !matches!(
+        how as libc::c_int,
+        libc::SIG_BLOCK | libc::SIG_UNBLOCK | libc::SIG_SETMASK
+    ) {
+        return eval_throw_builtin_value_error(
+            "pcntl_sigprocmask(): Argument #1 ($mode) must be one of SIG_BLOCK, SIG_UNBLOCK, or SIG_SETMASK",
+            context,
+            values,
+        );
+    }
+    eval_validate_pcntl_signal_set(
+        "pcntl_sigprocmask",
+        2,
+        &signals,
+        how as libc::c_int == libc::SIG_SETMASK,
+        context,
+        values,
+    )?;
     let old_arg = eval_pcntl_arg(args, 2);
     let mut old = vec![0i64; elephc_pcntl::elephc_pcntl_signal_limit() as usize];
     let count = unsafe {
@@ -230,12 +255,39 @@ fn eval_pcntl_signal_wait(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let signals = eval_pcntl_int_array(eval_pcntl_required_arg(args, 0)?.value, values)?;
+    let name = if timed {
+        "pcntl_sigtimedwait"
+    } else {
+        "pcntl_sigwaitinfo"
+    };
+    eval_validate_pcntl_signal_set(name, 1, &signals, false, context, values)?;
     let info_arg = eval_pcntl_arg(args, 1);
     let mut info = ElephcPcntlSigInfo::default();
     let signal = unsafe {
         if timed {
             let seconds = eval_pcntl_optional_int(eval_pcntl_arg(args, 2), 0, values)?;
             let nanoseconds = eval_pcntl_optional_int(eval_pcntl_arg(args, 3), 0, values)?;
+            if seconds < 0 {
+                return eval_throw_builtin_value_error(
+                    "pcntl_sigtimedwait(): Argument #3 ($seconds) must be greater than or equal to 0",
+                    context,
+                    values,
+                );
+            }
+            if !(0..1_000_000_000).contains(&nanoseconds) {
+                return eval_throw_builtin_value_error(
+                    "pcntl_sigtimedwait(): Argument #4 ($nanoseconds) must be between 0 and 1e9",
+                    context,
+                    values,
+                );
+            }
+            if seconds == 0 && nanoseconds == 0 {
+                return eval_throw_builtin_value_error(
+                    "pcntl_sigtimedwait(): At least one of argument #3 ($seconds) or argument #4 ($nanoseconds) must be greater than 0",
+                    context,
+                    values,
+                );
+            }
             elephc_pcntl::elephc_pcntl_sigtimedwait(
                 signals.as_ptr(),
                 signals.len(),
@@ -273,6 +325,38 @@ fn eval_pcntl_signal_wait(
         )?;
     }
     values.int(signal)
+}
+
+/// Raises PHP's signal-array `ValueError`s before an eval bridge call reaches libc.
+fn eval_validate_pcntl_signal_set(
+    name: &str,
+    argument: usize,
+    signals: &[i64],
+    allow_empty: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if signals.is_empty() && !allow_empty {
+        return eval_throw_builtin_value_error(
+            &format!("{name}(): Argument #{argument} ($signals) must not be empty"),
+            context,
+            values,
+        );
+    }
+    let maximum = i64::from(elephc_pcntl::elephc_pcntl_signal_limit()) - 1;
+    if signals
+        .iter()
+        .any(|signal| !(1..=maximum).contains(signal))
+    {
+        return eval_throw_builtin_value_error(
+            &format!(
+                "{name}(): Argument #{argument} ($signals) signals must be between 1 and {maximum}"
+            ),
+            context,
+            values,
+        );
+    }
+    Ok(())
 }
 
 /// Drains one masked signal snapshot and invokes its registered PHP callbacks.

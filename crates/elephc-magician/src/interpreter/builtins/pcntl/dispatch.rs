@@ -136,7 +136,7 @@ fn eval_pcntl_bound_result(
     if let Some(result) = eval_pcntl_qos_result(name, args, context, values)? {
         return Ok(result);
     }
-    if let Some(result) = eval_pcntl_scalar_result(name, args, values)? {
+    if let Some(result) = eval_pcntl_scalar_result(name, args, context, values)? {
         return Ok(result);
     }
     Err(EvalStatus::UnsupportedConstruct)

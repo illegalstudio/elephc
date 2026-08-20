@@ -8,7 +8,7 @@
 //! - Unsupported operations fail explicitly until their bridge ABI is implemented.
 
 use crate::codegen::context::FunctionContext;
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Platform};
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
     CodegenIrError, Result,
@@ -17,6 +17,7 @@ use crate::ir::{Immediate, Instruction, LocalSlotId, Op, PcntlRuntime, ValueDef,
 use crate::types::PhpType;
 
 use super::strings::load_as_int;
+use super::predicates;
 use super::{ensure_arg_count, ensure_arg_count_between, expect_operand, store_if_result};
 
 const PCNTL_CPU_CAPACITY: usize = 1024;
@@ -28,6 +29,9 @@ const PCNTL_WARNING_BUFFER_BYTES: usize = 256;
 pub(super) const PCNTL_WARNING_FORK: i64 = 0;
 pub(super) const PCNTL_WARNING_EXEC: i64 = 1;
 pub(super) const PCNTL_WARNING_SIGNAL: i64 = 2;
+const PCNTL_WARNING_SETNS: i64 = 3;
+const PCNTL_WARNING_UNSHARE: i64 = 4;
+const PCNTL_WARNING_CPU_AFFINITY: i64 = 5;
 
 /// Dispatches one typed PCNTL operation without consulting its PHP source name.
 pub(crate) fn lower(
@@ -53,14 +57,7 @@ pub(crate) fn lower(
         PcntlRuntime::GetPriority => lower_getpriority(ctx, inst),
         PcntlRuntime::GetQosClass => lower_getqos_class(ctx, inst),
         PcntlRuntime::SetCpuAffinity => lower_setcpuaffinity(ctx, inst),
-        PcntlRuntime::SetNs => lower_optional_binary_int_bridge(
-            ctx,
-            inst,
-            "pcntl_setns",
-            "elephc_pcntl_setns",
-            0,
-            0x4000_0000,
-        ),
+        PcntlRuntime::SetNs => lower_setns(ctx, inst),
         PcntlRuntime::SetPriority => lower_setpriority(ctx, inst),
         PcntlRuntime::SetQosClass => lower_setqos_class(ctx, inst),
         PcntlRuntime::Signal => super::pcntl_handlers::lower_signal(ctx, inst),
@@ -72,13 +69,7 @@ pub(crate) fn lower(
         PcntlRuntime::SignalTimedWait => super::pcntl_signals::lower_signal_wait(ctx, inst, true),
         PcntlRuntime::SignalWaitInfo => super::pcntl_signals::lower_signal_wait(ctx, inst, false),
         PcntlRuntime::StrError => lower_strerror(ctx, inst),
-        PcntlRuntime::Unshare => lower_unary_int_bridge(
-            ctx,
-            inst,
-            "pcntl_unshare",
-            "elephc_pcntl_unshare",
-            false,
-        ),
+        PcntlRuntime::Unshare => lower_unshare(ctx, inst),
         PcntlRuntime::Wait => lower_wait(ctx, inst, false),
         PcntlRuntime::WaitId => lower_waitid(ctx, inst),
         PcntlRuntime::WaitPid => lower_wait(ctx, inst, true),
@@ -215,11 +206,11 @@ fn lower_setqos_class(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction(&format!("ldr x1, [x0, #{}]", name_offset + 8)); // C arg1 = enum case-name length
-                ctx.emitter.instruction(&format!("ldr x0, [x0, #{}]", name_offset));     // C arg0 = enum case-name bytes
+                ctx.emitter.instruction(&format!("ldr x0, [x0, #{}]", name_offset)); // C arg0 = enum case-name bytes
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction(&format!("mov rsi, QWORD PTR [rax + {}]", name_offset + 8)); // C arg1 = enum case-name length
-                ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {}]", name_offset));     // C arg0 = enum case-name bytes
+                ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {}]", name_offset)); // C arg0 = enum case-name bytes
             }
         }
     } else {
@@ -339,7 +330,7 @@ fn lower_setcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let cpu_ids = expect_operand(inst, 1)?;
     let ty = ctx.load_value_to_result(cpu_ids)?.codegen_repr();
-    if !matches!(ty, PhpType::Array(ref element) if matches!(element.codegen_repr(), PhpType::Int | PhpType::Never)) {
+    if !matches!(ty, PhpType::Array(ref element) if matches!(&**element, PhpType::Int | PhpType::Never)) {
         return Err(CodegenIrError::unsupported(format!(
             "pcntl_setcpuaffinity CPU-id storage {ty:?}",
         )));
@@ -357,8 +348,103 @@ fn lower_setcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
         }
     }
     ctx.emitter.bl_c("elephc_pcntl_setcpuaffinity");
+    let success = ctx.next_label("pcntl_setcpuaffinity_success");
+    let empty = ctx.next_label("pcntl_setcpuaffinity_empty");
+    let cpu = ctx.next_label("pcntl_setcpuaffinity_cpu");
+    let process = ctx.next_label("pcntl_setcpuaffinity_process");
+    let mask = ctx.next_label("pcntl_setcpuaffinity_mask");
+    let done = ctx.next_label("pcntl_setcpuaffinity_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sxtw x0, w0");                             // preserve negative C int validation classifications
+            for (classification, label) in [
+                (1, &success),
+                (-1, &empty),
+                (-2, &cpu),
+                (-3, &process),
+                (-4, &mask),
+            ] {
+                ctx.emitter.instruction(&format!("cmp x0, #{classification}")); // select the PHP result for this bridge classification
+                ctx.emitter.instruction(&format!("b.eq {label}"));              // branch to success or its precise ValueError
+            }
+        }
+        Arch::X86_64 => {
+            for (classification, label) in [
+                (1, &success),
+                (-1, &empty),
+                (-2, &cpu),
+                (-3, &process),
+                (-4, &mask),
+            ] {
+                ctx.emitter.instruction(&format!("cmp eax, {classification}")); // select the PHP result for this bridge classification
+                ctx.emitter.instruction(&format!("je {label}"));                // branch to success or its precise ValueError
+            }
+        }
+    }
+    emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_CPU_AFFINITY);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&success);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&empty);
+    emit_cpu_affinity_value_error(ctx, -1);
+    ctx.emitter.label(&cpu);
+    emit_cpu_affinity_value_error(ctx, -2);
+    ctx.emitter.label(&process);
+    emit_cpu_affinity_value_error(ctx, -3);
+    ctx.emitter.label(&mask);
+    emit_cpu_affinity_value_error(ctx, -4);
+    ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     store_if_result(ctx, inst)
+}
+
+/// Formats and raises one classified Linux CPU-affinity `ValueError` from bridge state.
+fn emit_cpu_affinity_value_error(ctx: &mut FunctionContext<'_>, kind: i64) {
+    abi::emit_reserve_temporary_stack(ctx.emitter, PCNTL_WARNING_BUFFER_BYTES);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", kind);              // C arg0 = bridge validation classification
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                "x1",
+                PCNTL_WARNING_BUFFER_BYTES,
+            );                                                                  // C arg1 = preserved process id below the message buffer
+            ctx.emitter.instruction("mov x2, sp");                              // C arg2 = caller-owned message buffer
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x3",
+                PCNTL_WARNING_BUFFER_BYTES as i64,
+            );                                                                  // C arg3 = writable message capacity
+            ctx.emitter
+                .bl_c("elephc_pcntl_format_cpu_affinity_value_error");
+            ctx.emitter.instruction("mov x2, x0");                              // PHP string length = formatted byte count
+            ctx.emitter.instruction("mov x1, sp");                              // PHP string pointer = temporary message buffer
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", kind);             // C arg0 = bridge validation classification
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                "rsi",
+                PCNTL_WARNING_BUFFER_BYTES,
+            );                                                                  // C arg1 = preserved process id below the message buffer
+            ctx.emitter.instruction("mov rdx, rsp");                            // C arg2 = caller-owned message buffer
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "rcx",
+                PCNTL_WARNING_BUFFER_BYTES as i64,
+            );                                                                  // C arg3 = writable message capacity
+            ctx.emitter
+                .bl_c("elephc_pcntl_format_cpu_affinity_value_error");
+            ctx.emitter.instruction("mov rdx, rax");                            // PHP string length = formatted byte count
+            ctx.emitter.instruction("mov rax, rsp");                            // PHP string pointer = temporary message buffer
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    abi::emit_release_temporary_stack(ctx.emitter, PCNTL_WARNING_BUFFER_BYTES);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    super::super::exceptions::emit_value_error_from_string_result(ctx);
 }
 
 /// Lowers `pcntl_wait()` and `pcntl_waitpid()` with target-native status writeback.
@@ -417,6 +503,9 @@ fn lower_wait(
                 symbol
             });
             ctx.emitter.instruction("str x0, [sp, #8]");                        // preserve returned child id across status writeback
+            if ctx.local_php_type(status_slot)?.codegen_repr() == PhpType::Mixed {
+                ctx.release_local_before_refcounted_writeback(status_slot)?;
+            }
             ctx.emitter.instruction("ldrsw x0, [sp]");                          // load the target-native status as a PHP integer
             store_pcntl_status(ctx, status_slot)?;
             if let Some(slot) = usage_slot {
@@ -475,6 +564,9 @@ fn lower_wait(
                 symbol
             });
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // preserve returned child id across status writeback
+            if ctx.local_php_type(status_slot)?.codegen_repr() == PhpType::Mixed {
+                ctx.release_local_before_refcounted_writeback(status_slot)?;
+            }
             ctx.emitter.instruction("movsxd rax, DWORD PTR [rsp]");             // load the target-native status as a PHP integer
             store_pcntl_status(ctx, status_slot)?;
             if let Some(slot) = usage_slot {
@@ -756,25 +848,25 @@ pub(super) fn emit_pcntl_last_error_warning(ctx: &mut FunctionContext<'_>, kind:
     abi::emit_reserve_temporary_stack(ctx.emitter, PCNTL_WARNING_BUFFER_BYTES);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", kind);             // C arg0 = warning operation kind
+            abi::emit_load_int_immediate(ctx.emitter, "x0", kind);              // C arg0 = warning operation kind
             ctx.emitter.instruction("mov x1, sp");                              // C arg1 = caller-owned warning buffer
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 "x2",
                 PCNTL_WARNING_BUFFER_BYTES as i64,
-            );                                                                 // C arg2 = writable buffer capacity
+            );                                                                  // C arg2 = writable buffer capacity
             ctx.emitter.bl_c("elephc_pcntl_format_last_error_warning");
             ctx.emitter.instruction("mov x2, x0");                              // diagnostic arg1 = formatted byte count
             ctx.emitter.instruction("mov x1, sp");                              // diagnostic arg0 = formatted warning bytes
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rdi", kind);            // C arg0 = warning operation kind
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", kind);             // C arg0 = warning operation kind
             ctx.emitter.instruction("mov rsi, rsp");                            // C arg1 = caller-owned warning buffer
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 "rdx",
                 PCNTL_WARNING_BUFFER_BYTES as i64,
-            );                                                                 // C arg2 = writable buffer capacity
+            );                                                                  // C arg2 = writable buffer capacity
             ctx.emitter.bl_c("elephc_pcntl_format_last_error_warning");
             ctx.emitter.instruction("mov rsi, rax");                            // diagnostic arg1 = formatted byte count
             ctx.emitter.instruction("mov rdi, rsp");                            // diagnostic arg0 = formatted warning bytes
@@ -805,31 +897,173 @@ fn lower_unary_int_bridge(
     store_if_result(ctx, inst)
 }
 
-/// Lowers a bridge with two optional integer operands and fixed PHP defaults.
-fn lower_optional_binary_int_bridge(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    symbol: &str,
-    first_default: i64,
-    second_default: i64,
-) -> Result<()> {
-    ensure_arg_count_between(inst, name, 0, 2)?;
-    load_optional_int(ctx, inst.operands.first().copied(), first_default, name)?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    load_optional_int(ctx, inst.operands.get(1).copied(), second_default, name)?;
+/// Lowers `pcntl_setns()` while preserving null-vs-zero and PHP's error classes.
+fn lower_setns(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "pcntl_setns", 0, 2)?;
+    let invalid_process = ctx.next_label("pcntl_setns_invalid_process");
+    let missing_process = ctx.next_label("pcntl_setns_missing_process");
+    let invalid_namespace = ctx.next_label("pcntl_setns_invalid_namespace");
+    let warning = ctx.next_label("pcntl_setns_warning");
+    let success = ctx.next_label("pcntl_setns_success");
+    let done = ctx.next_label("pcntl_setns_done");
+    let process_resolved = ctx.next_label("pcntl_setns_process_resolved");
+
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    if let Some(process_id) = inst.operands.first().copied() {
+        predicates::emit_is_null_result(ctx, process_id)?;
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+        load_as_int(ctx, process_id, "pcntl_setns process_id")?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    }
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &process_resolved);
+    ctx.emitter.bl_c("getpid");
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&process_resolved);
+    load_optional_int(
+        ctx,
+        inst.operands.get(1).copied(),
+        0x4000_0000,
+        "pcntl_setns nstype",
+    )?;
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                              // C arg1 = second optional integer
-            abi::emit_pop_reg(ctx.emitter, "x0");                             // C arg0 = first optional integer
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 8);
+            ctx.emitter.bl_c("elephc_pcntl_setns");
+            ctx.emitter.instruction("sxtw x0, w0");                             // preserve negative C int classifications in 64-bit comparisons
+            ctx.emitter.instruction("cmp x0, #1");                              // distinguish success from PHP error classifications
+            ctx.emitter.instruction(&format!("b.eq {success}"));                // a successful namespace switch returns true
+            ctx.emitter.instruction("cmp x0, #-1");                             // did pidfd_open reject the process id?
+            ctx.emitter.instruction(&format!("b.eq {invalid_process}"));        // raise the first-argument ValueError
+            ctx.emitter.instruction("cmp x0, #-2");                             // did the process disappear before setns?
+            ctx.emitter.instruction(&format!("b.eq {missing_process}"));        // report the vanished process through ValueError
+            ctx.emitter.instruction("cmp x0, #-3");                             // did setns reject the namespace selector?
+            ctx.emitter.instruction(&format!("b.eq {invalid_namespace}"));      // raise the second-argument ValueError
+            ctx.emitter.instruction(&format!("b {warning}"));                   // remaining OS failures warn and return false
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov esi, eax");                            // C arg1 = second optional integer
-            abi::emit_pop_reg(ctx.emitter, "rdi");                            // C arg0 = first optional integer
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+            ctx.emitter.bl_c("elephc_pcntl_setns");
+            ctx.emitter.instruction("cmp eax, 1");                              // distinguish success from PHP error classifications
+            ctx.emitter.instruction(&format!("je {success}"));                  // a successful namespace switch returns true
+            ctx.emitter.instruction("cmp eax, -1");                             // did pidfd_open reject the process id?
+            ctx.emitter.instruction(&format!("je {invalid_process}"));          // raise the first-argument ValueError
+            ctx.emitter.instruction("cmp eax, -2");                             // did the process disappear before setns?
+            ctx.emitter.instruction(&format!("je {missing_process}"));          // report the vanished process through ValueError
+            ctx.emitter.instruction("cmp eax, -3");                             // did setns reject the namespace selector?
+            ctx.emitter.instruction(&format!("je {invalid_namespace}"));        // raise the second-argument ValueError
+            ctx.emitter.instruction(&format!("jmp {warning}"));                 // remaining OS failures warn and return false
         }
     }
-    ctx.emitter.bl_c(symbol);
+
+    ctx.emitter.label(&invalid_process);
+    emit_setns_integer_value_error(
+        ctx,
+        0,
+        "pcntl_setns(): Argument #1 ($process_id) is not a valid process (",
+    );
+    ctx.emitter.label(&missing_process);
+    emit_setns_integer_value_error(
+        ctx,
+        0,
+        "pcntl_setns(): Argument #1 ($process_id) process no longer available (",
+    );
+    ctx.emitter.label(&invalid_namespace);
+    emit_setns_integer_value_error(
+        ctx,
+        8,
+        "pcntl_setns(): Argument #2 ($nstype) is an invalid nstype (",
+    );
+
+    ctx.emitter.label(&warning);
+    emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_SETNS);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&success);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
+}
+
+/// Lowers `pcntl_unshare()` with PHP's invalid-flags exception and OS warning behavior.
+fn lower_unshare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "pcntl_unshare", 1)?;
+    load_as_int(ctx, expect_operand(inst, 0)?, "pcntl_unshare flags")?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // C arg0 = requested CLONE_* flags
+    }
+    ctx.emitter.bl_c("elephc_pcntl_unshare");
+    let success = ctx.next_label("pcntl_unshare_success");
+    let invalid = ctx.next_label("pcntl_unshare_invalid");
+    let done = ctx.next_label("pcntl_unshare_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sxtw x0, w0");                             // preserve the negative C int validation classification
+            ctx.emitter.instruction("cmp x0, #1");                              // distinguish successful unshare from failures
+            ctx.emitter.instruction(&format!("b.eq {success}"));                // successful calls return true
+            ctx.emitter.instruction("cmp x0, #-1");                             // EINVAL identifies PHP's argument ValueError
+            ctx.emitter.instruction(&format!("b.eq {invalid}"));                // raise instead of returning false silently
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp eax, 1");                              // distinguish successful unshare from failures
+            ctx.emitter.instruction(&format!("je {success}"));                  // successful calls return true
+            ctx.emitter.instruction("cmp eax, -1");                             // EINVAL identifies PHP's argument ValueError
+            ctx.emitter.instruction(&format!("je {invalid}"));                  // raise instead of returning false silently
+        }
+    }
+    emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_UNSHARE);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&success);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "pcntl_unshare(): Argument #1 ($flags) must be a combination of CLONE_* flags, or at least one flag is unsupported by the kernel",
+    );
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Builds and throws one `pcntl_setns()` ValueError containing a staged integer argument.
+fn emit_setns_integer_value_error(
+    ctx: &mut FunctionContext<'_>,
+    stack_offset: usize,
+    prefix: &str,
+) {
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        stack_offset,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
+    let (right_ptr, right_len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    };
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+    ctx.emitter.instruction(&format!("mov {right_ptr}, {text_ptr}"));           // move the decimal digits into concat's right operand
+    ctx.emitter.instruction(&format!("mov {right_len}, {text_len}"));           // move the digit count into concat's right operand
+    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
+    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    let (suffix_label, suffix_len) = ctx.data.add_string(b")");
+    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
+    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    super::super::exceptions::emit_value_error_from_string_result(ctx);
 }
 
 /// Lowers `pcntl_getpriority()` while preserving `-1` as a valid successful priority.
@@ -843,6 +1077,7 @@ fn lower_getpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             load_optional_int(ctx, inst.operands.first().copied(), 0, "pcntl_getpriority process_id")?;
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve process id while materializing mode
             load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_getpriority mode")?;
+            emit_validate_priority_mode(ctx, "pcntl_getpriority", 2);
             ctx.emitter.instruction("mov x1, x0");                              // C arg1 = priority selector mode
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // C arg0 = process id
             ctx.emitter.instruction("add x2, sp, #8");                          // C arg2 = writable priority output
@@ -862,6 +1097,7 @@ fn lower_getpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             load_optional_int(ctx, inst.operands.first().copied(), 0, "pcntl_getpriority process_id")?;
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve process id while materializing mode
             load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_getpriority mode")?;
+            emit_validate_priority_mode(ctx, "pcntl_getpriority", 2);
             ctx.emitter.instruction("mov esi, eax");                            // C arg1 = priority selector mode
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // C arg0 = process id
             ctx.emitter.instruction("lea rdx, [rsp + 8]");                      // C arg2 = writable priority output
@@ -890,20 +1126,52 @@ fn lower_setpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_setpriority process_id")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_optional_int(ctx, inst.operands.get(2).copied(), 0, "pcntl_setpriority mode")?;
+    emit_validate_priority_mode(ctx, "pcntl_setpriority", 3);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x2, x0");                              // C arg2 = priority selector mode
-            abi::emit_pop_reg(ctx.emitter, "x1");                              // C arg1 = process id
-            abi::emit_pop_reg(ctx.emitter, "x0");                              // C arg0 = requested priority
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // C arg1 = process id
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // C arg0 = requested priority
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov edx, eax");                            // C arg2 = priority selector mode
-            abi::emit_pop_reg(ctx.emitter, "rsi");                             // C arg1 = process id
-            abi::emit_pop_reg(ctx.emitter, "rdi");                             // C arg0 = requested priority
+            abi::emit_pop_reg(ctx.emitter, "rsi");                              // C arg1 = process id
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // C arg0 = requested priority
         }
     }
     ctx.emitter.bl_c("elephc_pcntl_setpriority");
     store_if_result(ctx, inst)
+}
+
+/// Raises PHP's target-specific `ValueError` when a priority selector is unsupported.
+fn emit_validate_priority_mode(ctx: &mut FunctionContext<'_>, name: &str, argument: usize) {
+    let valid = ctx.next_label("pcntl_priority_mode_valid");
+    let maximum = match ctx.emitter.target.platform {
+        Platform::MacOS => 3,
+        Platform::Linux => 2,
+        Platform::Windows => 0,
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{maximum}"));            // valid priority modes form a zero-based contiguous range
+            ctx.emitter.instruction(&format!("b.ls {valid}"));                  // accept only the target's exported PRIO_* selectors
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {maximum}"));            // valid priority modes form a zero-based contiguous range
+            ctx.emitter.instruction(&format!("jbe {valid}"));                   // accept only the target's exported PRIO_* selectors
+        }
+    }
+    let allowed = match ctx.emitter.target.platform {
+        Platform::MacOS => {
+            "PRIO_PGRP, PRIO_USER, PRIO_PROCESS or PRIO_DARWIN_THREAD"
+        }
+        Platform::Linux | Platform::Windows => "PRIO_PGRP, PRIO_USER, or PRIO_PROCESS",
+    };
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!("{name}(): Argument #{argument} ($mode) must be one of {allowed}"),
+    );
+    ctx.emitter.label(&valid);
 }
 
 /// Lowers `pcntl_strerror()` and persists libc's borrowed message as an owned PHP string.
@@ -929,7 +1197,7 @@ fn lower_strerror(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<(
             ctx.emitter.instruction("add rsp, 16");                             // release the temporary length slot
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_str_persist");                     // copy libc-owned bytes into fresh PHP string storage
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // copy libc-owned bytes into fresh PHP string storage
     store_if_result(ctx, inst)
 }
 

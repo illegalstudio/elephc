@@ -50327,7 +50327,8 @@
         "names": [
           "reads_heap",
           "reads_process",
-          "alloc_heap"
+          "alloc_heap",
+          "may_throw"
         ]
       },
       "lowering": {
@@ -50578,6 +50579,7 @@
           "writes_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },
@@ -50727,6 +50729,7 @@
           "writes_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },
@@ -50889,6 +50892,7 @@
           "writes_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },
@@ -51189,6 +51193,7 @@
           "writes_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },
@@ -51434,7 +51439,8 @@
         "names": [
           "reads_heap",
           "reads_process",
-          "alloc_heap"
+          "alloc_heap",
+          "may_throw"
         ]
       },
       "lowering": {
@@ -51590,6 +51596,7 @@
           "writes_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },
@@ -51775,6 +51782,7 @@
           "writes_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },
@@ -51938,6 +51946,7 @@
           "writes_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },
@@ -52197,6 +52206,7 @@
           "writes_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },

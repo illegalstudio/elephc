@@ -76,32 +76,26 @@ pub(super) fn eval_pcntl_siginfo_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let candidates = [
-        ("signo", info.signo, elephc_pcntl::SIGINFO_SIGNO),
-        ("errno", info.error, elephc_pcntl::SIGINFO_ERRNO),
-        ("code", info.code, elephc_pcntl::SIGINFO_CODE),
-        ("status", info.status, elephc_pcntl::SIGINFO_STATUS),
-        ("pid", info.pid, elephc_pcntl::SIGINFO_PID),
-        ("uid", info.uid, elephc_pcntl::SIGINFO_UID),
-        ("addr", info.address, elephc_pcntl::SIGINFO_ADDRESS),
+        ("signo", info.signo, elephc_pcntl::SIGINFO_SIGNO, false),
+        ("errno", info.error, elephc_pcntl::SIGINFO_ERRNO, false),
+        ("code", info.code, elephc_pcntl::SIGINFO_CODE, false),
+        ("status", info.status, elephc_pcntl::SIGINFO_STATUS, false),
+        ("utime", info.utime, elephc_pcntl::SIGINFO_UTIME, true),
+        ("stime", info.stime, elephc_pcntl::SIGINFO_STIME, true),
+        ("pid", info.pid, elephc_pcntl::SIGINFO_PID, false),
+        ("uid", info.uid, elephc_pcntl::SIGINFO_UID, false),
+        ("addr", info.address, elephc_pcntl::SIGINFO_ADDRESS, true),
+        ("band", info.band, elephc_pcntl::SIGINFO_BAND, false),
+        ("fd", info.fd, elephc_pcntl::SIGINFO_FD, false),
     ];
-    let extra_capacity = if cfg!(target_os = "linux") { 4 } else { 0 };
-    let mut result = values.assoc_new(candidates.len() + extra_capacity)?;
-    for (key, value, bit) in candidates {
+    let mut result = values.assoc_new(candidates.len())?;
+    for (key, value, bit, is_float) in candidates {
         if info.present & bit != 0 {
-            result = eval_pcntl_assoc_set_int(result, key, value, values)?;
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        for (key, value, bit) in [
-            ("utime", info.utime, elephc_pcntl::SIGINFO_UTIME),
-            ("stime", info.stime, elephc_pcntl::SIGINFO_STIME),
-            ("band", info.band, elephc_pcntl::SIGINFO_BAND),
-            ("fd", info.fd, elephc_pcntl::SIGINFO_FD),
-        ] {
-            if info.present & bit != 0 {
-                result = eval_pcntl_assoc_set_int(result, key, value, values)?;
-            }
+            result = if is_float {
+                eval_pcntl_assoc_set_float(result, key, value as f64, values)?
+            } else {
+                eval_pcntl_assoc_set_int(result, key, value, values)?
+            };
         }
     }
     Ok(result)
@@ -128,5 +122,17 @@ fn eval_pcntl_assoc_set_int(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let key = values.string(key)?;
     let value = values.int(value)?;
+    values.array_set(array, key, value)
+}
+
+/// Inserts one string-keyed float into an eval associative array.
+fn eval_pcntl_assoc_set_float(
+    array: RuntimeCellHandle,
+    key: &str,
+    value: f64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.string(key)?;
+    let value = values.float(value)?;
     values.array_set(array, key, value)
 }

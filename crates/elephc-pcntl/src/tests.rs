@@ -77,7 +77,39 @@ fn linux_cpu_affinity_round_trips_current_mask() {
 #[test]
 fn linux_empty_cpu_affinity_is_rejected() {
     let success = unsafe { elephc_pcntl_setcpuaffinity(0, std::ptr::null(), 0) };
-    assert_eq!(success, 0);
+    assert_eq!(success, -1);
+    assert_eq!(elephc_pcntl_get_last_error(), libc::EINVAL);
+    assert_eq!(
+        pcntl_cpu_affinity_value_error(success, 0),
+        "pcntl_setcpuaffinity(): Argument #2 ($cpu_ids) must not be empty"
+    );
+}
+
+/// Classifies an out-of-range Linux CPU identifier and retains it for PHP's message.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_out_of_range_cpu_affinity_is_rejected() {
+    let invalid = i64::MAX;
+    let success = unsafe { elephc_pcntl_setcpuaffinity(0, &invalid, 1) };
+    assert_eq!(success, -2);
+    let message = pcntl_cpu_affinity_value_error(success, 0);
+    assert!(message.contains("cpu id must be between 0 and"));
+    assert!(message.ends_with(&format!("({invalid})")));
+}
+
+/// Rejects explicit PID zero before `pidfd_open` can reinterpret it through the host policy.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_setns_rejects_explicit_zero_process_id() {
+    assert_eq!(elephc_pcntl_setns(0, libc::CLONE_NEWNET), -1);
+    assert_eq!(elephc_pcntl_get_last_error(), libc::EINVAL);
+}
+
+/// Rejects bits outside PHP's exported namespace-clone mask before entering `unshare`.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_unshare_rejects_unknown_flag_bits() {
+    assert_eq!(elephc_pcntl_unshare(1), -1);
     assert_eq!(elephc_pcntl_get_last_error(), libc::EINVAL);
 }
 
@@ -183,6 +215,29 @@ fn signal_mask_round_trips_old_members() {
     unsafe {
         assert_eq!(libc::sigprocmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()), 0);
     }
+}
+
+/// Classifies empty, out-of-range, and valid widened signal arrays without mutating the mask.
+#[test]
+fn signal_set_validation_matches_php_argument_rules() {
+    assert_eq!(
+        unsafe { elephc_pcntl_validate_signal_set(std::ptr::null(), 0, 0) },
+        -1
+    );
+    assert_eq!(
+        unsafe { elephc_pcntl_validate_signal_set(std::ptr::null(), 0, 1) },
+        1
+    );
+    let invalid = 0i64;
+    assert_eq!(
+        unsafe { elephc_pcntl_validate_signal_set(&invalid, 1, 0) },
+        -2
+    );
+    let valid = i64::from(libc::SIGUSR1);
+    assert_eq!(
+        unsafe { elephc_pcntl_validate_signal_set(&valid, 1, 0) },
+        1
+    );
 }
 
 /// Queues one asynchronously delivered signal and copies its stable siginfo outside the handler.

@@ -9,7 +9,7 @@
 //! - By-reference outputs are replaced only after a successful OS operation.
 
 use crate::codegen::context::FunctionContext;
-use crate::codegen::platform::Arch;
+use crate::codegen::platform::{Arch, Platform};
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed, CodegenIrError,
     Result,
@@ -27,6 +27,8 @@ const SIGNAL_CAPACITY: usize = 128;
 const SIGNAL_BUFFER_BYTES: usize = SIGNAL_CAPACITY * std::mem::size_of::<i64>();
 const MASK_MODE_OFFSET: usize = SIGNAL_BUFFER_BYTES;
 const MASK_RESULT_OFFSET: usize = SIGNAL_BUFFER_BYTES + 8;
+const MASK_SIGNALS_OFFSET: usize = SIGNAL_BUFFER_BYTES + 16;
+const MASK_COUNT_OFFSET: usize = SIGNAL_BUFFER_BYTES + 24;
 const MASK_FRAME_BYTES: usize = SIGNAL_BUFFER_BYTES + 32;
 const SIGINFO_BYTES: usize = 96;
 const WAIT_SIGNALS_OFFSET: usize = SIGINFO_BYTES;
@@ -56,6 +58,7 @@ pub(super) fn lower_sigprocmask(
         expect_operand(inst, 0)?,
         "pcntl_sigprocmask mode",
     )?;
+    emit_validate_sigprocmask_mode(ctx);
     abi::emit_store_to_sp(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -65,14 +68,29 @@ pub(super) fn lower_sigprocmask(
     load_indexed_int_array(ctx, signals, "pcntl_sigprocmask signals")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x2, [x0]");                         // C arg2 = selected signal count
-            ctx.emitter.instruction("add x1, x0, #24");                      // C arg1 = indexed signal payload
+            ctx.emitter.instruction("ldr x9, [x0]");                            // stage the selected signal count
+            ctx.emitter.instruction("add x10, x0, #24");                        // stage the indexed signal payload
+            abi::emit_store_to_sp(ctx.emitter, "x9", MASK_COUNT_OFFSET);
+            abi::emit_store_to_sp(ctx.emitter, "x10", MASK_SIGNALS_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", MASK_MODE_OFFSET);
+            let setmask = match ctx.emitter.target.platform {
+                Platform::MacOS => 3,
+                Platform::Linux => 2,
+                Platform::Windows => 0,
+            };
+            ctx.emitter.instruction(&format!("cmp x9, #{setmask}"));            // only SIG_SETMASK accepts an empty signal array
+            ctx.emitter.instruction("cset x2, eq");                             // validation arg2 = whether emptiness is allowed
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", MASK_SIGNALS_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", MASK_COUNT_OFFSET);
+            emit_validate_signal_set(ctx, "pcntl_sigprocmask", 2);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", MASK_SIGNALS_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", MASK_COUNT_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", MASK_MODE_OFFSET);
             if old_slot.is_some() {
-                abi::emit_temporary_stack_address(ctx.emitter, "x3", 0);     // C arg3 = prior-mask output buffer
+                abi::emit_temporary_stack_address(ctx.emitter, "x3", 0);        // C arg3 = prior-mask output buffer
                 abi::emit_load_int_immediate(ctx.emitter, "x4", SIGNAL_CAPACITY as i64);
             } else {
-                ctx.emitter.instruction("mov x3, #0");                       // caller omitted the output
+                ctx.emitter.instruction("mov x3, #0");                          // caller omitted the output
                 ctx.emitter.instruction("mov x4, #0");
             }
             ctx.emitter.bl_c("elephc_pcntl_sigprocmask");
@@ -81,14 +99,25 @@ pub(super) fn lower_sigprocmask(
             ctx.emitter.instruction(&format!("b.lt {failure}"));
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdx, QWORD PTR [rax]");              // C arg2 = selected signal count
-            ctx.emitter.instruction("lea rsi, [rax + 24]");                   // C arg1 = indexed signal payload
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // stage the selected signal count
+            ctx.emitter.instruction("lea r10, [rax + 24]");                     // stage the indexed signal payload
+            abi::emit_store_to_sp(ctx.emitter, "r9", MASK_COUNT_OFFSET);
+            abi::emit_store_to_sp(ctx.emitter, "r10", MASK_SIGNALS_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", MASK_MODE_OFFSET);
+            ctx.emitter.instruction("cmp r9, 2");                               // Linux SIG_SETMASK alone accepts an empty array
+            ctx.emitter.instruction("sete dl");                                 // materialize the validation allow-empty flag
+            ctx.emitter.instruction("movzx edx, dl");                           // validation arg2 = normalized boolean
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", MASK_SIGNALS_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", MASK_COUNT_OFFSET);
+            emit_validate_signal_set(ctx, "pcntl_sigprocmask", 2);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", MASK_SIGNALS_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", MASK_COUNT_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", MASK_MODE_OFFSET);
             if old_slot.is_some() {
-                abi::emit_temporary_stack_address(ctx.emitter, "rcx", 0);     // C arg3 = prior-mask output buffer
+                abi::emit_temporary_stack_address(ctx.emitter, "rcx", 0);       // C arg3 = prior-mask output buffer
                 abi::emit_load_int_immediate(ctx.emitter, "r8", SIGNAL_CAPACITY as i64);
             } else {
-                ctx.emitter.instruction("xor ecx, ecx");                     // caller omitted the output
+                ctx.emitter.instruction("xor ecx, ecx");                        // caller omitted the output
                 ctx.emitter.instruction("xor r8d, r8d");
             }
             ctx.emitter.bl_c("elephc_pcntl_sigprocmask");
@@ -138,18 +167,31 @@ pub(super) fn lower_signal_wait(
     load_indexed_int_array(ctx, expect_operand(inst, 0)?, name)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("add x9, x0, #24");                       // preserve indexed signal payload
-            ctx.emitter.instruction("ldr x10, [x0]");                        // preserve selected signal count
+            ctx.emitter.instruction("add x9, x0, #24");                         // preserve indexed signal payload
+            ctx.emitter.instruction("ldr x10, [x0]");                           // preserve selected signal count
             abi::emit_store_to_sp(ctx.emitter, "x9", WAIT_SIGNALS_OFFSET);
             abi::emit_store_to_sp(ctx.emitter, "x10", WAIT_COUNT_OFFSET);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("lea r9, [rax + 24]");                    // preserve indexed signal payload
-            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");              // preserve selected signal count
+            ctx.emitter.instruction("lea r9, [rax + 24]");                      // preserve indexed signal payload
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // preserve selected signal count
             abi::emit_store_to_sp(ctx.emitter, "r9", WAIT_SIGNALS_OFFSET);
             abi::emit_store_to_sp(ctx.emitter, "r10", WAIT_COUNT_OFFSET);
         }
     }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", WAIT_SIGNALS_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", WAIT_COUNT_OFFSET);
+            ctx.emitter.instruction("mov x2, #0");                              // synchronous waits reject an empty signal set
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", WAIT_SIGNALS_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", WAIT_COUNT_OFFSET);
+            ctx.emitter.instruction("xor edx, edx");                            // synchronous waits reject an empty signal set
+        }
+    }
+    emit_validate_signal_set(ctx, name, 1);
     if timed {
         load_optional_int(ctx, inst.operands.get(2).copied(), 0, name)?;
         abi::emit_store_to_sp(
@@ -163,12 +205,13 @@ pub(super) fn lower_signal_wait(
             abi::int_result_reg(ctx.emitter),
             WAIT_NANOSECONDS_OFFSET,
         );
+        emit_validate_sigtimedwait_timeout(ctx);
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", WAIT_SIGNALS_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", WAIT_COUNT_OFFSET);
-            ctx.emitter.instruction("mov x2, sp");                            // C arg2 = stable siginfo record
+            ctx.emitter.instruction("mov x2, sp");                              // C arg2 = stable siginfo record
             if timed {
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "x3", WAIT_SECONDS_OFFSET);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "x4", WAIT_NANOSECONDS_OFFSET);
@@ -185,7 +228,7 @@ pub(super) fn lower_signal_wait(
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", WAIT_SIGNALS_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", WAIT_COUNT_OFFSET);
-            ctx.emitter.instruction("mov rdx, rsp");                          // C arg2 = stable siginfo record
+            ctx.emitter.instruction("mov rdx, rsp");                            // C arg2 = stable siginfo record
             if timed {
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", WAIT_SECONDS_OFFSET);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "r8", WAIT_NANOSECONDS_OFFSET);
@@ -226,6 +269,132 @@ pub(super) fn lower_signal_wait(
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)
+}
+
+/// Rejects a signal-mask mode outside the target's three PHP constants.
+fn emit_validate_sigprocmask_mode(ctx: &mut FunctionContext<'_>) {
+    let valid = ctx.next_label("pcntl_sigprocmask_valid_mode");
+    let (minimum, maximum) = match ctx.emitter.target.platform {
+        Platform::MacOS => (1, 3),
+        Platform::Linux => (0, 2),
+        Platform::Windows => (0, 0),
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{minimum}"));            // compare against the target's first valid mask mode
+            ctx.emitter.instruction(&format!("b.lt {valid}_error"));            // reject values below SIG_BLOCK/SIG_SETMASK range
+            ctx.emitter.instruction(&format!("cmp x0, #{maximum}"));            // compare against the target's final valid mask mode
+            ctx.emitter.instruction(&format!("b.le {valid}"));                  // accept SIG_BLOCK, SIG_UNBLOCK, or SIG_SETMASK
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {minimum}"));            // compare against the target's first valid mask mode
+            ctx.emitter.instruction(&format!("jl {valid}_error"));              // reject values below SIG_BLOCK/SIG_SETMASK range
+            ctx.emitter.instruction(&format!("cmp rax, {maximum}"));            // compare against the target's final valid mask mode
+            ctx.emitter.instruction(&format!("jle {valid}"));                   // accept SIG_BLOCK, SIG_UNBLOCK, or SIG_SETMASK
+        }
+    }
+    ctx.emitter.label(&format!("{valid}_error"));
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "pcntl_sigprocmask(): Argument #1 ($mode) must be one of SIG_BLOCK, SIG_UNBLOCK, or SIG_SETMASK",
+    );
+    ctx.emitter.label(&valid);
+}
+
+/// Calls the bridge's signal-set validator and raises PHP's array `ValueError`s.
+fn emit_validate_signal_set(ctx: &mut FunctionContext<'_>, name: &str, argument: usize) {
+    let empty = ctx.next_label("pcntl_signal_set_empty");
+    let range = ctx.next_label("pcntl_signal_set_range");
+    let valid = ctx.next_label("pcntl_signal_set_valid");
+    ctx.emitter.bl_c("elephc_pcntl_validate_signal_set");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sxtw x0, w0");                             // preserve negative C int validation results in x0
+            ctx.emitter.instruction("cmp x0, #-1");                             // distinguish a forbidden empty signal array
+            ctx.emitter.instruction(&format!("b.eq {empty}"));                  // raise PHP's non-empty argument ValueError
+            ctx.emitter.instruction("cmp x0, #-2");                             // distinguish an out-of-range signal member
+            ctx.emitter.instruction(&format!("b.eq {range}"));                  // raise PHP's signal-range ValueError
+            ctx.emitter.instruction(&format!("b {valid}"));                     // continue after successful validation
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp eax, -1");                             // distinguish a forbidden empty signal array
+            ctx.emitter.instruction(&format!("je {empty}"));                    // raise PHP's non-empty argument ValueError
+            ctx.emitter.instruction("cmp eax, -2");                             // distinguish an out-of-range signal member
+            ctx.emitter.instruction(&format!("je {range}"));                    // raise PHP's signal-range ValueError
+            ctx.emitter.instruction(&format!("jmp {valid}"));                   // continue after successful validation
+        }
+    }
+    ctx.emitter.label(&empty);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!("{name}(): Argument #{argument} ($signals) must not be empty"),
+    );
+    ctx.emitter.label(&range);
+    let maximum = match ctx.emitter.target.platform {
+        Platform::MacOS => 31,
+        Platform::Linux => 64,
+        Platform::Windows => 0,
+    };
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!(
+            "{name}(): Argument #{argument} ($signals) signals must be between 1 and {maximum}"
+        ),
+    );
+    ctx.emitter.label(&valid);
+}
+
+/// Raises PHP's runtime `ValueError`s for invalid dynamic timed-wait bounds.
+fn emit_validate_sigtimedwait_timeout(ctx: &mut FunctionContext<'_>) {
+    let invalid_seconds = ctx.next_label("pcntl_sigtimedwait_invalid_seconds");
+    let invalid_nanoseconds = ctx.next_label("pcntl_sigtimedwait_invalid_nanoseconds");
+    let zero_timeout = ctx.next_label("pcntl_sigtimedwait_zero_timeout");
+    let valid = ctx.next_label("pcntl_sigtimedwait_valid_timeout");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", WAIT_SECONDS_OFFSET);
+            ctx.emitter.instruction("cmp x9, #0");                              // reject negative seconds supplied through dynamic storage
+            ctx.emitter.instruction(&format!("b.lt {invalid_seconds}"));        // raise PHP's argument-three ValueError
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", WAIT_NANOSECONDS_OFFSET);
+            ctx.emitter.instruction("cmp x10, #0");                             // reject negative nanoseconds
+            ctx.emitter.instruction(&format!("b.lt {invalid_nanoseconds}"));    // raise PHP's argument-four ValueError
+            abi::emit_load_int_immediate(ctx.emitter, "x11", 1_000_000_000);
+            ctx.emitter.instruction("cmp x10, x11");                            // enforce the exclusive one-billion nanosecond bound
+            ctx.emitter.instruction(&format!("b.ge {invalid_nanoseconds}"));    // reject a non-normalized timespec
+            ctx.emitter.instruction("orr x9, x9, x10");                         // test whether both timeout components are zero
+            ctx.emitter.instruction(&format!("cbz x9, {zero_timeout}"));        // PHP forbids an entirely zero timeout
+            ctx.emitter.instruction(&format!("b {valid}"));                     // continue to the bridge with validated values
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", WAIT_SECONDS_OFFSET);
+            ctx.emitter.instruction("cmp r9, 0");                               // reject negative seconds supplied through dynamic storage
+            ctx.emitter.instruction(&format!("jl {invalid_seconds}"));          // raise PHP's argument-three ValueError
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", WAIT_NANOSECONDS_OFFSET);
+            ctx.emitter.instruction("cmp r10, 0");                              // reject negative nanoseconds
+            ctx.emitter.instruction(&format!("jl {invalid_nanoseconds}"));      // raise PHP's argument-four ValueError
+            ctx.emitter.instruction("cmp r10, 1000000000");                     // enforce the exclusive one-billion nanosecond bound
+            ctx.emitter.instruction(&format!("jge {invalid_nanoseconds}"));     // reject a non-normalized timespec
+            ctx.emitter.instruction("or r9, r10");                              // test whether both timeout components are zero
+            ctx.emitter.instruction(&format!("jz {zero_timeout}"));             // PHP forbids an entirely zero timeout
+            ctx.emitter.instruction(&format!("jmp {valid}"));                   // continue to the bridge with validated values
+        }
+    }
+    ctx.emitter.label(&invalid_seconds);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "pcntl_sigtimedwait(): Argument #3 ($seconds) must be greater than or equal to 0",
+    );
+    ctx.emitter.label(&invalid_nanoseconds);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "pcntl_sigtimedwait(): Argument #4 ($nanoseconds) must be between 0 and 1e9",
+    );
+    ctx.emitter.label(&zero_timeout);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "pcntl_sigtimedwait(): At least one of argument #3 ($seconds) or argument #4 ($nanoseconds) must be greater than 0",
+    );
+    ctx.emitter.label(&valid);
 }
 
 /// Validates and loads one indexed integer array through its native result pointer.
@@ -275,12 +444,12 @@ fn emit_indexed_int_array_from_stack(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", count_offset);
-            ctx.emitter.instruction("mov x1, #8");                            // indexed integer slots are eight bytes
+            ctx.emitter.instruction("mov x1, #8");                              // indexed integer slots are eight bytes
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", count_offset);
             abi::emit_temporary_stack_address(ctx.emitter, "x11", buffer_offset);
-            ctx.emitter.instruction("add x12, x0, #24");                     // destination array payload
-            ctx.emitter.instruction("mov x13, #0");                          // copy index
+            ctx.emitter.instruction("add x12, x0, #24");                        // destination array payload
+            ctx.emitter.instruction("mov x13, #0");                             // copy index
             ctx.emitter.label(&copy_loop);
             ctx.emitter.instruction("cmp x13, x10");
             ctx.emitter.instruction(&format!("b.ge {copy_done}"));
@@ -289,16 +458,16 @@ fn emit_indexed_int_array_from_stack(
             ctx.emitter.instruction("add x13, x13, #1");
             ctx.emitter.instruction(&format!("b {copy_loop}"));
             ctx.emitter.label(&copy_done);
-            ctx.emitter.instruction("str x10, [x0]");                        // publish logical length
+            ctx.emitter.instruction("str x10, [x0]");                           // publish logical length
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", count_offset);
-            ctx.emitter.instruction("mov rsi, 8");                           // indexed integer slots are eight bytes
+            ctx.emitter.instruction("mov rsi, 8");                              // indexed integer slots are eight bytes
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", count_offset);
             abi::emit_temporary_stack_address(ctx.emitter, "r11", buffer_offset);
-            ctx.emitter.instruction("lea r8, [rax + 24]");                    // destination array payload
-            ctx.emitter.instruction("xor ecx, ecx");                         // copy index
+            ctx.emitter.instruction("lea r8, [rax + 24]");                      // destination array payload
+            ctx.emitter.instruction("xor ecx, ecx");                            // copy index
             ctx.emitter.label(&copy_loop);
             ctx.emitter.instruction("cmp rcx, r10");
             ctx.emitter.instruction(&format!("jge {copy_done}"));
@@ -307,7 +476,7 @@ fn emit_indexed_int_array_from_stack(
             ctx.emitter.instruction("add rcx, 1");
             ctx.emitter.instruction(&format!("jmp {copy_loop}"));
             ctx.emitter.label(&copy_done);
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");             // publish logical length
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // publish logical length
         }
     }
 }

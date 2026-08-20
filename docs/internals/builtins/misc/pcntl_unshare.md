@@ -26,7 +26,7 @@ sidebar:
 - **Validation**: `shared`
 - **Result type source**: `declared`
 - **Result ownership**: `non_heap`
-- **Effects**: `static (5 declared effects)`
+- **Effects**: `static (6 declared effects)`
 - **Requirements**: `static (1 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `linux-aarch64`, `linux-x86_64`

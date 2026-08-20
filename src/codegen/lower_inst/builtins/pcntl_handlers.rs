@@ -260,6 +260,7 @@ pub(crate) fn lower_signal_dispatch(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "pcntl_signal_dispatch", 0, 0)?;
+    emit_initialize_signal_bridge_slots(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_pcntl_dispatch_pending");
     store_if_result(ctx, inst)
 }
@@ -270,6 +271,7 @@ pub(crate) fn lower_async_signals(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "pcntl_async_signals", 0, 1)?;
+    emit_initialize_signal_bridge_slots(ctx);
     let Some(enable) = inst.operands.first().copied() else {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -333,10 +335,16 @@ fn emit_push_handler_kind_and_descriptor(
     handler: crate::ir::ValueId,
 ) -> Result<()> {
     match ctx.value_php_type(handler)?.codegen_repr() {
-        PhpType::Int | PhpType::Bool | PhpType::False => {
+        PhpType::Int => {
             load_as_int(ctx, handler, "pcntl_signal handler disposition")?;
             emit_normalize_integer_disposition(ctx);
             emit_push_integer_handler_pair(ctx);
+        }
+        PhpType::Bool | PhpType::False => {
+            super::super::exceptions::emit_type_error(
+                ctx,
+                "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given",
+            );
         }
         PhpType::Callable => {
             ctx.load_value_to_result(handler)?;
@@ -384,6 +392,7 @@ fn emit_push_mixed_handler_pair(
     handler: crate::ir::ValueId,
 ) -> Result<()> {
     let scalar = ctx.next_label("pcntl_signal_mixed_scalar");
+    let bool_error = ctx.next_label("pcntl_signal_mixed_bool_error");
     let done = ctx.next_label("pcntl_signal_mixed_handler_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -392,7 +401,7 @@ fn emit_push_mixed_handler_pair(
             ctx.emitter.instruction(&format!("cmp x0, #{MIXED_TAG_INT}"));
             ctx.emitter.instruction(&format!("b.eq {scalar}"));
             ctx.emitter.instruction(&format!("cmp x0, #{MIXED_TAG_BOOL}"));
-            ctx.emitter.instruction(&format!("b.eq {scalar}"));
+            ctx.emitter.instruction(&format!("b.eq {bool_error}"));
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(handler, "rax")?;
@@ -400,7 +409,7 @@ fn emit_push_mixed_handler_pair(
             ctx.emitter.instruction(&format!("cmp rax, {MIXED_TAG_INT}"));
             ctx.emitter.instruction(&format!("je {scalar}"));
             ctx.emitter.instruction(&format!("cmp rax, {MIXED_TAG_BOOL}"));
-            ctx.emitter.instruction(&format!("je {scalar}"));
+            ctx.emitter.instruction(&format!("je {bool_error}"));
         }
     }
     callables::emit_runtime_mixed_callable_descriptor_value(
@@ -418,6 +427,12 @@ fn emit_push_mixed_handler_pair(
     }
     emit_normalize_integer_disposition(ctx);
     emit_push_integer_handler_pair(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&bool_error);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given",
+    );
     ctx.emitter.label(&done);
     Ok(())
 }
