@@ -45,6 +45,7 @@ impl Checker {
                         true,
                     );
                 if prefer_extension_builtin {
+                    self.require_first_class_callable_builtin_libraries(&function_key);
                     return crate::types::first_class_callable_builtin_sig(&function_key)
                         .ok_or_else(|| {
                             CompileError::new(
@@ -86,6 +87,7 @@ impl Checker {
                     });
                 }
                 if crate::name_resolver::is_builtin_function(function_name) {
+                    self.require_first_class_callable_builtin_libraries(&function_key);
                     return crate::types::first_class_callable_builtin_sig(function_name)
                         .ok_or_else(|| {
                             CompileError::new(
