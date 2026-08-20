@@ -48,6 +48,36 @@ fn test_unused_user_function_program_still_runs() {
     assert_eq!(out, "1");
 }
 
+/// Verifies exception-aware DCE removes a disjoint catch before declaration reachability scans it.
+#[test]
+fn test_exception_dce_exposes_catch_only_function_to_reachability() {
+    let dir = make_cli_test_dir("elephc_decl_reach_exception_dce");
+    let (user_asm, _, _) = compile_source_to_asm_with_options(
+        "<?php
+        class A extends Exception {}
+        class B extends Exception {}
+        function catchOnly(): int { return 9; }
+        try {
+            throw new A('a');
+        } catch (B $error) {
+            echo catchOnly();
+        } catch (A $error) {
+            echo 'ok';
+        }
+        ",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let catch_only = elephc::names::function_symbol("catchOnly");
+    assert!(
+        !user_asm.contains(&format!(".globl {catch_only}\n")),
+        "a function referenced only by a disjoint catch must be pruned: {user_asm}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies an entirely unused class does not leave a method body in user assembly.
 #[test]
 fn test_unused_user_class_is_absent_from_assembly() {
