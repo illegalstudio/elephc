@@ -136,9 +136,10 @@ between compiled code and `eval()` in both directions.
   `strpos`/`gzuncompress` do. Declaring the narrow type worked for direct calls, where the
   check hook narrows it, but the first-class-callable wrapper reads the contract and
   handed the caller a raw pointer.
-- The callable wrapper references the bridge entry points without any direct call
-  recording the requirement, so the descriptor-invoker feature now force-links
-  `elephc_iconv` exactly as it already force-links `elephc_crypto`.
+- A first-class callable reaches a builtin without any direct call recording that
+  builtin's link requirements, so the program failed to link. The checker now reads the
+  requirements off the shared contract when it binds a callable, exactly as a direct call
+  does; this fixes every bridge-backed builtin, not just iconv's ten.
 - `iconv_mime_encode()` silently ignored its `$options` when the receiver's static type was
   `mixed`, because only an associative-array pointer was accepted. The receiver is now
   resolved once through `__rt_iconv_option_table`, which unboxes a Mixed cell.
