@@ -274,6 +274,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StrSplit,
     /// Dispatches `str_word_count(...)`.
     StrWordCount,
+    /// Dispatches the whole `iconv*` extension family.
+    Iconv,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
     /// Dispatches `str_repeat(...)`.
@@ -531,6 +533,7 @@ impl EvalDirectHook {
             },
             Self::StrSplit => eval_builtin_str_split(args, context, scope, values),
             Self::StrWordCount => eval_builtin_str_word_count(args, context, scope, values),
+            Self::Iconv => eval_builtin_iconv_call(name, args, context, scope, values),
             Self::Strlen => match name {
                 "mb_strlen" => eval_builtin_mb_strlen(args, context, scope, values),
                 "strlen" => eval_builtin_strlen(args, context, scope, values),
