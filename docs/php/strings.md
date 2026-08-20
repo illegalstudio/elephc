@@ -160,6 +160,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
 | `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
+| `iconv_strlen()` | `iconv_strlen($str, $encoding = null): int\|false` | Character count through the platform `iconv`. See [iconv](./iconv.md) for the whole extension |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract a substring. Negative `$start` counts from the end; a negative `$len` omits that many trailing bytes from the selected suffix, matching PHP |
 | `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |
 | `strrpos()` | `strrpos($haystack, $needle, $offset = 0): int\|false` | Find last occurrence. A non-negative `$offset` starts the search there; a negative one stops it that many bytes before the end. Returns `false` if not found |

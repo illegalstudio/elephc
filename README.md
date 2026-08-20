@@ -636,6 +636,7 @@ crates/
 ├── elephc-builtin-contract/ # Dependency-neutral builtin catalog and signatures
 ├── elephc-bcmath/       # Exact arbitrary-precision decimal bridge
 ├── elephc-crypto/       # Hashing, HMAC, and OpenSSL-compatible crypto bridge
+├── elephc-iconv/        # Character-set conversion and MIME header bridge
 ├── elephc-image/        # GD/Exif/Imagick/Gmagick/Cairo image bridge
 ├── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
 ├── elephc-pdo/          # Multi-driver PDO bridge
