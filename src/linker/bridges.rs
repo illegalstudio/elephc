@@ -86,6 +86,17 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         php_extension: Some("bcmath"),
     },
     BridgeStaticlib {
+        lib_name: "elephc_iconv",
+        env_var: "ELEPHC_ICONV_LIB_DIR",
+        crate_name: "elephc-iconv",
+        flag_name: "iconv",
+        whole_archive: false,
+        macos_frameworks: &[],
+        needs_libdl: true,
+        // The charset bridge implements PHP's procedural `iconv` extension.
+        php_extension: Some("iconv"),
+    },
+    BridgeStaticlib {
         lib_name: "elephc_phar",
         env_var: "ELEPHC_PHAR_LIB_DIR",
         crate_name: "elephc-phar",

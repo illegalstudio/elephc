@@ -14,8 +14,9 @@
 //! - Emitted stream/archive classes enable PHAR bridge libraries because their
 //!   generated methods route dynamic paths through `__rt_*_maybe_phar` helpers.
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
-//!   wrappers — including md5/sha1/hash — that reference the `elephc_crypto`
-//!   staticlib, so its detection forces that crate to link.
+//!   wrappers — including md5/sha1/hash and the `iconv*` family — that reference the
+//!   `elephc_crypto` and `elephc_iconv` staticlibs, so its detection forces those
+//!   crates to link.
 //! - `eval()` keeps the dynamic bridge feature separate from scope-only helpers
 //!   so AOT fragments can shed bridge-only runtime/link dependencies incrementally.
 
@@ -48,7 +49,8 @@ pub struct RuntimeFeatures {
     pub mb_strlen: bool,
     pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor
-    /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
+    /// invoker) that builds per-builtin wrappers referencing `elephc_crypto` and
+    /// `elephc_iconv`.
     pub descriptor_invoker: bool,
     /// True when codegen can call the optional eval interpreter bridge staticlib.
     pub eval_bridge: bool,
@@ -200,6 +202,11 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Magician staticlib already carries its crypto dependency, and adding the
         // standalone archive beside it produces duplicate C exports on macOS.
         requirements.push(LinkRequirement::Bridge("elephc_crypto"));
+        // The same dispatcher emits `iconv*()` wrappers that publish `elephc_iconv_call`
+        // and `elephc_iconv_release` into their runtime slots, so the charset bridge needs
+        // the identical treatment: a first-class callable such as `iconv_strlen(...)`
+        // reaches the wrapper without any direct call recording the requirement.
+        requirements.push(LinkRequirement::Bridge("elephc_iconv"));
     }
     if features.eval_bridge {
         // The interpreter remains an ordinary table-driven Elephc bridge. Its BCMath
