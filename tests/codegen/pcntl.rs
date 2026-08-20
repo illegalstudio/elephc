@@ -22,6 +22,16 @@ fn test_pcntl_common_constants_are_target_aware() {
     assert_eq!(out, "17|11|1");
 }
 
+/// Treats a PCNTL constant reference itself as extension usage for linker identity.
+#[test]
+fn test_pcntl_constant_auto_loads_extension() {
+    let out = compile_and_run(
+        "<?php echo (defined('SIGCHLD') ? 'defined' : 'missing') . '|'
+            . (extension_loaded('pcntl') ? 'loaded' : 'missing');",
+    );
+    assert_eq!(out, "defined|loaded");
+}
+
 /// Verifies Linux-only PCNTL namespace and siginfo constants compile to their libc values.
 #[cfg(target_os = "linux")]
 #[test]
@@ -54,6 +64,17 @@ fn test_pcntl_scalar_bridge_and_extension_loading() {
     assert_eq!(out, "message|0|0:0|loaded");
 }
 
+/// Returns the previous alarm's remaining time while cancelling it.
+#[test]
+fn test_pcntl_alarm_returns_previous_remaining_seconds() {
+    let out = compile_and_run(
+        "<?php
+        echo pcntl_alarm(3) . '|';
+        echo pcntl_alarm(0) > 0 ? 'remaining' : 'missing';",
+    );
+    assert_eq!(out, "0|remaining");
+}
+
 /// Verifies target-native wait status helpers preserve boolean and mixed result encodings.
 #[test]
 fn test_pcntl_wait_status_decoders() {
@@ -65,12 +86,13 @@ fn test_pcntl_wait_status_decoders() {
         echo pcntl_wifsignaled(15) . '|';
         echo pcntl_wtermsig(15) . '|';
         echo pcntl_wifstopped(127) . '|';
+        echo pcntl_wstopsig((SIGSTOP << 8) | 127) . '|';
         echo pcntl_wifcontinued(65535);",
     );
     #[cfg(target_os = "macos")]
-    assert_eq!(out, "1|23|1|15|1|");
+    assert_eq!(out, "1|23|1|15|1|17|");
     #[cfg(target_os = "linux")]
-    assert_eq!(out, "1|23|1|15|1|1");
+    assert_eq!(out, "1|23|1|15|1|19|1");
 }
 
 /// Verifies priority lookup returns an integer without confusing a valid `-1` with failure.
@@ -80,6 +102,39 @@ fn test_pcntl_getpriority_returns_int() {
         "<?php $priority = pcntl_getpriority(); echo is_int($priority) ? 'int' : 'failure';",
     );
     assert_eq!(out, "int");
+}
+
+/// Rejects unsupported dynamic priority modes in both compiled and eval calls.
+#[test]
+fn test_pcntl_priority_rejects_dynamic_invalid_modes() {
+    let out = compile_and_run(
+        r#"<?php
+        $mode = 999;
+        try { pcntl_getpriority(0, $mode); }
+        catch (ValueError $error) { echo 'get|'; }
+        try { pcntl_setpriority(0, 0, $mode); }
+        catch (ValueError $error) { echo 'set|'; }
+        echo eval('
+            $mode = 999;
+            try { pcntl_getpriority(0, $mode); }
+            catch (ValueError $error) { echo "eval-get|"; }
+            try { pcntl_setpriority(0, 0, $mode); }
+            catch (ValueError $error) { echo "eval-set"; }
+        ');"#,
+    );
+    assert_eq!(out, "get|set|eval-get|eval-set");
+}
+
+/// Reapplies the current process priority without requiring elevated privileges.
+#[test]
+fn test_pcntl_setpriority_reapplies_current_priority() {
+    let out = compile_and_run(
+        "<?php
+        $priority = pcntl_getpriority();
+        echo is_int($priority) ? 'int|' : 'bad|';
+        echo pcntl_setpriority($priority) ? 'set' : 'failure';",
+    );
+    assert_eq!(out, "int|set");
 }
 
 /// Changes and restores the current signal mask while materializing the prior set by reference.
@@ -94,6 +149,26 @@ fn test_pcntl_signal_mask_round_trip() {
         echo (pcntl_sigprocmask(SIG_SETMASK, $old) ? 'restored' : 'bad');",
     );
     assert_eq!(out, "blocked|array|restored");
+}
+
+/// Raises PHP's runtime mask and signal-array `ValueError`s for dynamic inputs.
+#[test]
+fn test_pcntl_signal_mask_rejects_dynamic_invalid_values() {
+    let out = compile_and_run(
+        "<?php
+        $mode = 999;
+        $signals = [SIGUSR1];
+        try { pcntl_sigprocmask($mode, $signals); }
+        catch (ValueError $error) { echo 'mode|'; }
+        $mode = SIG_BLOCK;
+        $signals = [];
+        try { pcntl_sigprocmask($mode, $signals); }
+        catch (ValueError $error) { echo 'empty|'; }
+        $signals = [999];
+        try { pcntl_sigprocmask($mode, $signals); }
+        catch (ValueError $error) { echo 'range'; }",
+    );
+    assert_eq!(out, "mode|empty|range");
 }
 
 /// Registers a callable, retrieves it, and dispatches SIGALRM with stable siginfo.
@@ -113,6 +188,49 @@ fn test_pcntl_signal_handler_dispatch_and_lookup() {
         echo (pcntl_signal(SIGALRM, SIG_DFL) ? 'reset' : 'bad');",
     );
     assert_eq!(out, "set|callable|handled:14:14|dispatched|reset");
+}
+
+/// Returns integer signal dispositions exactly as registered.
+#[test]
+fn test_pcntl_signal_get_handler_returns_integer_dispositions() {
+    let out = compile_and_run(
+        "<?php
+        pcntl_signal(SIGUSR1, SIG_IGN);
+        echo pcntl_signal_get_handler(SIGUSR1) === SIG_IGN ? 'ignore|' : 'bad|';
+        pcntl_signal(SIGUSR1, SIG_DFL);
+        echo pcntl_signal_get_handler(SIGUSR1) === SIG_DFL ? 'default' : 'bad';",
+    );
+    assert_eq!(out, "ignore|default");
+}
+
+/// Returns true when explicit dispatch runs before any signal handler registration.
+#[test]
+fn test_pcntl_signal_dispatch_without_registered_handlers() {
+    let out = compile_and_run(
+        "<?php echo pcntl_signal_dispatch() ? 'aot' : 'bad';
+        echo eval('return pcntl_signal_dispatch() ? \"|eval\" : \"|bad\";');",
+    );
+    assert_eq!(out, "aot|eval");
+}
+
+/// Rejects booleans as signal dispositions in both AOT and eval execution.
+#[test]
+fn test_pcntl_signal_rejects_boolean_handler() {
+    let out = compile_and_run(
+        r#"<?php
+        try { pcntl_signal(SIGALRM, true); }
+        catch (TypeError $error) { echo $error->getMessage() . "|"; }
+        echo eval('
+            try { pcntl_signal(SIGALRM, false); }
+            catch (TypeError $error) { return $error->getMessage(); }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(
+        out,
+        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given|\
+pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given"
+    );
 }
 
 /// Automatically dispatches a pending signal after a normal EIR safe point.
@@ -159,6 +277,42 @@ fn test_pcntl_timed_signal_wait_timeout_preserves_info() {
     assert_eq!(out, "timeout|42");
 }
 
+/// Receives a blocked alarm synchronously through the AOT `sigwaitinfo` bridge.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_sigwaitinfo_receives_blocked_alarm() {
+    let out = compile_and_run(
+        "<?php
+        pcntl_sigprocmask(SIG_BLOCK, [SIGALRM], $old);
+        pcntl_alarm(1);
+        $received = pcntl_sigwaitinfo([SIGALRM], $info);
+        pcntl_sigprocmask(SIG_SETMASK, $old);
+        echo $received . '|' . $info['signo'];",
+    );
+    assert_eq!(out, "14|14");
+}
+
+/// Raises PHP's timed-wait `ValueError`s for invalid values held in dynamic variables.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_timed_signal_wait_rejects_dynamic_invalid_timeouts() {
+    let out = compile_and_run(
+        "<?php
+        $seconds = -1;
+        $nanoseconds = 0;
+        try { pcntl_sigtimedwait([SIGUSR1], $info, $seconds, $nanoseconds); }
+        catch (ValueError $error) { echo 'seconds|'; }
+        $seconds = 0;
+        $nanoseconds = 1000000000;
+        try { pcntl_sigtimedwait([SIGUSR1], $info, $seconds, $nanoseconds); }
+        catch (ValueError $error) { echo 'nanoseconds|'; }
+        $nanoseconds = 0;
+        try { pcntl_sigtimedwait([SIGUSR1], $info, $seconds, $nanoseconds); }
+        catch (ValueError $error) { echo 'zero'; }",
+    );
+    assert_eq!(out, "seconds|nanoseconds|zero");
+}
+
 /// Reads and reapplies the current Linux CPU affinity through indexed integer arrays.
 #[cfg(target_os = "linux")]
 #[test]
@@ -175,18 +329,64 @@ fn test_pcntl_linux_cpu_affinity_round_trip() {
     assert_eq!(out, "cpu|mask|set|mask");
 }
 
-/// Exercises safe Linux namespace entry points without changing namespace state.
+/// Raises PHP's CPU-affinity `ValueError`s for dynamic invalid arrays and process ids.
 #[cfg(target_os = "linux")]
 #[test]
-fn test_pcntl_linux_namespace_operations_report_boolean_results() {
+fn test_pcntl_linux_cpu_affinity_rejects_dynamic_invalid_values() {
+    let out = compile_and_run(
+        r#"<?php
+        $empty = [];
+        try { pcntl_setcpuaffinity(0, $empty); }
+        catch (ValueError $error) { echo 'empty|'; }
+        $invalid = 99999999;
+        try { pcntl_setcpuaffinity(0, [$invalid]); }
+        catch (ValueError $error) { echo 'cpu|'; }
+        $valid = pcntl_getcpu();
+        try { pcntl_setcpuaffinity(99999999, [$valid]); }
+        catch (ValueError $error) { echo 'pid|'; }
+        echo eval('
+            $empty = [];
+            try { pcntl_setcpuaffinity(0, $empty); }
+            catch (ValueError $error) { return "eval"; }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(out, "empty|cpu|pid|eval");
+}
+
+/// Exercises Linux namespace validation without changing namespace state.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_linux_namespace_operations_match_php_errors() {
     let out = compile_and_run(
         "<?php
         $unshared = pcntl_unshare(0);
         echo (is_bool($unshared) ? 'bool' : 'bad') . '|';
-        $joined = pcntl_setns(99999999, CLONE_NEWNET);
-        echo (!$joined && pcntl_get_last_error() > 0 ? 'error' : 'bad');",
+        try { pcntl_setns(99999999, CLONE_NEWNET); }
+        catch (ValueError $error) { echo 'invalid|'; }
+        try { pcntl_setns(0, CLONE_NEWNET); }
+        catch (ValueError $error) { echo 'zero'; }",
     );
-    assert_eq!(out, "bool|error");
+    assert_eq!(out, "bool|invalid|zero");
+}
+
+/// Raises PHP's invalid-flags `ValueError` for dynamic Linux unshare input.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_linux_unshare_rejects_invalid_flags() {
+    let out = compile_and_run(
+        r#"<?php
+        $flags = 1;
+        try { pcntl_unshare($flags); }
+        catch (ValueError $error) { echo 'aot|'; }
+        echo eval('
+            $flags = 1;
+            try { pcntl_unshare($flags); }
+            catch (ValueError $error) { return "eval"; }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(out, "aot|eval");
 }
 
 /// Keeps Linux-only PCNTL functions absent from the Darwin PHP-visible surface.
@@ -383,6 +583,27 @@ fn test_pcntl_waitpid_populates_resource_usage_outputs() {
     assert_eq!(out, "pid|19|17|int");
 }
 
+/// Overwrites pre-existing incompatible wait output storage like PHP by-reference parameters.
+#[test]
+fn test_pcntl_waitpid_overwrites_incompatible_output_types() {
+    let out = compile_and_run(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { exit(17); }
+        $status = 'old';
+        $usage = 'old';
+        pcntl_waitpid(
+            resource_usage: $usage,
+            status: $status,
+            process_id: $pid,
+            flags: 0,
+        );
+        echo pcntl_wexitstatus($status) . '|';
+        echo (is_array($usage) && count($usage) === 17 ? 'usage' : 'bad');",
+    );
+    assert_eq!(out, "17|usage");
+}
+
 /// Preserves status and replaces resource usage with an empty array when `waitpid()` fails.
 #[test]
 fn test_pcntl_waitpid_failure_preserves_status_and_empties_usage() {
@@ -396,6 +617,23 @@ fn test_pcntl_waitpid_failure_preserves_status_and_empties_usage() {
         echo (array_key_exists('ru_maxrss', $usage) ? 'rss' : 'norss');",
     );
     assert_eq!(out, "-1|41|0|noold|norss");
+}
+
+/// Leaves wait outputs untouched by a live child's zero-result `WNOHANG` poll.
+#[test]
+fn test_pcntl_waitpid_wnohang_live_child_preserves_status_and_empties_usage() {
+    let out = compile_and_run(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { sleep(1); exit(13); }
+        $status = 41;
+        $usage = ['old' => 1];
+        $polled = pcntl_waitpid($pid, $status, WNOHANG, $usage);
+        echo $polled . '|' . $status . '|' . count($usage) . '|';
+        pcntl_waitpid($pid, $status);
+        echo pcntl_wexitstatus($status);",
+    );
+    assert_eq!(out, "0|41|0|13");
 }
 
 /// Gives the forked child a private signal queue so its alarm cannot be dispatched by the parent.
@@ -499,6 +737,21 @@ fn test_pcntl_waitid_populates_signal_info() {
     assert_eq!(out, "ok|37|pid|6|20");
     #[cfg(target_os = "linux")]
     assert_eq!(out, "ok|37|pid|8|17");
+}
+
+/// Preserves PHP's Linux waitid key order and floating-point clock fields.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_waitid_uses_mixed_siginfo_values_and_php_key_order() {
+    let out = compile_and_run(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { exit(0); }
+        pcntl_waitid(P_PID, $pid, $info, WEXITED);
+        echo implode(',', array_keys($info)) . '|';
+        echo (is_float($info['utime']) && is_float($info['stime']) ? 'float' : 'bad');",
+    );
+    assert_eq!(out, "signo,errno,code,status,utime,stime,pid,uid|float");
 }
 
 /// Leaves an existing info output untouched when `pcntl_waitid()` fails.
@@ -634,6 +887,24 @@ fn test_pcntl_eval_linux_target_surface_and_affinity() {
         ');"#,
     );
     assert_eq!(out, "visible|no-qos|affinity");
+}
+
+/// Preserves explicit PID zero and raises PHP's `ValueError` through eval `pcntl_setns()`.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_eval_setns_rejects_explicit_zero_pid() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            try { pcntl_setns(0, CLONE_NEWNET); }
+            catch (ValueError $error) { return $error->getMessage(); }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(
+        out,
+        "pcntl_setns(): Argument #1 ($process_id) is not a valid process (0)"
+    );
 }
 
 /// Exercises Darwin QoS enum defaults through eval and confirms Linux-only metadata stays absent.

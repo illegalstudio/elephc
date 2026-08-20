@@ -266,7 +266,7 @@ impl Checker {
                             continue;
                         }
                         if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
-                            || pcntl_wait_output_type(builtin_name, arg, idx).is_some()
+                            || pcntl_output_type(builtin_name, arg, idx).is_some()
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
                                 && is_openssl_encrypt_tag_arg(arg, idx))
                         {
@@ -294,7 +294,7 @@ impl Checker {
                     }
                 }
                 for (idx, arg) in expanded_args.iter().enumerate() {
-                    if let Some(output_ty) = pcntl_wait_output_type(builtin_name, arg, idx) {
+                    if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), output_ty);
                         }
@@ -653,8 +653,8 @@ fn output_variable(arg: &Expr) -> Option<&String> {
     }
 }
 
-/// Returns the post-call type of a PCNTL wait-family output argument, when applicable.
-fn pcntl_wait_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType> {
+/// Returns the post-call type of a write-only PCNTL output argument, when applicable.
+fn pcntl_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType> {
     let builtin = php_symbol_key(builtin);
     let positional_parameter = match builtin.as_str() {
         "pcntl_wait" => ["status", "flags", "resource_usage"].get(index).copied(),
@@ -662,6 +662,11 @@ fn pcntl_wait_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<Php
             .get(index)
             .copied(),
         "pcntl_waitid" => ["idtype", "id", "info", "flags"].get(index).copied(),
+        "pcntl_sigprocmask" => ["mode", "signals", "old_signals"].get(index).copied(),
+        "pcntl_sigwaitinfo" => ["signals", "info"].get(index).copied(),
+        "pcntl_sigtimedwait" => ["signals", "info", "seconds", "nanoseconds"]
+            .get(index)
+            .copied(),
         _ => return None,
     };
     let parameter = match &arg.kind {
@@ -676,8 +681,9 @@ fn pcntl_wait_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<Php
         }),
         "info" => Some(PhpType::AssocArray {
             key: Box::new(PhpType::Str),
-            value: Box::new(PhpType::Int),
+            value: Box::new(PhpType::Mixed),
         }),
+        "old_signals" => Some(PhpType::Array(Box::new(PhpType::Int))),
         _ => None,
     }
 }

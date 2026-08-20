@@ -97,6 +97,9 @@ valid registration, `pcntl_signal()` emits `E_WARNING` and returns `false`.
 
 Signal masks use `pcntl_sigprocmask()`. Linux additionally provides
 `pcntl_sigwaitinfo()` and `pcntl_sigtimedwait()` for synchronous signal receipt.
+Invalid dynamic mask modes, empty signal sets, out-of-range signals, and invalid
+timed-wait durations raise the same `ValueError` cases as PHP; they are not
+collapsed into a silent `false` result.
 
 ## Target-specific surface
 
@@ -108,6 +111,11 @@ Signal masks use `pcntl_sigprocmask()`. Linux additionally provides
 Function availability and PCNTL constants are selected from the compilation
 target, not from the machine running the compiler. Linux-only functions are
 undefined in macOS output, and the macOS QoS API is undefined in Linux output.
+Linux namespace and CPU-affinity argument failures are classified separately
+from OS permission/resource failures: invalid values raise `ValueError`, while
+operating-system failures emit a suppressible PHP warning and return `false`.
+Invalid priority selector modes likewise raise target-specific `ValueError`s on
+all supported targets.
 `pcntl_rfork()` and `pcntl_forkx()` belong to operating systems outside
 elephc's supported target matrix and are intentionally absent.
 
@@ -118,6 +126,14 @@ dispositions, queue, dispatch masking, wait outputs, and warning behavior as
 AOT code. Callable descriptors remain owned by the active backend runtime:
 Magician retains eval handlers in its evaluation context, while compiled
 handlers remain in AOT runtime storage.
+
+Because those handler tables use different callable representations, signal
+registration and dispatch must currently stay in the same backend domain. An
+eval handler must be dispatched from eval, and a compiled handler must be
+dispatched from compiled code. If the other backend drains the shared queue
+first, it has no compatible descriptor to invoke for that record. This is the
+only intentional callable-interoperability limit; ordinary process, wait,
+mask, errno, and disposition state remains shared.
 
 The pending-signal transport is a nonblocking process-local pipe. This keeps
 the OS handler async-signal-safe, but the queue is bounded by the operating

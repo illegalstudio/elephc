@@ -39,10 +39,10 @@ const SIGINFO_FIELDS: &[(&str, usize, usize, usize)] = &[
     ("_pcntl_siginfo_errno", 5, 8, 1),
     ("_pcntl_siginfo_code", 4, 16, 2),
     ("_pcntl_siginfo_status", 6, 24, 3),
-    ("_pcntl_siginfo_pid", 3, 32, 4),
-    ("_pcntl_siginfo_uid", 3, 40, 5),
     ("_pcntl_siginfo_utime", 5, 48, 6),
     ("_pcntl_siginfo_stime", 5, 56, 7),
+    ("_pcntl_siginfo_pid", 3, 32, 4),
+    ("_pcntl_siginfo_uid", 3, 40, 5),
     ("_pcntl_siginfo_addr", 4, 64, 8),
     ("_pcntl_siginfo_band", 4, 72, 9),
     ("_pcntl_siginfo_fd", 2, 80, 10),
@@ -100,7 +100,7 @@ fn emit_pcntl_rusage_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #8]");                                    // preserve the current hash pointer
     for (symbol, length, offset) in RUSAGE_FIELDS {
         emitter.instruction("ldr x0, [sp, #8]");                                // C arg0 = current hash
-        abi::emit_symbol_address(emitter, "x1", symbol);                      // C arg1 = string key bytes
+        abi::emit_symbol_address(emitter, "x1", symbol);                        // C arg1 = string key bytes
         emitter.instruction(&format!("mov x2, #{}", length));                   // C arg2 = key length
         emitter.instruction("ldr x9, [sp]");                                    // reload usage-record pointer
         emitter.instruction(&format!("ldr x3, [x9, #{}]", offset));             // C arg3 = integer value
@@ -131,7 +131,7 @@ fn emit_pcntl_rusage_array_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the current hash pointer
     for (symbol, length, offset) in RUSAGE_FIELDS {
         emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                   // C arg0 = current hash
-        abi::emit_symbol_address(emitter, "rsi", symbol);                     // C arg1 = string key bytes
+        abi::emit_symbol_address(emitter, "rsi", symbol);                       // C arg1 = string key bytes
         emitter.instruction(&format!("mov rdx, {}", length));                   // C arg2 = key length
         emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // reload usage-record pointer
         emitter.instruction(&format!("mov rcx, QWORD PTR [rax + {}]", offset)); // C arg3 = integer value
@@ -165,7 +165,7 @@ fn emit_pcntl_siginfo_array_aarch64(emitter: &mut Emitter) {
         emitter.instruction("ldr x10, [x9, #88]");                              // load the field-presence bitset
         emitter.instruction(&format!("tbz x10, #{bit}, {skip}"));               // omit fields not supplied by this signal/target
         emitter.instruction("ldr x0, [sp, #8]");                                // C arg0 = current hash
-        abi::emit_symbol_address(emitter, "x1", symbol);                      // C arg1 = string key bytes
+        abi::emit_symbol_address(emitter, "x1", symbol);                        // C arg1 = string key bytes
         emitter.instruction(&format!("mov x2, #{}", length));                   // C arg2 = key length
         emitter.instruction("ldr x9, [sp]");                                    // symbol loading may use scratch registers
         emitter.instruction(&format!("ldr x3, [x9, #{}]", offset));             // C arg3 = stable scalar value
@@ -207,7 +207,7 @@ fn emit_pcntl_siginfo_array_x86_64(emitter: &mut Emitter) {
         emitter.instruction(&format!("test QWORD PTR [rax + 88], {}", 1_u64 << bit)); // test this field's presence bit
         emitter.instruction(&format!("jz {skip}"));                             // omit fields not supplied by this signal/target
         emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                   // C arg0 = current hash
-        abi::emit_symbol_address(emitter, "rsi", symbol);                     // C arg1 = string key bytes
+        abi::emit_symbol_address(emitter, "rsi", symbol);                       // C arg1 = string key bytes
         emitter.instruction(&format!("mov rdx, {}", length));                   // C arg2 = key length
         emitter.instruction(&format!("mov rcx, QWORD PTR [rax + {}]", offset)); // C arg3 = stable scalar value
         emitter.instruction("mov r8, 0");                                       // unused high value word
@@ -569,6 +569,23 @@ fn emit_pcntl_async_dispatch_preserving_aarch64(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");
     emitter.comment("--- runtime: pcntl async dispatch preserving registers ---");
     emitter.label_global("__rt_pcntl_async_dispatch_preserving");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve a minimal flag-test frame
+    emitter.instruction("stp x9, x10, [sp]");                                   // preserve both scratch registers used by the fast path
+    emitter.instruction("mrs x9, nzcv");                                        // preserve condition flags before testing async state
+    emitter.instruction("str x9, [sp, #16]");                                   // park the original condition flags
+    abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_async_enabled");
+    emitter.instruction("ldr x10, [x9]");                                       // read async state before spilling the full register file
+    emitter.instruction("cbnz x10, __rt_pcntl_async_slow");                     // enter the expensive path only while async dispatch is enabled
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the caller's condition flags
+    emitter.instruction("msr nzcv, x9");                                        // restore flags on the disabled fast path
+    emitter.instruction("ldp x9, x10, [sp]");                                   // restore scratch registers on the disabled fast path
+    emitter.instruction("add sp, sp, #32");                                     // release the minimal flag-test frame
+    emitter.instruction("ret");                                                 // return without the 800-byte spill when async mode is off
+    emitter.label("__rt_pcntl_async_slow");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload flags before the complete preserving wrapper
+    emitter.instruction("msr nzcv, x9");                                        // restore the caller's condition flags
+    emitter.instruction("ldp x9, x10, [sp]");                                   // restore scratch registers before the complete spill
+    emitter.instruction("add sp, sp, #32");                                     // release the fast-path frame before the regular frame
     emitter.instruction("sub sp, sp, #800");
     for register in (0..32).step_by(2) {
         emitter.instruction(&format!(
@@ -637,6 +654,13 @@ fn emit_pcntl_async_dispatch_preserving_x86_64(emitter: &mut Emitter) {
     emitter.raw("    .p2align 4");
     emitter.comment("--- runtime: pcntl async dispatch preserving registers ---");
     emitter.label_global("__rt_pcntl_async_dispatch_preserving");
+    emitter.instruction("pushfq");                                              // preserve caller flags around the direct state comparison
+    emitter.instruction("cmp QWORD PTR [rip + __rt_pcntl_async_enabled], 0");   // test async state before spilling registers and vectors
+    emitter.instruction("jne __rt_pcntl_async_slow_x86");                       // enter the expensive path only while async dispatch is enabled
+    emitter.instruction("popfq");                                               // restore flags on the disabled fast path
+    emitter.instruction("ret");                                                 // return without the complete spill when async mode is off
+    emitter.label("__rt_pcntl_async_slow_x86");
+    emitter.instruction("popfq");                                               // restore flags before the complete preserving wrapper
     emitter.instruction("pushfq");
     for register in REGISTERS {
         emitter.instruction(&format!("push {register}"));

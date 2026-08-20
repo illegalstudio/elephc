@@ -74,18 +74,14 @@ pub const SIGINFO_STATUS: u64 = 1 << 3;
 pub const SIGINFO_PID: u64 = 1 << 4;
 /// Presence bit for `ElephcPcntlSigInfo::uid`.
 pub const SIGINFO_UID: u64 = 1 << 5;
-#[cfg(target_os = "linux")]
 /// Presence bit for Linux `ElephcPcntlSigInfo::utime`.
 pub const SIGINFO_UTIME: u64 = 1 << 6;
-#[cfg(target_os = "linux")]
 /// Presence bit for Linux `ElephcPcntlSigInfo::stime`.
 pub const SIGINFO_STIME: u64 = 1 << 7;
 /// Presence bit for `ElephcPcntlSigInfo::address`.
 pub const SIGINFO_ADDRESS: u64 = 1 << 8;
-#[cfg(target_os = "linux")]
 /// Presence bit for Linux `ElephcPcntlSigInfo::band`.
 pub const SIGINFO_BAND: u64 = 1 << 9;
-#[cfg(target_os = "linux")]
 /// Presence bit for Linux `ElephcPcntlSigInfo::fd`.
 pub const SIGINFO_FD: u64 = 1 << 10;
 
@@ -124,7 +120,7 @@ unsafe fn build_signal_set(
         return None;
     }
     for index in 0..count {
-        let signal = *signals.add(index);
+        let signal = std::ptr::read_unaligned(signals.add(index));
         if signal < 1 || signal >= i64::from(signal_limit()) {
             LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
             return None;
@@ -135,6 +131,34 @@ unsafe fn build_signal_set(
         }
     }
     Some(set)
+}
+
+/// Validates PHP's widened signal-array ABI without changing process signal state.
+///
+/// Returns one when valid, minus one for a forbidden empty array, minus two for an out-of-range
+/// signal, and zero for an invalid native pointer.
+///
+/// # Safety
+/// `signals` must be readable for `count` consecutive `i64` values when `count` is nonzero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pcntl_validate_signal_set(
+    signals: *const i64,
+    count: usize,
+    allow_empty: libc::c_int,
+) -> libc::c_int {
+    if count == 0 {
+        return if allow_empty != 0 { 1 } else { -1 };
+    }
+    if signals.is_null() {
+        return 0;
+    }
+    for index in 0..count {
+        let signal = std::ptr::read_unaligned(signals.add(index));
+        if signal < 1 || signal >= i64::from(signal_limit()) {
+            return -2;
+        }
+    }
+    1
 }
 
 /// Copies target-native signal information into the stable PCNTL record.
@@ -357,7 +381,7 @@ pub extern "C" fn elephc_pcntl_signal(
         1 => libc::SIG_IGN,
         _ => queued_signal_handler as *const () as libc::sighandler_t,
     };
-    if unsafe { libc::sigemptyset(&mut action.sa_mask) } != 0 {
+    if unsafe { libc::sigfillset(&mut action.sa_mask) } != 0 {
         record_errno();
         return 0;
     }

@@ -10,6 +10,7 @@
 use super::{body_must_not_use_this, merge_null_coalesce_result_type, Checker};
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
+use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::{packed_type_size, PhpType, TypeEnv};
 
 impl Checker {
@@ -23,6 +24,27 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let name = name.as_str().to_string();
                 let args = args.clone();
+                let call_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+                let references_pcntl_constant = matches!(call_key.as_str(), "defined" | "constant")
+                    && args.first().is_some_and(|arg| {
+                        let value = match &arg.kind {
+                            ExprKind::StringLiteral(value) => Some(value.as_str()),
+                            ExprKind::NamedArg { value, .. } => match &value.kind {
+                                ExprKind::StringLiteral(value) => Some(value.as_str()),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        value.is_some_and(|value| {
+                            let value = value.trim_start_matches('\\');
+                            pcntl_int_constants(self.target_platform)
+                                .iter()
+                                .any(|(constant, _)| *constant == value)
+                        })
+                    });
+                if references_pcntl_constant {
+                    self.require_builtin_library("elephc_pcntl");
+                }
                 if self.extern_functions.contains_key(name.as_str()) {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
@@ -97,6 +119,13 @@ impl Checker {
                 )
             }
             ExprKind::ConstRef(name) => {
+                let constant_name = name.as_str().trim_start_matches('\\');
+                if pcntl_int_constants(self.target_platform)
+                    .iter()
+                    .any(|(constant, _)| *constant == constant_name)
+                {
+                    self.require_builtin_library("elephc_pcntl");
+                }
                 self.constants
                     .get(name.as_str())
                     .cloned()

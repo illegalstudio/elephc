@@ -312,7 +312,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, iconv, phar, tz, image, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, iconv, phar, tz, image, pcntl, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -497,6 +497,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Database (PDO)**: `PDO`, `PDOStatement`, `PDOException` with SQLite, PostgreSQL, MySQL/MariaDB, optional FreeTDS PDO_DBLIB, pure-Rust PDO_FIREBIRD, system-driver-manager PDO_ODBC, Client SDK PDO_INFORMIX/PDO_IBM, Microsoft ODBC PDO_SQLSRV, Oracle Instant Client PDO_OCI, and official CCI PDO_CUBRID drivers, positional `?` and named `:name` binds, fetch modes, transactions, and `foreach` over result sets
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
+- **Process control (PCNTL)**: `pcntl_fork`, wait/status helpers, `pcntl_exec`, signal handlers and async dispatch, masks, priorities, Linux affinity/namespaces, and macOS QoS; see the [PCNTL guide](docs/php/pcntl.md)
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
 - **Native extensions**: complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
@@ -716,6 +717,7 @@ crates/
 ├── elephc-image/        # GD/Exif/Imagick/Gmagick/Cairo image bridge
 ├── elephc-instr/        # Exact profiling instrumentation runtime
 ├── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
+├── elephc-pcntl/        # Unix process control, wait, exec, and signal bridge
 ├── elephc-pdo/          # Multi-driver PDO bridge
 ├── elephc-phar/         # PHAR/tar/zip bridge
 ├── elephc-probe/        # Sampled profiling and authenticated service endpoint
