@@ -473,6 +473,7 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new_with_type_metadata(
         &ast,
+        &check_result.functions,
         &check_result.classes,
         &check_result.interfaces,
     );

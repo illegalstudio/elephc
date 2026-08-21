@@ -11,13 +11,14 @@
 //! - Unknown call/runtime throws stay conservative while exact explicit throws remain precise.
 
 use super::*;
-use crate::types::{ClassInfo, InterfaceInfo};
+use crate::types::{ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 mod callables;
 mod hierarchy;
+mod string_conversion;
 mod types;
 
 use callables::{
@@ -46,6 +47,9 @@ pub(super) struct ExceptionFlowAnalysis {
     function_throws: HashMap<String, ThrownTypes>,
     static_method_throws: HashMap<String, ThrownTypes>,
     instance_method_throws: HashMap<String, ThrownTypes>,
+    function_returns: HashMap<String, PhpType>,
+    static_method_returns: HashMap<String, PhpType>,
+    instance_method_returns: HashMap<String, PhpType>,
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.
@@ -197,6 +201,7 @@ impl ExceptionFlowAnalysis {
     pub(super) fn from_program(
         program: &[Stmt],
         type_metadata: Option<(
+            &HashMap<String, FunctionSig>,
             &HashMap<String, ClassInfo>,
             &HashMap<String, InterfaceInfo>,
         )>,
@@ -212,8 +217,46 @@ impl ExceptionFlowAnalysis {
             &mut instance_method_bodies,
             &mut class_contexts,
         );
+        let function_returns = type_metadata
+            .map(|(functions, _, _)| {
+                functions
+                    .iter()
+                    .map(|(name, signature)| (name.clone(), signature.return_type.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let static_method_returns = type_metadata
+            .map(|(_, classes, _)| {
+                classes
+                    .iter()
+                    .flat_map(|(class_name, class)| {
+                        class.static_methods.iter().map(move |(method, signature)| {
+                            (
+                                method_effect_key(class_name, method),
+                                signature.return_type.clone(),
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let instance_method_returns = type_metadata
+            .map(|(_, classes, _)| {
+                classes
+                    .iter()
+                    .flat_map(|(class_name, class)| {
+                        class.methods.iter().map(move |(method, signature)| {
+                            (
+                                method_effect_key(class_name, method),
+                                signature.return_type.clone(),
+                            )
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let declared_classes = class_contexts.keys().cloned().collect();
-        let mut hierarchy = if let Some((classes, interfaces)) = type_metadata {
+        let mut hierarchy = if let Some((_, classes, interfaces)) = type_metadata {
             ExceptionHierarchy::from_type_metadata(classes, interfaces, declared_classes)
         } else {
             ExceptionHierarchy::from_program(program, declared_classes)
@@ -227,6 +270,9 @@ impl ExceptionFlowAnalysis {
             function_throws: empty_summaries(function_bodies.keys()),
             static_method_throws: empty_summaries(static_method_bodies.keys()),
             instance_method_throws: empty_summaries(instance_method_bodies.keys()),
+            function_returns,
+            static_method_returns,
+            instance_method_returns,
         };
 
         for _ in 0..MAX_EXCEPTION_SUMMARY_ITERATIONS {
@@ -347,8 +393,10 @@ impl ExceptionFlowAnalysis {
             | StmtKind::IncludeOnceGuard { body, .. } => {
                 self.block_throws(body, bindings, class_context)
             }
-            StmtKind::Echo(expr)
-            | StmtKind::ExprStmt(expr)
+            StmtKind::Echo(expr) => self
+                .expr_throws(expr, bindings, class_context)
+                .combined(self.string_conversion_throws(expr, class_context)),
+            StmtKind::ExprStmt(expr)
             | StmtKind::ConstDecl { value: expr, .. }
             | StmtKind::StaticVar { init: expr, .. }
             | StmtKind::ListUnpack { value: expr, .. }
@@ -530,10 +578,18 @@ impl ExceptionFlowAnalysis {
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::ErrorSuppress(inner)
-            | ExprKind::Print(inner)
-            | ExprKind::Cast { expr: inner, .. }
             | ExprKind::PtrCast { expr: inner, .. }
             | ExprKind::Spread(inner) => self.expr_throws(inner, bindings, class_context),
+            ExprKind::Print(inner) => self
+                .expr_throws(inner, bindings, class_context)
+                .combined(self.string_conversion_throws(inner, class_context)),
+            ExprKind::Cast { target, expr: inner } => {
+                let mut thrown = self.expr_throws(inner, bindings, class_context);
+                if matches!(target, CastType::String) {
+                    thrown = thrown.combined(self.string_conversion_throws(inner, class_context));
+                }
+                thrown
+            }
             ExprKind::Clone(inner) | ExprKind::YieldFrom(inner) => self
                 .expr_throws(inner, bindings, class_context)
                 .combined(ThrownTypes::unknown()),
@@ -545,6 +601,11 @@ impl ExceptionFlowAnalysis {
                     thrown = thrown.combined(ThrownTypes::exact(class_name));
                 } else if binary_op_has_dynamic_throw(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::unknown());
+                }
+                if matches!(op, BinOp::Concat) {
+                    thrown = thrown
+                        .combined(self.string_conversion_throws(left, class_context))
+                        .combined(self.string_conversion_throws(right, class_context));
                 }
                 thrown
             }
@@ -577,7 +638,7 @@ impl ExceptionFlowAnalysis {
             } => {
                 let mut thrown = self.expr_list_throws(args, bindings, class_context);
                 if let Some(class_name) = resolve_exception_receiver(receiver, class_context) {
-                    if let Some(summary) = self.resolve_method_summary(
+                    if let Some(summary) = self.resolve_method_value(
                         &class_name,
                         method,
                         &self.static_method_throws,
@@ -604,7 +665,7 @@ impl ExceptionFlowAnalysis {
                     .expr_throws(object, bindings, class_context)
                     .combined(self.expr_list_throws(args, bindings, class_context));
                 if let Some(class_name) = exact_receiver_class(object, class_context) {
-                    if let Some(summary) = self.resolve_method_summary(
+                    if let Some(summary) = self.resolve_method_value(
                         &class_name,
                         method,
                         &self.instance_method_throws,
@@ -762,7 +823,7 @@ impl ExceptionFlowAnalysis {
 
     /// Resolves constructor-body throws or conservatively classifies external builtin constructors.
     fn constructor_throws(&self, class_name: &str) -> ThrownTypes {
-        if let Some(summary) = self.resolve_method_summary(
+        if let Some(summary) = self.resolve_method_value(
             class_name,
             "__construct",
             &self.instance_method_throws,
@@ -781,13 +842,13 @@ impl ExceptionFlowAnalysis {
         }
     }
 
-    /// Resolves an inherited exact-class method summary through the parent chain.
-    fn resolve_method_summary(
+    /// Resolves inherited exact-class method metadata through the parent chain.
+    fn resolve_method_value<T: Clone>(
         &self,
         class_name: &str,
         method: &str,
-        summaries: &HashMap<String, ThrownTypes>,
-    ) -> Option<ThrownTypes> {
+        values: &HashMap<String, T>,
+    ) -> Option<T> {
         let mut current = Some(class_name.to_string());
         let mut seen = HashSet::new();
         while let Some(class_name) = current {
@@ -796,8 +857,8 @@ impl ExceptionFlowAnalysis {
                 return None;
             }
             let method_key = method_effect_key(&class_name, method);
-            if let Some(summary) = summaries.get(&method_key) {
-                return Some(summary.clone());
+            if let Some(value) = values.get(&method_key) {
+                return Some(value.clone());
             }
             if self
                 .hierarchy

@@ -195,19 +195,21 @@ impl PostTypecheckOptimizer {
         Self::new_with_optional_type_metadata(program, None)
     }
 
-    /// Builds reusable analyses with the checker's canonical class and interface hierarchy.
+    /// Builds reusable analyses with checker function signatures and canonical type hierarchy.
     pub fn new_with_type_metadata(
         program: &Program,
+        functions: &HashMap<String, crate::types::FunctionSig>,
         classes: &HashMap<String, crate::types::ClassInfo>,
         interfaces: &HashMap<String, crate::types::InterfaceInfo>,
     ) -> Self {
-        Self::new_with_optional_type_metadata(program, Some((classes, interfaces)))
+        Self::new_with_optional_type_metadata(program, Some((functions, classes, interfaces)))
     }
 
     /// Builds callable and exception analyses, optionally using authoritative checker metadata.
     fn new_with_optional_type_metadata(
         program: &Program,
         type_metadata: Option<(
+            &HashMap<String, crate::types::FunctionSig>,
             &HashMap<String, crate::types::ClassInfo>,
             &HashMap<String, crate::types::InterfaceInfo>,
         )>,
