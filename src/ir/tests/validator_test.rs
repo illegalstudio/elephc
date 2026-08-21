@@ -9,7 +9,8 @@
 //!   not on assumptions from the builder.
 
 use crate::ir::{
-    validate_function, Builder, Function, IrType, Terminator, ValidationError,
+    validate_function, Builder, Function, IrType, LocalKind, Ownership, Terminator,
+    ValidationError,
 };
 use crate::types::PhpType;
 
@@ -104,4 +105,44 @@ fn use_not_dominated_fails() {
         validate_function(&function),
         Err(ValidationError::UseNotDominated { .. })
     ));
+}
+
+/// Resource values require lifetime-capable ownership even though their EIR storage is `I64`.
+#[test]
+fn resource_value_requires_lifetime_tracked_ownership() {
+    let resource_type = PhpType::stream_resource();
+    let mut function = Function::new("resource_owner".to_string(), IrType::Void, PhpType::Void);
+    let resource;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let slot = builder.add_local(
+            Some("stream".to_string()),
+            IrType::I64,
+            resource_type.clone(),
+            LocalKind::PhpLocal,
+        );
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        resource = builder.emit_load_local(slot, IrType::I64, resource_type);
+        builder.terminate(Terminator::Return { value: None });
+    }
+
+    assert_eq!(
+        function.value(resource).expect("resource value").ownership,
+        Ownership::MaybeOwned
+    );
+    assert!(
+        validate_function(&function).is_ok(),
+        "MaybeOwned resource values must pass EIR validation"
+    );
+
+    function
+        .value_mut(resource)
+        .expect("resource value")
+        .ownership = Ownership::NonHeap;
+    assert_eq!(
+        validate_function(&function),
+        Err(ValidationError::OwnershipTypeMismatch(resource))
+    );
 }

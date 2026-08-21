@@ -24,7 +24,7 @@ mod exceptions;
 mod fibers;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
-mod io;
+pub(crate) mod io;
 /// The shared PHP `float`→`int` conversion (`__rt_php_float_to_int`).
 mod numeric;
 mod objects;
@@ -32,6 +32,7 @@ mod objects;
 mod pdo;
 mod pointers;
 mod resource_ids;
+pub(crate) mod resources;
 /// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
 mod round_mode;
 /// Standard PHP library constants, functions, and classes.
@@ -61,7 +62,9 @@ pub(crate) use data::{
 };
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
-pub(crate) use data::{is_user_filter_contract_method, is_user_wrapper_contract_method};
+pub(crate) use data::{
+    is_user_filter_contract_method, is_user_wrapper_contract_method, is_user_wrapper_marker_method,
+};
 /// Emit user-program-specific runtime data section.
 pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float

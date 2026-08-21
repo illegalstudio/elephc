@@ -11,9 +11,6 @@
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
-const FILE_GET_CONTENTS_FAILED_WARNING: &str =
-    "Warning: file_get_contents(): Failed to open stream\n";
-
 /// Emits `__rt_file_get_contents`, the runtime helper that reads an entire file into an owned heap buffer.
 /// Dispatches to the x86_64 or ARM64 implementation based on `emitter.target`.
 /// Input: x1=filename pointer, x2=filename length (PHP string encoding)
@@ -109,9 +106,25 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 
     emitter.label("__rt_file_get_contents_fail");
-    abi::emit_symbol_address(emitter, "x1", "_diag_file_get_contents_failed_msg");
-    emitter.instruction(&format!("mov x2, #{}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
-    emitter.instruction("bl __rt_diag_warning");                                // emit or suppress the file_get_contents() failure warning
+    // Both branches into here still carry the failing syscall result, and the
+    // null-terminated path is at [sp, #0]. php-src names both in the message.
+    if plat.needs_cmp_before_error_branch() {
+        emitter.instruction("neg x3, x0");                                      // Linux answers -errno
+    } else {
+        emitter.instruction("mov x3, x0");                                      // macOS answers the errno itself
+    }
+    // php-src warns TWICE when the scheme names no wrapper, the missing-wrapper line first
+    // because it is the one that says WHY. The helper is silent for any path a wrapper claims.
+    emitter.instruction("str x3, [sp, #-16]!");                                 // the errno survives the extra warning
+    emitter.instruction("ldr x2, [sp, #16]");                                   // the null-terminated path
+    abi::emit_symbol_address(emitter, "x0", "_uww_name_fgc");
+    emitter.instruction(&format!("mov x1, #{}", "file_get_contents".len()));    // bare callee name
+    emitter.instruction("bl __rt_unknown_wrapper_warning");
+    emitter.instruction("ldr x3, [sp], #16");                                   // restore the errno
+    emitter.instruction("ldr x2, [sp, #0]");                                    // the null-terminated path
+    abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fgc_prefix");
+    emitter.instruction("mov x1, #27");                                          // prefix length
+    emitter.instruction("bl __rt_open_failed_warning");
     emitter.instruction("mov x1, #0");                                          // return an empty string pointer on read-path failure
     emitter.instruction("mov x2, #0");                                          // return an empty string length on read-path failure
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address on the failure path
@@ -185,9 +198,24 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the owned file contents as an elephc string
 
     emitter.label("__rt_file_get_contents_fail");
-    abi::emit_symbol_address(emitter, "rdi", "_diag_file_get_contents_failed_msg"); // pass the file_get_contents() warning text pointer to the diagnostic helper
-    emitter.instruction(&format!("mov esi, {}", FILE_GET_CONTENTS_FAILED_WARNING.len())); // pass the warning byte length to the diagnostic helper
-    emitter.instruction("call __rt_diag_warning");                              // emit or suppress the file_get_contents() failure warning
+    // The libc wrappers report failure through errno rather than the return value, and the
+    // C path is held in the frame rather than a register.
+    emitter.instruction("call __errno_location");
+    emitter.instruction("movsxd rcx, DWORD PTR [rax]");                         // the errno to describe
+    // php-src warns TWICE when the scheme names no wrapper, the missing-wrapper line first
+    // because it is the one that says WHY. The helper is silent for any path a wrapper claims.
+    emitter.instruction("push rcx");                                            // the errno survives the extra warning
+    emitter.instruction("push rcx");                                            // keep rsp 16-byte aligned for the call
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", path_off));   // the null-terminated path
+    abi::emit_symbol_address(emitter, "rdi", "_uww_name_fgc");
+    emitter.instruction(&format!("mov esi, {}", "file_get_contents".len()));    // bare callee name
+    emitter.instruction("call __rt_unknown_wrapper_warning");
+    emitter.instruction("pop rcx");                                             // discard the alignment copy
+    emitter.instruction("pop rcx");                                             // restore the errno
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", path_off));   // the null-terminated path
+    abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fgc_prefix");
+    emitter.instruction("mov esi, 27");                                          // prefix length
+    emitter.instruction("call __rt_open_failed_warning");
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when the file could not be stated or opened
     emitter.instruction("xor edx, edx");                                        // return an empty string length when the file could not be stated or opened
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary Linux stat buffer and local spill slots on the failure path

@@ -115,6 +115,11 @@ pub(super) fn lower(
         RuntimeFnId::StreamContextSetOption => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_context_set_option(ctx, inst)
         }),
+        // The plural spelling is the two-argument array form, which the singular lowering already
+        // recognises; only the arity contract differs, which is why it carries its own id.
+        RuntimeFnId::StreamContextSetOptions => Some({
+            crate::codegen::lower_inst::builtins::io::lower_stream_context_set_option(ctx, inst)
+        }),
         RuntimeFnId::StreamContextSetParams => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_context_set_params(ctx, inst)
         }),

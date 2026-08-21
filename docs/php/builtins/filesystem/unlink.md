@@ -8,13 +8,14 @@ sidebar:
 ## unlink()
 
 ```php
-function unlink(string $filename): bool
+function unlink(string $filename, mixed $context = null): bool
 ```
 
 Deletes a file.
 
 **Parameters**:
 - `$filename` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

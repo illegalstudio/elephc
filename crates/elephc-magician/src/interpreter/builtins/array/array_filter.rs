@@ -100,6 +100,9 @@ fn eval_array_filter_result_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // Every caller has already evaluated its whole operand list, which is where php puts
+    // the type check too, so this one site serves the direct and evaluated paths alike.
+    super::array_arg_check::eval_check_array_args("array_filter", &[array], context, values)?;
     let callback = match callback {
         Some(callback) if !values.is_null(callback)? => {
             Some(eval_callable_with_optional_scope(

@@ -144,10 +144,19 @@ impl Checker {
     }
 
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    ///
+    /// `places_rewritable` says whether THIS call site's lowering can carry a non-local place.
+    /// `ir_lower::expr::ref_place_args` rewrites a FREE FUNCTION call — it reads the place into a
+    /// hidden temporary, calls with that, and writes the temporary back — and there is no such
+    /// rewrite for a method, a closure, or a `callable`. Accepting a property for those compiled
+    /// a call that RAN and dropped the write in silence: `$this->twiddle($box->data)` left the
+    /// property unchanged where php mutates it. The flag is what keeps the checker from
+    /// promising what one of its lowerings cannot deliver.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
         arg: &Expr,
         env: &TypeEnv,
+        places_rewritable: bool,
     ) -> Result<bool, CompileError> {
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
@@ -155,6 +164,31 @@ impl Checker {
                 Ok(matches!(
                     self.infer_type(array, env)?.codegen_repr(),
                     PhpType::Array(_)
+                ))
+            }
+            // An ELEMENT of a property — `set($obj->items[1])` — stays REFUSED. php allows it,
+            // but the by-reference argument lowering resolves a cell address only for an element
+            // of a plain LOCAL, and `ref_place_args`' read/write-back does not fire for it
+            // either: accepting the shape produced a call that ran and dropped the write in
+            // silence, which is worse than the diagnostic. The refusal names the parameter.
+            // A PROPERTY is a writable place in php — `sort($obj->items)` and
+            // `bump($this->rows)` are ordinary code — and `ir_lower::expr::ref_place_args`
+            // lowers one by reading it into a hidden temporary, calling with that, and writing
+            // the temporary back. It can only do that for ARRAY storage, so this accepts
+            // exactly what it can lower: a scalar property keeps the existing diagnostic rather
+            // than compiling into a write-back that never happens.
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {
+                if !places_rewritable {
+                    return Ok(false);
+                }
+                Ok(matches!(
+                    self.infer_type(arg, env)?.codegen_repr(),
+                    PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                        | PhpType::Int
+                        | PhpType::Float
+                        | PhpType::Bool
+                        | PhpType::Str
                 ))
             }
             _ => Ok(false),
@@ -281,6 +315,12 @@ impl Checker {
                 PhpType::AssocArray { key, value },
                 PhpType::Array(_) | PhpType::AssocArray { .. },
             ) if **key == PhpType::Mixed && **value == PhpType::Mixed => true,
+            // An EMPTY array literal is `array<never>` and is every array shape at once: php has
+            // one `[]`. `$h = []; fill_keyed($h);` with `function fill_keyed(array &$a)` whose
+            // body writes string keys re-types the parameter to a hash, and the call site would
+            // otherwise reject the very literal that started it. The lowering converts it with
+            // `Op::ArrayToHash`, which for an empty array moves nothing.
+            (PhpType::AssocArray { .. }, PhpType::Array(elem)) if **elem == PhpType::Never => true,
             (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
@@ -511,7 +551,7 @@ impl Checker {
             }
             if param_idx < regular_param_count {
                 if sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
+                    && !self.is_by_ref_argument_lvalue(arg, caller_env, false)?
                 {
                     let param_name = sig
                         .params

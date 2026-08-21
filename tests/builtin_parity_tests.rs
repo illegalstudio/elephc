@@ -28,7 +28,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(exceptional.len(), 13);
+    assert_eq!(exceptional.len(), 15);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -54,7 +54,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     assert_eq!(unsupported, 3);
     assert_eq!(
         preludes,
-        BTreeSet::from(["hash_copy", "hash_final", "hash_init", "hash_update"])
+        BTreeSet::from(["dir", "hash_copy", "hash_final", "hash_init", "hash_update"])
     );
 
     let hash_init = contracts()

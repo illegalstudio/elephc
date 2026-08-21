@@ -32,6 +32,30 @@ pub unsafe extern "C" fn elephc_phar_extract_url(
     }
 }
 
+/// C ABI wrapper around [`zip_stat_entries_bytes`].
+///
+/// Returns a pointer to the serialized per-entry stat buffer and writes its byte
+/// length into `out_len`. Returns null and writes zero when the file cannot be
+/// read or is no ZIP archive.
+///
+/// # Safety
+/// `path_ptr` must be valid for `path_len` bytes unless `path_len` is zero.
+/// `out_len` may be null; when non-null it must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_zip_stat_entries(
+    path_ptr: *const u8,
+    path_len: usize,
+    out_len: *mut usize,
+) -> *const u8 {
+    match std::panic::catch_unwind(|| zip_stat_entries_bytes(slice(path_ptr, path_len))) {
+        Ok(Some(bytes)) => publish_result(bytes, out_len),
+        _ => {
+            write_len(out_len, 0);
+            std::ptr::null()
+        }
+    }
+}
+
 /// C ABI wrapper around [`entry_names_bytes`].
 ///
 /// Returns a pointer to the serialized entry-name buffer and writes its byte

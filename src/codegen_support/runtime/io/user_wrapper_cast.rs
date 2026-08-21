@@ -104,7 +104,7 @@ fn emit_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emitter.instruction("mov w9, #0x4000");                                     // high half of the synthetic fd base (0x4000 << 16 = 0x40000000)
     emitter.instruction("lsl x9, x9, #16");                                     // form 0x40000000 in x9
     emitter.instruction("sub x9, x0, x9");                                      // x9 = fd - 0x40000000 = handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
     emitter.instruction(&format!("cbz x0, {}", missing_label));                 // slot empty (fclose'd or never registered): not selectable
 }
@@ -134,7 +134,7 @@ fn emit_user_wrapper_stream_cast_linux_x86_64(emitter: &mut Emitter) {
 
     // $cast_as stays in rsi across both lookups (neither touches it).
     emitter.instruction(&format!("sub rdi, {:#x}", FD_WRAPPER_BIT));            // rdi = fd - 0x40000000 = handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + rdi * 8]");                  // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // is the slot empty?
     emitter.instruction("jz __rt_uwcast_neg1_x86");                             // fclose'd or never registered: not selectable

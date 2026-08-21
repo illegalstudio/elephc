@@ -8,7 +8,7 @@ sidebar:
 ## glob()
 
 ```php
-function glob(string $pattern): array
+function glob(string $pattern): mixed
 ```
 
 Finds pathnames matching a pattern.
@@ -16,7 +16,7 @@ Finds pathnames matching a pattern.
 **Parameters**:
 - `$pattern` (`string`)
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 

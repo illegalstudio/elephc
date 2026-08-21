@@ -47,6 +47,12 @@ pub(in crate::interpreter) fn eval_builtin_array_combine(
     };
     let keys = eval_expr(keys, context, scope, values)?;
     let values_array = eval_expr(values_array, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args(
+        "array_combine",
+        &[keys, values_array],
+        context,
+        values,
+    )?;
     eval_array_combine_result(keys, values_array, values)
 }
 

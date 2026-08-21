@@ -1,0 +1,15 @@
+{
+  "argv": [],
+  "dependencies": [],
+  "description": "Captures simultaneous binary stdout/stderr, an ordered warning, return data, and a filesystem write.",
+  "environment": {},
+  "id": "binary-diagnostics",
+  "ini": {},
+  "normalization": [],
+  "schema_version": 1,
+  "stdin": {
+    "data": "aW4A/w==",
+    "encoding": "base64"
+  },
+  "timeout_seconds": 10
+}

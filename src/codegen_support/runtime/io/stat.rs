@@ -214,25 +214,25 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
-    // -- extract st_size, but ONLY if stat() wrote the buffer --
-    // Reading it unconditionally answered whatever the stack held at the `st_size` offset, which
-    // measured as a steady `0` here and so read like a wrong constant — but it is not a constant,
-    // it is unfilled memory, exactly as in `__rt_filemtime` where the `st_mtime` offset made the
-    // same omission visible as five different values in five runs. `x1` carries the int|false
-    // flag the rest of the stat family already uses.
+    // -- extract st_size, or report false when stat() failed --
+    // Reading the buffer regardless returns whatever the stack held; that it usually looked
+    // like a plausible size was luck, not correctness.
     emitter.instruction("cmp x0, #0");                                          // did stat() succeed?
-    emitter.instruction("b.ne __rt_filesize_fail");                             // failure path: return the false flag
+    emitter.instruction("b.ne __rt_filesize_false");                            // no: php answers false
     emitter.instruction(&format!("ldr x0, [sp, #{}]", size_off));               // load st_size from stat struct
-    emitter.instruction("mov x1, #1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction("mov x1, #1");                                          // success flag for the int|false boxing
+
+    // -- restore frame and return --
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
-    emitter.label("__rt_filesize_fail");
-    emitter.instruction("mov x0, #0");                                          // stat failed: integer payload defaults to 0
-    emitter.instruction("mov x1, #0");                                          // failure flag tells codegen to box PHP false
+
+    emitter.label("__rt_filesize_false");
+    emitter.instruction("mov x0, #0");                                          // stat failed: the integer payload is unused
+    emitter.instruction("mov x1, #0");                                          // clear flag: the caller boxes PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("ret");                                                 // return the failure flag
 
     // ================================================================
     // __rt_filemtime: get file modification time
@@ -253,24 +253,23 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
-    // -- extract st_mtimespec.tv_sec, but ONLY if stat() wrote the buffer --
-    // Reading it unconditionally returned whatever the stack happened to hold for a path that
-    // cannot be stat'ed: five runs of one binary gave five different values, because the leaked
-    // bytes track a stack address that ASLR moves. `x1` carries the int|false flag its seven
-    // siblings already use — 0 tells codegen to box php `false`.
+    // -- extract st_mtimespec.tv_sec, or report false when stat() failed --
     emitter.instruction("cmp x0, #0");                                          // did stat() succeed?
-    emitter.instruction("b.ne __rt_filemtime_fail");                            // failure path: return the false flag
+    emitter.instruction("b.ne __rt_filemtime_false");                           // no: php answers false
     emitter.instruction(&format!("ldr x0, [sp, #{}]", mtime_off));              // load mtime tv_sec from stat struct
-    emitter.instruction("mov x1, #1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction("mov x1, #1");                                          // success flag for the int|false boxing
+
+    // -- restore frame and return --
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
-    emitter.label("__rt_filemtime_fail");
-    emitter.instruction("mov x0, #0");                                          // stat failed: integer payload defaults to 0
-    emitter.instruction("mov x1, #0");                                          // failure flag tells codegen to box PHP false
+
+    emitter.label("__rt_filemtime_false");
+    emitter.instruction("mov x0, #0");                                          // stat failed: the integer payload is unused
+    emitter.instruction("mov x1, #0");                                          // clear flag: the caller boxes PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("ret");                                                 // return the failure flag
 }
 
 /// Emits x86_64 Linux stat helpers: __rt_file_exists, __rt_is_file, __rt_is_dir,
@@ -352,11 +351,11 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading st_size
     emitter.instruction("jne __rt_filesize_fail");                              // failure path: return the false flag
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", size_off));   // load st_size from the Linux stat buffer
-    emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction("mov rdx, 1");                                          // success flag for the int|false boxing
     emitter.instruction("jmp __rt_filesize_ret");                               // skip the failure path after reading the file size
     emitter.label("__rt_filesize_fail");
-    emitter.instruction("mov rax, 0");                                          // stat failed: integer payload defaults to 0
-    emitter.instruction("mov rdx, 0");                                          // failure flag tells codegen to box PHP false
+    emitter.instruction("mov rax, 0");                                          // stat failed: the integer payload is unused
+    emitter.instruction("mov rdx, 0");                                          // clear flag: the caller boxes PHP false
     emitter.label("__rt_filesize_ret");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary stat buffer frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -372,11 +371,11 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading st_mtime
     emitter.instruction("jne __rt_filemtime_fail");                             // failure path: return the false flag
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mtime_off));  // load st_mtime.tv_sec from the Linux stat buffer
-    emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction("mov rdx, 1");                                          // success flag for the int|false boxing
     emitter.instruction("jmp __rt_filemtime_ret");                              // skip the failure path after reading the modification time
     emitter.label("__rt_filemtime_fail");
-    emitter.instruction("mov rax, 0");                                          // stat failed: integer payload defaults to 0
-    emitter.instruction("mov rdx, 0");                                          // failure flag tells codegen to box PHP false
+    emitter.instruction("mov rax, 0");                                          // stat failed: the integer payload is unused
+    emitter.instruction("mov rdx, 0");                                          // clear flag: the caller boxes PHP false
     emitter.label("__rt_filemtime_ret");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary stat buffer frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

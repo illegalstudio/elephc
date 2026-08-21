@@ -2,19 +2,19 @@
 title: "stream_context_get_options()"
 description: "Retrieves options for the specified stream context."
 sidebar:
-  order: 219
+  order: 229
 ---
 
 ## stream_context_get_options()
 
 ```php
-function stream_context_get_options(resource $context): array
+function stream_context_get_options(resource $stream_or_context): array
 ```
 
 Retrieves options for the specified stream context.
 
 **Parameters**:
-- `$context` (`resource`)
+- `$stream_or_context` (`resource`)
 
 **Returns**: `array`
 

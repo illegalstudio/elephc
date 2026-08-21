@@ -17,9 +17,14 @@ pub(crate) fn lower_file_exists(
     lower_file_exists_with_wrapper(ctx, inst)
 }
 
-/// Lowers `unlink(path)` through the target-aware runtime helper.
+/// Lowers `unlink(path, context)` through the target-aware runtime helper.
+///
+/// `$context` is accepted and IGNORED: php threads a stream context into the wrapper's `unlink()`
+/// through `$this->context`, and elephc has no context plumbing on the path-op route yet. Refusing
+/// the argument outright was worse — it made `unlink($p, $ctx)` a compile error on a signature php
+/// documents.
 pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "unlink", 1)?;
+    ensure_arg_count_between(inst, "unlink", 1, 2)?;
     let path = expect_operand(inst, 0)?;
     let path_literal = optional_const_string_operand(ctx, path)?;
     let can_be_phar = path_literal
@@ -29,6 +34,13 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     if can_be_phar {
         publish_phar_delete_function_pointer(ctx);
     }
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_unlink",
+        WRAPPER_MISSING_HOOK_HEAD_UNLINK.len(),
+        "_uwmh_tail_unlink",
+        WRAPPER_MISSING_HOOK_TAIL_UNLINK.len(),
+    );
     load_string_to_result(ctx, path, "unlink")?;
     if can_be_phar {
         emit_unlink_maybe_phar_dispatch(ctx);
@@ -38,14 +50,53 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
-/// Lowers `mkdir(path)` through the target-aware runtime helper.
+/// Lowers `mkdir(path, permissions, recursive, context)` through the target-aware runtime helper.
+///
+/// `$permissions` and `$recursive` reach BOTH routes: the POSIX `mkdir` gets the mode and creates
+/// missing parents when asked, and a userspace wrapper's `mkdir()` receives what php passes it —
+/// measured on 8.5.6 as `($path, 511, 8)` by default, `($path, 493, 8)` for an explicit `0755`, and
+/// `($path, 448, 9)` for `0700` recursive, i.e. `STREAM_REPORT_ERRORS | STREAM_MKDIR_RECURSIVE`.
+/// `$context` is accepted and ignored (see [`lower_unlink`]).
 pub(crate) fn lower_mkdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_single_path_wrapper_op(ctx, inst, "mkdir", "__rt_mkdir", STREAM_WRAPPER_MKDIR_SLOT)
+    ensure_arg_count_between(inst, "mkdir", 1, 4)?;
+    let path = expect_operand(inst, 0)?;
+    let permissions = inst.operands.get(1).copied();
+    let recursive = inst.operands.get(2).copied();
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_mkdir",
+        WRAPPER_MISSING_HOOK_HEAD_MKDIR.len(),
+        "_uwmh_tail_mkdir",
+        WRAPPER_MISSING_HOOK_TAIL_MKDIR.len(),
+    );
+    load_string_to_result(ctx, path, "mkdir")?;
+    emit_mkdir_wrapper_dispatch(ctx, permissions, recursive)?;
+    store_if_result(ctx, inst)
 }
 
-/// Lowers `rmdir(path)` through the target-aware runtime helper.
+/// Lowers `rmdir(path, context)` through the target-aware runtime helper.
+///
+/// php hands a wrapper's `rmdir()` an `$options` of `STREAM_REPORT_ERRORS` (8), measured on 8.5.6;
+/// `$context` is accepted and ignored (see [`lower_unlink`]).
 pub(crate) fn lower_rmdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_single_path_wrapper_op(ctx, inst, "rmdir", "__rt_rmdir", STREAM_WRAPPER_RMDIR_SLOT)
+    ensure_arg_count_between(inst, "rmdir", 1, 2)?;
+    let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_rmdir",
+        WRAPPER_MISSING_HOOK_HEAD_RMDIR.len(),
+        "_uwmh_tail_rmdir",
+        WRAPPER_MISSING_HOOK_TAIL_RMDIR.len(),
+    );
+    load_string_to_result(ctx, path, "rmdir")?;
+    emit_single_path_wrapper_dispatch_with_options(
+        ctx,
+        "__rt_rmdir",
+        STREAM_WRAPPER_RMDIR_SLOT,
+        STREAM_REPORT_ERRORS,
+        0,
+    );
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `chdir(path)` through the target-aware runtime helper.
@@ -55,7 +106,7 @@ pub(crate) fn lower_chdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 
 /// Lowers `copy(source, dest)` through the target-aware runtime helper.
 pub(crate) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_binary_path_call(ctx, inst, "copy", "__rt_copy")
+    lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy")
 }
 
 /// Lowers `rename(from, to)` through the target-aware runtime helper.
@@ -69,13 +120,60 @@ pub(crate) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `scandir(path)` through the target-aware runtime directory listing helper.
+///
+/// php's signature is `array|false`, so the raw pointer is boxed rather than stored bare:
+/// the runtime answers NULL for a directory it cannot open, and the boxing turns that into
+/// PHP false — which is what lets `scandir($d) === false`, the manual's own failure test,
+/// finally fire. The success side boxes the indexed array as a tag-4 Mixed payload.
 pub(crate) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "scandir", "__rt_scandir")
+    // `$context` is the third parameter, accepted and ignored (see `lower_unlink`).
+    super::super::ensure_arg_count_between(inst, "scandir", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "scandir")?;
+    // $sorting_order rides beside the path pair, defaulting to SCANDIR_SORT_ASCENDING —
+    // php sorts the listing unless SCANDIR_SORT_NONE asks it not to.
+    match inst.operands.get(1).copied() {
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("mov x0, #0"),
+            Arch::X86_64 => ctx.emitter.instruction("xor edi, edi"),
+        },
+        Some(order) => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+                Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
+            }
+            ctx.load_value_to_result(order)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x9, x0");                      // hold the order while the pair returns
+                    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+                    ctx.emitter.instruction("mov x0, x9");
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");
+                    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+                }
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_scandir");
+    // The shared helper makes the box the listing's sole owner; see its doc for the
+    // copy-on-write consequence of leaving the creation reference alive.
+    box_listing_or_false_result(ctx, "scandir");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.
 pub(crate) fn lower_glob(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "glob", "__rt_glob")
+    // php's signature is array|false, so the listing is boxed like scandir's. The runtime
+    // never produces the false today — a pattern with no matches answers the empty array,
+    // exactly as php does — but the union is what the checker now declares.
+    super::super::ensure_arg_count(inst, "glob", 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "glob")?;
+    abi::emit_call_label(ctx.emitter, "__rt_glob");
+    box_listing_or_false_result(ctx, "glob");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `chmod(path, mode)` through the target-aware runtime helper.
@@ -137,6 +235,13 @@ pub(crate) fn lower_umask(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 pub(crate) fn lower_touch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "touch", 1, 3)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_touch",
+        WRAPPER_MISSING_HOOK_HEAD_TOUCH.len(),
+        "_uwmh_tail_metadata",
+        WRAPPER_MISSING_HOOK_TAIL_METADATA.len(),
+    );
     load_string_to_result(ctx, path, "touch path")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_touch_args_aarch64(ctx, inst)?,

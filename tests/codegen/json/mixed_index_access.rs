@@ -156,6 +156,21 @@ fn test_mixed_count_assoc() {
     assert_eq!(out, "3");
 }
 
+/// `count()` on a non-container Mixed payload raises PHP's `TypeError`.
+///
+/// The old expectation was `0`, and its comment guessed at what PHP does rather than measuring
+/// it. `php -n` 8.5.6 raises here, and answering `0` made `count($x) === 0` read a scalar as an
+/// empty collection. The type is named with the VALUE's own spelling, which is why a boolean
+/// would read `false` rather than `bool`.
+#[test]
+fn test_mixed_count_scalar_raises_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo count(json_decode("42"));
+} catch (\TypeError $e) {
+    echo $e->getMessage();
+}"#,
 /// `count()` on a non-container Mixed payload raises PHP 8's TypeError.
 ///
 /// This asserted `0` and passed — which is what a divergence looks like once a test
@@ -176,6 +191,33 @@ fn test_mixed_count_scalar_throws_php_type_error() {
     assert_eq!(
         out,
         "count(): Argument #1 ($value) must be of type Countable|array, int given"
+    );
+}
+
+/// `count()` names every type PHP names, with PHP's own spelling.
+///
+/// All eight wordings were read off `php -n` 8.5.6 rather than derived from the tag names, which
+/// is what catches the boolean pair: PHP spells the VALUE, so `true` and `false` are different
+/// words where a type-driven table would have produced `bool` twice. The two containers at the
+/// end are the control — a fix that raised for everything would look just as green without them.
+#[test]
+fn test_count_names_every_rejected_type_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("/dev/null", "r");
+$vals = [1, "s", 1.5, true, false, null, $h, [1, 2], ["k" => 1]];
+foreach ([0, 1, 2, 3, 4, 5, 6, 7, 8] as $i) {
+    try {
+        echo count($vals[$i]), "|";
+    } catch (\TypeError $e) {
+        echo substr($e->getMessage(), 63), "|";
+    }
+}
+fclose($h);"#,
+    );
+    assert_eq!(
+        out,
+        "int given|string given|float given|true given|false given|null given|resource given|2|1|"
     );
 }
 

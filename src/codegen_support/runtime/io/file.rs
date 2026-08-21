@@ -52,7 +52,27 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #32]");                                   // save the PHP $flags bitmask across every helper call
 
     // -- read entire file contents --
-    emitter.instruction("bl __rt_file_get_contents");                           // read file, x1=ptr, x2=len
+    emitter.instruction("bl __rt_file_get_contents_maybe_url");                 // read the file OR the wrapper URL, x1=ptr, x2=len
+    emitter.instruction("b __rt_file_split");                                   // and split whatever came back
+
+    // -- second entry: the caller already read the bytes (a php://filter chain read) --
+    // `file()` on a filter URL is "read through the chain, then split": the read half lives in
+    // the lowering's filter route, which cannot reach the split loop through `__rt_file`
+    // because that entry performs its own read. Same frame, same flags slot, same loop.
+    emitter.label_global("__rt_file_from_bytes");
+    emitter.instruction("sub sp, sp, #64");                                     // the same frame the ordinary entry builds
+    emitter.instruction("stp x29, x30, [sp, #48]");
+    emitter.instruction("add x29, sp, #48");
+    emitter.instruction("str x0, [sp, #32]");                                   // save the PHP $flags bitmask across every helper call
+
+    // A shared label, not a local one: the plain `b` above crosses from `__rt_file`'s atom into
+    // this one, and a local label would be dropped by macOS dead-stripping (`.alt_entry` keeps
+    // it addressable; the jump is an unconditional `b`, which is what `.alt_entry` supports).
+    emitter.label_shared("__rt_file_split");
+    // A null payload pointer is the reader's failure signal — php answers FALSE for a file it
+    // cannot read, and a null return is what the caller's boxing turns into that false. An
+    // EMPTY file arrives as a non-null pointer with length zero and still answers `[]`.
+    emitter.instruction("cbz x1, __rt_file_failed");
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
     emitter.instruction("cbz x1, __rt_file_failed");                            // a null payload is a FAILED read, which PHP reports as false
 
@@ -119,10 +139,14 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // null result distinguishes a failed read from an EMPTY file
 
     // -- restore frame and return --
-    emitter.label("__rt_file_epilogue");
+    emitter.label("__rt_file_out");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    emitter.label("__rt_file_failed");
+    emitter.instruction("mov x0, #0");                                          // the caller boxes the null as PHP false
+    emitter.instruction("b __rt_file_out");
 }
 
 /// Emits the ARM64 `$flags` handling applied to one complete `file()` line before it is pushed.
@@ -183,7 +207,22 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the file payload, line scan cursors, and result array pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the PHP $flags bitmask across every helper call
 
-    emitter.instruction("call __rt_file_get_contents");                         // read the full file payload into an owned elephc string before splitting it into lines
+    emitter.instruction("call __rt_file_get_contents_maybe_url");               // read the file OR the wrapper URL into an owned elephc string before splitting it into lines
+    emitter.instruction("jmp __rt_file_split_x");                               // and split whatever came back
+
+    // -- second entry: the caller already read the bytes; see the AArch64 counterpart --
+    emitter.label_global("__rt_file_from_bytes");
+    emitter.instruction("push rbp");                                            // the same frame the ordinary entry builds
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 64");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the PHP $flags bitmask across every helper call
+
+    // See the AArch64 counterpart: the `jmp` crosses into this entry's section, so the label
+    // must survive section-level garbage collection.
+    emitter.label_shared("__rt_file_split_x");
+    // See the AArch64 counterpart: a null payload pointer answers null, which boxes to false.
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_file_failed_x");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned file payload pointer across the later array allocation and line pushes
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned file payload length across the later array allocation and scan loop
     emitter.instruction("test rax, rax");                                       // a null payload is a FAILED read, which PHP reports as false
@@ -238,16 +277,14 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_file_cleanup");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the result array pointer in the canonical x86_64 integer result register
-    emitter.instruction("jmp __rt_file_epilogue");                              // skip the failure result on the success path
-
-    // -- a read that failed answers null, which the lowering boxes as PHP's false --
-    emitter.label("__rt_file_failed");
-    emitter.instruction("xor eax, eax");                                        // null result distinguishes a failed read from an EMPTY file
-
-    emitter.label("__rt_file_epilogue");
+    emitter.label("__rt_file_out_x");
     emitter.instruction("add rsp, 64");                                         // release the temporary file payload and scan-state spill slots used by file()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the line array
     emitter.instruction("ret");                                                 // return the array of file lines to the caller
+
+    emitter.label("__rt_file_failed_x");
+    emitter.instruction("xor eax, eax");                                        // the caller boxes the null as PHP false
+    emitter.instruction("jmp __rt_file_out_x");
 }
 
 /// Emits the x86_64 `$flags` handling applied to one complete `file()` line before it is pushed.

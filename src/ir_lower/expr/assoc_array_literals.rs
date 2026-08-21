@@ -186,6 +186,11 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
         ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
+        // A call result is subscripted directly often enough to matter — `meta()["mode"]`. Without
+        // this arm the caller fell back to `infer_expr_type_syntactic`, whose last resort for an
+        // unknown call is `int`, so a ternary merging that read with `false` typed its temp `int`
+        // and CAST the string element to one: `$c ? false : meta()["mode"]` printed `0`.
+        ExprKind::FunctionCall { name, .. } => Some(call_return_type(ctx, name, &[])),
         _ => None,
     }?
     .codegen_repr();

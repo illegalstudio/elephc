@@ -586,6 +586,121 @@ items below are intentionally deferred to a later milestone. They are either
 niche, genuinely large (multi-week), or blocked by an upstream-library limit —
 none are needed for typical stream usage.
 
+- [x] **`fgetcsv`/`fputcsv` full PHP 8.4 signatures** — `fgetcsv` now accepts
+  `$enclosure` and `$escape` (default `""` = RFC 4180 doubling mode), and
+  `fputcsv` accepts `$escape` (default `"\\"`) and `$eol` (default `"\n"`,
+  PHP 8.1+). The EIR lowering extracts the first byte of each delimiter string,
+  packs them into a `csv_opts` word (`esc<<16 | enc<<8 | sep`), and passes it
+  to the runtime. `__rt_fgetcsv` implements a 5-state machine
+  (OutsideField/InField/InQuotedField/AfterEscape/AfterCloseQuote) honoring
+  custom separator, enclosure, and escape; `__rt_fputcsv` honors custom
+  separator, enclosure, escape, and end-of-line. ARM64 + x86_64.
+- [x] **PSFS return-code propagation** — `__rt_user_filter_brigade_invoke`
+  now observes the user filter's `int` return value: `PSFS_PASS_ON` (2)
+  walks the output brigade as before; `PSFS_FEED_ME` (1) returns the original
+  input buffer unchanged so the stream layer can re-read and re-invoke;
+  `PSFS_ERR_FATAL` (0) returns an empty result to signal a fatal filter
+  error. Previously only PASS_ON produced output and the other two codes
+  were silently treated as empty output. ARM64 + x86_64.
+- [x] **`stream_select` → `poll(2)`** — `__rt_stream_select` now builds a
+  stack-allocated `struct pollfd` array (capacity 256) and invokes `poll(2)`
+  instead of `select(2)`, removing the 64-fd ceiling that blocked servers
+  with more than 64 concurrent connections. Read entries use `POLLIN`,
+  write entries `POLLOUT`, except entries `POLLPRI`. Synthetic user-wrapper
+  descriptors are still resolved via `stream_cast(STREAM_CAST_FOR_SELECT)`.
+  Descriptors that resolve to -1 (no `stream_cast`) are kept in the pollfd
+  array so indices stay aligned, but `revents & (POLLIN|POLLOUT|POLLPRI)`
+  filtering drops them from the ready subset (matching PHP, which excludes
+  non-selectable wrappers). Timeout: `seconds`/`microseconds` are combined
+  into a millisecond count; a sentinel null/infinite maps to `-1` (block
+  forever). macOS uses `bl _poll` (libSystem); Linux uses the native poll
+  syscall (73 on ARM64, 7 on x86_64). ARM64 + x86_64.
+- [x] **`stream_get_meta_data` real `wrapper_type` and `uri` (file://)** —
+  `__rt_fopen` now records the opened URI and a wrapper id (0=plainfile) per
+  fd via a new `__rt_stream_record_meta` runtime helper, backed by three
+  per-fd tables (`_stream_wrapper_id`, `_stream_uri_ptr`, `_stream_uri_len`).
+  `__rt_stream_get_meta_data` reads these tables and maps the wrapper id to
+  the matching wrapper-name literal (plainfile/http/https/ftp/ftps/phar/php/
+  data/compress.zlib/compress.bzip2/glob/user), falling back to "plainfile"
+  for unset fds. The URI is read from the per-fd pointer/length pair, falling
+  back to an empty string. The URI is persisted via `__rt_str_persist` so it
+  survives past the caller's string lifetime. ARM64 + x86_64.
+- [x] **Extended `stream_get_meta_data` wrapper instrumentation** — the
+  `emit_record_stream_meta_after_fd` lowering helper now instruments
+  php://memory and php://temp (wrapper_id=6), data:// (wrapper_id=7),
+  http:// (wrapper_id=1), ftp:// (wrapper_id=3), compress.zlib://
+  (wrapper_id=8), and compress.bzip2:// (wrapper_id=9), so
+  `stream_get_meta_data()` reports the real `wrapper_type` and `uri` for
+  these wrappers.
+- [x] **Full `stream_socket_client`/`server` signatures** —
+  `stream_socket_client` now accepts the full 7-arg PHP signature
+  (address, &$errno, &$errstr, $timeout, $flags, $context, $peername),
+  and `stream_socket_server` accepts the full 6-arg signature
+  (address, &$errno, &$errstr, $flags, $context, $peername). The check
+  hook validates that $errno and $errstr are plain variables (by-ref).
+  The runtime currently ignores the extra args (errno/errstr not yet
+  written); this lands the signature surface for compilation.
+- [x] **Full `file_get_contents`/`file_put_contents`/`readfile` signatures** —
+  `file_get_contents` accepts the 5-arg signature (filename,
+  use_include_path, context, offset, length); `file_put_contents` accepts
+  the 4-arg signature (filename, data, flags, context) with data widened
+  from Str to Mixed; `readfile` accepts the 3-arg signature (filename,
+  use_include_path, context). The runtime currently ignores the extra
+  args; this lands the signature surface.
+- [x] **User-registered filters in `stream_get_filters()`** —
+  `stream_get_filters()` now appends user-registered filter names from
+  the runtime `_user_filter_registry` to the built-in static list, via a
+  new `__rt_stream_get_filters` runtime helper that scans the 128-slot
+  registry. ARM64 + x86_64.
+- [x] **`%c` and `%x` format specifiers in `sscanf`/`fscanf`** — the
+  `__rt_sscanf` runtime helper (shared by `sscanf` and `fscanf`) now
+  supports `%c` (single character) and `%x` (hexadecimal integer with
+  optional sign, `0x` prefix, and hex digits) alongside the existing
+  `%d`/`%f`/`%s`/`%%`. A lone sign with no digits is backtracked.
+  ARM64 + x86_64.
+- [x] **HTTP wrapper method/headers/content/redirects** — investigation
+  confirmed the HTTP wrapper already reads `http.method`, `http.header`,
+  `http.content`, `http.follow_location`, and `http.max_redirects` from
+  the stream context via `__rt_http_build_request`. POST with headers
+  and content is verified working. Redirects (up to `max_redirects`)
+  are supported. The remaining gap is the `$http_response_header`
+  auto-populated superglobal variable.
+- [x] **`stream_set_chunk_size` effective in `stream_get_contents`** —
+  `__rt_stream_get_contents` and `__rt_stream_get_contents_bounded` now
+  read the per-fd chunk size from `_stream_chunk_size[fd]` instead of
+  hardcoding 4096. Synthetic user-wrapper fds skip the table lookup.
+  ARM64 + x86_64.
+- [x] **True `stream_filter_prepend` with 2-slot filter chain** — the
+  `_stream_read_filters` and `_stream_write_filters` tables are widened
+  to 512 bytes (2 slots per fd: slot 0 at index fd, slot 1 at fd+256).
+  `stream_filter_prepend` shifts the current slot-0 filter to slot 1
+  before attaching the new filter at slot 0. `stream_filter_append`
+  checks if slot 0 is occupied and falls back to slot 1.
+  `stream_filter_remove` clears both slots. `__rt_fread` applies a
+  2-slot filter chain (slot 0 then slot 1). Verified: prepend(toupper)
+  + append(rot13) produces rot13(UPPER(input)). ARM64 + x86_64.
+- [x] **`stream_is_local` based on scheme/wrapper_id** —
+  `stream_is_local` now returns `false` for `http://`, `https://`,
+  `ftp://`, and `ftps://` streams. For string-literal arguments, the
+  scheme prefix is checked at compile time. For resource arguments, the
+  per-fd `wrapper_id` table is consulted (ids 1–4 = non-local).
+  ARM64 + x86_64.
+- [x] **`getaddrinfo` replaces `gethostbyname` in DNS resolver** —
+  `__rt_resolve_host` now uses libc `getaddrinfo` with `AF_INET` hints
+  instead of the deprecated `gethostbyname`. This modernizes the DNS
+  resolver and allows resolution of host names with only AAAA records.
+  `freeaddrinfo` is called after the address is copied. ARM64 + x86_64.
+- [x] **`$http_response_header` superglobal** — the auto-populated
+  `$http_response_header` variable is now declared as a global
+  `Array<Str>` in the type checker and uses global storage. After
+  `fopen("http://...")`, the lowering calls
+  `__rt_get_http_response_headers` (a new runtime helper that splits
+  `_http_resp_buf` at CRLF boundaries into an indexed array of header
+  lines), boxes the result as `Mixed(array)`, and stores it into the
+  mangled global slot `_eir_global_http_u_response_u_header`. Reads of
+  `$http_response_header` load the boxed Mixed from the global. Returns
+  an empty array when no HTTP response has been received. ARM64 + x86_64.
+
 - [x] **User stream-filter `$params`** — the 4th `stream_filter_append`/`prepend`
   argument is honored for the built-in compression filters (Phase 39) and is now
   exposed to *userspace* filters as `$this->params` on classes extending PHP's

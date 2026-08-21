@@ -264,17 +264,20 @@ pub(super) struct EvalOpenMode {
 }
 
 impl EvalOpenMode {
-    /// Parses PHP's common fopen mode grammar, ignoring binary/text markers.
+    /// Parses PHP's fopen mode grammar: the FIRST byte decides, and `+` anywhere adds write.
+    ///
+    /// php-src's `php_stream_parse_fopen_modes` switches on `mode[0]` and afterwards only ever
+    /// asks `strchr(mode, '+')`. Nothing else in the string is validated — `b`, `t` and `e` are
+    /// looked for but never required, and any other byte is simply ignored.
+    ///
+    /// This used to reject every mode carrying a byte outside `rwaxc+bte`, which is a rule php
+    /// does not have: `fopen($f, "rn")`, `"rz"` and `"r "` all open on `php -n` 8.5.6 and in the
+    /// AOT backend, and only the interpreter answered false. The `_ => return None` arm below is
+    /// the whole of php's check, so the extra filter could only ever refuse too much.
     pub(super) fn parse(mode: &str) -> Option<Self> {
         let mut chars = mode.chars();
         let first = chars.next()?;
         let plus = mode.contains('+');
-        if !mode
-            .chars()
-            .all(|ch| matches!(ch, 'r' | 'w' | 'a' | 'x' | 'c' | '+' | 'b' | 't' | 'e'))
-        {
-            return None;
-        }
         let mut mode = match first {
             'r' => Self {
                 read: true,

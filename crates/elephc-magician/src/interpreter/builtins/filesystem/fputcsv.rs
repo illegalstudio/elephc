@@ -74,8 +74,30 @@ pub(in crate::interpreter) fn eval_fputcsv_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
-    let separator = eval_optional_delimiter(separator, b',', values)?;
-    let enclosure = eval_optional_delimiter(enclosure, b'"', values)?;
+    let separator = eval_csv_control_byte(
+        separator,
+        b',',
+        CsvControlArgument {
+            function: "fputcsv",
+            position: 3,
+            parameter: "separator",
+            empty_allowed: false,
+        },
+        context,
+        values,
+    )?;
+    let enclosure = eval_csv_control_byte(
+        enclosure,
+        b'"',
+        CsvControlArgument {
+            function: "fputcsv",
+            position: 4,
+            parameter: "enclosure",
+            empty_allowed: false,
+        },
+        context,
+        values,
+    )?;
     let output = eval_format_csv_record(fields, separator, enclosure, values)?;
     match context.stream_resources_mut().write(id, &output) {
         Some(written) => values.int(i64::try_from(written).map_err(|_| EvalStatus::RuntimeFatal)?),

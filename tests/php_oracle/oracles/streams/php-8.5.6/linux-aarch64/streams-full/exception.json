@@ -1,0 +1,127 @@
+{
+  "case": {
+    "dependencies": [],
+    "description": "Captures an uncaught exception in raw mode and structured exception telemetry.",
+    "id": "exception",
+    "normalization": [],
+    "source": "tests/php_oracle/cases/streams/gate0/exception",
+    "source_sha256": "e9f97bedb1b922e1788b3c47f24bd4b5eabeb3cf0c1e288dad8add9739104828"
+  },
+  "environment": {
+    "base": {
+      "LANG": "C",
+      "LC_ALL": "C",
+      "TZ": "UTC"
+    },
+    "case": {},
+    "ini": {
+      "date.timezone": "UTC",
+      "display_errors": "stderr",
+      "display_startup_errors": "1",
+      "error_reporting": "-1",
+      "html_errors": "0",
+      "log_errors": "0"
+    },
+    "stdin": null
+  },
+  "filesystem_diff": {
+    "created": {},
+    "deleted": {},
+    "modified": {}
+  },
+  "instrumented": {
+    "argv": [
+      "php",
+      "-n",
+      "-d",
+      "date.timezone=UTC",
+      "-d",
+      "display_errors=stderr",
+      "-d",
+      "display_startup_errors=1",
+      "-d",
+      "error_reporting=-1",
+      "-d",
+      "html_errors=0",
+      "-d",
+      "log_errors=0",
+      "tools/php_oracle/bootstrap.php",
+      "main.php"
+    ],
+    "exit": {
+      "code": 255,
+      "signal": null,
+      "timeout": false
+    },
+    "stderr": {
+      "base64": "RmF0YWwgZXJyb3I6IFVuY2F1Z2h0IFJ1bnRpbWVFeGNlcHRpb246IG9yYWNsZSBib29tIGluIC90bXAvZWxlcGhjLXBocC1vcmFjbGUvc3RyZWFtcy9waHAtOC41LjYvbGludXgtYWFyY2g2NC9zdHJlYW1zLWZ1bGwvZXhjZXB0aW9uL21haW4ucGhwOjMKU3RhY2sgdHJhY2U6CiMwIC90bXAvZWxlcGhjLXBocC1vcmFjbGUvc3RyZWFtcy9waHAtOC41LjYvbGludXgtYWFyY2g2NC9zdHJlYW1zLWZ1bGwvZXhjZXB0aW9uLy5vcmFjbGUtdG9vbHMvYm9vdHN0cmFwLnBocCg1OSk6IGluY2x1ZGUoKQojMSAvdG1wL2VsZXBoYy1waHAtb3JhY2xlL3N0cmVhbXMvcGhwLTguNS42L2xpbnV4LWFhcmNoNjQvc3RyZWFtcy1mdWxsL2V4Y2VwdGlvbi8ub3JhY2xlLXRvb2xzL2Jvb3RzdHJhcC5waHAoNTkpOiB7Y2xvc3VyZTovdG1wL2VsZXBoYy1waHAtb3JhY2xlL3N0cmVhbXMvcGhwLTguNS42L2xpbnV4LWFhcmNoNjQvc3RyZWFtcy1mdWxsL2V4Y2VwdGlvbi8ub3JhY2xlLXRvb2xzL2Jvb3RzdHJhcC5waHA6NTl9KCcvdG1wL2VsZXBoYy1waHAuLi4nKQojMiB7bWFpbn0KICB0aHJvd24gaW4gL3RtcC9lbGVwaGMtcGhwLW9yYWNsZS9zdHJlYW1zL3BocC04LjUuNi9saW51eC1hYXJjaDY0L3N0cmVhbXMtZnVsbC9leGNlcHRpb24vbWFpbi5waHAgb24gbGluZSAzCg==",
+      "length": 655,
+      "sha256": "b2c27cb56740b50d1c4e6a5f8514b191adeb83404f8ebfdddd176c779cd4520c"
+    },
+    "stdout": {
+      "base64": "",
+      "length": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "telemetry": {
+      "events": [],
+      "exception": {
+        "class": "RuntimeException",
+        "code": 23,
+        "file": "/tmp/elephc-php-oracle/streams/php-8.5.6/linux-aarch64/streams-full/exception/main.php",
+        "line": 3,
+        "message": "oracle boom"
+      },
+      "observations": null,
+      "return": {
+        "type": "null"
+      },
+      "schema_version": 1
+    }
+  },
+  "kind": "php-src-stream-oracle-artifact",
+  "profile": {
+    "name": "streams-full",
+    "path": "tests/php_oracle/manifests/streams/php-8.5.6/linux-aarch64/streams-full.json",
+    "php_binary_sha256": "0634cac996dba51ac722821ce90eb45b698504ff6b7b2cd2ca488c582f3ac7f8",
+    "php_release": "8.5.6",
+    "php_src_commit": "fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633",
+    "sha256": "4fc37ec194fbf05c66ee5a2a553768ad0331614d64698b94caf02947ea906974",
+    "target": "linux-aarch64"
+  },
+  "raw": {
+    "argv": [
+      "php",
+      "-n",
+      "-d",
+      "date.timezone=UTC",
+      "-d",
+      "display_errors=stderr",
+      "-d",
+      "display_startup_errors=1",
+      "-d",
+      "error_reporting=-1",
+      "-d",
+      "html_errors=0",
+      "-d",
+      "log_errors=0",
+      "main.php"
+    ],
+    "exit": {
+      "code": 255,
+      "signal": null,
+      "timeout": false
+    },
+    "stderr": {
+      "base64": "RmF0YWwgZXJyb3I6IFVuY2F1Z2h0IFJ1bnRpbWVFeGNlcHRpb246IG9yYWNsZSBib29tIGluIC90bXAvZWxlcGhjLXBocC1vcmFjbGUvc3RyZWFtcy9waHAtOC41LjYvbGludXgtYWFyY2g2NC9zdHJlYW1zLWZ1bGwvZXhjZXB0aW9uL21haW4ucGhwOjMKU3RhY2sgdHJhY2U6CiMwIHttYWlufQogIHRocm93biBpbiAvdG1wL2VsZXBoYy1waHAtb3JhY2xlL3N0cmVhbXMvcGhwLTguNS42L2xpbnV4LWFhcmNoNjQvc3RyZWFtcy1mdWxsL2V4Y2VwdGlvbi9tYWluLnBocCBvbiBsaW5lIDMK",
+      "length": 276,
+      "sha256": "5e35a980afacf229f3b4f41af9d044bf294aae7ae6b0fcc56512ab16b0f02cf9"
+    },
+    "stdout": {
+      "base64": "",
+      "length": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "schema_version": 1
+}

@@ -8,13 +8,13 @@ sidebar:
 ## closedir()
 
 ```php
-function closedir(resource $dir_handle): void
+function closedir(resource $dir_handle = null): void
 ```
 
 Closes directory handle.
 
 **Parameters**:
-- `$dir_handle` (`resource`)
+- `$dir_handle` (`resource`), default `null`, optional
 
 **Returns**: `void`
 

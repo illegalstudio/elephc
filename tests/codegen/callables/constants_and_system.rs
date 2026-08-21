@@ -106,6 +106,7 @@ fn test_error_control_suppresses_duplicate_define_warning() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ok1");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 // Tests that a duplicate `define()` call without `@` emits a PHP warning at runtime.
@@ -120,9 +121,9 @@ fn test_duplicate_define_emits_runtime_warning() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ok1");
     assert!(
-        out.stderr.contains("Warning: define()"),
-        "expected duplicate define warning, got stderr={}",
-        out.stderr
+        out.diagnostics.contains("Warning: define()"),
+        "expected duplicate define warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -138,6 +139,7 @@ fn test_define_duplicate_is_checked_at_runtime() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "TF1");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 // Tests that two `const` declarations can be used together in an expression:

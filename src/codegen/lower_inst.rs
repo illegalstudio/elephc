@@ -15,6 +15,7 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, runtime,
     runtime_value_tag,
 };
+use crate::codegen_support::try_handlers::TRY_HANDLER_SAVED_DEPTHS;
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
     BlockId, Builder, CmpPredicate, Function, FunctionParam, Immediate, InstId, Instruction,
@@ -144,6 +145,52 @@ const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
 
 /// Lowers one EIR instruction by opcode.
+
+/// Publishes the source line php would name in a diagnostic raised by this instruction.
+///
+/// php ends every warning with ` in FILE on line N`, and the line is the CALL SITE's — which only
+/// the lowering knows. `__rt_diag_warning` reads what is published here when it writes the line
+/// out, so the run-time helpers that actually compose the message need no span of their own.
+///
+/// Only an instruction whose effects admit `MAY_WARN` pays for it, which is what keeps this off
+/// the arithmetic and the loads: a program that cannot warn emits none of these stores. The
+/// string is rendered here rather than formatted at run time because both halves are constants at
+/// this point, and because the obvious run-time formatter, `__rt_itoa`, writes through the shared
+/// concat buffer — a warning raised mid-concatenation would corrupt the string being built.
+///
+/// Scratch registers are free at an instruction boundary: this backend gives every SSA value a
+/// stack slot, so nothing of the function's own is live in one here.
+fn publish_diagnostic_location(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    if !inst.effects.contains(crate::ir::Effects::MAY_WARN) {
+        return;
+    }
+    let Some(span) = inst.span else {
+        return;
+    };
+    publish_diagnostic_line(ctx, span.line);
+}
+
+/// Publishes one already-known source line as the location the next diagnostic will name.
+///
+/// Split out of `publish_diagnostic_location` because not every diagnostic is raised BY an
+/// instruction: php's `$http_response_header` deprecation is raised while compiling the file and
+/// is emitted from the main prologue, where there is no instruction to read a span from, yet php
+/// still names the line of the mention that caused it.
+pub(super) fn publish_diagnostic_line(ctx: &mut FunctionContext<'_>, line: u32) {
+    if line == 0 {
+        return;
+    }
+    let (label, len) = ctx.data.add_string(format!(" on line {line}\n").as_bytes());
+    // NOT the primary scratch: `emit_store_reg_to_symbol` borrows that one to materialize the
+    // symbol's own address, so handing it the value to store overwrites the value first.
+    let ptr_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let len_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_store_reg_to_symbol(ctx.emitter, ptr_reg, "_rt_diag_loc_ptr", 0);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    abi::emit_store_reg_to_symbol(ctx.emitter, len_reg, "_rt_diag_loc_len", 0);
+}
+
 pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
     ctx.begin_instruction(inst_id);
     let inst = ctx
@@ -151,6 +198,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         .instruction(inst_id)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
+    publish_diagnostic_location(ctx, &inst);
     match inst.op {
         Op::ConstI64 => lower_const_i64(ctx, &inst),
         Op::ConstF64 => floats::lower_const_f64(ctx, &inst),

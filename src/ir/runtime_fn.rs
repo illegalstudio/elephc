@@ -188,6 +188,7 @@ pub enum RuntimeFnId {
     ElephcPharSetZipPassword,
     ElephcPharSignHash,
     ElephcPharSignOpenssl,
+    ElephcZipStatEntries,
     Basename,
     Chdir,
     Chgrp,
@@ -226,7 +227,6 @@ pub enum RuntimeFnId {
     Fprintf,
     Fputcsv,
     Fread,
-    Fscanf,
     Fseek,
     Fsockopen,
     Fstat,
@@ -299,6 +299,7 @@ pub enum RuntimeFnId {
     StreamContextGetParams,
     StreamContextSetDefault,
     StreamContextSetOption,
+    StreamContextSetOptions,
     StreamContextSetParams,
     StreamCopyToStream,
     StreamFilterAppend,
@@ -446,6 +447,14 @@ pub enum RuntimeFnId {
     CtypeAlpha,
     CtypeDigit,
     CtypeSpace,
+    /// Unboxes an `array|false` builtin ARGUMENT, throwing php's TypeError for the false.
+    ///
+    /// Inserted by the argument lowering when an `array|false` union (scandir, glob, file…)
+    /// flows into an array-taking builtin: the consumer's own lowering then sees a raw array
+    /// pointer and stays untouched. Operands: the boxed value, then the message string —
+    /// composed at compile time, `{fn}(): Argument #{n} (${param}) must be of type array,
+    /// false given` — the throw uses verbatim.
+    ExpectArrayArg,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -483,8 +492,8 @@ pub enum RuntimeFnId {
     Rtrim,
     Sha1,
     Sprintf,
-    Sscanf,
     StrContains,
+    StrGetcsv,
     StrEndsWith,
     StrIreplace,
     StrPad,
@@ -532,6 +541,8 @@ pub enum RuntimeFnId {
     Gmmktime,
     Header,
     Hrtime,
+    HttpClearLastResponseHeaders,
+    HttpGetLastResponseHeaders,
     HttpResponseCode,
     JsonDecode,
     JsonEncode,
@@ -606,6 +617,9 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            // Compiler-internal: no PHP builtin declares it, so the registry cannot. The two
+            // operands are the boxed `array|false` value and the TypeError message.
+            RuntimeFnId::ExpectArrayArg => Some((2, Some(2))),
             _ => None,
         }
     }
@@ -662,28 +676,30 @@ impl RuntimeFnId {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             },
-            // `fgetcsv()` answers `false` at end of file and `file()` answers `false` when the
-            // read fails, so their fallback type must carry that arm too: the checker declares
-            // the union, and a builtin whose EIR and checker types disagree miscompiles rather
-            // than failing to build. This is the authority that is easy to forget, because a
-            // SYNTHESIZED call has no call-site type to fall back on — leaving `fgetcsv()` here
-            // made `SplFileObject::fgetcsv()` read the boxed cell as a raw pointer.
-            RuntimeFnId::Fgetcsv | RuntimeFnId::File => PhpType::Union(vec![
-                PhpType::Array(Box::new(PhpType::Str)),
-                PhpType::False,
-            ]),
+            // `Fgetcsv` is deliberately absent: it boxes `array|false`, so its declared `Mixed`
+            // IS the representation the lowering builds. Refining it to `array<string>` here
+            // made a synthesized call — `SplFileObject::fgetcsv()`, whose prelude body has no
+            // checked call-site type — read the boxed Mixed cell as a raw array pointer and
+            // hand back its header words as integers.
+            // `Scandir`, `File` and `Glob` left this list when their results became boxed
+            // `array|false`, the same exit `Fgetcsv` made: the boxed cell IS the representation
+            // the lowering builds.
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::BcDivmod
             | RuntimeFnId::Explode
-            | RuntimeFnId::Glob
-            | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
                 "ReflectionAttribute".to_string(),
             ))),
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::ElephcZipStatEntries => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
+            // A CSV row is `?string[]`: php answers `[null]` for a wholly empty subject, so the
+            // runtime widens every row to boxed Mixed cells. A callable-dispatched
+            // `$f = 'str_getcsv'; $f("")` has no checked call-site type and would otherwise read
+            // those cells as raw string pointer/length pairs.
+            RuntimeFnId::StrGetcsv => PhpType::Array(Box::new(PhpType::Mixed)),
             RuntimeFnId::Range => PhpType::Array(Box::new(PhpType::Int)),
             _ => declared.clone(),
         }
@@ -847,32 +863,18 @@ impl RuntimeFnId {
             ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
-            RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
-            RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
-            RuntimeFnId::ArrayDiffKey |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayFlip |
-            RuntimeFnId::ArrayIntersect |
             RuntimeFnId::ArrayIntersectAssoc |
-            RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |
             RuntimeFnId::ArrayKeyFirst |
             RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
-            RuntimeFnId::ArrayMerge |
             RuntimeFnId::ArrayMergeRecursive |
-            RuntimeFnId::ArrayProduct |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
-            RuntimeFnId::ArrayReverse |
-            RuntimeFnId::ArraySearch |
-            RuntimeFnId::ArraySlice |
-            RuntimeFnId::ArraySum |
-            RuntimeFnId::ArrayUnique |
-            RuntimeFnId::ArrayValues |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
             // `base64_decode()` only reads the subject's bytes and writes its answer into a
@@ -966,7 +968,27 @@ impl RuntimeFnId {
             // be treated
             // as removable pure calls: dead-code elimination would drop the diagnostic, and
             // the try-prefix hoist would move the call out of the `try` that must catch it.
-            RuntimeFnId::ArrayChunk
+            // These accept an `array|false` union argument (scandir, glob, file) through the
+            // lowering's unbox-or-throw wrap (`ARRAY_OR_FALSE_ARG_SITES`): a runtime `false`
+            // raises php's catchable TypeError at the argument. Claiming purity let DCE drop
+            // an unused call — and its throw — and let the try-prefix hoist move the call out
+            // of the `try` that must catch it, so the TypeError escaped as uncaught.
+            RuntimeFnId::ArrayColumn
+            | RuntimeFnId::ArrayDiff
+            | RuntimeFnId::ArrayDiffKey
+            | RuntimeFnId::ArrayFlip
+            | RuntimeFnId::ArrayIntersect
+            | RuntimeFnId::ArrayIntersectKey
+            | RuntimeFnId::ArrayMerge
+            | RuntimeFnId::ArrayProduct
+            | RuntimeFnId::ArrayReverse
+            | RuntimeFnId::ArraySearch
+            | RuntimeFnId::ArraySlice
+            | RuntimeFnId::ArraySum
+            | RuntimeFnId::ArrayUnique
+            | RuntimeFnId::ArrayValues
+            // These raise reference PHP's catchable `ValueError` for out-of-range arguments.
+            | RuntimeFnId::ArrayChunk
             | RuntimeFnId::ArrayFill
             | RuntimeFnId::CountChars
             | RuntimeFnId::ArrayPad
@@ -1156,6 +1178,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetStub => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSetZipPassword => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignHash => &[BuiltinRequirement::Bridge("elephc_phar")],
+            RuntimeFnId::ElephcZipStatEntries => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignOpenssl => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -1256,6 +1279,7 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::ElephcPharListEntries
+                | RuntimeFnId::ElephcZipStatEntries
                 | RuntimeFnId::ElephcPharGetMetadata
                 | RuntimeFnId::ElephcPharGetStub
                 | RuntimeFnId::ElephcPharSetMetadata
@@ -1516,6 +1540,7 @@ impl RuntimeFnId {
     /// Returns the stable textual EIR spelling for diagnostics and snapshots.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeFnId::ExpectArrayArg => "expect_array_arg",
             RuntimeFnId::ArrayAll => "array_all",
             RuntimeFnId::ArrayAny => "array_any",
             RuntimeFnId::ArrayChunk => "array_chunk",
@@ -1613,6 +1638,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharGetStub => "__elephc_phar_get_stub",
             RuntimeFnId::ElephcPharGzipArchive => "__elephc_phar_gzip_archive",
             RuntimeFnId::ElephcPharListEntries => "__elephc_phar_list_entries",
+            RuntimeFnId::ElephcZipStatEntries => "__elephc_zip_stat_entries",
             RuntimeFnId::ElephcPharSetCompression => "__elephc_phar_set_compression",
             RuntimeFnId::ElephcPharSetFileMetadata => "__elephc_phar_set_file_metadata",
             RuntimeFnId::ElephcPharSetMetadata => "__elephc_phar_set_metadata",
@@ -1658,7 +1684,6 @@ impl RuntimeFnId {
             RuntimeFnId::Fprintf => "fprintf",
             RuntimeFnId::Fputcsv => "fputcsv",
             RuntimeFnId::Fread => "fread",
-            RuntimeFnId::Fscanf => "fscanf",
             RuntimeFnId::Fseek => "fseek",
             RuntimeFnId::Fsockopen => "fsockopen",
             RuntimeFnId::Fstat => "fstat",
@@ -1731,6 +1756,7 @@ impl RuntimeFnId {
             RuntimeFnId::StreamContextGetParams => "stream_context_get_params",
             RuntimeFnId::StreamContextSetDefault => "stream_context_set_default",
             RuntimeFnId::StreamContextSetOption => "stream_context_set_option",
+            RuntimeFnId::StreamContextSetOptions => "stream_context_set_options",
             RuntimeFnId::StreamContextSetParams => "stream_context_set_params",
             RuntimeFnId::StreamCopyToStream => "stream_copy_to_stream",
             RuntimeFnId::StreamFilterAppend => "stream_filter_append",
@@ -1915,8 +1941,8 @@ impl RuntimeFnId {
             RuntimeFnId::Rtrim => "rtrim",
             RuntimeFnId::Sha1 => "sha1",
             RuntimeFnId::Sprintf => "sprintf",
-            RuntimeFnId::Sscanf => "sscanf",
             RuntimeFnId::StrContains => "str_contains",
+            RuntimeFnId::StrGetcsv => "str_getcsv",
             RuntimeFnId::StrEndsWith => "str_ends_with",
             RuntimeFnId::StrIreplace => "str_ireplace",
             RuntimeFnId::StrPad => "str_pad",
@@ -1964,6 +1990,8 @@ impl RuntimeFnId {
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",
             RuntimeFnId::Hrtime => "hrtime",
+            RuntimeFnId::HttpClearLastResponseHeaders => "http_clear_last_response_headers",
+            RuntimeFnId::HttpGetLastResponseHeaders => "http_get_last_response_headers",
             RuntimeFnId::HttpResponseCode => "http_response_code",
             RuntimeFnId::JsonDecode => "json_decode",
             RuntimeFnId::JsonEncode => "json_encode",

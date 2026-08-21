@@ -649,8 +649,19 @@ impl Op {
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
-            | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            IToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate | VarDump | PrintR => {
+                E::ALLOC_CONCAT
+            }
+            // A float reaching a string coercion can be NaN, and PHP warns when it is
+            // (`unexpected NAN value was coerced to string`, MEASURED on `php -n` 8.5.6 — with the
+            // ` in FILE on line N` tail every diagnostic carries). `__rt_ftoa` raises it from the
+            // runtime, so the only thing that can supply the line is this instruction declaring
+            // that it may warn. Without it the warning still printed, and printed WITHOUT a
+            // location — which read as program output rather than as a diagnostic.
+            //
+            // Deliberately NOT extended to `StrConcat`: it joins strings that are already
+            // formatted, so no NaN can reach it, and `MAY_WARN` costs four stores at every site.
+            FToStr | MixedCastString => E::ALLOC_CONCAT | E::MAY_WARN,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
@@ -790,7 +801,13 @@ impl Op {
     pub fn allows_effect_refinement(self) -> bool {
         matches!(
             self,
-            Op::IDiv
+            // Whether an echo can warn depends on WHAT is echoed, not on the opcode: a float
+            // reaching the formatter can be NaN, which PHP warns about, while a string literal
+            // cannot. Declaring `MAY_WARN` unconditionally would make every `echo "..."` in every
+            // program pay for the location stores; refining it per site keeps that pay-for-use,
+            // which is the same reason the call opcodes below refine theirs.
+            Op::EchoValue
+                | Op::IDiv
                 | Op::ISDiv
                 | Op::ISMod
                 | Op::FDiv

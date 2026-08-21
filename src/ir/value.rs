@@ -63,11 +63,10 @@ pub enum Ownership {
 impl Ownership {
     /// Returns the default ownership state for a value produced from a PHP type.
     pub fn for_php_type(ty: &PhpType) -> Self {
-        let ty = ty.codegen_repr();
         if matches!(ty, PhpType::Packed(_)) {
             return Ownership::Borrowed;
         }
-        if Self::php_type_needs_lifetime_tracking(&ty) {
+        if Self::php_type_needs_lifetime_tracking(ty) {
             Ownership::MaybeOwned
         } else {
             Ownership::NonHeap
@@ -76,17 +75,22 @@ impl Ownership {
 
     /// Returns true when the PHP type can carry cleanup or retain responsibility.
     ///
-    /// DELIBERATELY WIDER THAN [`PhpType::is_refcounted`]: `Str`, `Callable` and `Buffer`
-    /// are lifetime-tracked in the IR layer while `is_refcounted` — which the BACKEND's
-    /// `emit_incref_if_refcounted` consults — does not list them. That divergence is load
-    /// bearing, not an oversight: `LoweringContext::store_local` relies on it to retain a
-    /// string stored into a `static` local, because the backend's incref is a silent no-op
-    /// for strings. Adding `Str` to `is_refcounted` to "fix the inconsistency" would make
-    /// that store retain TWICE and leak one buffer per assignment.
+    /// DELIBERATELY WIDER THAN [`PhpType::is_refcounted`]: `Str`, `Callable`, `Buffer`,
+    /// and `Resource` are lifetime-tracked in the IR layer while `is_refcounted` — which
+    /// the BACKEND's `emit_incref_if_refcounted` consults — does not list them. That
+    /// divergence is load bearing, not an oversight: `LoweringContext::store_local`
+    /// relies on it to retain a string stored into a `static` local, because the
+    /// backend's incref is a silent no-op for strings. Adding `Str` to `is_refcounted`
+    /// to "fix the inconsistency" would make that store retain TWICE and leak one buffer
+    /// per assignment. Resources likewise use the dedicated runtime registry retain and
+    /// release helpers rather than the heap-block refcount helpers.
     ///
     /// `lifetime_tracking_is_wider_than_refcounted` pins the relationship so the next
     /// person to notice the asymmetry sees why it exists before changing either predicate.
     pub fn php_type_needs_lifetime_tracking(ty: &PhpType) -> bool {
+        if matches!(ty, PhpType::Resource(_)) {
+            return true;
+        }
         let ty = ty.codegen_repr();
         matches!(ty, PhpType::Str | PhpType::Callable | PhpType::Buffer(_)) || ty.is_refcounted()
     }
@@ -150,6 +154,20 @@ mod tests {
             !PhpType::Str.is_refcounted(),
             "Str must stay OUT of is_refcounted: the backend would then retain a second time \
              and every `static $s = ''; $s = f();` would leak one buffer per call"
+        );
+        let stream_resource = PhpType::Resource(Some("stream".to_string()));
+        assert!(
+            Ownership::php_type_needs_lifetime_tracking(&stream_resource),
+            "Resource must be lifetime-tracked so Acquire/Release can retain the runtime registry handle"
+        );
+        assert_eq!(
+            Ownership::for_php_type(&stream_resource),
+            Ownership::MaybeOwned,
+            "Resource SSA values must carry release-capable default ownership"
+        );
+        assert!(
+            !stream_resource.is_refcounted(),
+            "Resource must stay OUT of is_refcounted: it uses registry retain/release rather than heap incref/decref"
         );
         for ty in [
             PhpType::Mixed,

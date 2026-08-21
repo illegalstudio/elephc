@@ -203,7 +203,11 @@ return is_callable("vprintf");"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval `sscanf()` returns indexed string matches through callable paths.
+/// Verifies eval `sscanf()` returns php-typed matches through callable paths.
+///
+/// The `-2.5e3` case reads `-2500`, not the matched text: `%f` yields a FLOAT, so echoing
+/// it prints php's float rendering. This assertion used to read `-2.5e3`, pinning the
+/// string-slice answer the old scanf subset gave — `php -n` (8.5.6) answers `float(-2500)`.
 #[test]
 fn execute_program_dispatches_sscanf_builtin() {
     let program = parse_fragment(
@@ -223,7 +227,7 @@ return function_exists("sscanf");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "John:1.5:30:-25:-2.5e3:ok:");
+    assert_eq!(values.output, "John:1.5:30:-25:-2500:ok:");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval `min()` and `max()` select numeric values directly and by callable.

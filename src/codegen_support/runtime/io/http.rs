@@ -31,6 +31,7 @@ pub fn emit_http(emitter: &mut Emitter) {
         return;
     }
 
+    let plat = emitter.platform;
     emitter.blank();
     emitter.comment("--- runtime: http_open ---");
     emitter.label_global("__rt_http_open");
@@ -83,15 +84,29 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_http_fire_notification");                      // invoke the registered notification callback (no-op if none)
     emitter.instruction("ldr x0, [sp, #0]");                                    // restore fd into x0 (the shim clobbered it; the send relies on it)
 
-    // -- if [http][timeout] was set (seconds > 0), apply SO_RCVTIMEO so
-    //    slow servers don't hang the read loop forever. --
+    // -- if [http][timeout] was set, apply SO_RCVTIMEO so slow servers don't
+    //    hang the read loop forever. The option is a FLOAT in PHP, so the
+    //    deadline arrives here already split into a whole-second and a
+    //    microsecond half. A present-but-zero deadline is php's "fail right
+    //    now": setsockopt(0, 0) means "no timeout" to the kernel, so that case
+    //    skips the exchange entirely instead of blocking forever. --
+    abi::emit_symbol_address(emitter, "x9", "_http_active_timeout_set");
+    emitter.instruction("ldr x10, [x9]");                                       // was a deadline armed?
+    emitter.instruction("cbz x10, __rt_http_open_skip_timeout_aarch64");        // no deadline: read until the peer closes
     abi::emit_symbol_address(emitter, "x9", "_http_active_timeout_seconds");
-    emitter.instruction("ldr x10, [x9]");                                       // load runtime value
-    emitter.instruction("cbz x10, __rt_http_open_skip_timeout_aarch64");        // branch when the checked value is zero or equal
+    emitter.instruction("ldr x11, [x9]");                                       // tv_sec
+    abi::emit_symbol_address(emitter, "x9", "_http_active_timeout_usec");
+    emitter.instruction("ldr x12, [x9]");                                       // tv_usec
+    emitter.instruction("orr x13, x11, x12");                                   // is the whole deadline zero?
+    emitter.instruction("cbz x13, __rt_http_open_timed_out_aarch64");           // `timeout => 0` fails without waiting
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd
-    emitter.instruction("mov x1, x10");                                         // tv_sec
-    emitter.instruction("mov x2, #0");                                          // tv_usec
+    emitter.instruction("mov x1, x11");                                         // tv_sec
+    emitter.instruction("mov x2, x12");                                         // tv_usec
     emitter.instruction("bl __rt_stream_set_timeout");                          // call runtime helper
+    // The helper answers 0/1 in x0, which is also the descriptor the send below
+    // relies on. Without this reload an armed [http][timeout] wrote the request
+    // to fd 1 — the request went to STDOUT and the server never saw it.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore fd for the send
     emitter.label("__rt_http_open_skip_timeout_aarch64");
 
     // -- send the HTTP request --
@@ -110,7 +125,18 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("subs x2, x2, x9");                                     // remaining buffer capacity
     emitter.instruction("b.le __rt_http_open_read_done");                       // stop when the response buffer is full
     emitter.syscall(3);
-    emitter.instruction("cmp x0, #0");                                          // did the read hit EOF or fail?
+    // A failed read must stop the loop. On macOS a syscall reports failure
+    // through the carry flag and leaves the POSITIVE errno in x0, so the plain
+    // `cmp x0, #0 / b.le` this replaces read `EAGAIN` (35) as "35 bytes were
+    // read" and spun forever once SO_RCVTIMEO started firing — the whole
+    // [http][timeout] option was inert on that target as a result.
+    if plat.needs_cmp_before_error_branch() {
+        emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
+    }
+    emitter.instruction(&plat.branch_on_syscall_success("__rt_http_open_read_ok")); // continue only when the read succeeded
+    emitter.instruction("b __rt_http_open_read_done");                          // a read error (timeout included) ends the response
+    emitter.label("__rt_http_open_read_ok");
+    emitter.instruction("cmp x0, #0");                                          // did the read hit EOF?
     emitter.instruction("b.le __rt_http_open_read_done");                       // the server closed the connection
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the accumulated response length
     emitter.instruction("add x9, x9, x0");                                      // advance by the bytes just read
@@ -121,6 +147,17 @@ pub fn emit_http(emitter: &mut Emitter) {
     // -- close the socket; the whole response is buffered --
     emitter.instruction("ldr x0, [sp, #0]");                                    // the connected socket descriptor
     emitter.syscall(6);
+
+    // -- an armed deadline that expired before a single response byte arrived is
+    //    php's "Failed to open stream: Operation timed out": the open fails
+    //    rather than handing back an empty body. A deadline that expires
+    //    mid-response keeps whatever arrived, which is what php does too. --
+    abi::emit_symbol_address(emitter, "x9", "_http_active_timeout_set");
+    emitter.instruction("ldr x10, [x9]");                                       // was a deadline armed?
+    emitter.instruction("cbz x10, __rt_http_open_timeout_checked_aarch64");     // no deadline: nothing to report
+    emitter.instruction("ldr x11, [sp, #24]");                                  // the accumulated response length
+    emitter.instruction("cbz x11, __rt_http_open_fail");                        // nothing arrived in time: fail the open
+    emitter.label("__rt_http_open_timeout_checked_aarch64");
 
     // -- parse the HTTP status line ("HTTP/1.x SSS …\r\n"). --
     emitter.instruction("ldr x5, [sp, #24]");                                   // response length
@@ -379,6 +416,8 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_http_open_scan_next");                       // not the separator
     emitter.instruction("add x6, x6, #4");                                      // the body begins just past CRLFCRLF
     emitter.instruction("str x6, [sp, #32]");                                   // save the body start offset
+    abi::emit_symbol_address(emitter, "x9", "_http_resp_header_end");
+    emitter.instruction("str x6, [x9]");                                        // store the header end for $http_response_header
     emitter.instruction("b __rt_http_open_body");                               // headers are stripped
     emitter.label("__rt_http_open_scan_next");
     emitter.instruction("add x6, x6, #1");                                      // advance the scan index
@@ -420,6 +459,13 @@ pub fn emit_http(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the http:// stream descriptor
+
+    emitter.label("__rt_http_open_timed_out_aarch64");
+    // -- `[http][timeout] => 0` asks for a deadline that has already passed.
+    //    php answers `false` immediately; drop the connection and do the same. --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the connected socket descriptor
+    emitter.syscall(6);
+    emitter.instruction("b __rt_http_open_fail");                               // report the failed open
 
     emitter.label("__rt_http_open_fail");
     // -- fire STREAM_NOTIFY_FAILURE (code 9, ERR) before returning -1 --
@@ -487,14 +533,25 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_http_fire_notification");                    // invoke the registered notification callback (no-op if none)
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore fd into rax (the shim clobbered it; the send relies on it)
 
-    // -- if [http][timeout] was set (seconds > 0), apply SO_RCVTIMEO --
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_http_active_timeout_seconds", 0); // prepare SysV call argument
-    emitter.instruction("test r9, r9");                                         // check whether the runtime value is zero
-    emitter.instruction("jz __rt_http_open_skip_timeout_x");                    // branch when the checked value is zero or equal
+    // -- if [http][timeout] was set, apply SO_RCVTIMEO. See the AArch64
+    //    counterpart: the option is a FLOAT in PHP, so the deadline arrives
+    //    already split into a whole-second and a microsecond half, and a
+    //    present-but-zero deadline is php's "fail right now" rather than the
+    //    kernel's "no timeout". --
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_http_active_timeout_set", 0); // was a deadline armed?
+    emitter.instruction("test r9, r9");                                         // check whether a deadline exists
+    emitter.instruction("jz __rt_http_open_skip_timeout_x");                    // no deadline: read until the peer closes
+    abi::emit_load_symbol_to_reg(emitter, "rsi", "_http_active_timeout_seconds", 0); // tv_sec
+    abi::emit_load_symbol_to_reg(emitter, "rdx", "_http_active_timeout_usec", 0); // tv_usec
+    emitter.instruction("mov r9, rsi");                                         // fold both halves together
+    emitter.instruction("or r9, rdx");                                          // is the whole deadline zero?
+    emitter.instruction("jz __rt_http_open_timed_out_x");                       // `timeout => 0` fails without waiting
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // prepare SysV call argument
-    emitter.instruction("mov rsi, r9");                                         // tv_sec
-    emitter.instruction("xor edx, edx");                                        // tv_usec = 0
     emitter.instruction("call __rt_stream_set_timeout");                        // call runtime helper
+    // The helper answers 0/1 in rax, which is also the descriptor the send below
+    // relies on. Without this reload an armed [http][timeout] wrote the request
+    // to fd 1 — the request went to STDOUT and the server never saw it.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore fd for the send
     emitter.label("__rt_http_open_skip_timeout_x");
 
     // -- send the HTTP request --
@@ -525,6 +582,17 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     // -- close the socket; the whole response is buffered --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the connected socket descriptor
     emitter.instruction("call close");                                          // close the HTTP connection
+
+    // -- an armed deadline that expired before a single response byte arrived is
+    //    php's "Failed to open stream: Operation timed out": the open fails
+    //    rather than handing back an empty body. --
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_http_active_timeout_set", 0); // was a deadline armed?
+    emitter.instruction("test r10, r10");                                       // check whether a deadline exists
+    emitter.instruction("jz __rt_http_open_timeout_checked_x");                 // no deadline: nothing to report
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the accumulated response length
+    emitter.instruction("test r10, r10");                                       // did anything arrive in time?
+    emitter.instruction("jz __rt_http_open_fail_x86");                          // nothing arrived in time: fail the open
+    emitter.label("__rt_http_open_timeout_checked_x");
 
     // -- HTTP status parse. --
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // response length
@@ -760,6 +828,8 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_http_open_scan_next_x86");                    // not the separator
     emitter.instruction("lea rax, [rcx + 4]");                                  // the body begins just past CRLFCRLF
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the body start offset
+    abi::emit_symbol_address(emitter, "r9", "_http_resp_header_end");
+    emitter.instruction("mov QWORD PTR [r9], rax");                             // store the header end for $http_response_header
     emitter.instruction("jmp __rt_http_open_body_x86");                         // headers are stripped
     emitter.label("__rt_http_open_scan_next_x86");
     emitter.instruction("inc rcx");                                             // advance the scan index
@@ -800,6 +870,13 @@ fn emit_http_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 80");                                         // release the helper frame (matches the prologue's sub rsp, 80)
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the http:// stream descriptor
+
+    emitter.label("__rt_http_open_timed_out_x");
+    // -- `[http][timeout] => 0` asks for a deadline that has already passed.
+    //    php answers `false` immediately; drop the connection and do the same. --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the connected socket descriptor
+    emitter.instruction("call close");                                          // close the HTTP connection
+    emitter.instruction("jmp __rt_http_open_fail_x86");                         // report the failed open
 
     emitter.label("__rt_http_open_fail_x86");
     // -- fire STREAM_NOTIFY_FAILURE (code 9, ERR) before returning -1 --

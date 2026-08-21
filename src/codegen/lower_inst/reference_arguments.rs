@@ -197,7 +197,14 @@ pub(super) fn plan_ref_arg_writebacks(
 
 /// Rejects scalar-to-Mixed temporary ref cells whose writeback shape is not supported yet.
 pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {
-    if matches!(source_ty.codegen_repr(), PhpType::Int | PhpType::Bool) {
+    // `Void` is php's out-parameter idiom: `$x = null; f($x);` where the callee writes. The null
+    // boxes into the temporary cell like any other scalar, and the caller's local is re-typed to
+    // the parameter's widened `<written>|null` by then, so the unboxed value stores back into
+    // storage that can hold it.
+    if matches!(
+        source_ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Void
+    ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(

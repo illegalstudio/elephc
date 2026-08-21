@@ -85,7 +85,55 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_get_object");                    // branch on the current JSON decoder condition
     emitter.instruction("cmp x9, #8");                                          // tag = 8 (canonical PHP null)?
     emitter.instruction("b.eq __rt_mixed_array_get_null_container");            // null receivers warn only for ordinary reads
+    emitter.instruction("cmp x9, #1");                                          // tag = 1 (string)?
+    emitter.instruction("b.eq __rt_mixed_array_get_string");                    // a string offset read, not a container lookup
     emitter.instruction("b __rt_mixed_array_get_null");                         // any other payload → null
+
+    // -- string receiver: `$s[$i]` reads one byte and answers a 1-character string --
+    // A boxed string reaching here is ordinary PHP: `$s = fgets($h); $s[0]`. Without this
+    // case it fell through to null, and because `ord(null)` is 0 the mistake was silent.
+    emitter.label("__rt_mixed_array_get_string");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // the string payload pointer
+    emitter.instruction("ldr x11, [x0, #16]");                                  // and its length
+    emitter.instruction("ldr x12, [sp, #8]");                                   // the offset (key_lo holds the integer key)
+    emitter.instruction("tbz x12, #63, __rt_mixed_array_get_string_abs");       // already an absolute offset
+    emitter.instruction("add x12, x12, x11");                                   // php counts a negative offset back from the end
+    emitter.label("__rt_mixed_array_get_string_abs");
+    emitter.instruction("tbnz x12, #63, __rt_mixed_array_get_string_oob");      // still negative: before the start
+    emitter.instruction("cmp x12, x11");                                        // past the last byte?
+    emitter.instruction("b.hs __rt_mixed_array_get_string_oob");                // php answers "" for either direction
+    emitter.instruction("ldrb w13, [x10, x12]");                                // the selected byte
+    emitter.instruction("str x13, [sp, #16]");                                  // park it across the reservation (key_hi is dead here)
+    emitter.instruction("mov x0, #1");                                          // one byte of storage for the result
+    emitter.instruction("bl __rt_concat_reserve");                              // scratch or heap, decided by size
+    emitter.instruction("ldr x13, [sp, #16]");                                  // reload the byte
+    emitter.instruction("strb w13, [x0]");                                      // write the single character
+    emitter.instruction("mov x1, x0");                                          // publish expects the result pointer
+    emitter.instruction("mov x2, #1");                                          // and its length
+    emitter.instruction("bl __rt_concat_publish");                              // advance the scratch cursor for scratch-backed results
+    emitter.instruction("mov x0, #1");                                          // tag 1 = string; publish left x1/x2 untouched
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the 1-character result
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    // An out-of-range offset is "" in php, not null. php also emits
+    // `Warning: Uninitialized string offset N`, which elephc does not yet compose — that
+    // needs an integer rendered into the message, and the runtime has no such helper.
+    emitter.label("__rt_mixed_array_get_string_oob");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // an ordinary read, or isset()/`??`?
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // isset() must see the offset as ABSENT, not as ""
+    emitter.instruction("ldr x0, [sp, #8]");                                    // php names the offset AS WRITTEN, not the resolved one
+    emitter.instruction("bl __rt_warn_uninitialized_string_offset");            // `@` is suppressed inside the diagnostic itself
+    emitter.instruction("mov x0, #0");                                          // a zero-length reservation still yields a real pointer
+    emitter.instruction("bl __rt_concat_reserve");                              // so the empty result is a valid string, not a null one
+    emitter.instruction("mov x1, x0");                                          // the empty payload pointer
+    emitter.instruction("mov x2, #0");                                          // with no bytes
+    emitter.instruction("mov x0, #1");                                          // tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the empty result
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
 
     // Indexed array: integer key only. key_hi == -1 marks int keys.
     emitter.label("__rt_mixed_array_get_indexed");
@@ -390,7 +438,58 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_get_object");                      // branch on the current JSON decoder condition
     emitter.instruction("cmp r10, 8");                                          // tag = 8 (canonical PHP null)?
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null receivers warn only for ordinary reads
+    emitter.instruction("cmp r10, 1");                                          // tag = 1 (string)?
+    emitter.instruction("je __rt_mixed_array_get_string");                      // a string offset read, not a container lookup
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // any other payload → null
+
+    // -- string receiver: `$s[$i]` reads one byte and answers a 1-character string --
+    // See the AArch64 half. Silent before this case existed, because `ord(null)` is 0.
+    emitter.label("__rt_mixed_array_get_string");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // the string payload pointer
+    emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // and its length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the offset (key_lo holds the integer key)
+    emitter.instruction("test rsi, rsi");                                       // is it already absolute?
+    emitter.instruction("jns __rt_mixed_array_get_string_abs");                 // yes: use it as it stands
+    emitter.instruction("add rsi, r11");                                        // php counts a negative offset back from the end
+    emitter.label("__rt_mixed_array_get_string_abs");
+    emitter.instruction("test rsi, rsi");                                       // still negative: before the start
+    emitter.instruction("js __rt_mixed_array_get_string_oob");                  // php answers "" for either direction
+    emitter.instruction("cmp rsi, r11");                                        // past the last byte?
+    emitter.instruction("jae __rt_mixed_array_get_string_oob");
+    emitter.instruction("movzx eax, BYTE PTR [r10 + rsi]");                     // the selected byte
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // park it across the reservation (key_hi is dead here)
+    emitter.instruction("mov rax, 1");                                          // one byte of storage for the result
+    emitter.instruction("call __rt_concat_reserve");                            // scratch or heap, decided by size
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the byte
+    emitter.instruction("mov BYTE PTR [rax], r10b");                            // write the single character
+    emitter.instruction("mov rdx, 1");                                          // publish expects the length in rdx
+    emitter.instruction("call __rt_concat_publish");                            // advance the scratch cursor for scratch-backed results
+    emitter.instruction("mov rdi, rax");                                        // value_lo = the result pointer
+    emitter.instruction("mov rsi, rdx");                                        // value_hi = its length
+    emitter.instruction("mov rax, 1");                                          // tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // box the 1-character result
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    // An out-of-range offset is "" in php, not null. The accompanying
+    // `Warning: Uninitialized string offset N` is not composed yet — it needs an integer
+    // rendered into the message and the runtime has no helper for that.
+    emitter.label("__rt_mixed_array_get_string_oob");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // an ordinary read, or isset()/`??`?
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_mixed_array_get_null");                        // isset() must see the offset as ABSENT, not as ""
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // php names the offset AS WRITTEN, not the resolved one
+    emitter.instruction("call __rt_warn_uninitialized_string_offset");          // `@` is suppressed inside the diagnostic itself
+    emitter.instruction("mov rax, 0");                                          // a zero-length reservation still yields a real pointer
+    emitter.instruction("call __rt_concat_reserve");                            // so the empty result is a valid string, not a null one
+    emitter.instruction("mov rdi, rax");                                        // value_lo = the empty payload pointer
+    emitter.instruction("mov rsi, 0");                                          // value_hi = no bytes
+    emitter.instruction("mov rax, 1");                                          // tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // box the empty result
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = array pointer

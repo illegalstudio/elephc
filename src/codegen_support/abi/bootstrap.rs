@@ -15,6 +15,37 @@ use super::{
     temp_int_reg,
 };
 
+/// Ignore SIGPIPE for the whole process, the way the PHP CLI does.
+///
+/// Without this, writing to a socket whose peer has closed kills the program
+/// with signal 13 before any output is flushed: `fwrite()` on a half-closed
+/// connection terminated the process instead of returning a byte count.
+///
+/// `signal(2)` is called through libc so the platform picks its own sigaction
+/// shim; SIGPIPE is 13 and SIG_IGN is 1 on both supported targets.
+///
+/// THE CALL GOES THROUGH `bl_c`, WHICH IS PLATFORM-AWARE. Writing the mnemonic by
+/// hand once emitted `bl _signal` on the whole AArch64 arm — right on macOS, where C
+/// symbols carry a leading underscore, and wrong on Linux, where the symbol is
+/// `signal`. Every `--web` program then failed to link with
+/// `undefined reference to '_signal'`, and a program with enough objects linked in
+/// resolved it elsewhere and crashed at run time instead. The arch match now decides
+/// only the ARGUMENT registers; the symbol name is never spelled per-arch.
+pub fn emit_ignore_sigpipe(emitter: &mut Emitter) {
+    emitter.comment("ignore SIGPIPE so a closed peer cannot kill the process");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #13");                                 // SIGPIPE
+            emitter.instruction("mov x1, #1");                                  // SIG_IGN
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov edi, 13");                                 // SIGPIPE
+            emitter.instruction("mov esi, 1");                                  // SIG_IGN
+        }
+    }
+    emitter.bl_c("signal");
+}
+
 /// Store OS-provided argc and argv into global symbols.
 pub fn emit_store_process_args_to_globals(emitter: &mut Emitter) {
     emit_store_reg_to_symbol(emitter, process_argc_reg(emitter.target), "_global_argc", 0);
@@ -124,6 +155,41 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
         }
         (super::super::platform::Platform::Windows, _) => {
             panic!("Windows target is not yet supported (see issue #379)");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Pins the SIGPIPE bootstrap call to the C symbol each PLATFORM actually exports.
+    ///
+    /// macOS prefixes C symbols with an underscore and Linux does not, so the mnemonic
+    /// cannot be written per-ARCH. It was: the AArch64 arm emitted `bl _signal` for both
+    /// platforms, which linked on macOS and broke every Linux program —
+    /// `undefined reference to '_signal'` for a `--web` build, and a run-time crash once
+    /// enough objects were linked for the name to resolve to something else. The local
+    /// suite is macOS-only, so only CI could see it.
+    #[test]
+    fn the_sigpipe_call_uses_each_platforms_c_symbol() {
+        for (target, expected) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "bl _signal"),
+            (Target::new(Platform::Linux, Arch::AArch64), "bl signal"),
+            (Target::new(Platform::Linux, Arch::X86_64), "call signal"),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_ignore_sigpipe(&mut emitter);
+            let asm = emitter.output();
+            assert!(
+                asm.contains(expected),
+                "{target:?} must call the C symbol as `{expected}`:\n{asm}"
+            );
+            assert!(
+                !asm.contains("_signal\n") || expected.contains("_signal"),
+                "{target:?} must not emit the macOS-mangled name:\n{asm}"
+            );
         }
     }
 }

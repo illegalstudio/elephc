@@ -102,6 +102,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     super::enum_singletons::emit_enum_slot_resets(emitter, module);
 
     emit_concat_offset_reset(emitter);
+    emit_user_wrapper_registry_reset(emitter);
+    emit_resource_registry_storage_reset(emitter);
+    emit_output_buffer_stack_reset(emitter);
 
     // The heap arena reset MUST be the final reset step: the static/global releases
     // above may run destructors or decref shared values, which require the arena to
@@ -113,6 +116,63 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
+}
+
+/// Drops the userspace stream-wrapper registrations before the arena is wiped.
+///
+/// `stream_wrapper_register()` keeps its scheme/class table, its flag table and its
+/// open-handle table in the PHP arena, but reaches them through process-lifetime
+/// pointers. The arena reset below hands that memory back, so leaving the pointers set
+/// would let the next request walk freed storage: `stream_get_wrappers()` read a
+/// garbage slot count and allocated until the heap was exhausted, killing the worker.
+///
+/// Clearing them is also what PHP does — a wrapper registered during a request is not
+/// visible to the next one.
+fn emit_user_wrapper_registry_reset(emitter: &mut Emitter) {
+    emitter.comment("drop user stream-wrapper registrations: their tables live in the arena");
+    for symbol in [
+        "_user_wrappers_ptr",
+        "_user_wrappers_cap",
+        "_user_wrapper_flags_ptr",
+        "_user_wrapper_handles_ptr",
+        "_user_wrapper_handles_cap",
+    ] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    }
+}
+
+/// Drops the resource registry's slot storage before the arena is wiped.
+///
+/// The registry starts in a static 8-slot array but GROWS onto the PHP arena, and
+/// `_resource_registry_ptr` is a process-lifetime pointer. The arena reset below
+/// reclaims that storage, so a worker that had served a request opening more than
+/// eight resources went on to walk freed slots on the next one. The previous request's
+/// epilogue has already released every resource through
+/// `__rt_resource_registry_request_reset`, so nothing is leaked by forgetting the
+/// storage here; `__rt_resource_registry_init` re-seeds from the static slots on the
+/// next use, and ids restarting per request is what PHP does anyway.
+fn emit_resource_registry_storage_reset(emitter: &mut Emitter) {
+    emitter.comment("forget grown resource-registry storage: it lives in the arena");
+    for symbol in [
+        "_resource_registry_ptr",
+        "_resource_registry_len",
+        "_resource_registry_cap",
+        "_resource_registry_free",
+        "_resource_registry_live",
+    ] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    }
+}
+
+/// Drops any output-buffer nesting left over from the previous request.
+///
+/// The buffer stack's payloads are arena allocations reached through process-lifetime
+/// state, so a level surviving the wipe would let the next request append through a
+/// dangling pointer. The epilogue's `__rt_ob_flush_all` normally empties the stack
+/// first; this is the belt-and-braces that keeps the invariant true by construction.
+fn emit_output_buffer_stack_reset(emitter: &mut Emitter) {
+    emitter.comment("drop leftover output-buffer nesting: its payloads live in the arena");
+    abi::emit_store_zero_to_symbol(emitter, "_ob_level", 0);
 }
 
 /// Resets the PHP heap arena to a pristine bump-only state: `_heap_off = 0`, an empty

@@ -64,6 +64,12 @@ pub(super) fn lower(
         RuntimeFnId::Hrtime => Some({
             crate::codegen::lower_inst::builtins::system::lower_hrtime(ctx, inst)
         }),
+        RuntimeFnId::HttpClearLastResponseHeaders => Some({
+            crate::codegen::lower_inst::builtins::io::lower_http_clear_last_response_headers(ctx, inst)
+        }),
+        RuntimeFnId::HttpGetLastResponseHeaders => Some({
+            crate::codegen::lower_inst::builtins::io::lower_http_get_last_response_headers(ctx, inst)
+        }),
         RuntimeFnId::HttpResponseCode => Some({
             crate::codegen::lower_inst::builtins::system::lower_http_response_code(ctx, inst)
         }),

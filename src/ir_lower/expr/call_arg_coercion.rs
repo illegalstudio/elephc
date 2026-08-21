@@ -31,6 +31,74 @@ pub(super) fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
+/// Converts every local holding NULL that a USER function's by-reference parameter WRITES.
+///
+/// This is php's out-parameter idiom — `$x = null; f($x);` with `function f(&$a) { $a = 5; }` —
+/// and the whole point of it is that `$x` is `int(5)` afterwards. The checker widened the
+/// parameter to `mixed` when it saw the body write, and re-typed its own view of the caller's
+/// variable; the LOWERING keeps its own local-type map, so without this the load after the call
+/// still carried `php=null` and every read of it constant-folded to NULL. The write itself
+/// always happened — the callee stores through the pointer — which is why nothing warned.
+///
+/// It runs from the USER-function call site only, and deliberately NOT from the shared argument
+/// lowering that builtins also reach. A builtin's by-reference `mixed` parameter carries its own
+/// convention for what the caller hands over: `stream_select($r, $w, $e, 0)` passes `null` for
+/// the write and except sets, which the runtime reads as EMPTY sets, so boxing them into Mixed
+/// cells made it read a cell header as an array length — it polled fourteen uninitialized
+/// entries and answered 15 where php answers 1.
+pub(super) fn prepare_by_ref_null_out_locals(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) {
+    let Some(sig) = sig else {
+        return;
+    };
+    // A by-reference VARIADIC needs the same treatment past its fixed parameters: every argument
+    // in the tail binds to `&...$out`, and `$out[$i] = …` writes through to the caller's cell. A
+    // caller local still holding `null` has no Mixed storage for that write to land in, so
+    // `foreach ($out as $i => $_) { $out[$i] = …; }` over `$a = null` left every variable NULL.
+    let regular = crate::types::call_args::regular_param_count(sig);
+    let by_ref_variadic = super::variadic_args::variadic_param_is_by_ref(sig);
+    for (index, arg) in args.iter().enumerate() {
+        let in_variadic_tail = index >= regular;
+        if in_variadic_tail {
+            if !by_ref_variadic {
+                continue;
+            }
+        } else {
+            if !sig.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some((_, param_ty)) = sig.params.get(index) else {
+                continue;
+            };
+            if !matches!(param_ty, PhpType::Mixed) {
+                continue;
+            }
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            continue;
+        };
+        if !matches!(ctx.local_type(name), PhpType::Void) {
+            continue;
+        }
+        let local = ctx.load_local(name, Some(arg.span));
+        // The slot really is converted, not merely re-typed: the callee writes a boxed value
+        // through the pointer, so what the caller hands over has to already be a Mixed cell.
+        // This mirrors the `ArrayToMixed` the by-reference array path emits for the same reason.
+        let boxed = ctx.emit_value(
+            Op::MixedBox,
+            vec![local.value],
+            None,
+            PhpType::Mixed,
+            Op::MixedBox.default_effects(),
+            Some(arg.span),
+        );
+        ctx.store_call_normalized_local(name, boxed, PhpType::Mixed, Some(arg.span));
+    }
+}
+
 /// Coerces a positional argument to storage owned explicitly by EIR when required.
 ///
 /// Integer-to-float conversion selects the callee's floating-point ABI class. Mixed-to-string
@@ -156,20 +224,23 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
     let ExprKind::Variable(name) = &arg.kind else {
         return None;
     };
-    if !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty) {
-        return None;
-    }
-    let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let (op, array_ty) = by_ref_array_arg_storage_conversion(ctx, name, param_ty)?;
     let local = ctx.load_local(name, Some(arg.span));
-    let converted = ctx.emit_value(
-        Op::ArrayToMixed,
-        vec![local.value],
-        None,
-        array_ty.clone(),
-        Op::ArrayToMixed.default_effects(),
-        Some(arg.span),
-    );
-    ctx.store_call_normalized_local(name, converted, array_ty, Some(arg.span));
+    // No op for an EMPTY array: `array<never>` has no element slots to box, so the caller only
+    // needs its LOCAL re-typed to what the callee will fill it with. Emitting `ArrayToMixed`
+    // there would tag the storage `mixed` when the callee is about to write raw ints into it.
+    let normalized = match op {
+        Some(op) => ctx.emit_value(
+            op,
+            vec![local.value],
+            None,
+            array_ty.clone(),
+            op.default_effects(),
+            Some(arg.span),
+        ),
+        None => local,
+    };
+    ctx.store_call_normalized_local(name, normalized, array_ty, Some(arg.span));
     Some(ctx.load_local(name, Some(arg.span)).value)
 }
 
@@ -216,22 +287,78 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     Some(value)
 }
 
-/// Returns true when a local array must be converted before a by-reference call.
-pub(super) fn by_ref_array_arg_needs_mixed_storage(
+/// Returns the conversion, if any, that puts a by-reference argument's storage in the element
+/// representation its callee was compiled for, and the type the caller's local then carries.
+///
+/// Three cases, all measured against `php -n` 8.5.6:
+/// - a LIST whose elements must become boxed needs `Op::ArrayToMixed`;
+/// - a HASH needs `Op::HashToMixed`. Leaving the hash out meant `f($assoc)` with
+///   `function f(array &$a)` handed a raw-slot hash to a body compiled for boxed ones, and
+///   `["x" => 1, "y" => 2]` came back as two ADDRESSES;
+/// - an EMPTY array — `array<never>` — needs NO op at all. It has no element slots, so the
+///   caller only has to READ it as whatever the callee fills it with. `$e = []; fill($e);`
+///   answered an empty array (and segfaulted before the by-reference widening landed) because
+///   the caller kept reading `array<never>` storage the callee had already appended to.
+fn by_ref_array_arg_storage_conversion(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     param_ty: &PhpType,
-) -> bool {
-    let PhpType::Array(param_elem) = param_ty.codegen_repr() else {
-        return false;
-    };
-    if param_elem.codegen_repr() != PhpType::Mixed {
-        return false;
+) -> Option<(Option<Op>, PhpType)> {
+    let local_ty = ctx.local_type(name).codegen_repr();
+    match (param_ty.codegen_repr(), local_ty) {
+        (PhpType::Array(param_elem), PhpType::Array(local_elem)) => {
+            let param_elem = param_elem.codegen_repr();
+            let local_elem = local_elem.codegen_repr();
+            if local_elem == PhpType::Void && param_elem != PhpType::Void {
+                return Some((None, PhpType::Array(Box::new(param_elem))));
+            }
+            (param_elem == PhpType::Mixed && local_elem != PhpType::Mixed).then(|| {
+                (
+                    Some(Op::ArrayToMixed),
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                )
+            })
+        }
+        (
+            PhpType::AssocArray {
+                value: param_value, ..
+            },
+            PhpType::AssocArray {
+                key: local_key,
+                value: local_value,
+            },
+        ) => {
+            let param_value = param_value.codegen_repr();
+            let local_value = local_value.codegen_repr();
+            if local_value == PhpType::Void && param_value != PhpType::Void {
+                return Some((
+                    None,
+                    PhpType::AssocArray {
+                        key: local_key,
+                        value: Box::new(param_value),
+                    },
+                ));
+            }
+            (param_value == PhpType::Mixed && local_value != PhpType::Mixed).then(|| {
+                (
+                    Some(Op::HashToMixed),
+                    PhpType::AssocArray {
+                        key: local_key,
+                        value: Box::new(PhpType::Mixed),
+                    },
+                )
+            })
+        }
+        // An empty LIST the callee fills by KEY has to become a hash before the call: the
+        // callee is compiled for bucket storage and would otherwise write string keys into a
+        // packed vector. `$h = []; fill_keyed($h);` read back as `[10, 13]` without this.
+        (PhpType::AssocArray { .. }, PhpType::Array(local_elem))
+            if local_elem.codegen_repr() == PhpType::Void =>
+        {
+            Some((Some(Op::ArrayToHash), param_ty.codegen_repr()))
+        }
+        _ => None,
     }
-    let PhpType::Array(local_elem) = ctx.local_type(name).codegen_repr() else {
-        return false;
-    };
-    local_elem.codegen_repr() != PhpType::Mixed
 }
 
 /// Lowers positional call arguments with omitted optional defaults and variadic tail packing.

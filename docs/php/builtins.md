@@ -15,7 +15,7 @@ sidebar:
 | [`array_column()`](./builtins/array/array_column.md) | `(array $array, string $column_key): array` | `array` | ✓ | ✓ |
 | [`array_combine()`](./builtins/array/array_combine.md) | `(array $keys, array $values): array` | `array` | ✓ | ✓ |
 | [`array_count_values()`](./builtins/array/array_count_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_diff()`](./builtins/array/array_diff.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
+| [`array_diff()`](./builtins/array/array_diff.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | ✓ |
 | [`array_diff_assoc()`](./builtins/array/array_diff_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
 | [`array_diff_key()`](./builtins/array/array_diff_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_fill()`](./builtins/array/array_fill.md) | `(int $start_index, int $count, mixed $value): array` | `array` | ✓ | ✓ |
@@ -23,7 +23,7 @@ sidebar:
 | [`array_filter()`](./builtins/array/array_filter.md) | `(array $array, callable $callback = null, int $mode = 0): array` | `array` | ✓ | ✓ |
 | [`array_find()`](./builtins/array/array_find.md) | `(mixed $array, mixed $callback): mixed` | `mixed` | ✓ | — |
 | [`array_flip()`](./builtins/array/array_flip.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_intersect()`](./builtins/array/array_intersect.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
+| [`array_intersect()`](./builtins/array/array_intersect.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | ✓ |
 | [`array_intersect_assoc()`](./builtins/array/array_intersect_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
 | [`array_intersect_key()`](./builtins/array/array_intersect_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_is_list()`](./builtins/array/array_is_list.md) | `(mixed $array): bool` | `bool` | ✓ | — |
@@ -125,10 +125,10 @@ sidebar:
 | [`chmod()`](./builtins/filesystem/chmod.md) | `(string $filename, int $permissions): bool` | `bool` | ✓ | ✓ |
 | [`chown()`](./builtins/filesystem/chown.md) | `(string $filename, string $user): bool` | `bool` | ✓ | ✓ |
 | [`clearstatcache()`](./builtins/filesystem/clearstatcache.md) | `(bool $clear_realpath_cache = false, string $filename = ''): void` | `void` | ✓ | ✓ |
-| [`copy()`](./builtins/filesystem/copy.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
+| [`copy()`](./builtins/filesystem/copy.md) | `(string $from, string $to, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`dirname()`](./builtins/filesystem/dirname.md) | `(string $path, int $levels = 1): string` | `string` | ✓ | ✓ |
-| [`disk_free_space()`](./builtins/filesystem/disk_free_space.md) | `(string $directory): float` | `float` | ✓ | ✓ |
-| [`disk_total_space()`](./builtins/filesystem/disk_total_space.md) | `(string $directory): float` | `float` | ✓ | ✓ |
+| [`disk_free_space()`](./builtins/filesystem/disk_free_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
+| [`disk_total_space()`](./builtins/filesystem/disk_total_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
 | [`file_exists()`](./builtins/filesystem/file_exists.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`fileatime()`](./builtins/filesystem/fileatime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filectime()`](./builtins/filesystem/filectime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
@@ -142,7 +142,7 @@ sidebar:
 | [`fnmatch()`](./builtins/filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./builtins/filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
 | [`getenv()`](./builtins/filesystem/getenv.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
-| [`glob()`](./builtins/filesystem/glob.md) | `(string $pattern): array` | `array` | ✓ | ✓ |
+| [`glob()`](./builtins/filesystem/glob.md) | `(string $pattern): mixed` | `mixed` | ✓ | ✓ |
 | [`is_dir()`](./builtins/filesystem/is_dir.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_executable()`](./builtins/filesystem/is_executable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_file()`](./builtins/filesystem/is_file.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
@@ -155,17 +155,17 @@ sidebar:
 | [`link()`](./builtins/filesystem/link.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`linkinfo()`](./builtins/filesystem/linkinfo.md) | `(string $path): int` | `int` | ✓ | ✓ |
 | [`lstat()`](./builtins/filesystem/lstat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`mkdir()`](./builtins/filesystem/mkdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
+| [`mkdir()`](./builtins/filesystem/mkdir.md) | `(string $directory, int $permissions = 511, bool $recursive = false, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`pathinfo()`](./builtins/filesystem/pathinfo.md) | `(string $path, int $flags = 15): array` | `array` | ✓ | ✓ |
 | [`putenv()`](./builtins/filesystem/putenv.md) | `(string $assignment): bool` | `bool` | ✓ | ✓ |
-| [`readfile()`](./builtins/filesystem/readfile.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
+| [`readfile()`](./builtins/filesystem/readfile.md) | `(string $filename, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`readlink()`](./builtins/filesystem/readlink.md) | `(string $path): mixed` | `mixed` | ✓ | ✓ |
 | [`realpath()`](./builtins/filesystem/realpath.md) | `(string $path): mixed` | `mixed` | ✓ | ✓ |
 | [`realpath_cache_get()`](./builtins/filesystem/realpath_cache_get.md) | `(): array` | `array` | ✓ | ✓ |
 | [`realpath_cache_size()`](./builtins/filesystem/realpath_cache_size.md) | `(): int` | `int` | ✓ | ✓ |
 | [`rename()`](./builtins/filesystem/rename.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
-| [`rmdir()`](./builtins/filesystem/rmdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
-| [`scandir()`](./builtins/filesystem/scandir.md) | `(string $directory): array` | `array` | ✓ | ✓ |
+| [`rmdir()`](./builtins/filesystem/rmdir.md) | `(string $directory, mixed $context = null): bool` | `bool` | ✓ | ✓ |
+| [`scandir()`](./builtins/filesystem/scandir.md) | `(string $directory, int $sorting_order = 0, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stat()`](./builtins/filesystem/stat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`symlink()`](./builtins/filesystem/symlink.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`sys_get_temp_dir()`](./builtins/filesystem/sys_get_temp_dir.md) | `(): string` | `string` | ✓ | ✓ |
@@ -173,31 +173,34 @@ sidebar:
 | [`tmpfile()`](./builtins/filesystem/tmpfile.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`touch()`](./builtins/filesystem/touch.md) | `(string $filename, int $mtime = null, int $atime = null): bool` | `bool` | ✓ | ✓ |
 | [`umask()`](./builtins/filesystem/umask.md) | `(int $mask = null): int` | `int` | ✓ | ✓ |
-| [`unlink()`](./builtins/filesystem/unlink.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
-| [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
+| [`unlink()`](./builtins/filesystem/unlink.md) | `(string $filename, mixed $context = null): bool` | `bool` | ✓ | ✓ |
+| [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle = null): void` | `void` | ✓ | ✓ |
+| [`dir()`](./builtins/io/dir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | — |
+| [`diskfreespace()`](./builtins/io/diskfreespace.md) | `(string $directory): float` | `float` | ✓ | ✓ |
 | [`fclose()`](./builtins/io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fdatasync()`](./builtins/io/fdatasync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`feof()`](./builtins/io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fflush()`](./builtins/io/fflush.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fgetc()`](./builtins/io/fgetc.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`fgetcsv()`](./builtins/io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ','): mixed` | `mixed` | ✓ | ✓ |
-| [`fgets()`](./builtins/io/fgets.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`fgetcsv()`](./builtins/io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed` | `mixed` | ✓ | ✓ |
+| [`fgets()`](./builtins/io/fgets.md) | `(resource $stream, mixed $length = null): mixed` | `mixed` | ✓ | ✓ |
+| [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./builtins/io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
-| [`file_put_contents()`](./builtins/io/file_put_contents.md) | `(string $filename, string $data): int` | `int` | ✓ | ✓ |
+| [`file_put_contents()`](./builtins/io/file_put_contents.md) | `(string $filename, mixed $data, int $flags = 0, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`flock()`](./builtins/io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |
 | [`fopen()`](./builtins/io/fopen.md) | `(string $filename, string $mode, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`fpassthru()`](./builtins/io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`fprintf()`](./builtins/io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
-| [`fputcsv()`](./builtins/io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int` | `int` | ✓ | ✓ |
-| [`fread()`](./builtins/io/fread.md) | `(resource $stream, int $length): string` | `string` | ✓ | ✓ |
-| [`fscanf()`](./builtins/io/fscanf.md) | `(resource $stream, string $format, ...$vars): array` | `array` | ✓ | ✓ |
+| [`fputcsv()`](./builtins/io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int` | `int` | ✓ | ✓ |
+| [`fputs()`](./builtins/io/fputs.md) | `(mixed $stream, string $data, mixed $length = null): mixed` | `mixed` | ✓ | ✓ |
+| [`fread()`](./builtins/io/fread.md) | `(resource $stream, int $length): mixed` | `mixed` | ✓ | ✓ |
+| [`fscanf()`](./builtins/io/fscanf.md) | `(resource $stream, string $format, ...$vars): mixed` | `mixed` | ✓ | ✓ |
 | [`fseek()`](./builtins/io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |
 | [`fstat()`](./builtins/io/fstat.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`fsync()`](./builtins/io/fsync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`ftell()`](./builtins/io/ftell.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`ftruncate()`](./builtins/io/ftruncate.md) | `(resource $stream, int $size): bool` | `bool` | ✓ | ✓ |
-| [`fwrite()`](./builtins/io/fwrite.md) | `(resource $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
+| [`fwrite()`](./builtins/io/fwrite.md) | `(resource $stream, string $data, mixed $length = null): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyaddr()`](./builtins/io/gethostbyaddr.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyname()`](./builtins/io/gethostbyname.md) | `(string $hostname): string` | `string` | ✓ | ✓ |
 | [`gethostname()`](./builtins/io/gethostname.md) | `(): string` | `string` | ✓ | ✓ |
@@ -206,6 +209,8 @@ sidebar:
 | [`getservbyname()`](./builtins/io/getservbyname.md) | `(string $service, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyport()`](./builtins/io/getservbyport.md) | `(int $port, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`hash_file()`](./builtins/io/hash_file.md) | `(string $algo, string $filename, bool $binary = false): mixed` | `mixed` | ✓ | ✓ |
+| [`http_clear_last_response_headers()`](./builtins/io/http_clear_last_response_headers.md) | `(): void` | `void` | ✓ | — |
+| [`http_get_last_response_headers()`](./builtins/io/http_get_last_response_headers.md) | `(): mixed` | `mixed` | ✓ | — |
 | [`ob_clean()`](./builtins/io/ob_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`ob_end_clean()`](./builtins/io/ob_end_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`ob_end_flush()`](./builtins/io/ob_end_flush.md) | `(): bool` | `bool` | ✓ | ✓ |
@@ -219,45 +224,52 @@ sidebar:
 | [`ob_implicit_flush()`](./builtins/io/ob_implicit_flush.md) | `(bool $enable = true): bool` | `bool` | ✓ | ✓ |
 | [`ob_list_handlers()`](./builtins/io/ob_list_handlers.md) | `(): array` | `array` | ✓ | ✓ |
 | [`ob_start()`](./builtins/io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
-| [`opendir()`](./builtins/io/opendir.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
-| [`readdir()`](./builtins/io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
+| [`opendir()`](./builtins/io/opendir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
+| [`readdir()`](./builtins/io/readdir.md) | `(resource $dir_handle = null): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./builtins/io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
-| [`rewinddir()`](./builtins/io/rewinddir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
+| [`rewinddir()`](./builtins/io/rewinddir.md) | `(resource $dir_handle = null): void` | `void` | ✓ | ✓ |
+| [`set_file_buffer()`](./builtins/io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | ✓ |
+| [`socket_get_status()`](./builtins/io/socket_get_status.md) | `(mixed $stream): mixed` | `mixed` | ✓ | ✓ |
+| [`socket_set_block()`](./builtins/io/socket_set_block.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
+| [`socket_set_blocking()`](./builtins/io/socket_set_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
+| [`socket_set_timeout()`](./builtins/io/socket_set_timeout.md) | `(mixed $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_bucket_make_writeable()`](./builtins/io/stream_bucket_make_writeable.md) | `(mixed $brigade): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_bucket_new()`](./builtins/io/stream_bucket_new.md) | `(resource $stream, string $buffer): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_context_create()`](./builtins/io/stream_context_create.md) | `(array $options = null, array $params = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_context_get_default()`](./builtins/io/stream_context_get_default.md) | `(array $options = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_context_get_options()`](./builtins/io/stream_context_get_options.md) | `(resource $context): array` | `array` | ✓ | ✓ |
+| [`stream_context_get_options()`](./builtins/io/stream_context_get_options.md) | `(resource $stream_or_context): array` | `array` | ✓ | ✓ |
 | [`stream_context_get_params()`](./builtins/io/stream_context_get_params.md) | `(resource $context): array` | `array` | ✓ | ✓ |
 | [`stream_context_set_default()`](./builtins/io/stream_context_set_default.md) | `(array $options): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_context_set_option()`](./builtins/io/stream_context_set_option.md) | `(resource $context, string $wrapper_or_options, string $option_name = null, mixed $value = null): bool` | `bool` | ✓ | ✓ |
+| [`stream_context_set_options()`](./builtins/io/stream_context_set_options.md) | `(mixed $context, mixed $options): bool` | `bool` | ✓ | ✓ |
 | [`stream_context_set_params()`](./builtins/io/stream_context_set_params.md) | `(resource $context, array $params): bool` | `bool` | ✓ | ✓ |
-| [`stream_copy_to_stream()`](./builtins/io/stream_copy_to_stream.md) | `(resource $from, resource $to, int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_copy_to_stream()`](./builtins/io/stream_copy_to_stream.md) | `(resource $from, resource $to, int $length = null, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_filter_register()`](./builtins/io/stream_filter_register.md) | `(string $filter_name, string $class): bool` | `bool` | ✓ | ✓ |
 | [`stream_filter_remove()`](./builtins/io/stream_filter_remove.md) | `(resource $stream_filter): bool` | `bool` | ✓ | ✓ |
 | [`stream_get_contents()`](./builtins/io/stream_get_contents.md) | `(resource $stream, int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_get_filters()`](./builtins/io/stream_get_filters.md) | `(): array` | `array` | ✓ | ✓ |
-| [`stream_get_line()`](./builtins/io/stream_get_line.md) | `(resource $stream, int $length, string $ending = ''): string` | `string` | ✓ | ✓ |
+| [`stream_get_line()`](./builtins/io/stream_get_line.md) | `(resource $stream, int $length, string $ending = ''): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_get_meta_data()`](./builtins/io/stream_get_meta_data.md) | `(resource $stream): array` | `array` | ✓ | ✓ |
 | [`stream_get_transports()`](./builtins/io/stream_get_transports.md) | `(): array` | `array` | ✓ | ✓ |
 | [`stream_get_wrappers()`](./builtins/io/stream_get_wrappers.md) | `(): array` | `array` | ✓ | ✓ |
 | [`stream_is_local()`](./builtins/io/stream_is_local.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_isatty()`](./builtins/io/stream_isatty.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
+| [`stream_register_wrapper()`](./builtins/io/stream_register_wrapper.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_resolve_include_path()`](./builtins/io/stream_resolve_include_path.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_select()`](./builtins/io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int` | `int` | ✓ | ✓ |
+| [`stream_select()`](./builtins/io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_set_blocking()`](./builtins/io/stream_set_blocking.md) | `(resource $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_chunk_size()`](./builtins/io/stream_set_chunk_size.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_set_read_buffer()`](./builtins/io/stream_set_read_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_set_timeout()`](./builtins/io/stream_set_timeout.md) | `(resource $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_write_buffer()`](./builtins/io/stream_set_write_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_socket_accept()`](./builtins/io/stream_socket_accept.md) | `(resource $socket, float $timeout = null, string $peer_name = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_client()`](./builtins/io/stream_socket_client.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_enable_crypto()`](./builtins/io/stream_socket_enable_crypto.md) | `(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | `bool` | ✓ | ✓ |
+| [`stream_socket_client()`](./builtins/io/stream_socket_client.md) | `(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 4, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_enable_crypto()`](./builtins/io/stream_socket_enable_crypto.md) | `(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_get_name()`](./builtins/io/stream_socket_get_name.md) | `(resource $socket, bool $remote): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_pair()`](./builtins/io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_recvfrom()`](./builtins/io/stream_socket_recvfrom.md) | `(resource $socket, int $length, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_recvfrom()`](./builtins/io/stream_socket_recvfrom.md) | `(resource $socket, int $length, int $flags = 0, string $address = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_sendto()`](./builtins/io/stream_socket_sendto.md) | `(resource $socket, string $data, int $flags = 0, string $address = ''): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_server()`](./builtins/io/stream_socket_server.md) | `(string $address): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_server()`](./builtins/io/stream_socket_server.md) | `(string $address, mixed $error_code = null, mixed $error_message = null, int $flags = 12, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_shutdown()`](./builtins/io/stream_socket_shutdown.md) | `(resource $stream, int $mode): bool` | `bool` | ✓ | ✓ |
 | [`stream_supports_lock()`](./builtins/io/stream_supports_lock.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_wrapper_register()`](./builtins/io/stream_wrapper_register.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |
@@ -391,12 +403,12 @@ sidebar:
 | [`spl_classes()`](./builtins/spl/spl_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`spl_object_hash()`](./builtins/spl/spl_object_hash.md) | `(object $object): string` | `string` | ✓ | ✓ |
 | [`spl_object_id()`](./builtins/spl/spl_object_id.md) | `(object $object): int` | `int` | ✓ | ✓ |
-| [`fsockopen()`](./builtins/streams/fsockopen.md) | `(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
-| [`pfsockopen()`](./builtins/streams/pfsockopen.md) | `(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
+| [`fsockopen()`](./builtins/streams/fsockopen.md) | `(string $hostname, int $port = -1, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
+| [`pfsockopen()`](./builtins/streams/pfsockopen.md) | `(string $hostname, int $port = -1, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_bucket_append()`](./builtins/streams/stream_bucket_append.md) | `(mixed $brigade, mixed $bucket): void` | `void` | ✓ | ✓ |
 | [`stream_bucket_prepend()`](./builtins/streams/stream_bucket_prepend.md) | `(mixed $brigade, mixed $bucket): void` | `void` | ✓ | ✓ |
-| [`stream_filter_append()`](./builtins/streams/stream_filter_append.md) | `(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_filter_prepend()`](./builtins/streams/stream_filter_prepend.md) | `(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_filter_append()`](./builtins/streams/stream_filter_append.md) | `(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_filter_prepend()`](./builtins/streams/stream_filter_prepend.md) | `(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
 | [`addslashes()`](./builtins/string/addslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`base64_decode()`](./builtins/string/base64_decode.md) | `(string $string, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
 | [`base64_encode()`](./builtins/string/base64_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -450,9 +462,10 @@ sidebar:
 | [`rtrim()`](./builtins/string/rtrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`sha1()`](./builtins/string/sha1.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`sprintf()`](./builtins/string/sprintf.md) | `(string $format, ...$values): string` | `string` | ✓ | ✓ |
-| [`sscanf()`](./builtins/string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |
+| [`sscanf()`](./builtins/string/sscanf.md) | `(string $string, string $format, ...$vars): mixed` | `mixed` | ✓ | ✓ |
 | [`str_contains()`](./builtins/string/str_contains.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_ends_with()`](./builtins/string/str_ends_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
+| [`str_getcsv()`](./builtins/string/str_getcsv.md) | `(string $string, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array` | `array` | ✓ | ✓ |
 | [`str_ireplace()`](./builtins/string/str_ireplace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
 | [`str_pad()`](./builtins/string/str_pad.md) | `(string $string, int $length, string $pad_string = ' ', int $pad_type = 1): string` | `string` | ✓ | ✓ |
 | [`str_repeat()`](./builtins/string/str_repeat.md) | `(string $string, int $times): string` | `string` | ✓ | ✓ |

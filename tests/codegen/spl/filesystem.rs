@@ -555,3 +555,250 @@ rmdir("root");
     assert_eq!(out, "child:wrapped:leaf.txt=root/child/leaf.txt\nhas|leaf=7\n");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `SplFileObject::getCsvControl()` returns the controls instead of faulting.
+///
+/// The method was declared on the class and left out of `is_supported_builtin_spl_method()`,
+/// the list that decides which prelude bodies are LOWERED. A declared-but-unlowered method
+/// keeps a null vtable slot, so calling it branched to address 0 — a segfault at the call site
+/// with nothing wrong at compile time. Removing the name from that list reproduces it exactly.
+#[test]
+fn test_spl_file_object_get_csv_control_is_lowered() {
+    let (out, dir) = compile_and_run_in_dir(
+        r##"<?php
+file_put_contents("ctl2.csv", "a,b\n");
+$f = new SplFileObject("ctl2.csv", "r");
+echo json_encode($f->getCsvControl()), "|";
+$f->setCsvControl(";", "'", "#");
+echo json_encode($f->getCsvControl()), "\n";
+unset($f);
+unlink("ctl2.csv");
+"##,
+    );
+    assert_eq!(out, "[\",\",\"\\\"\",\"\\\\\"]|[\";\",\"'\",\"#\"]\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies READ_CSV iteration reads CSV RECORDS rather than exploding the raw line.
+///
+/// `current()` used to answer `explode($delimiter, $line)`, which is not CSV: an enclosure was
+/// ordinary text, so `a,"b,c",d` came back as `["a", "\"b", "c\"", "d\n"]` — four fields, quotes
+/// attached, the terminator glued to the last one. A quoted field holding a newline was cut in
+/// half across two iterations, and a blank line answered `["\n"]` where php answers `[null]`.
+/// Every expectation below is `php -n` 8.5.6 on the same file, including the final `[null]`
+/// php yields because it reads until a read fails rather than until the lines run out.
+#[test]
+fn test_spl_file_object_read_csv_parses_records_not_exploded_lines() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rec.csv", "a,\"b,c\",d\n\n\"x\ny\",z\n");
+$f = new SplFileObject("rec.csv");
+$f->setFlags(SplFileObject::READ_CSV);
+foreach ($f as $i => $row) {
+    echo $i, "=", json_encode($row), ";";
+}
+echo "\n";
+unset($f);
+unlink("rec.csv");
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=[\"a\",\"b,c\",\"d\"];1=[null];2=[\"x\\ny\",\"z\"];3=[null];\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies READ_CSV honors the flags it is combined with, as php does.
+///
+/// SKIP_EMPTY turns the end-of-input record into `false` instead of `[null]`, and — only when
+/// DROP_NEW_LINE is set too, which is php's own rule — steps OVER a blank record without
+/// renumbering the ones after it: the keys run 0, 2, 3, not 0, 1, 2. A record spanning three
+/// physical lines counts as ONE key, so the key is a record index and not a line index.
+#[test]
+fn test_spl_file_object_read_csv_flag_combinations() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function walk(string $content, int $flags): void {
+    file_put_contents("flags.csv", $content);
+    $f = new SplFileObject("flags.csv");
+    $f->setFlags($flags);
+    foreach ($f as $i => $row) {
+        echo $i, "=", json_encode($row), ";";
+    }
+    echo "\n";
+    unset($f);
+    unlink("flags.csv");
+}
+$c = "a,\"b,c\",d\n\n\"x\ny\",z\n";
+walk($c, SplFileObject::READ_CSV | SplFileObject::SKIP_EMPTY);
+walk($c, SplFileObject::READ_CSV | SplFileObject::SKIP_EMPTY | SplFileObject::DROP_NEW_LINE);
+walk("\"a\nb\nc\",z\nq,r\n", SplFileObject::READ_CSV);
+walk("a,b\nc,d", SplFileObject::READ_CSV);
+walk("", SplFileObject::READ_CSV);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=[\"a\",\"b,c\",\"d\"];1=[null];2=[\"x\\ny\",\"z\"];3=false;\n\
+         0=[\"a\",\"b,c\",\"d\"];2=[\"x\\ny\",\"z\"];3=false;\n\
+         0=[\"a\\nb\\nc\",\"z\"];1=[\"q\",\"r\"];2=[null];\n\
+         0=[\"a\",\"b\"];1=[\"c\",\"d\"];\n\
+         0=[null];\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `SplFileObject::fputcsv()` forwards its `$eol` instead of dropping it.
+///
+/// The method declared the parameter and then called `fputcsv()` with five arguments, so the
+/// sixth never left the prelude: every row ended in `"\n"` whatever the caller asked for, and
+/// the return count reported the newline it did not write. Measured on `php -n` 8.5.6, the
+/// three rows below leave `a,b\nc,de,f|EOL|` and answer 4, 3, 8.
+#[test]
+fn test_spl_file_object_fputcsv_forwards_its_eol() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$w = new SplFileObject("eol.csv", "w");
+echo $w->fputcsv(["a", "b"]), "|";
+echo $w->fputcsv(["c", "d"], ",", "\"", "\\", ""), "|";
+echo $w->fputcsv(["e", "f"], ",", "\"", "\\", "|EOL|"), "\n";
+unset($w);
+echo bin2hex(file_get_contents("eol.csv")), "\n";
+unlink("eol.csv");
+"#,
+    );
+    assert_eq!(out, "4|3|8\n612c620a632c64652c667c454f4c7c\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an omitted CSV control falls back on `setCsvControl()` state, not on a literal.
+///
+/// php resolves `$separator`, `$enclosure` and `$escape` against the object when the call
+/// leaves them out — that is what `setCsvControl()` is for, and what the 8.4 deprecation text
+/// points at. elephc spelled `","` as the parameter default, so the state was ignored and
+/// `$f->setCsvControl(";"); $f->fgetcsv()` came back as one field.
+#[test]
+fn test_spl_file_object_csv_controls_fall_back_on_set_csv_control() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("ctl.csv", "a;b;c\n");
+$f = new SplFileObject("ctl.csv", "r");
+$f->setCsvControl(";", "\"", "\\");
+echo json_encode($f->fgetcsv()), "|";
+$g = new SplFileObject("ctl.csv", "r");
+echo json_encode($g->fgetcsv(";", "\"", "\\")), "|";
+$h = new SplFileObject("ctl.csv", "r");
+echo json_encode($h->fgetcsv(",", "\"", "\\")), "\n";
+unlink("ctl.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\",\"c\"]|[\"a\",\"b\",\"c\"]|[\"a;b;c\"]\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `SplFileObject::fscanf()` scans one line through php's scanf engine.
+///
+/// The method did not exist: `$f->fscanf('%d %s')` was `Undefined method`. It reads a line the
+/// way `fgets()` does and hands it to the shared engine, so a `%d` field comes back as an INT.
+///
+/// The LINE NUMBER rule is php's own and is NOT `fgets()`'s: measured on `php -n` 8.5.6, the
+/// FIRST `fscanf()` of a fresh object leaves `key()` where it was and only later reads advance
+/// it, so on a three-line file the keys run 0, 1, 2 where `fgets()` gives 1, 2, 3. Mixing the
+/// two shows it is the first READ that is special rather than the method.
+#[test]
+fn test_spl_file_object_fscanf_scans_one_line_per_call() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("scan.txt", "1 a\n2 b\n3 c\n");
+$f = new SplFileObject("scan.txt", "r");
+echo json_encode($f->fscanf("%d %s")), " key=", $f->key(), "\n";
+echo json_encode($f->fscanf("%d %s")), " key=", $f->key(), "\n";
+echo json_encode($f->fscanf("%d %s")), " key=", $f->key(), "\n";
+echo json_encode($f->fscanf("%d %s")), " key=", $f->key(), "\n";
+$g = new SplFileObject("scan.txt", "r");
+$g->fgets();
+echo "after fgets key=", $g->key(), "\n";
+$g->fscanf("%d %s");
+echo "after fscanf key=", $g->key(), "\n";
+unlink("scan.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "[1,\"a\"] key=0\n[2,\"b\"] key=1\n[3,\"c\"] key=2\nnull key=3\n\
+         after fgets key=1\nafter fscanf key=2\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a file object at end of file ANSWERS an empty line once, then refuses.
+///
+/// `SplFileObject::fgets()` never returns `false` in php: measured on `php -n` 8.5.6 over
+/// `"a\nbb\n"`, it answers `'a\n'`, `'bb\n'`, then `''` — `key()` advancing each time, `eof()`
+/// true after the empty one — and only the call AFTER that throws
+/// `RuntimeException: Cannot read from file <path>`. elephc answered `false` for ever and
+/// stopped counting, so a `!== false` loop terminated where php's throws.
+///
+/// The empty-line step exists because `feof()` only becomes true once a read has hit the end,
+/// which is also why the guard fires on the following call rather than this one.
+#[test]
+fn test_spl_file_object_read_past_eof_answers_empty_then_throws() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("eof.txt", "a\nbb\n");
+$f = new SplFileObject("eof.txt", "r");
+for ($i = 0; $i < 4; $i++) {
+    try {
+        $line = $f->fgets();
+    } catch (\RuntimeException $e) {
+        echo $i, ": THROW ", $e->getMessage(), "\n";
+        continue;
+    }
+    echo $i, ": ", json_encode($line), " key=", $f->key(), " eof=", json_encode($f->eof()), "\n";
+}
+unlink("eof.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "0: \"a\\n\" key=1 eof=false\n\
+         1: \"bb\\n\" key=2 eof=false\n\
+         2: \"\" key=3 eof=true\n\
+         3: THROW Cannot read from file eof.txt\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `getCurrentLine()` is php's ALIAS of `fgets()` and therefore CONSUMES the line.
+///
+/// elephc answered the cached current line and left the stream where it was, so
+/// `getCurrentLine()` followed by `fgetc()` read the FIRST line's bytes twice. Measured on
+/// `php -n` 8.5.6 over `"aa\nbb\n"`: the line comes back, `key()` advances, the next read
+/// starts at the second line, and once `feof()` holds the call throws like `fgets()` does.
+#[test]
+fn test_spl_file_object_get_current_line_is_an_alias_of_fgets() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("cur.txt", "aa\nbb\n");
+$f = new SplFileObject("cur.txt", "r");
+echo json_encode($f->getCurrentLine()), " key=", $f->key(), "\n";
+echo json_encode($f->fgetc()), $f->fgetc(), "\n";
+$g = new SplFileObject("cur.txt", "r");
+$g->getCurrentLine();
+$g->getCurrentLine();
+echo json_encode($g->getCurrentLine()), " key=", $g->key(), "\n";
+try {
+    $g->getCurrentLine();
+} catch (\RuntimeException $e) {
+    echo "THROW ", $e->getMessage(), "\n";
+}
+unlink("cur.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "\"aa\\n\" key=1\n\"b\"b\n\"\" key=3\nTHROW Cannot read from file cur.txt\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -5,17 +5,15 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates the stream resource, checks that `operation` is strictly `Int`
-//!   (not just accepts_int), and verifies that `would_block` (when present) is passed
-//!   as a variable — both checks match the legacy behaviour exactly.
-//! - `would_block` is a by-reference parameter (`ref` marker in `params:`); the hook's
-//!   variable check is in addition to, not instead of, the ref-ness.
-//! - Arguments are pre-inferred by the registry before the hook runs; `operation` is
-//!   re-inferred inside the hook to obtain its type for validation.
+//! - `check` validates the stream resource and checks that `operation` is strictly `Int`
+//!   (not just accepts_int), matching the legacy behaviour exactly.
+//! - `would_block` is declared `ref(Int)`: PHP writes `0`/`1` into it, so the caller may pass it
+//!   undeclared and the declaration is what requires a variable there.
+//! - Arguments are pre-inferred by the registry before the hook runs, except `would_block`, which
+//!   is written rather than read; `operation` is re-inferred inside the hook for validation.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -26,8 +24,7 @@ builtin! {
     ),
 }
 
-/// Validates the stream resource, enforces strict Int type for operation, and
-/// requires that `would_block` (if provided) is passed as a plain variable.
+/// Validates the stream resource and enforces a strict `Int` type for `operation`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -41,14 +38,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             cx.args[1].span,
             "flock() operation must be int",
         ));
-    }
-    if let Some(arg2) = cx.args.get(2) {
-        if !matches!(arg2.kind, ExprKind::Variable(_)) {
-            return Err(CompileError::new(
-                arg2.span,
-                "flock() parameter $would_block must be passed a variable",
-            ));
-        }
     }
     Ok(PhpType::Bool)
 }

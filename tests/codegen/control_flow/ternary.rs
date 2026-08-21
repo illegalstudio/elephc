@@ -9,6 +9,32 @@
 
 use super::*;
 
+/// Verifies a ternary that merges `false` with a STRING read from an inline-subscripted call.
+///
+/// The result used to collapse to the integer `0`, both branches: the merge temporary is typed
+/// from the branch expressions, and the subscript of a call had no type of its own, so it took
+/// the syntactic fallback whose last resort is `int` — and the string element was CAST into it.
+///
+/// The boundary was narrow, which is why the fix is where it is: three neighbouring shapes were
+/// already right — `meta()["mode"]` on its own, the same ternary reading the array through a
+/// VARIABLE, and the same ternary reading an INT element. It took the subscript applied directly
+/// to a call result, inside the ternary, on a non-integer element. It surfaced while probing
+/// `stream_get_meta_data()`.
+#[test]
+fn test_ternary_merging_false_with_a_subscripted_call_keeps_the_string() {
+    let out = compile_and_run(
+        r#"<?php
+function meta(): array { return ["mode" => "r+", "n" => 7]; }
+$t = true;
+$f = false;
+echo var_export($t === false ? false : meta()["mode"], true), "|";
+echo var_export($f === false ? false : meta()["mode"], true), "|";
+echo var_export($t === false ? false : meta()["n"], true);
+"#,
+    );
+    assert_eq!(out, "'r+'|false|7");
+}
+
 /// Tests ternary true branch using equality comparison that evaluates to true.
 #[test]
 fn test_ternary_true() {

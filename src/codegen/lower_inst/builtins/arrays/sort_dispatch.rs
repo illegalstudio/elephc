@@ -11,6 +11,10 @@ use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
 /// Loads an indexed array argument and calls the selected runtime aggregate helper.
+///
+/// HASH storage is aggregated through the same helpers: php's `array_sum()`/`array_product()`
+/// walk the values with `ZEND_HASH_FOREACH_VAL` (ext/standard/array.c) and never read a key, so
+/// a hash aggregates exactly like the indexed array of its values.
 pub(super) fn lower_indexed_array_aggregate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -21,6 +25,18 @@ pub(super) fn lower_indexed_array_aggregate(
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
     let array_ty = ctx.value_php_type(array)?;
+    if let PhpType::AssocArray { value, .. } = array_ty.codegen_repr() {
+        return lower_hash_aggregate_via_values(
+            ctx,
+            inst,
+            name,
+            scalar_helper,
+            mixed_helper,
+            array,
+            &array_ty.codegen_repr(),
+            &value.codegen_repr(),
+        );
+    }
     let helper = match array_ty.codegen_repr() {
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => mixed_helper
             .ok_or_else(|| {
@@ -43,19 +59,79 @@ pub(super) fn lower_indexed_array_aggregate(
     store_if_result(ctx, inst)
 }
 
-/// Calls a value set-operation helper after validating compatible indexed-array layouts.
-pub(super) fn lower_indexed_array_set_op(
+/// Aggregates HASH storage by materializing its values and reusing the packed helper.
+///
+/// The values are copied into a temporary indexed array — the route `implode()` already takes
+/// for hash storage — so the per-element rules stay in the one packed helper instead of being
+/// restated for the hash layout, and both architectures are covered without a second assembly
+/// body. The temporary is owned HERE: it holds the same payload pointers the hash entries
+/// carry, so it is deep-freed around the aggregate's integer result, which the free helper's
+/// own argument register (`x0`/`rax`, NOT `rdi`) would otherwise destroy.
+///
+/// The supported value types are exactly the packed ones, and an unsupported value keeps the
+/// refusal worded with the ORIGINAL hash type: reporting the materialized `Array(Mixed)`
+/// instead would name a type the source never wrote.
+#[allow(clippy::too_many_arguments)]
+fn lower_hash_aggregate_via_values(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
     scalar_helper: &str,
-    refcounted_helper: &str,
+    mixed_helper: Option<&str>,
+    array: ValueId,
+    array_ty: &PhpType,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let unsupported =
+        || CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, array_ty));
+    let helper = match value_ty {
+        PhpType::Mixed => mixed_helper.ok_or_else(unsupported)?,
+        PhpType::Int | PhpType::Bool | PhpType::Never | PhpType::Void => scalar_helper,
+        _ => return Err(unsupported()),
+    };
+    ctx.load_value_to_result(array)?;
+    values::emit_loaded_assoc_array_values(ctx, value_ty)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // preserve the temporary values array across the aggregate call
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the materialized values array as the runtime helper argument
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // preserve the aggregate result across the deep free
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx
+            .emitter
+            .instruction(&format!("ldr {}, [sp, #16]", result_reg)),             // reload the temporary values array pointer
+        Arch::X86_64 => ctx
+            .emitter
+            .instruction(&format!("mov {}, QWORD PTR [rsp + 16]", result_reg)),  // reload the temporary values array pointer
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_free_deep");
+    abi::emit_pop_reg(ctx.emitter, result_reg);                                 // restore the aggregate result
+    abi::emit_release_temporary_stack(ctx.emitter, 16);                         // drop the temporary values array slot
+    store_if_result(ctx, inst)
+}
+
+/// Calls a key-preserving value set-operation helper after validating indexed-array layouts.
+///
+/// php keeps the FIRST operand's keys: `array_diff(["a","b","c"], ["b"])` is `{0:"a", 2:"c"}` and
+/// `array_intersect(["a","b","c"], ["b","c"])` is `{1:"b", 2:"c"}`. A dense indexed array cannot
+/// hold a gap, so both lower to `__rt_array_*_to_hash`, which inserts each survivor at its
+/// ORIGINAL index. The helper reads the element layout from the source header at runtime, so the
+/// scalar, refcounted and string element types share one entry point instead of the three-way
+/// helper split the reindexing form needed. The result carries the hash's own header, so the
+/// indexed-array value_type stamp the dense form applied would be meaningless here.
+pub(super) fn lower_indexed_array_set_op(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    hash_helper: &str,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let first_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(first)?, name)?;
-    let second_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(second)?, name)?;
+    let first_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(first)?, name, true)?;
+    let second_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(second)?, name, true)?;
     require_set_op_compatible_element_types(name, &first_elem_ty, &second_elem_ty)?;
     require_set_op_result_type(name, &first_elem_ty, &inst.result_php_type.codegen_repr())?;
     match ctx.emitter.target.arch {
@@ -68,17 +144,7 @@ pub(super) fn lower_indexed_array_set_op(
             ctx.load_value_to_reg(second, "rsi")?;
         }
     }
-    let helper = if first_elem_ty.is_refcounted() {
-        refcounted_helper
-    } else {
-        scalar_helper
-    };
-    abi::emit_call_label(ctx.emitter, helper);
-    crate::codegen::emit_array_value_type_stamp(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        &first_elem_ty,
-    );
+    abi::emit_call_label(ctx.emitter, hash_helper);
     store_if_result(ctx, inst)
 }
 
@@ -221,8 +287,61 @@ pub(super) fn lower_indexed_array_sort(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty =
-        indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
+    let operand_ty = ctx.value_php_type(array)?;
+    // An `array|false` union — `$d = scandir($dir); sort($d);` — arrives BOXED. The payload is
+    // sorted in place, so the box keeps pointing at the sorted storage and no write-back is
+    // needed; a runtime `false` throws php's TypeError, worded exactly as php words it. The
+    // copy-on-write split is skipped: the box owns its array, so the sort mutates the only
+    // storage the value has, which is also why `ensure_unique_sort_source` has nothing to do.
+    if let Some(member) = operand_ty.array_or_false_member().cloned() {
+        let elem_ty = indexed_sort_element_type(member, name, str_helper.is_some())?;
+        ctx.load_value_to_result(array)?;
+        let sortable = ctx.next_label(&format!("{}_union_array", name));
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x9, [x0]");                        // the boxed payload tag
+                ctx.emitter.instruction("cmp x9, #4");                          // an indexed array?
+                ctx.emitter.instruction(&format!("b.eq {}", sortable));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov r9, QWORD PTR [rax]");             // the boxed payload tag
+                ctx.emitter.instruction("cmp r9, 4");                           // an indexed array?
+                ctx.emitter.instruction(&format!("je {}", sortable));
+            }
+        }
+        let message = format!(
+            "{}(): Argument #1 ($array) must be of type array, false given",
+            name
+        );
+        let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, &message_label);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, message_len as i64);
+        super::super::exceptions::emit_type_error_from_string_result(ctx);
+        ctx.emitter.label(&sortable);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x0, [x0, #8]");                    // the raw array the box owns
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");        // the raw array the box owns
+                ctx.emitter.instruction("mov rdi, rax");                        // the sort helpers take rdi
+            }
+        }
+        let helper = if elem_ty == PhpType::Str {
+            str_helper.expect("string sort helper is required after validation")
+        } else {
+            int_helper
+        };
+        abi::emit_call_label(ctx.emitter, helper);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            0x7fff_ffff_ffff_fffe,
+        );
+        return store_if_result(ctx, inst);
+    }
+    let elem_ty = indexed_sort_element_type(operand_ty, name, str_helper.is_some())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     receiver.store_back_value(ctx, array)?;
@@ -252,7 +371,15 @@ pub(super) fn lower_indexed_array_sort(
 pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "shuffle", 1)?;
     let array = expect_operand(inst, 0)?;
-    eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
+    // String arrays store 16-byte (ptr, len) slots the 8-byte swap would tear in half,
+    // pairing one string's pointer with another's length; they get their own helper.
+    let helper = match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => "__rt_shuffle_str",
+        ty => {
+            eight_byte_indexed_array_element_type(ty, "shuffle")?;
+            "__rt_shuffle"
+        }
+    };
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     receiver.store_back_value(ctx, array)?;
@@ -264,7 +391,7 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_shuffle");
+    abi::emit_call_label(ctx.emitter, helper);
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),

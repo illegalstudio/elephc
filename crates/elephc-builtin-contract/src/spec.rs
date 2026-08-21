@@ -120,6 +120,11 @@ pub struct ParamSpec {
     pub default: Option<DefaultSpec>,
     /// Compatibility mirror of `passing` used by current registry consumers.
     pub by_ref: bool,
+    /// For a by-reference parameter the builtin only WRITES: the type the
+    /// caller's variable holds afterwards. `None` for in-out or by-value
+    /// parameters. Keeping the written type beside the slot it is written
+    /// into stops the two from drifting apart.
+    pub writes: Option<TypeSpec>,
 }
 
 /// Backend-neutral callable signature selected for one catalog consumer.
@@ -188,6 +193,14 @@ pub struct BuiltinContract {
     pub params: &'static [ParamSpec],
     /// PHP-visible variadic parameter name, when present.
     pub variadic: Option<&'static str>,
+    /// For a variadic tail the builtin only WRITES: the type each caller variable
+    /// holds afterwards. `None` for a by-value tail, which is nearly all of them.
+    ///
+    /// `sscanf()` and `fscanf()` are the tail that writes: php's
+    /// `sscanf($s, '%d %s', $n, $w)` fills both variables and neither has to exist
+    /// beforehand. Saying so here is what stops the checker reading those arguments
+    /// and rejecting the manual's own idiom with `Undefined variable`.
+    pub variadic_writes: Option<TypeSpec>,
     /// Optional supported minimum-arity override.
     pub min_args: Option<usize>,
     /// Optional supported maximum-arity override.

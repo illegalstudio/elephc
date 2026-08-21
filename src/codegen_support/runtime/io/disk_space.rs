@@ -43,7 +43,15 @@ pub fn emit_disk_space(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_disk_space_ok")); // continue only when statfs succeeded
-    emitter.instruction("fmov d0, xzr");                                        // statfs failed: report 0.0 bytes
+    // php names the reason in its warning, so carry it out beside the flag — the register still
+    // holds it here, and the flag below is about to overwrite it.
+    if plat.needs_cmp_before_error_branch() {
+        emitter.instruction("neg x1, x0");                                      // Linux returns -errno; report the positive number
+    } else {
+        emitter.instruction("mov x1, x0");                                      // macOS already returns a positive errno
+    }
+    emitter.instruction("fmov d0, xzr");                                        // statfs failed: no byte count to report
+    emitter.instruction("mov x0, #0");                                          // clear flag: the caller boxes PHP false
     emitter.instruction("b __rt_disk_space_done");                              // skip the computation after a failure
 
     emitter.label("__rt_disk_space_ok");
@@ -57,6 +65,8 @@ pub fn emit_disk_space(emitter: &mut Emitter) {
     emitter.label("__rt_disk_space_count");
     emitter.instruction("mul x9, x9, x11");                                     // bytes = block size * block count
     emitter.instruction("ucvtf d0, x9");                                        // convert the byte count to a double
+    emitter.instruction("mov x0, #1");                                          // success flag for the float|false boxing
+    emitter.instruction("mov x1, #0");                                          // a reading has no reason to report
 
     emitter.label("__rt_disk_space_done");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -109,10 +119,16 @@ fn emit_disk_space_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rcx");                                        // block size into the multiply accumulator
     emitter.instruction("imul rax, r8");                                        // bytes = block size * block count
     emitter.instruction("cvtsi2sd xmm0, rax");                                  // convert the byte count to a double
+    emitter.instruction("mov rax, 1");                                          // success flag for the float|false boxing
+    emitter.instruction("xor edx, edx");                                        // a reading has no reason to report
     emitter.instruction("jmp __rt_disk_space_done_x86");                        // skip the failure path
 
     emitter.label("__rt_disk_space_fail_x86");
-    emitter.instruction("xorps xmm0, xmm0");                                    // statfs failed: report 0.0 bytes
+    // See the AArch64 counterpart: php names the reason, so carry it out beside the flag.
+    emitter.instruction("mov rdx, rax");                                        // the failing result
+    emitter.instruction("neg rdx");                                             // Linux returns -errno; report the positive number
+    emitter.instruction("xorps xmm0, xmm0");                                    // statfs failed: no byte count to report
+    emitter.instruction("xor eax, eax");                                        // clear flag: the caller boxes PHP false
 
     emitter.label("__rt_disk_space_done_x86");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the stack frame

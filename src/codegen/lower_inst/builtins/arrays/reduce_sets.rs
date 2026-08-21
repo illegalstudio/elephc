@@ -168,11 +168,29 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
     super::super::ensure_arg_count(inst, "array_merge", 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let elem_ty = compatible_eight_byte_indexed_array_element_type(
-        ctx.value_php_type(first)?,
-        ctx.value_php_type(second)?,
-        "array_merge",
-    )?;
+    // STRING arrays take the 16-byte-slot helper. An EMPTY literal (`Never`/`Void` element)
+    // rides along: its length is zero, so the copy loop never reads a slot and its declared
+    // slot size is moot. The shared 8-byte gate keeps refusing a string array beside any
+    // non-empty other layout, where a merged container would need one common slot shape.
+    let first_ty = ctx.value_php_type(first)?;
+    let second_ty = ctx.value_php_type(second)?;
+    let str_side = |ty: &PhpType| {
+        matches!(ty.codegen_repr(), PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str)
+    };
+    let empty_side = |ty: &PhpType| {
+        matches!(
+            ty.codegen_repr(),
+            PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Never | PhpType::Void)
+        )
+    };
+    let str_merge = (str_side(&first_ty) || str_side(&second_ty))
+        && (str_side(&first_ty) || empty_side(&first_ty))
+        && (str_side(&second_ty) || empty_side(&second_ty));
+    let elem_ty = if str_merge {
+        PhpType::Str
+    } else {
+        compatible_eight_byte_indexed_array_element_type(first_ty, second_ty, "array_merge")?
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(first, "x0")?;
@@ -195,29 +213,17 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
+/// Lowers `array_diff()` into the key-preserving hash php returns.
 pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_set_op(
-        ctx,
-        inst,
-        "array_diff",
-        "__rt_array_diff",
-        "__rt_array_diff_refcounted",
-    )
+    lower_indexed_array_set_op(ctx, inst, "array_diff", "__rt_array_diff_to_hash")
 }
 
-/// Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots.
+/// Lowers `array_intersect()` into the key-preserving hash php returns.
 pub(crate) fn lower_array_intersect(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_indexed_array_set_op(
-        ctx,
-        inst,
-        "array_intersect",
-        "__rt_array_intersect",
-        "__rt_array_intersect_refcounted",
-    )
+    lower_indexed_array_set_op(ctx, inst, "array_intersect", "__rt_array_intersect_to_hash")
 }
 
 /// Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys.

@@ -223,7 +223,16 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decbin",
     "dechex",
     "decoct",
+    // The compiler serves `dir()` through the `Directory` class prelude, which eval does not
+    // parse: the interpreter would need a Directory cell kind with property reads and method
+    // dispatch of its own, the way `hash_init()` needed one for `HashContext`.
+    "dir",
     "hexdec",
+    // php 8.4's response-header pair reads engine state the interpreter does not own: the
+    // compiler answers both from `_http_resp_header_end` / `_http_resp_buf`, which are
+    // host-runtime symbols the eval value model has no cell kind for.
+    "http_clear_last_response_headers",
+    "http_get_last_response_headers",
     "join",
     "octdec",
     "serialize",
@@ -277,13 +286,14 @@ mod tests {
             }
         }
 
-        assert_eq!(eval_registry, 474);
-        assert_eq!(eval_internal, 39);
-        assert_eq!(eval_pending, 31);
-        // Main's BCMath registry adds fourteen AOT contracts; this branch also
-        // promotes get_object_vars from an external surface into the registry.
-        assert_eq!(aot_registry, 531);
-        assert_eq!(aot_external, 10);
+        assert_eq!(eval_registry, 484);
+        assert_eq!(eval_internal, 40);
+        assert_eq!(eval_pending, 34);
+        // 544 on the merged catalogue: this branch counted 543 and main 531, and main also
+        // PROMOTES get_object_vars out of the external surface into the registry. Neither
+        // branch's number survives the merge; this one is measured on the result.
+        assert_eq!(aot_registry, 544);
+        assert_eq!(aot_external, 11);
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -330,8 +340,8 @@ mod tests {
 
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 453);
-        assert_eq!(unsupported, 70);
+        assert_eq!(interpreter_adapter, 463);
+        assert_eq!(unsupported, 74);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

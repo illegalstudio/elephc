@@ -34,6 +34,8 @@ use externs::{
 #[cfg(not(test))]
 pub struct ElephcRuntimeOps {
     context: *const ElephcEvalContext,
+    /// `@` suppression depth; while non-zero, `warning()` swallows its message.
+    suppress_depth: u32,
 }
 
 #[cfg(not(test))]
@@ -42,12 +44,16 @@ impl ElephcRuntimeOps {
     pub const fn new() -> Self {
         Self {
             context: std::ptr::null(),
+            suppress_depth: 0,
         }
     }
 
     /// Creates a runtime hook adapter that can expose the active class scope to generated helpers.
     pub const fn with_context(context: *const ElephcEvalContext) -> Self {
-        Self { context }
+        Self {
+            context,
+            suppress_depth: 0,
+        }
     }
 
     /// Converts a runtime wrapper result into an interpreter handle.

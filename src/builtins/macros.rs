@@ -10,6 +10,25 @@
 //!   without explicit import at every call site.
 //! - Production home files repeat no PHP-visible name/signature/default/docs metadata.
 //! - The full metadata form remains only for focused inline test probes.
+//! - Fields must appear in the CANONICAL ORDER listed below; optional fields may be omitted.
+//! - The `params` list syntax is `[name: TypeSpec, name: TypeSpec = DefaultSpec::Variant, ...]`.
+//!   Defaults are written as full `DefaultSpec::` paths (unit or data-carrying), e.g.
+//!   `= DefaultSpec::Null`, `= DefaultSpec::Int(5)`, `= DefaultSpec::Bool(false)`.
+//!   This avoids `macro_rules!`' limitation that `expr` fragments cannot be spliced after `::`.
+//! - An optional leading `ref` per parameter marks it as by-reference (`by_ref: true`).
+//!   Syntax: `params: [ref array: Mixed, offset: Int]`. Parameters without `ref` are by-value.
+//! - Writing the marker as `ref(T)` additionally declares that the builtin only WRITES that
+//!   parameter, and that the caller's variable holds a `T` afterwards:
+//!   `params: [address: Str, ref(Int) error_code: Mixed]`. That is what lets the argument be an
+//!   undeclared variable, as in PHP's own `stream_socket_client($url, $errno, $errstr)` idiom.
+//!   Use plain `ref` for an in-out parameter the builtin also reads.
+//! - A trailing comma after the last field is optional.
+//!
+//! Canonical field order:
+//!   name, area, params, variadic?, min_args?, max_args?, arity_error?, returns,
+//!   by_ref_return?, check?,
+//!   lazy_check?, semantics, requirements?, summary, examples?, php_manual?,
+//!   deprecation?, extension?, internal?
 //!
 //! Example:
 //! ```ignore
@@ -99,6 +118,7 @@ macro_rules! builtin {
                             PARAMS
                         },
                         variadic: builtin!(@opt_str $($variadic)?),
+                        variadic_writes: None,
                         max_args: builtin!(@opt_usize $($max_args)?),
                         min_args: builtin!(@opt_usize $($min_args)?),
                         arity_error: builtin!(@opt_str $($arity_error)?),
@@ -132,6 +152,35 @@ macro_rules! builtin {
     // Done: emit the accumulated ParamSpec list as a const-promotable slice.
     (@params [] -> [$($acc:tt)*]) => { &[ $($acc)* ] };
 
+    // write-only by-ref param WITH default: `ref(Int) error_code: Mixed = DefaultSpec::Null`.
+    // The parenthesised type is what the builtin WRITES back; the type after the colon stays
+    // the parameter's declared PHP type. These arms precede the plain `ref` ones so `(Int)` is
+    // consumed as the written type rather than matched as the parameter name.
+    (@params [ ref($wty:ident) $pname:tt : $pty:ident = $pdefault:expr $(, $($rest:tt)*)? ] -> [$($acc:tt)*]) => {
+        builtin!(@params [ $($($rest)*)? ] -> [ $($acc)*
+            $crate::builtins::spec::ParamSpec {
+                name: builtin!(@name_str $pname),
+                ty: $crate::builtins::spec::TypeSpec::$pty,
+                default: Some($pdefault),
+                by_ref: true,
+                writes: Some($crate::builtins::spec::TypeSpec::$wty),
+            },
+        ])
+    };
+
+    // write-only by-ref param WITHOUT default.
+    (@params [ ref($wty:ident) $pname:tt : $pty:ident $(, $($rest:tt)*)? ] -> [$($acc:tt)*]) => {
+        builtin!(@params [ $($($rest)*)? ] -> [ $($acc)*
+            $crate::builtins::spec::ParamSpec {
+                name: builtin!(@name_str $pname),
+                ty: $crate::builtins::spec::TypeSpec::$pty,
+                default: None,
+                by_ref: true,
+                writes: Some($crate::builtins::spec::TypeSpec::$wty),
+            },
+        ])
+    };
+
     // by-ref param WITH default.
     (@params [ ref $pname:tt : $pty:ident = $pdefault:expr $(, $($rest:tt)*)? ] -> [$($acc:tt)*]) => {
         builtin!(@params [ $($($rest)*)? ] -> [ $($acc)*
@@ -140,6 +189,7 @@ macro_rules! builtin {
                 ty: $crate::builtins::spec::TypeSpec::$pty,
                 default: Some($pdefault),
                 by_ref: true,
+                writes: None,
             },
         ])
     };
@@ -152,6 +202,7 @@ macro_rules! builtin {
                 ty: $crate::builtins::spec::TypeSpec::$pty,
                 default: None,
                 by_ref: true,
+                writes: None,
             },
         ])
     };
@@ -164,6 +215,7 @@ macro_rules! builtin {
                 ty: $crate::builtins::spec::TypeSpec::$pty,
                 default: Some($pdefault),
                 by_ref: false,
+                writes: None,
             },
         ])
     };
@@ -176,6 +228,7 @@ macro_rules! builtin {
                 ty: $crate::builtins::spec::TypeSpec::$pty,
                 default: None,
                 by_ref: false,
+                writes: None,
             },
         ])
     };

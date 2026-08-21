@@ -33,6 +33,19 @@ pub(super) fn lower_chown_or_chgrp(
     super::super::ensure_arg_count(inst, name, 2)?;
     let path = expect_operand(inst, 0)?;
     let principal = expect_operand(inst, 1)?;
+    // php names the CALLER in the missing-hook warning, and both callers land on the same
+    // `stream_metadata` hook, so the name is chosen here rather than in the shared helper.
+    let (head_symbol, head_len) = match kind {
+        PrincipalKind::Owner => ("_uwmh_head_chown", WRAPPER_MISSING_HOOK_HEAD_CHOWN.len()),
+        PrincipalKind::Group => ("_uwmh_head_chgrp", WRAPPER_MISSING_HOOK_HEAD_CHGRP.len()),
+    };
+    emit_publish_missing_hook_message(
+        ctx,
+        head_symbol,
+        head_len,
+        "_uwmh_tail_metadata",
+        WRAPPER_MISSING_HOOK_TAIL_METADATA.len(),
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_chown_or_chgrp_aarch64(ctx, path, principal, name, kind)?,
         Arch::X86_64 => lower_chown_or_chgrp_x86_64(ctx, path, principal, name, kind)?,
@@ -234,6 +247,13 @@ pub(super) fn lower_chmod_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Ins
     super::super::ensure_arg_count(inst, "chmod", 2)?;
     let path = expect_operand(inst, 0)?;
     let mode = expect_operand(inst, 1)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_chmod",
+        WRAPPER_MISSING_HOOK_HEAD_CHMOD.len(),
+        "_uwmh_tail_metadata",
+        WRAPPER_MISSING_HOOK_TAIL_METADATA.len(),
+    );
     let wrapper = ctx.next_label("chmod_wrapper");
     let after = ctx.next_label("chmod_after");
     match ctx.emitter.target.arch {

@@ -172,7 +172,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, [rsp+16]");                                   // rax = new descriptor
     emitter.instruction("mov rdx, [rsp+8]");                                    // rdx = new $this receiver
     emitter.instruction("mov [rax+64], rdx");                                   // replace the captured object with the new receiver
-    emitter.instruction("mov rdi, rdx");                                        // pass the new receiver to the incref helper
+    emitter.instruction("mov rax, rdx");                                        // pass the new receiver where __rt_incref reads it on x86_64
     emitter.instruction("call __rt_incref");                                    // the bound descriptor now owns a reference to $this
     emitter.instruction("jmp __rt_closure_bind_return");                        // skip the Mixed boxing path
 

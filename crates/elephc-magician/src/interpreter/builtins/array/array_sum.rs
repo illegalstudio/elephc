@@ -47,6 +47,8 @@ pub(in crate::interpreter) fn eval_builtin_array_aggregate(
         return Err(EvalStatus::RuntimeFatal);
     };
     let array = eval_expr(array, context, scope, values)?;
+    // `name` is `array_sum` or `array_product`; both name their first parameter `$array`.
+    super::array_arg_check::eval_check_array_args(name, &[array], context, values)?;
     eval_array_aggregate_result(name, array, values)
 }
 

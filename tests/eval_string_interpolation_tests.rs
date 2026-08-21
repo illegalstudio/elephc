@@ -323,7 +323,7 @@ echo "after\n";
     let (stdout, stderr) = run_binary_expecting_failure(&dir, &bin);
     assert_eq!(stdout, "before\n");
     assert!(
-        stderr.contains("Parse error: eval() fragment is invalid"),
+        stderr.contains("Parse error: syntax error, unexpected end of file"),
         "expected an eval parse-error refusal, got stderr:\n{stderr}"
     );
     let _ = fs::remove_dir_all(&dir);

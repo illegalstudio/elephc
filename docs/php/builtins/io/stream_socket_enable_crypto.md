@@ -2,13 +2,13 @@
 title: "stream_socket_enable_crypto()"
 description: "Turns encryption on/off on an already connected socket."
 sidebar:
-  order: 244
+  order: 256
 ---
 
 ## stream_socket_enable_crypto()
 
 ```php
-function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool
+function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): mixed
 ```
 
 Turns encryption on/off on an already connected socket.
@@ -19,7 +19,7 @@ Turns encryption on/off on an already connected socket.
 - `$crypto_method` (`int`), default `null`, optional
 - `$session_stream` (`resource`), default `null`, optional
 
-**Returns**: `bool`
+**Returns**: `mixed`
 
 ## Availability
 

@@ -2,7 +2,7 @@
 title: "__elephc_new_without_constructor() — internals"
 description: "Compiler internals for __elephc_new_without_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 516
+  order: 529
 ---
 
 ## `__elephc_new_without_constructor()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_new_without_constructor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_new_without_constructor.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:551](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L551) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -176,15 +176,15 @@ pub(crate) fn collect_constants(
     );
     constants.insert(
         "STDIN".to_string(),
-        (ExprKind::IntLiteral(0), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0001), PhpType::stream_resource()),
     );
     constants.insert(
         "STDOUT".to_string(),
-        (ExprKind::IntLiteral(1), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0002), PhpType::stream_resource()),
     );
     constants.insert(
         "STDERR".to_string(),
-        (ExprKind::IntLiteral(2), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0003), PhpType::stream_resource()),
     );
     constants.insert(
         "LOCK_SH".to_string(),
@@ -238,6 +238,16 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    // STREAM_PF_INET6 is target-divergent (AF_INET6 = 30 on macOS, 10 on Linux).
+    let pf_inet6: i64 = match target_platform {
+        Platform::MacOS => 30,
+        Platform::Linux => 10,
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    constants.insert(
+        "STREAM_PF_INET6".to_string(),
+        (ExprKind::IntLiteral(pf_inet6), PhpType::Int),
+    );
     for (name, value) in PREG_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),

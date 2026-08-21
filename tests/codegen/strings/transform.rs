@@ -203,6 +203,196 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Regression: `implode()` over an array whose STATIC type is `Mixed` SIGSEGVed on int elements.
+///
+/// A `Mixed` operand carries no compile-time element type, so `implode_runtime_label` sent it to
+/// `__rt_implode` — the renderer that reads 16-byte string `{ptr,len}` slots. An int array stores
+/// 8-byte payloads, so element 0 (`1`) was dereferenced as a string pointer and the process died
+/// with SIGSEGV (exit 139). Measured with `php -n` (8.5.6):
+/// `$r = eval('return [1,2];'); echo implode(",", $r);` prints `1,2`.
+#[test]
+fn test_implode_mixed_operand_int_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [1, 2];');
+echo implode(",", $r), "\n";
+function h(): mixed { return [10, 20, 30]; }
+echo implode("-", h()), "\n";
+echo join(",", eval('return [7, 8];')), "\n";
+echo implode(eval('return [4, 5];')), "\n";
+"#,
+    );
+    assert_eq!(out, "1,2\n10-20-30\n7,8\n45\n");
+}
+
+/// Regression: `implode()` over a `Mixed` operand holding a BOOL array rendered the wrong bytes.
+///
+/// PHP stringifies `true` as `"1"` and `false` as the EMPTY string, which only `__rt_implode_bool`
+/// does. Reading the 8-byte bool payloads as 16-byte string pairs silently produced `","` instead.
+/// Measured with `php -n` (8.5.6): `implode(",", [true, false])` is `"1,"`.
+#[test]
+fn test_implode_mixed_operand_bool_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [true, false];');
+echo implode(",", $r), "|\n";
+function h(): mixed { return [true, true]; }
+echo implode("-", h()), "|\n";
+"#,
+    );
+    assert_eq!(out, "1,|\n1-1|\n");
+}
+
+/// Guard: the `Mixed`-operand dispatcher must leave the layouts that already worked untouched.
+///
+/// String slots (value_type tag 1), boxed Mixed cells (tag 7), and the empty array (unstamped, so
+/// it shares the int tag) all round-trip through `__rt_implode_dyn` unchanged. Measured with
+/// `php -n` (8.5.6): `"a,b"`, `"1,a"`, and the empty string.
+#[test]
+fn test_implode_mixed_operand_preserves_string_and_boxed_layouts() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", eval('return ["a", "b"];')), "|\n";
+echo implode(",", eval('return [1, "a"];')), "|\n";
+echo implode(",", eval('return [];')), "|\n";
+"#,
+    );
+    assert_eq!(out, "a,b|\n1,a|\n|\n");
+}
+
+/// Regression: `implode()` over an array of FLOATS had no renderer at all.
+///
+/// A statically `array<float>` operand was refused at codegen with "implode array element PHP type
+/// Float", and the same array behind a `Mixed` operand (runtime value_type tag 2) reached
+/// `__rt_implode`, which read the 8-byte doubles as 16-byte string `{ptr,len}` pairs and SIGSEGVed
+/// (exit 139). `__rt_implode_float` renders each element through `__rt_ftoa`, PHP's `precision=14`
+/// / `zend_gcvt` spelling. Measured with `php -n` (8.5.6):
+/// `implode(",", [1.5, 2.0, 1e20, 0.1+0.2, -0.0, INF])` is `1.5,2,1.0E+20,0.3,-0,INF`, and
+/// `implode(",", [1/3, 1e-7, 1e15])` is `0.33333333333333,1.0E-7,1.0E+15`.
+#[test]
+fn test_implode_float_elements() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", [1.5, 2.5]), "|\n";
+echo implode(",", [1.5, 2.0, 1e20, 0.1 + 0.2, -0.0, INF]), "|\n";
+echo implode(",", [1/3, 1e-7, 1e15]), "|\n";
+echo implode(",", [-1.5, -INF]), "|\n";
+echo implode(",", [2.0]), "|\n";
+echo join(",", [1.5, 2.5]), "|\n";
+echo implode([1.5, 2.5]), "|\n";
+$r = eval('return [1.5, 2.5];');
+echo implode(",", $r), "|\n";
+function h(): mixed { return [1.25, 2.75, 3.0]; }
+echo implode("-", h()), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5,2.5|\n\
+         1.5,2,1.0E+20,0.3,-0,INF|\n\
+         0.33333333333333,1.0E-7,1.0E+15|\n\
+         -1.5,-INF|\n\
+         2|\n\
+         1.5,2.5|\n\
+         1.52.5|\n\
+         1.5,2.5|\n\
+         1.25-2.75-3|\n"
+    );
+}
+
+/// Guard: the float renderer must publish the LIVE concat cursor before every conversion.
+///
+/// `__rt_ftoa` formats into `_concat_buf` at `_concat_off` and advances the offset by the bytes it
+/// actually wrote — unlike `__rt_itoa`, which always reserves a fixed 21-byte scratch. Leaving
+/// `_concat_off` parked at the implode result START made the second element's conversion overwrite
+/// the glue already copied, so a glue LONGER than the rendered element is what exposes it. The
+/// trailing concat and `strlen` pin the other half: the ABSOLUTE end offset must be stamped on
+/// completion, or the next string written reuses the joined bytes. Measured with `php -n` (8.5.6).
+#[test]
+fn test_implode_float_publishes_concat_cursor() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode("XXXXXXXXXXXXXXXXXXXXXXXXXXXX", [1.5, 2.5, 3.5]), "|\n";
+echo implode(",", [1.5, 2.5]) . "TAIL", "|\n";
+echo strlen(implode(",", [1.5, 2.0, 1e20])), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5XXXXXXXXXXXXXXXXXXXXXXXXXXXX2.5XXXXXXXXXXXXXXXXXXXXXXXXXXXX3.5|\n\
+         1.5,2.5TAIL|\n\
+         13|\n"
+    );
+}
+
+/// Regression: `implode()` over a HASH held in a `Mixed` operand SIGSEGVed for every value type.
+///
+/// A statically `AssocArray` operand was already flattened into a temporary indexed array of its
+/// values, but a `Mixed` operand carries no compile-time storage kind, so hash storage reached
+/// `__rt_implode`, which read the entry table as 16-byte string slots and died (exit 139) — for
+/// int, float, string, bool, null and heterogeneous values alike. The call site now probes
+/// `__rt_heap_kind` and flattens kind 3 the same way, flagging the temporary so only IT is freed.
+/// Measured with `php -n` (8.5.6): php's `implode()` reads only the VALUES, in insertion order.
+#[test]
+fn test_implode_mixed_operand_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", eval('return ["k" => 10, "j" => 13];')), "|\n";
+echo implode(",", eval('return ["k" => 1.5, "j" => 2.0];')), "|\n";
+echo implode(",", eval('return ["k" => "aa", "j" => "bb"];')), "|\n";
+echo implode(",", eval('return ["k" => true, "j" => false];')), "|\n";
+echo implode(",", eval('return ["k" => null, "j" => null];')), "|\n";
+echo implode(",", eval('return ["k" => 1, "j" => "two", "l" => 3.5, "m" => true, "n" => null];')), "|\n";
+echo implode(",", eval('return [5 => 10, 9 => 13];')), "|\n";
+echo implode(",", eval('return ["k" => 1];')), "|\n";
+echo join("-", eval('return ["k" => 10, "j" => 13];')), "|\n";
+echo implode(eval('return ["k" => 10, "j" => 13];')), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "10,13|\n1.5,2|\naa,bb|\n1,|\n,|\n1,two,3.5,1,|\n10,13|\n1|\n10-13|\n1013|\n"
+    );
+}
+
+/// Guard: only the MATERIALIZED temporary may be freed, never the caller's own array.
+///
+/// The `Mixed` arm decides at runtime whether it handed the renderer a temporary (hash storage) or
+/// the caller's own indexed array, so an unconditional deep-free would destroy a live operand.
+/// Both storage kinds are joined twice and read afterwards. Measured with `php -n` (8.5.6).
+#[test]
+fn test_implode_mixed_operand_does_not_free_borrowed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [1.5, 2.5, 3.5];');
+echo implode(",", $r), "|", implode("-", $r), "|", count($r), "|\n";
+$h = eval('return ["a" => 1.5, "b" => "two", "c" => 3];');
+echo implode(",", $h), "|", implode("-", $h), "|", count($h), "|", $h["b"], "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5,2.5,3.5|1.5-2.5-3.5|3|\n1.5,two,3|1.5-two-3|3|two|\n"
+    );
+}
+
+/// Regression: a statically `array<string, float>` hash had no `implode()` renderer.
+///
+/// `emit_loaded_assoc_array_values` stamps the values array with value_type tag 2 and appends the
+/// raw f64 payloads as 8-byte words, so the float renderer reads it directly; before this the
+/// lowering refused with "implode hash value PHP type Float". Measured with `php -n` (8.5.6):
+/// `implode(",", ["x" => 1.5, "y" => 2.0])` is `1.5,2`.
+#[test]
+fn test_implode_hash_float_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", ["x" => 1.5, "y" => 2.0]), "|\n";
+echo implode("-", ["x" => 1e20, "y" => 0.1 + 0.2, "z" => -0.0]), "|\n";
+"#,
+    );
+    assert_eq!(out, "1.5,2|\n1.0E+20-0.3--0|\n");
+}
+
 /// Verifies `implode()` and `join()` accept an ASSOCIATIVE array, joining its values.
 ///
 /// PHP ignores the keys entirely, so this is ordinary code — but the renderers walk a dense
@@ -797,5 +987,93 @@ var_dump(ucwords($subject));
         "string(17) \"Hello|World-Again\"\n\
 string(17) \"Hello|World-Again\"\n\
 string(17) \"Hello|world-again\"\n"
+    );
+}
+
+/// Verifies `str_replace()` with an ARRAY `$search`, php's idiomatic form.
+///
+/// It did not compile at all: the EIR backend refused with `str_replace string coercion for PHP
+/// type Array(Str)`, because the shared string-coercion helper has no array case — and rightly so,
+/// an array is not a string. The array form gets its own path instead.
+///
+/// Two rules are measured on `php -n` 8.5.6 and neither is guessable:
+///
+/// - The pairs CASCADE. Each applies to the result of the last, not to the original subject, so
+///   `str_replace(["a","b"], ["b","c"], "a")` answers `"c"` — the `a` became a `b`, and the second
+///   pair then rewrote it.
+/// - A `$replace` array SHORTER than `$search` pairs the remainder with the empty string:
+///   `str_replace(["a","b"], ["1"], "abc")` answers `"1c"`, not `"1bc"`.
+#[test]
+fn test_str_replace_accepts_an_array_search() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(str_replace(["a", "b"], ["1", "2"], "abcabc"));
+var_dump(str_replace(["a", "b"], "X", "abcabc"));
+var_dump(str_replace(["a", "b"], ["1"], "abc"));
+var_dump(str_replace(["a", "b", "c"], [], "abc"));
+var_dump(str_replace(["a", "b"], ["b", "c"], "a"));
+var_dump(str_replace([], [], "abc"));
+var_dump(str_replace(["z"], ["!"], "abc"));
+var_dump(str_replace(["abcdef"], ["x"], "abc"));
+var_dump(str_replace(["ab", "bc"], ["-", "+"], "abcabc"));
+var_dump(str_replace(["a"], ["b"], ""));
+$s = ["x", "y"];
+$r = ["1", "2"];
+var_dump(str_replace($s, $r, "xyxy"));
+var_dump(str_replace("a", "Z", "banana"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(6) \"12c12c\"\n",
+            "string(6) \"XXcXXc\"\n",
+            "string(2) \"1c\"\n",
+            "string(0) \"\"\n",
+            "string(1) \"c\"\n",
+            "string(3) \"abc\"\n",
+            "string(3) \"abc\"\n",
+            "string(3) \"abc\"\n",
+            "string(4) \"-c-c\"\n",
+            "string(0) \"\"\n",
+            "string(4) \"1212\"\n",
+            "string(6) \"bZnZnZ\"\n",
+        )
+    );
+}
+
+/// Verifies `str_replace()` with an ARRAY `$subject`, which php answers with an array.
+///
+/// The call did not compile at all: the subject reached the shared string coercion, which has no
+/// array case. What makes this form different from the array `$search` landed alongside it is that
+/// the RESULT SHAPE moves — php replaces inside every element and hands back an array — so the
+/// builtin needed a `check` hook that reads the subject's type. A plain string subject still
+/// answers a string, which is what every existing call site relied on.
+///
+/// Both search forms go through the same loop, scalar and array, and the subject is re-dumped
+/// afterwards to pin that php replaces into a COPY rather than in place.
+#[test]
+fn test_str_replace_accepts_an_array_subject() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(str_replace("a", "X", ["abc", "aaa"]));
+var_dump(str_replace(["a", "b"], ["1", "2"], ["ab", "ba"]));
+var_dump(str_replace("a", "X", []));
+var_dump(str_replace(["a"], "Y", ["aa", "b"]));
+$subject = ["one", "two", "three"];
+var_dump(str_replace("t", "T", $subject));
+var_dump($subject);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(2) {\n  [0]=>\n  string(3) \"Xbc\"\n  [1]=>\n  string(3) \"XXX\"\n}\n",
+            "array(2) {\n  [0]=>\n  string(2) \"12\"\n  [1]=>\n  string(2) \"21\"\n}\n",
+            "array(0) {\n}\n",
+            "array(2) {\n  [0]=>\n  string(2) \"YY\"\n  [1]=>\n  string(1) \"b\"\n}\n",
+            "array(3) {\n  [0]=>\n  string(3) \"one\"\n  [1]=>\n  string(3) \"Two\"\n  [2]=>\n  string(5) \"Three\"\n}\n",
+            "array(3) {\n  [0]=>\n  string(3) \"one\"\n  [1]=>\n  string(3) \"two\"\n  [2]=>\n  string(5) \"three\"\n}\n",
+        )
     );
 }

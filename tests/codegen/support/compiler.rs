@@ -222,6 +222,10 @@ fn try_compile_source_to_asm_with_defines_repr(
     TestLinkRequirements,
 ) {
     elephc::codegen::set_null_repr(null_repr);
+    // `pipeline::compile` records the profile here, and lowering reads it back for the
+    // version-gated diagnostics. Without this the fixtures compiled every `--php-version`
+    // against the DEFAULT profile, so a gate keyed on the version could not be tested at all.
+    elephc::codegen::set_compile_profile(php_version, false);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
@@ -243,7 +247,9 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::dir_prelude::inject_if_used(resolved);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::scanf_prelude::inject_if_used(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -700,6 +706,48 @@ pub(crate) fn compile_and_run_with_php_version(
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+/// Compiles and runs PHP source at an explicit PHP version, capturing stdout AND stderr.
+///
+/// Version-gated DIAGNOSTICS can only be checked this way: the notice a newer PHP prints goes
+/// to stderr, so a stdout-only helper reports the same string for a gate that works and a gate
+/// that does not exist.
+pub(crate) fn compile_and_run_capture_with_php_version(
+    source: &str,
+    php_version: elephc::php_version::PhpVersion,
+) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_php_version_capture_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_defines_repr_and_php_version(
+            source,
+            &dir,
+            &HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            default_null_repr(),
+            php_version,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture(
         &user_asm,
         &runtime_obj,
         &dir,

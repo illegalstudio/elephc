@@ -37,7 +37,7 @@ class ContractPipelineTests(unittest.TestCase):
         cls.render_by_name = {record["name"]: record for record in registry}
 
     def test_all_non_registry_contract_routes_are_exported(self) -> None:
-        """Keep the six constructs, four preludes, and three eval-only routes explicit."""
+        """Keep the six constructs, five preludes, and three eval-only routes explicit."""
         routes = Counter(
             (record.get("aot") or {}).get("kind")
             for record in self.records
@@ -49,7 +49,7 @@ class ContractPipelineTests(unittest.TestCase):
                 {
                     "language-construct": 5,
                     "dedicated-syntax": 1,
-                    "prelude": 4,
+                    "prelude": 5,
                     "none": 3,
                 }
             ),
@@ -81,7 +81,7 @@ class ContractPipelineTests(unittest.TestCase):
                 "is_extension": False,
             }
         )
-        self.assertIn("compiler-injected hash prelude", rendered)
+        self.assertIn("compiler-injected PHP prelude", rendered)
         self.assertIn('hash_init(string $algo, int $flags = 0, string $key = "")', rendered)
         self.assertNotIn("Compiled (AOT)**: not available", rendered)
 

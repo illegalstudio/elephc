@@ -327,7 +327,7 @@ impl Checker {
                     }
                 }
                 if decl.ref_params.get(arg_idx).copied().unwrap_or(false)
-                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
+                    && !self.is_by_ref_argument_lvalue(arg, caller_env, true)?
                 {
                     let param_name = decl
                         .params

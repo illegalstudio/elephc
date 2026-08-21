@@ -183,6 +183,14 @@ pub(in crate::interpreter) fn eval_expr(
             let object = eval_expr(object, context, scope, values)?;
             eval_object_clone_result(object, context, values)
         }
+        EvalExpr::ErrorSuppress(inner) => {
+            // The depth must unwind on EVERY exit — a thrown exception passes through `@`
+            // in php, but leaving the counter raised would silence the rest of the run.
+            values.suppress_begin();
+            let result = eval_expr(inner, context, scope, values);
+            values.suppress_end();
+            result
+        }
         EvalExpr::NamespacedCall {
             name,
             fallback_name,

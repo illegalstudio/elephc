@@ -10,7 +10,6 @@
 //!   emitted for codegen, preserving concrete subclasses.
 
 use crate::codegen::abi;
-use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -19,7 +18,6 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
 /// Lowers `intval($value, $base)`, PHP's two-argument integer conversion.
@@ -754,143 +752,221 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
 pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "is_resource", 1)?;
     let value = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(value)? {
-        PhpType::Resource(_) => emit_bool_result(ctx, true),
-        PhpType::Mixed | PhpType::Union(_) => predicates::emit_mixed_tag_eq(ctx, value, 9)?,
-        _ => emit_bool_result(ctx, false),
-    }
+    emit_resource_is_open(ctx, value)?;
     store_if_result(ctx, inst)
 }
 
-/// Lowers `get_resource_type(resource)` to elephc's current resource type label.
-///
-/// The label is resolved at RUNTIME through `__rt_resource_type_name`, not baked in as
-/// a literal: PHP 8.5.6 renames a closed resource to `"Unknown"` — measured identical
-/// for `fclose`, `pclose` and `closedir` — and the close state is carried by the sign
-/// bit of the native payload (see `crate::codegen_support::runtime::resource_type_name`).
-///
-/// The operand is deliberately NOT routed through `super::io::load_stream_fd_to_result`.
-/// That helper refuses a statically non-resource argument with
-/// `CodegenIrError::unsupported`, which would turn `get_resource_type(5)` — a program
-/// elephc compiles today — into a compile refusal. elephc over-accepting that call is a
-/// real but SEPARATE debt (PHP throws a `TypeError`); closing it here would silently
-/// change the accepted language. The `other` arm below therefore keeps answering
-/// exactly what it answers today.
+/// Lowers `get_resource_type(resource)` from the live registry kind.
 pub(crate) fn lower_get_resource_type(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
-    ctx.load_value_to_result(value)?;
-    match resource_type_name_shape(&ctx.raw_value_php_type(value)?) {
-        ResourceTypeNameShape::Boxed => emit_boxed_resource_type_name(ctx),
-        ResourceTypeNameShape::Unboxed => {
-            abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
+    emit_resource_kind_if_open(ctx, value)?;
+    let context_label = ctx.next_label("resource_type_context");
+    let filter_label = ctx.next_label("resource_type_filter");
+    let unknown_label = ctx.next_label("resource_type_unknown");
+    let done_label = ctx.next_label("resource_type_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", unknown_label));     // stale or closed resources have PHP type Unknown
+            ctx.emitter.instruction("cmp x0, #2");                              // registry kind 2 identifies stream contexts
+            ctx.emitter.instruction(&format!("b.eq {}", context_label));        // contexts use PHP's stream-context resource label
+            ctx.emitter.instruction("cmp x0, #3");                              // registry kind 3 identifies stream filters
+            ctx.emitter.instruction(&format!("b.eq {}", filter_label));         // filters use PHP's "stream filter" resource label
         }
-        ResourceTypeNameShape::Constant => emit_string_result(ctx, b"stream"),
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the handle resolve to a live registry entry?
+            ctx.emitter.instruction(&format!("jz {}", unknown_label));          // stale or closed resources have PHP type Unknown
+            ctx.emitter.instruction("cmp rax, 2");                              // registry kind 2 identifies stream contexts
+            ctx.emitter.instruction(&format!("je {}", context_label));          // contexts use PHP's stream-context resource label
+            ctx.emitter.instruction("cmp rax, 3");                              // registry kind 3 identifies stream filters
+            ctx.emitter.instruction(&format!("je {}", filter_label));           // filters use PHP's "stream filter" resource label
+        }
     }
+    emit_string_result(ctx, b"stream");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the context and unknown labels for live streams
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the context and unknown labels for live streams
+        }
+    }
+    ctx.emitter.label(&filter_label);
+    emit_string_result(ctx, b"stream filter");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
+    }
+    ctx.emitter.label(&context_label);
+    emit_string_result(ctx, b"stream-context");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip Unknown after materializing the context label
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip Unknown after materializing the context label
+        }
+    }
+    ctx.emitter.label(&unknown_label);
+    emit_string_result(ctx, b"Unknown");
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
-/// How `get_resource_type()` must reach its operand's payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ResourceTypeNameShape {
-    /// The operand is a Mixed/Union box: unbox, gate on the resource tag, then resolve.
-    Boxed,
-    /// The operand is an unboxed `Resource`: its payload is already in the result register.
-    Unboxed,
-    /// The operand cannot be a resource: keep the constant this builtin always answered.
-    Constant,
-}
-
-/// Maps a `get_resource_type()` operand's static PHP type to its lowering shape.
-///
-/// Split out of the lowering so the DECISION is testable without a `FunctionContext`.
-/// The `Constant` arm is what preserves today's acceptance: elephc compiles
-/// `get_resource_type(5)` where PHP throws a `TypeError`, and turning that into a compile
-/// refusal — which routing through `super::io::load_stream_fd_to_result` would do — would
-/// change the accepted language in a change nobody reviewed for it.
-fn resource_type_name_shape(raw_ty: &PhpType) -> ResourceTypeNameShape {
-    match raw_ty {
-        PhpType::Mixed | PhpType::Union(_) => ResourceTypeNameShape::Boxed,
-        PhpType::Resource(_) => ResourceTypeNameShape::Unboxed,
-        _ => ResourceTypeNameShape::Constant,
+/// Leaves a live registry kind in the result register, using kind one for legacy resources.
+fn emit_resource_kind_if_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let raw_type = ctx.raw_value_php_type(value)?;
+    ctx.load_value_to_result(value)?;
+    match raw_type {
+        PhpType::Resource(_) => {
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the statically typed opaque handle to registry kind lookup
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let tag_ok_label = ctx.next_label("resource_kind_tag_ok");
+            let registry_label = ctx.next_label("resource_kind_registry");
+            let legacy_label = ctx.next_label("resource_kind_legacy");
+            let done_label = ctx.next_label("resource_kind_done");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #9");                      // require a boxed resource before reading its ownership marker
+                    ctx.emitter.instruction(&format!("b.eq {}", tag_ok_label)); // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("mov x0, #0");                      // non-resource Mixed values have no resource kind
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    // Marker 0 is what `emit_box_current_value_as_mixed` writes when a
+                    // statically Resource-typed value is boxed at a value boundary, and on
+                    // this branch such a value IS a registry handle — a stream context taken
+                    // through an untyped parameter reported "stream" while a filter (boxed by
+                    // the legacy fd path with marker 3) reported correctly. Legacy raw
+                    // descriptors never reach here with 0: they are boxed by
+                    // `box_stream_fd_or_false_result_kind`, which writes 1, 3 or 4.
+                    for marker in [0_u64, 1, 3, 4, 9] {
+                        ctx.emitter.instruction(&format!("cmp x2, #{}", marker)); // compare a registry ownership marker
+                        ctx.emitter.instruction(&format!("b.eq {}", registry_label)); // registry resources resolve their authoritative kind
+                    }
+                    ctx.emitter.instruction(&format!("b {}", legacy_label));    // unmigrated tagged resources retain the legacy stream label
+                    ctx.emitter.label(&registry_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // pass the opaque registry handle to kind lookup
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // preserve the registry kind result
+                    ctx.emitter.label(&legacy_label);
+                    ctx.emitter.instruction("mov x0, #1");                      // legacy live resources use the transitional stream kind
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 9");                      // require a boxed resource before reading its ownership marker
+                    ctx.emitter.instruction(&format!("je {}", tag_ok_label));   // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("xor eax, eax");                    // non-resource Mixed values have no resource kind
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [0_u64, 1, 3, 4, 9] {
+                        // __rt_mixed_unbox returns tag in rax, payload low in rdi and the
+                        // ownership marker in RDX on x86_64 — rsi holds nothing of ours.
+                        // Comparing rsi never matched, so every boxed resource fell to the
+                        // legacy arm: `is_resource()` stayed true after fclose() and
+                        // get_resource_type() answered "stream" for everything.
+                        ctx.emitter.instruction(&format!("cmp rdx, {}", marker)); // compare a registry ownership marker
+                        ctx.emitter.instruction(&format!("je {}", registry_label)); // registry resources resolve their authoritative kind
+                    }
+                    ctx.emitter.instruction(&format!("jmp {}", legacy_label));  // unmigrated tagged resources retain the legacy stream label
+                    ctx.emitter.label(&registry_label);
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // preserve the registry kind result
+                    ctx.emitter.label(&legacy_label);
+                    ctx.emitter.instruction("mov eax, 1");                      // legacy live resources use the transitional stream kind
+                }
+            }
+            ctx.emitter.label(&done_label);
+        }
+        _ => emit_bool_result(ctx, false),
     }
+    Ok(())
 }
 
-/// Resolves the type name of a BOXED `get_resource_type()` operand.
+/// Leaves whether a value is a currently open PHP resource in the integer result register.
 ///
-/// Unboxes, and consults `__rt_resource_type_name` only when the runtime tag is 9
-/// (resource). Every other tag keeps answering the constant `"stream"` this builtin has
-/// always answered, which matters for two reasons: elephc accepts
-/// `get_resource_type(5)` today where PHP throws a `TypeError` (a separate,
-/// deliberately untouched debt), and a boxed float's payload word IS its sign-carrying
-/// IEEE bit pattern — `get_resource_type(-1.5)` would otherwise start reporting
-/// `"Unknown"` because bit 63 of `-1.5` is set. The tag gate makes the sign test apply
-/// to genuine resource payloads only.
-fn emit_boxed_resource_type_name(ctx: &mut FunctionContext<'_>) {
-    let (fallback_label, fallback_len) = ctx.data.add_string(b"stream");
-    let resource_label = ctx.next_label("get_resource_type_resource");
-    let done_label = ctx.next_label("get_resource_type_done");
-    emit_boxed_resource_type_name_asm(
-        ctx.emitter,
-        &fallback_label,
-        fallback_len,
-        &resource_label,
-        &done_label,
-    );
+/// Registry-owned stream markers (`high=1/3/4`) validate the opaque handle and
+/// its Live state. Legacy resource kinds stay tag-based until their dedicated
+/// ContextState and FilterState migrations move them into the same registry.
+fn emit_resource_is_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let raw_type = ctx.raw_value_php_type(value)?;
+    ctx.load_value_to_result(value)?;
+    match raw_type {
+        PhpType::Resource(_) => {
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the statically typed resource handle to the registry
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let tag_ok_label = ctx.next_label("resource_tag_ok");
+            let registry_label = ctx.next_label("resource_registry_check");
+            let true_label = ctx.next_label("resource_legacy_live");
+            let done_label = ctx.next_label("resource_live_done");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #9");                      // require the Mixed resource tag before inspecting its payload
+                    ctx.emitter.instruction(&format!("b.eq {}", tag_ok_label)); // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("mov x0, #0");                      // non-resource Mixed values answer false
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [0_u64, 1, 3, 4, 9] {
+                        ctx.emitter.instruction(&format!("cmp x2, #{}", marker)); // compare the transitional registry ownership marker
+                        ctx.emitter.instruction(&format!("b.eq {}", registry_label)); // registry-owned streams validate their generation
+                    }
+                    ctx.emitter.instruction(&format!("b {}", true_label));      // legacy tagged resources remain live by tag for now
+                    ctx.emitter.label(&registry_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // pass the opaque registry handle to the liveness helper
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // preserve the registry liveness result
+                    ctx.emitter.label(&true_label);
+                    ctx.emitter.instruction("mov x0, #1");                      // an unmigrated resource tag remains a live resource
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 9");                      // require the Mixed resource tag before inspecting its payload
+                    ctx.emitter.instruction(&format!("je {}", tag_ok_label));   // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("xor eax, eax");                    // non-resource Mixed values answer false
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [0_u64, 1, 3, 4, 9] {
+                        // __rt_mixed_unbox returns tag in rax, payload low in rdi and the
+                        // ownership marker in RDX on x86_64 — rsi holds nothing of ours.
+                        // Comparing rsi never matched, so every boxed resource fell to the
+                        // legacy arm: `is_resource()` stayed true after fclose() and
+                        // get_resource_type() answered "stream" for everything.
+                        ctx.emitter.instruction(&format!("cmp rdx, {}", marker)); // compare the transitional registry ownership marker
+                        ctx.emitter.instruction(&format!("je {}", registry_label)); // registry-owned streams validate their generation
+                    }
+                    ctx.emitter.instruction(&format!("jmp {}", true_label));    // legacy tagged resources remain live by tag for now
+                    ctx.emitter.label(&registry_label);
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // preserve the registry liveness result
+                    ctx.emitter.label(&true_label);
+                    ctx.emitter.instruction("mov eax, 1");                      // an unmigrated resource tag remains a live resource
+                }
+            }
+            ctx.emitter.label(&done_label);
+        }
+        _ => emit_bool_result(ctx, false),
+    }
+    Ok(())
 }
 
-/// Emits the assembly body of `emit_boxed_resource_type_name`, split out so both target
-/// variants can be pinned without a `FunctionContext` (the precedent is
-/// `emit_resource_release_sentinel` in `crate::codegen::lower_inst::builtins::io`).
-///
-/// `fallback_label`/`fallback_len` name the `.data` literal answered for every non-resource
-/// tag; `resource_label` and `done_label` are the two locally unique branch targets.
-fn emit_boxed_resource_type_name_asm(
-    emitter: &mut Emitter,
-    fallback_label: &str,
-    fallback_len: usize,
-    resource_label: &str,
-    done_label: &str,
-) {
-    abi::emit_call_label(emitter, "__rt_mixed_unbox");
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("cmp x0, #9");                                  // check whether the boxed operand carries the resource tag
-            emitter.instruction(&format!("b.eq {}", resource_label));           // only a genuine resource payload gets a computed type name
-        }
-        Arch::X86_64 => {
-            emitter.instruction("cmp rax, 9");                                  // check whether the boxed operand carries the resource tag
-            emitter.instruction(&format!("je {}", resource_label));             // only a genuine resource payload gets a computed type name
-        }
-    }
-    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-    abi::emit_symbol_address(emitter, ptr_reg, fallback_label);
-    abi::emit_load_int_immediate(emitter, len_reg, fallback_len as i64);        // every non-resource tag keeps the constant this builtin always answered
-    abi::emit_jump(emitter, done_label);
-    emitter.label(resource_label);
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            emitter.instruction("mov x0, x1");                                  // move the unboxed Mixed low payload into the integer result register
-        }
-        Arch::X86_64 => {
-            emitter.instruction("mov rax, rdi");                                // move the unboxed Mixed low payload into the integer result register
-        }
-    }
-    abi::emit_call_label(emitter, "__rt_resource_type_name");                   // stream while the handle is open, Unknown once it is closed
-    emitter.label(done_label);
-}
-
-/// Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based.
+/// Lowers `get_resource_id(resource)` from the opaque registry handle.
 pub(crate) fn lower_get_resource_id(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_id", 1)?;
     let value = expect_operand(inst, 0)?;
-    super::io::load_stream_fd_to_result(ctx, value, "get_resource_id")?;
+    super::io::load_stream_handle_to_result(ctx, value, "get_resource_id")?;
     emit_resource_display_id_to_int(ctx);
     store_if_result(ctx, inst)
 }
@@ -1290,138 +1366,4 @@ fn optional_const_string_operand(
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
-}
-
-#[cfg(test)]
-mod get_resource_type_asm_tests {
-    use super::emit_boxed_resource_type_name_asm;
-    use crate::codegen::emit::Emitter;
-    use crate::codegen::platform::{Arch, Platform, Target};
-
-    /// Emits the boxed `get_resource_type` body for one target and returns the assembly.
-    fn emit_for(target: Target) -> String {
-        let mut emitter = Emitter::new(target);
-        emit_boxed_resource_type_name_asm(
-            &mut emitter,
-            "_str_stream",
-            6,
-            "_gt_resource",
-            "_gt_done",
-        );
-        emitter.output()
-    }
-
-    /// Pins the whole AArch64 body as an ordered, exact-line block.
-    ///
-    /// The load-bearing line is `bl __rt_resource_type_name`: before it the builtin
-    /// answered the literal `"stream"` unconditionally, so `fclose($r);
-    /// get_resource_type($r)` reported `"stream"` where PHP 8.5.6 reports `"Unknown"`.
-    #[test]
-    fn aarch64_consults_the_runtime_type_name_for_resource_tags() {
-        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
-        let expected = concat!(
-            "    bl __rt_mixed_unbox\n",
-            "    cmp x0, #9\n",
-            "    b.eq _gt_resource\n",
-            "    adrp x1, _str_stream@PAGE\n",
-            "    add x1, x1, _str_stream@PAGEOFF\n",
-            "    mov x2, #6\n",
-            "    b _gt_done\n",
-            "_gt_resource:\n",
-            "    mov x0, x1\n",
-            "    bl __rt_resource_type_name\n",
-            "_gt_done:\n",
-        );
-        assert!(asm.contains(expected), "expected block missing:\n{asm}");
-    }
-
-    /// Pins the whole x86_64 body, so the two targets cannot drift: the payload move is
-    /// `mov rax, rdi` here and `mov x0, x1` there, and an aarch64-only pin has already let
-    /// an x86 fix be deleted silently on this branch.
-    #[test]
-    fn x86_64_consults_the_runtime_type_name_for_resource_tags() {
-        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
-        let expected = concat!(
-            "    call __rt_mixed_unbox\n",
-            "    cmp rax, 9\n",
-            "    je _gt_resource\n",
-            "    lea rax, [rip + _str_stream]\n",
-            "    mov rdx, 6\n",
-            "    jmp _gt_done\n",
-            "_gt_resource:\n",
-            "    mov rax, rdi\n",
-            "    call __rt_resource_type_name\n",
-            "_gt_done:\n",
-        );
-        assert!(asm.contains(expected), "expected block missing:\n{asm}");
-    }
-
-    /// Pins the operand-shape decision, which the lowering can no longer make inline.
-    ///
-    /// `Mixed`/`Union` is the shape every real program takes (`fopen()` types as
-    /// `Union([Resource(Some("stream")), Bool])`); a bare `Resource` is unreachable today
-    /// but handled uniformly anyway, because a sign test on an already-loaded payload
-    /// costs two instructions and cannot mis-fire. Everything else must stay `Constant`:
-    /// that is the arm that keeps `get_resource_type(5)` compiling, which is a separate
-    /// debt this change deliberately does not close.
-    #[test]
-    fn the_operand_shape_decides_how_the_payload_is_reached() {
-        use super::{resource_type_name_shape, ResourceTypeNameShape};
-        use crate::types::PhpType;
-
-        assert_eq!(
-            resource_type_name_shape(&PhpType::Mixed),
-            ResourceTypeNameShape::Boxed
-        );
-        assert_eq!(
-            resource_type_name_shape(&PhpType::Union(vec![
-                PhpType::Resource(Some("stream".to_string())),
-                PhpType::Bool,
-            ])),
-            ResourceTypeNameShape::Boxed
-        );
-        assert_eq!(
-            resource_type_name_shape(&PhpType::Resource(Some("stream".to_string()))),
-            ResourceTypeNameShape::Unboxed
-        );
-        for other in [PhpType::Int, PhpType::Float, PhpType::Str, PhpType::Bool] {
-            assert_eq!(
-                resource_type_name_shape(&other),
-                ResourceTypeNameShape::Constant,
-                "acceptance must not change for {other:?}"
-            );
-        }
-    }
-
-    /// The non-resource tag must keep answering the constant, on both targets.
-    ///
-    /// elephc accepts `get_resource_type(5)` today where PHP throws a `TypeError`; that
-    /// over-acceptance is a separate debt, and routing every tag through the sign test
-    /// would ALSO make `get_resource_type(-1.5)` report `"Unknown"`, because bit 63 of a
-    /// negative double is set. The tag gate is what keeps both cases at today's answer.
-    #[test]
-    fn a_non_resource_tag_keeps_the_constant_answer_on_both_targets() {
-        for (target, gate) in [
-            (Target::new(Platform::MacOS, Arch::AArch64), "    b.eq _gt_resource\n"),
-            (Target::new(Platform::Linux, Arch::X86_64), "    je _gt_resource\n"),
-        ] {
-            let asm = emit_for(target);
-            let fallthrough = asm
-                .split(gate)
-                .nth(1)
-                .unwrap_or_else(|| panic!("missing resource-tag gate for {target:?}:\n{asm}"))
-                .split("_gt_resource:\n")
-                .next()
-                .expect("the fallthrough arm precedes the resource arm")
-                .to_string();
-            assert!(
-                fallthrough.contains("_str_stream"),
-                "the non-resource arm must answer the constant ({target:?}):\n{fallthrough}"
-            );
-            assert!(
-                !fallthrough.contains("__rt_resource_type_name"),
-                "the non-resource arm must not reach the runtime resolver ({target:?}):\n{fallthrough}"
-            );
-        }
-    }
 }

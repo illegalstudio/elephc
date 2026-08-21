@@ -31,6 +31,112 @@
 
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::runtime::data::{
+    WRAPPER_MISSING_HOOK_HEAD_FEOF, WRAPPER_MISSING_HOOK_HEAD_FLOCK,
+    WRAPPER_MISSING_HOOK_HEAD_FSTAT, WRAPPER_MISSING_HOOK_HEAD_FWRITE,
+    WRAPPER_MISSING_HOOK_TAIL_EOF, WRAPPER_MISSING_HOOK_TAIL_LOCK,
+    WRAPPER_MISSING_HOOK_TAIL_STAT, WRAPPER_MISSING_HOOK_TAIL_WRITE,
+};
+
+/// Emits `__rt_wrapper_missing_hook_warning(class_id, head_ptr, head_len, tail_ptr, tail_len)`.
+///
+/// Writes `<head><ClassName><tail>` through `__rt_diag_warning`, which is what makes the whole
+/// thing honour `@` and the filter-suppression scope without any work here. The class name is
+/// read out of the shared `_class_name_entries` `(ptr, len)` table by id, exactly as
+/// `__rt_dynamic_context_deprecation` does — an unknown id simply names nothing rather than
+/// reading past the table.
+///
+/// Inputs (AArch64): x0 = class id, x1/x2 = head pair, x3/x4 = tail pair.
+///          (x86_64): rdi = class id, rsi/rdx = head pair, rcx/r8 = tail pair.
+pub fn emit_wrapper_missing_hook_warning(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: wrapper missing hook warning ---");
+    emitter.label_global("__rt_wrapper_missing_hook_warning");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            // Frame: 48 bytes. [0..16] x29/x30, [16] class id, [24] tail ptr, [32] tail len.
+            emitter.instruction("sub sp, sp, #48");
+            emitter.instruction("stp x29, x30, [sp, #0]");                      // save frame pointer and return address
+            emitter.instruction("mov x29, sp");
+            emitter.instruction("str x0, [sp, #16]");                           // hold the class id across the writes
+            emitter.instruction("str x3, [sp, #24]");                           // hold the tail pair across the writes
+            emitter.instruction("str x4, [sp, #32]");
+            emitter.instruction("bl __rt_diag_warning");                        // the head already carries "Warning: <caller>(): "
+            emitter.instruction("ldr x9, [sp, #16]");                           // the class id
+            abi::emit_symbol_address(emitter, "x10", "_class_name_count");
+            emitter.instruction("ldr x10, [x10]");
+            emitter.instruction("cmp x9, x10");
+            emitter.instruction("b.hs __rt_uwmh_tail");                         // an unknown id names nothing
+            abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
+            emitter.instruction("add x11, x11, x9, lsl #4");                    // 16-byte (ptr, len) entries
+            emitter.instruction("ldr x1, [x11]");
+            emitter.instruction("ldr x2, [x11, #8]");
+            emitter.instruction("bl __rt_diag_warning");                        // the wrapper class's own name
+            emitter.label("__rt_uwmh_tail");
+            emitter.instruction("ldr x1, [sp, #24]");                           // "::<method> is not implemented!\n"
+            emitter.instruction("ldr x2, [sp, #32]");
+            emitter.instruction("bl __rt_diag_warning");
+            emitter.instruction("ldp x29, x30, [sp, #0]");                      // restore frame pointer and return address
+            emitter.instruction("add sp, sp, #48");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 32");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // hold the class id across the writes
+            emitter.instruction("mov QWORD PTR [rbp - 16], rcx");               // hold the tail pair across the writes
+            emitter.instruction("mov QWORD PTR [rbp - 24], r8");
+            emitter.instruction("mov rdi, rsi");                                // __rt_diag_warning takes the pair in rdi/rsi
+            emitter.instruction("mov rsi, rdx");
+            emitter.instruction("call __rt_diag_warning");                      // the head already carries "Warning: <caller>(): "
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // the class id
+            abi::emit_symbol_address(emitter, "r11", "_class_name_count");
+            emitter.instruction("mov r11, QWORD PTR [r11]");
+            emitter.instruction("cmp r10, r11");
+            emitter.instruction("jae __rt_uwmh_tail_x86");                      // an unknown id names nothing
+            abi::emit_symbol_address(emitter, "r11", "_class_name_entries");
+            emitter.instruction("shl r10, 4");                                  // 16-byte (ptr, len) entries
+            emitter.instruction("add r11, r10");
+            emitter.instruction("mov rdi, QWORD PTR [r11]");
+            emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");
+            emitter.instruction("call __rt_diag_warning");                      // the wrapper class's own name
+            emitter.label("__rt_uwmh_tail_x86");
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");               // "::<method> is not implemented!\n"
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");
+            emitter.instruction("call __rt_diag_warning");
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
+/// Emits the call that warns about one missing hook, from a helper whose `x0`/`rdi` holds the
+/// wrapper object.
+///
+/// The object's class id sits at its head, which is the same word the vtable lookup just read, so
+/// the warning costs one load and the two static pairs the site names.
+fn emit_missing_hook_warning_call(emitter: &mut Emitter, head_symbol: &str, head_len: usize, tail_symbol: &str, tail_len: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x0, [x0]");                                // class_id stored at the head of every wrapper object
+            abi::emit_symbol_address(emitter, "x1", head_symbol);
+            emitter.instruction(&format!("mov x2, #{}", head_len));
+            abi::emit_symbol_address(emitter, "x3", tail_symbol);
+            emitter.instruction(&format!("mov x4, #{}", tail_len));
+            emitter.instruction("bl __rt_wrapper_missing_hook_warning");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rdi, QWORD PTR [rdi]");                    // class_id stored at the head of every wrapper object
+            abi::emit_symbol_address(emitter, "rsi", head_symbol);
+            emitter.instruction(&format!("mov rdx, {}", head_len));
+            abi::emit_symbol_address(emitter, "rcx", tail_symbol);
+            emitter.instruction(&format!("mov r8, {}", tail_len));
+            emitter.instruction("call __rt_wrapper_missing_hook_warning");
+        }
+    }
+}
 
 const FD_BASE_LOW16: u32 = 0x4000;
 const FD_BASE: u32 = 0x40000000;
@@ -75,8 +181,8 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.label("__rt_uwfclose_clear");
     // -- free the handle slot so the synthetic fd cannot be reused stale --
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the synthetic file descriptor
-    emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = fd & 0x3f, the handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = fd - USER_WRAPPER_FD_BASE, the handle slot index
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the freed handle slot
     emitter.instruction("mov x0, #1");                                          // fclose() on a wrapper always reports success
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -104,8 +210,8 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uwfclose_clear_x86");
     // -- free the handle slot so the synthetic fd cannot be reused stale --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic file descriptor
-    emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = fd & 0x3f, the handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = fd - USER_WRAPPER_FD_BASE, the handle slot index
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // clear the freed handle slot
     emitter.instruction("mov eax, 1");                                          // fclose() on a wrapper always reports success
     emitter.instruction("add rsp, 16");                                         // release the helper frame
@@ -136,12 +242,13 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #24]");                                   // save the requested read length across the helper call
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfread_empty");                  // resolve obj into x0, fall through to empty-string on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwfread_empty", VTABLE_SLOT_READ); // resolve stream_read method pointer into x11, mask into x13
+    emit_aarch64_method_lookup(emitter, "__rt_uwfread_missing", VTABLE_SLOT_READ); // resolve stream_read method pointer into x11
 
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
     emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ)); // a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
+    emitter.instruction("mov x0, #1");                                          // fread's result flag: a wrapper read is a real result
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
@@ -161,9 +268,22 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
+    // -- the class does not implement stream_read: php answers FALSE, not "" --
+    // Measured on php 8.5.6 with `stream_eof` present so the read is genuinely attempted; php
+    // emits no warning here, unlike the write side. The zero flag is what the builtin reads as
+    // failure, so the empty pair below never reaches the caller as a string.
+    emitter.label("__rt_uwfread_missing");
+    emitter.instruction("mov x1, #0");
+    emitter.instruction("mov x2, #0");
+    emitter.instruction("mov x0, #0");                                          // failure flag → fread() answers false
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the failure result
+
     emitter.label("__rt_uwfread_empty");
     emitter.instruction("mov x1, #0");                                          // empty-string pointer for the missing stream_read fallback
     emitter.instruction("mov x2, #0");                                          // empty-string length for the missing stream_read fallback
+    emitter.instruction("mov x0, #1");                                          // and a real (empty) result, not a failure
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the empty-string result
@@ -182,40 +302,32 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested read length
 
     emit_x86_handle_lookup(emitter, "__rt_uwfread_empty_x86");                  // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwfread_empty_x86", VTABLE_SLOT_READ); // resolve stream_read method pointer into r11, mask into r8
+    emit_x86_method_lookup(emitter, "__rt_uwfread_missing_x86", VTABLE_SLOT_READ); // resolve stream_read method pointer into r11
 
     // -- call stream_read($this, $count); the result shape follows the method's return type --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
     emitter.instruction(&format!("bt r8, {}", VTABLE_SLOT_READ));               // does this class return a boxed `string|false`?
     emitter.instruction("jc __rt_uwfread_boxed_x86");                           // convert the boxed result instead of reading the pair
     emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
-    emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
+    emitter.instruction("mov ecx, 1");                                          // fread's result flag: a wrapper read is a real result
+    emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
 
-    emitter.label("__rt_uwfread_boxed_x86");
-    emitter.instruction("call r11");                                            // invoke stream_read; rax = owned Mixed cell
-    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // keep the boxed result across the conversion
-    emitter.instruction("mov rdi, rax");                                        // pass the boxed cell to the string cast
-    emitter.instruction("call __rt_mixed_cast_string");                         // rax/rdx = owned string; false unboxes to the empty-string result
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the converted pointer across the box release
-    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the converted length
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the boxed result the method handed us
-    emitter.instruction("test rax, rax");                                       // a null box owns nothing to release
-    emitter.instruction("jz __rt_uwfread_boxed_done_x86");                      // skip the release for a null box
-    emitter.instruction("mov QWORD PTR [rax], 0");                              // retag the box as an int: its payload now belongs to the pair above
-    emitter.instruction("call __rt_mixed_free_deep");                           // release the box storage only, never the string being returned
-    emitter.label("__rt_uwfread_boxed_done_x86");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // restore the converted read pointer
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // restore the converted read length
-    emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
+    // -- the class does not implement stream_read: php answers FALSE, not "" --
+    emitter.label("__rt_uwfread_missing_x86");
+    emitter.instruction("xor eax, eax");
+    emitter.instruction("xor edx, edx");
+    emitter.instruction("xor ecx, ecx");                                        // failure flag → fread() answers false
+    emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+    emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_uwfread_empty_x86");
     emitter.instruction("xor eax, eax");                                        // empty-string pointer for the missing stream_read fallback
     emitter.instruction("xor edx, edx");                                        // empty-string length for the missing stream_read fallback
-    emitter.instruction("mov rsp, rbp");                                        // discard the helper slots
+    emitter.instruction("mov ecx, 1");                                          // and a real (empty) result, not a failure
+    emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the empty-string result
 }
@@ -240,7 +352,7 @@ pub fn emit_user_wrapper_fwrite(emitter: &mut Emitter) {
     emitter.instruction("stp x1, x2, [sp, #16]");                               // save the data string pointer/length across the helper call
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfwrite_zero");                  // resolve obj into x0, fall through to zero on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwfwrite_zero", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into x11
+    emit_aarch64_method_lookup(emitter, "__rt_uwfwrite_missing", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into x11
 
     // -- call stream_write($this, $data) → returns int in x0 --
     emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload data string ptr/len for the second argument pair
@@ -248,6 +360,21 @@ pub fn emit_user_wrapper_fwrite(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
+
+    // -- the class does not implement stream_write: warn, then report failure --
+    // php answers `false`, not 0 bytes; the builtin turns a negative count into false.
+    emitter.label("__rt_uwfwrite_missing");
+    emit_missing_hook_warning_call(
+        emitter,
+        "_uwmh_head_fwrite",
+        WRAPPER_MISSING_HOOK_HEAD_FWRITE.len(),
+        "_uwmh_tail_write",
+        WRAPPER_MISSING_HOOK_TAIL_WRITE.len(),
+    );
+    emitter.instruction("mov x0, #-1");                                         // a negative count is how the caller sees false
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     emitter.label("__rt_uwfwrite_zero");
     emitter.instruction("mov x0, #0");                                          // zero-byte fallback for the missing stream_write
@@ -271,7 +398,7 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
     // rdi already holds the synthetic fd from the builtin call site; the
     // handle lookup expects the fd in rdi so no extra reload is needed.
     emit_x86_handle_lookup(emitter, "__rt_uwfwrite_zero_x86");                  // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwfwrite_zero_x86", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into r11
+    emit_x86_method_lookup(emitter, "__rt_uwfwrite_missing_x86", VTABLE_SLOT_WRITE); // resolve stream_write method pointer into r11
 
     // -- call stream_write($this, $data) → returns int in rax --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload data string pointer as the second arg
@@ -280,6 +407,20 @@ fn emit_user_wrapper_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's int result to the caller
+
+    // -- the class does not implement stream_write: warn, then report failure --
+    emitter.label("__rt_uwfwrite_missing_x86");
+    emit_missing_hook_warning_call(
+        emitter,
+        "_uwmh_head_fwrite",
+        WRAPPER_MISSING_HOOK_HEAD_FWRITE.len(),
+        "_uwmh_tail_write",
+        WRAPPER_MISSING_HOOK_TAIL_WRITE.len(),
+    );
+    emitter.instruction("mov rax, -1");                                         // a negative count is how the caller sees false
+    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure sentinel
 
     emitter.label("__rt_uwfwrite_zero_x86");
     emitter.instruction("xor eax, eax");                                        // zero-byte fallback for the missing stream_write
@@ -306,12 +447,23 @@ pub fn emit_user_wrapper_feof(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfeof_eof");                     // resolve obj into x0, fall through to EOF on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwfeof_eof", VTABLE_SLOT_EOF);    // resolve stream_eof method pointer into x11
+    emit_aarch64_method_lookup(emitter, "__rt_uwfeof_missing", VTABLE_SLOT_EOF); // resolve stream_eof method pointer into x11
 
     emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_EOF, "feof");            // invoke stream_eof, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
+
+    // -- the class does not implement stream_eof: warn, then keep the EOF answer --
+    // php says so in the warning itself: "... is not implemented! Assuming EOF".
+    emitter.label("__rt_uwfeof_missing");
+    emit_missing_hook_warning_call(
+        emitter,
+        "_uwmh_head_feof",
+        WRAPPER_MISSING_HOOK_HEAD_FEOF.len(),
+        "_uwmh_tail_eof",
+        WRAPPER_MISSING_HOOK_TAIL_EOF.len(),
+    );
 
     emitter.label("__rt_uwfeof_eof");
     emitter.instruction("mov x0, #1");                                          // report EOF when the wrapper does not implement stream_eof
@@ -330,11 +482,21 @@ fn emit_user_wrapper_feof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
 
     emit_x86_handle_lookup(emitter, "__rt_uwfeof_eof_x86");                     // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwfeof_eof_x86", VTABLE_SLOT_EOF);    // resolve stream_eof method pointer into r11
+    emit_x86_method_lookup(emitter, "__rt_uwfeof_missing_x86", VTABLE_SLOT_EOF); // resolve stream_eof method pointer into r11
 
     emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_EOF, "feof");                // invoke stream_eof, unboxing an undeclared return
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
+
+    // -- the class does not implement stream_eof: warn, then keep the EOF answer --
+    emitter.label("__rt_uwfeof_missing_x86");
+    emit_missing_hook_warning_call(
+        emitter,
+        "_uwmh_head_feof",
+        WRAPPER_MISSING_HOOK_HEAD_FEOF.len(),
+        "_uwmh_tail_eof",
+        WRAPPER_MISSING_HOOK_TAIL_EOF.len(),
+    );
 
     emitter.label("__rt_uwfeof_eof_x86");
     emitter.instruction("mov eax, 1");                                          // report EOF when the wrapper does not implement stream_eof
@@ -397,8 +559,12 @@ fn emit_user_wrapper_ftell_linux_x86_64(emitter: &mut Emitter) {
 }
 
 /// `__rt_user_wrapper_fflush`: invoke the wrapper's `stream_flush()` and
-/// return its declared bool result. When the method is absent, returns 1 —
-/// fflush's "nothing to do, treat as success" convention.
+/// return its declared bool result.
+///
+/// A wrapper WITHOUT `stream_flush()` answers false, measured on php 8.5.6 —
+/// "nothing to do" is not treated as success here, unlike an ordinary stream.
+/// An unresolvable handle keeps the old success answer: it is not a wrapper
+/// missing its hook, it is not a wrapper at all.
 pub fn emit_user_wrapper_fflush(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_user_wrapper_fflush_linux_x86_64(emitter);
@@ -414,15 +580,21 @@ pub fn emit_user_wrapper_fflush(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfflush_ok");                    // resolve obj into x0, fall through to default-true on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwfflush_ok", VTABLE_SLOT_FLUSH); // resolve stream_flush method pointer into x11
+    emit_aarch64_method_lookup(emitter, "__rt_uwfflush_none", VTABLE_SLOT_FLUSH); // resolve stream_flush method pointer into x11
 
     emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_FLUSH, "fflush");        // invoke stream_flush, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
+    emitter.label("__rt_uwfflush_none");
+    emitter.instruction("mov x0, #0");                                          // php answers false for a wrapper with no stream_flush
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return false
+
     emitter.label("__rt_uwfflush_ok");
-    emitter.instruction("mov x0, #1");                                          // report success when the wrapper does not implement stream_flush
+    emitter.instruction("mov x0, #1");                                          // an unresolvable handle keeps the success answer
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return true
@@ -438,14 +610,19 @@ fn emit_user_wrapper_fflush_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
 
     emit_x86_handle_lookup(emitter, "__rt_uwfflush_ok_x86");                    // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwfflush_ok_x86", VTABLE_SLOT_FLUSH); // resolve stream_flush method pointer into r11
+    emit_x86_method_lookup(emitter, "__rt_uwfflush_none_x86", VTABLE_SLOT_FLUSH); // resolve stream_flush method pointer into r11
 
     emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_FLUSH, "fflush");            // invoke stream_flush, unboxing an undeclared return
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
 
+    emitter.label("__rt_uwfflush_none_x86");
+    emitter.instruction("xor eax, eax");                                        // php answers false for a wrapper with no stream_flush
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return false
+
     emitter.label("__rt_uwfflush_ok_x86");
-    emitter.instruction("mov eax, 1");                                          // report success when the wrapper does not implement stream_flush
+    emitter.instruction("mov eax, 1");                                          // an unresolvable handle keeps the success answer
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return true
 }
@@ -542,13 +719,23 @@ pub fn emit_user_wrapper_flock(emitter: &mut Emitter) {
 
     // The lock operation stays in x1 across both lookups (neither touches it).
     emit_aarch64_handle_lookup(emitter, "__rt_uwflock_false");                  // resolve obj into x0, fall through to false on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwflock_false", VTABLE_SLOT_LOCK); // resolve stream_lock method pointer into x11
+    emit_aarch64_method_lookup(emitter, "__rt_uwflock_missing", VTABLE_SLOT_LOCK); // resolve stream_lock method pointer into x11
 
     // -- call stream_lock($this, $operation) → returns bool in x0 --
     emit_aarch64_scalar_slot_call(emitter, VTABLE_SLOT_LOCK, "flock");          // invoke stream_lock, unboxing an undeclared return
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
+
+    // -- the class does not implement stream_lock: warn, then answer false as before --
+    emitter.label("__rt_uwflock_missing");
+    emit_missing_hook_warning_call(
+        emitter,
+        "_uwmh_head_flock",
+        WRAPPER_MISSING_HOOK_HEAD_FLOCK.len(),
+        "_uwmh_tail_lock",
+        WRAPPER_MISSING_HOOK_TAIL_LOCK.len(),
+    );
 
     emitter.label("__rt_uwflock_false");
     emitter.instruction("mov x0, #0");                                          // false when the wrapper does not implement stream_lock
@@ -568,12 +755,22 @@ fn emit_user_wrapper_flock_linux_x86_64(emitter: &mut Emitter) {
 
     // The lock operation stays in rsi across both lookups (neither touches it).
     emit_x86_handle_lookup(emitter, "__rt_uwflock_false_x86");                  // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwflock_false_x86", VTABLE_SLOT_LOCK); // resolve stream_lock method pointer into r11
+    emit_x86_method_lookup(emitter, "__rt_uwflock_missing_x86", VTABLE_SLOT_LOCK); // resolve stream_lock method pointer into r11
 
     // -- call stream_lock($this, $operation) → returns bool in rax --
     emit_x86_scalar_slot_call(emitter, VTABLE_SLOT_LOCK, "flock");              // invoke stream_lock, unboxing an undeclared return
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's bool result to the caller
+
+    // -- the class does not implement stream_lock: warn, then answer false as before --
+    emitter.label("__rt_uwflock_missing_x86");
+    emit_missing_hook_warning_call(
+        emitter,
+        "_uwmh_head_flock",
+        WRAPPER_MISSING_HOOK_HEAD_FLOCK.len(),
+        "_uwmh_tail_lock",
+        WRAPPER_MISSING_HOOK_TAIL_LOCK.len(),
+    );
 
     emitter.label("__rt_uwflock_false_x86");
     emitter.instruction("xor eax, eax");                                        // false when the wrapper does not implement stream_lock
@@ -779,7 +976,7 @@ pub fn emit_user_wrapper_fstat(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfstat_false");                  // resolve obj into x0, fall through to boxed false on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwfstat_false", VTABLE_SLOT_STAT); // resolve stream_stat method pointer into x11
+    emit_aarch64_method_lookup(emitter, "__rt_uwfstat_missing", VTABLE_SLOT_STAT); // resolve stream_stat method pointer into x11
 
     // -- call stream_stat($this) → x0 = raw return, normalized to a Mixed --
     emitter.instruction("blr x11");                                             // invoke stream_stat on the wrapper object
@@ -787,6 +984,16 @@ pub fn emit_user_wrapper_fstat(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the boxed Mixed stat array
+
+    // -- the class does not implement stream_stat: warn, then box false as before --
+    emitter.label("__rt_uwfstat_missing");
+    emit_missing_hook_warning_call(
+        emitter,
+        "_uwmh_head_fstat",
+        WRAPPER_MISSING_HOOK_HEAD_FSTAT.len(),
+        "_uwmh_tail_stat",
+        WRAPPER_MISSING_HOOK_TAIL_STAT.len(),
+    );
 
     emitter.label("__rt_uwfstat_false");
     emitter.instruction("mov x0, #0");                                          // null return → box_wrapper_stat_result yields boxed false
@@ -806,13 +1013,23 @@ fn emit_user_wrapper_fstat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
 
     emit_x86_handle_lookup(emitter, "__rt_uwfstat_false_x86");                  // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwfstat_false_x86", VTABLE_SLOT_STAT); // resolve stream_stat method pointer into r11
+    emit_x86_method_lookup(emitter, "__rt_uwfstat_missing_x86", VTABLE_SLOT_STAT); // resolve stream_stat method pointer into r11
 
     // -- call stream_stat($this) → rax = raw return, normalized to a Mixed --
     emitter.instruction("call r11");                                            // invoke stream_stat on the wrapper object
     emitter.instruction("call __rt_box_wrapper_stat_result");                   // normalize the type-erased return into a boxed Mixed
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed Mixed stat array
+
+    // -- the class does not implement stream_stat: warn, then box false as before --
+    emitter.label("__rt_uwfstat_missing_x86");
+    emit_missing_hook_warning_call(
+        emitter,
+        "_uwmh_head_fstat",
+        WRAPPER_MISSING_HOOK_HEAD_FSTAT.len(),
+        "_uwmh_tail_stat",
+        WRAPPER_MISSING_HOOK_TAIL_STAT.len(),
+    );
 
     emitter.label("__rt_uwfstat_false_x86");
     emitter.instruction("xor eax, eax");                                        // null return → box_wrapper_stat_result yields boxed false
@@ -835,7 +1052,7 @@ fn emit_aarch64_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
 /// (cleared after fclose) jumps to `missing_label`.
 fn emit_aarch64_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
     emitter.instruction(&format!("cbz x0, {}", missing_label));                 // slot empty (already fclose'd or never registered): take the fallback
 }
@@ -898,7 +1115,7 @@ fn emit_x86_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
 /// jumps to `missing_label`.
 fn emit_x86_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // is the slot empty?
     emitter.instruction(&format!("jz {}", missing_label));                      // slot empty: take the fallback

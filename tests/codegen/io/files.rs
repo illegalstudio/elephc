@@ -24,6 +24,233 @@ echo file_get_contents("test.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the disk-space family answers `false` for a path it cannot stat.
+///
+/// Both answered `float(0)`, which is a legitimate reading for a full filesystem — so
+/// `disk_free_space($d) === false` never fired and arithmetic silently used zero.
+///
+/// The success half is the control, and it is the half a `float|false` change can break:
+/// declaring the union changes how the value is carried, so the result still has to be a
+/// float that adds, divides and compares.
+#[test]
+fn test_disk_space_reports_false_for_an_unstattable_path() {
+    let out = compile_and_run(
+        r#"<?php
+echo var_export(@disk_free_space("/no/such/dir"), true), "|";
+echo var_export(@disk_total_space("/no/such/dir"), true), "|";
+$f = disk_free_space("/");
+echo var_export(is_float($f), true), ",";
+echo var_export($f > 0, true), ",";
+echo var_export($f <= disk_total_space("/"), true);
+"#,
+    );
+    assert_eq!(out, "false|false|true,true,true");
+}
+
+/// An append stream reports the position PHP maintains, not the descriptor's.
+///
+/// `O_APPEND` puts every write at the end of the file, so after writing one byte to a four-byte
+/// file the descriptor is at 5 — but PHP answers 1, because it advances a position of its own by
+/// the bytes written, wherever they land. elephc reported the descriptor's offset.
+///
+/// Every case here is a `php -n` witness. The `a+` read matters most: it is the one the fix could
+/// have broken, since a read moves the descriptor and PHP's position by the same amount and must
+/// therefore be left alone. The seek matters next: it puts the two back in agreement, and without
+/// clearing the running total the following write answers a negative number.
+#[test]
+fn test_append_stream_reports_phps_position_not_the_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+$p = sys_get_temp_dir() . "/elephc_append_tell.txt";
+@unlink($p);
+file_put_contents($p, "seed");
+$h = fopen($p, "a");
+echo ftell($h), ",";
+fwrite($h, "X");
+echo ftell($h), ",";
+fwrite($h, "YZ");
+echo ftell($h), ",";
+fseek($h, 0);
+echo ftell($h), ",";
+fwrite($h, "Q");
+echo ftell($h), "|";
+fclose($h);
+echo file_get_contents($p), "|";
+
+@unlink($p);
+file_put_contents($p, "seed");
+$g = fopen($p, "a+");
+echo ftell($g), ",";
+fread($g, 2);
+echo ftell($g), ",";
+fwrite($g, "X");
+echo ftell($g), "|";
+fclose($g);
+
+@unlink($p);
+$w = fopen($p, "w");
+fwrite($w, "abc");
+echo ftell($w);
+fclose($w);
+@unlink($p);
+"#,
+    );
+    assert_eq!(out, "0,1,3,0,1|seedXYZQ|0,2,3|3");
+}
+
+/// A disk-space failure names itself and the reason, as php does.
+///
+/// Answering `false` was only half of it: php also prints `disk_free_space(): No such file or
+/// directory`, so a script that watched the warning to notice a bad path saw a silent `false`.
+/// php names NEITHER the path here nor a fixed middle, which is why this does not go through the
+/// failed-open composer.
+///
+/// The `@` half is the control. A diagnostic that ignores suppression is as wrong as a missing
+/// one, and it is the half that a hand-written warning path gets wrong.
+#[test]
+fn test_disk_space_failure_names_itself_and_the_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo var_export(disk_free_space("/no/such/dir"), true), "|";
+echo var_export(disk_total_space("/no/such/dir"), true), "|";
+echo var_export(@disk_free_space("/no/such/dir"), true), "|";
+echo var_export(is_float(disk_free_space("/")), true);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|false|false|true");
+    assert!(
+        out.diagnostics
+            .contains("Warning: disk_free_space(): No such file or directory\n"),
+        "expected php's wording, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics
+            .contains("Warning: disk_total_space(): No such file or directory\n"),
+        "expected the total-space wording too, got diagnostics={}",
+        out.diagnostics
+    );
+    // Three calls fail, one of them suppressed: exactly two lines may be printed.
+    assert_eq!(
+        out.diagnostics.matches("No such file or directory").count(),
+        2,
+        "@ must suppress the third, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies `sys_get_temp_dir()` derives its answer from `TMPDIR`, as php does.
+///
+/// It used to answer a hardcoded `/tmp`. On macOS php hands out a private per-user directory,
+/// so a program falling back to the shared `/tmp` changed behaviour and not merely its output.
+///
+/// The assertion is a RELATIONSHIP rather than a literal, because the right answer depends on
+/// the machine: whatever `TMPDIR` holds, minus exactly one trailing slash — php removes one,
+/// not all, which is why `/tmp///` must not collapse to `/tmp`. With `TMPDIR` unset the test
+/// falls back to checking the answer is a usable directory, since the constant differs
+/// between macOS (`/var/tmp/`) and Linux (`/tmp`).
+#[test]
+fn test_sys_get_temp_dir_follows_tmpdir() {
+    let out = compile_and_run(
+        r#"<?php
+$env = getenv("TMPDIR");
+$tmp = sys_get_temp_dir();
+if ($env === false || $env === "") {
+    echo var_export(is_dir($tmp), true);
+} else {
+    // Copy every byte but a single trailing slash. Deliberately NOT substr($env, 0, -1):
+    // a negative substr length is itself wrong on this branch, so using it here would make
+    // this test measure that defect instead of this one.
+    $keep = strlen($env);
+    if ($env[$keep - 1] === "/") {
+        $keep--;
+    }
+    $expected = "";
+    for ($i = 0; $i < $keep; $i++) {
+        $expected .= $env[$i];
+    }
+    echo var_export($tmp === $expected, true);
+}
+echo "|", var_export(is_dir($tmp), true);
+"#,
+    );
+    assert_eq!(out, "true|true");
+}
+
+/// Verifies `file_get_contents()` reads a literal `data://` URI.
+///
+/// `fopen("data://…")` already decoded these at compile time, but `file_get_contents()` went
+/// through the filesystem helper and answered `false` with `No such file or directory` —
+/// naming a "path" that was never meant to be one. The `$offset`/`$length` window applies to
+/// the decoded bytes, and a malformed URI still answers `false`, both as php does.
+#[test]
+fn test_file_get_contents_reads_a_literal_data_uri() {
+    let out = compile_and_run(
+        r#"<?php
+echo var_export(file_get_contents("data://text/plain,hello"), true), "|";
+echo var_export(file_get_contents("data://text/plain;base64,aGVsbG8="), true), "|";
+echo var_export(file_get_contents("data://text/plain,a%20b"), true), "|";
+echo var_export(@file_get_contents("data://bogus"), true), "|";
+echo var_export(file_get_contents("data://text/plain,offset", false, null, 2, 3), true);
+"#,
+    );
+    assert_eq!(out, "'hello'|'hello'|'a b'|false|'fse'");
+}
+
+/// Verifies `filesize()` and `filemtime()` answer `false` for a path they cannot stat.
+///
+/// Seven of the nine stat readers already did; these two were left behind. `filesize()`
+/// answered `0` — a legitimate size for an empty file, so `filesize($f) === false` never
+/// fired and arithmetic silently used zero. `filemtime()` was worse: the AArch64 helper read
+/// the stat buffer WITHOUT checking whether the syscall had filled it, so a missing path
+/// returned uninitialised stack — a different large integer each run.
+///
+/// The success half is the control: both must still behave as plain ints, since declaring
+/// them `int|false` changes how the value is carried.
+#[test]
+fn test_filesize_and_filemtime_report_false_for_an_unstattable_path() {
+    let out = compile_and_run(
+        r#"<?php
+echo var_export(@filesize("/no/such/file"), true), "|";
+echo var_export(@filemtime("/no/such/file"), true), "|";
+
+$p = tempnam(sys_get_temp_dir(), "sz");
+file_put_contents($p, "0123456789");
+$s = filesize($p);
+echo $s, ",", $s + 1, ",", var_export(is_int($s), true), "|";
+echo var_export(filemtime($p) > 0, true);
+unlink($p);
+"#,
+    );
+    assert_eq!(out, "false|false|10,11,true|true");
+}
+
+/// Verifies `FILE_APPEND` extends the file instead of replacing it.
+///
+/// The flag was accepted by the arity check and then discarded, so the one call whose entire
+/// purpose is to EXTEND a file truncated it — and still returned the byte count, so a caller
+/// checking the result saw a success while the previous contents were gone. Nothing covered
+/// FILE_APPEND on a file that already had content, which is the only way to see it.
+///
+/// The second write is the control: WITHOUT the flag the call must still truncate, so this
+/// cannot pass by making every write append.
+#[test]
+fn test_file_put_contents_append_extends_the_file() {
+    let out = compile_and_run(
+        r#"<?php
+$p = tempnam(sys_get_temp_dir(), "ap");
+file_put_contents($p, "xy");
+$n = file_put_contents($p, "z", FILE_APPEND);
+echo $n, ":", file_get_contents($p), "|";
+file_put_contents($p, "w");
+echo file_get_contents($p);
+unlink($p);
+"#,
+    );
+    assert_eq!(out, "1:xyz|w");
+}
+
 /// Verifies `file_get_contents` on a missing file emits a runtime warning to stderr and continues execution.
 /// Fixture: tries to read "missing.txt" which does not exist.
 /// Asserts: program exits successfully, stdout is "after" (execution continued), stderr contains the PHP warning.
@@ -38,10 +265,14 @@ echo "after";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "after");
+    // php-src puts the PATH inside the parentheses and the reason after it; the bare
+    // `file_get_contents()` this used to assert named neither.
     assert!(
-        out.stderr.contains("Warning: file_get_contents()"),
-        "expected runtime warning, got stderr={}",
-        out.stderr
+        out.diagnostics.contains(
+            "Warning: file_get_contents(missing.txt): Failed to open stream: No such file or directory"
+        ),
+        "expected the path and reason in the warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -60,6 +291,7 @@ echo $value === false ? "false" : "string";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies `file_get_contents` on an existing file returns a truthy value, not `false`.
@@ -380,15 +612,15 @@ unlink("seek.txt");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\n");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: file_get_contents(): Failed to seek to position -30 in the stream"),
-        "expected the php-src seek warning, got stderr={}",
-        out.stderr
+        "expected the php-src seek warning, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        !out.stderr.contains("position -11"),
-        "the @-suppressed read must not warn, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("position -11"),
+        "the @-suppressed read must not warn, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -449,9 +681,9 @@ unlink("neg.txt");
         "ValueError: file_get_contents(): Argument #5 ($length) must be greater than or equal to 0\nValueError: file_get_contents(): Argument #5 ($length) must be greater than or equal to 0\n"
     );
     assert!(
-        !out.stderr.contains("Failed to open stream"),
-        "the negative-length ValueError must precede the open, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("Failed to open stream"),
+        "the negative-length ValueError must precede the open, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -478,21 +710,22 @@ string(3) "EFG"
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies a non-null `$context` is refused with a diagnostic that names the parameter, rather
-/// than being silently ignored: elephc has no stream-context plumbing on the read path, so a
-/// caller's context options could not be honored.
+/// Verifies a non-null `$context` compiles and reaches the read.
+///
+/// This used to be a compile error — the read path had no context plumbing, so refusing was
+/// better than silently dropping the caller's options. The context is published for the
+/// duration of the read now, so the same program has to compile and run. What the options
+/// actually do to a request is covered by `stream_context_propagation`.
 #[test]
-fn test_file_get_contents_rejects_a_non_null_stream_context() {
-    let error = compile_source_expect_backend_error(
+fn test_file_get_contents_accepts_a_non_null_stream_context() {
+    let out = compile_and_run_capture(
         r#"<?php
 $context = stream_context_create([]);
-echo file_get_contents("x.txt", false, $context);
+var_dump(@file_get_contents("still-missing.txt", false, $context));
 "#,
     );
-    assert!(
-        error.contains("file_get_contents() $context argument"),
-        "expected a diagnostic naming $context, got: {error}"
-    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
 }
 
 /// Verifies the 1-argument form is unchanged: a literal `null` context and an omitted one both

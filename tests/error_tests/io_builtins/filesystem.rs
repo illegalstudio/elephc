@@ -48,7 +48,7 @@ fn test_error_hash_file_wrong_args() {
 /// Verifies `readfile()` rejects zero arguments with arity error.
 #[test]
 fn test_error_readfile_wrong_args() {
-    expect_error("<?php readfile();", "readfile() takes exactly 1 argument");
+    expect_error("<?php readfile();", "readfile() takes 1 to 3 arguments");
 }
 
 /// Verifies `readfile()` returning `false` is incompatible with declared `int` return type.
@@ -69,7 +69,7 @@ function dump_file(): int {
 fn test_error_file_put_contents_wrong_args() {
     expect_error(
         r#"<?php file_put_contents("x");"#,
-        "file_put_contents() takes exactly 2 arguments",
+        "file_put_contents() takes 2 to 4 arguments",
     );
 }
 
@@ -83,15 +83,22 @@ fn test_error_file_exists_wrong_args() {
 }
 
 /// Verifies `mkdir()` rejects zero arguments with arity error.
+///
+/// php's signature is `mkdir($directory, $permissions = 0777, $recursive = false, $context = null)`,
+/// so the range is 1 to 4 — the contract used to stop at the directory, which made the ordinary
+/// `mkdir($p, 0755, true)` a compile error rather than a call.
 #[test]
 fn test_error_mkdir_wrong_args() {
-    expect_error("<?php mkdir();", "mkdir() takes exactly 1 argument");
+    expect_error("<?php mkdir();", "mkdir() takes 1 to 4 arguments");
 }
 
 /// Verifies `copy()` rejects one argument (requires 2) with arity error.
+///
+/// The wording follows the signature: php declares `copy(string $from, string $to, $context = null)`,
+/// so since `$context` landed the range is 2 or 3, not exactly 2.
 #[test]
 fn test_error_copy_wrong_args() {
-    expect_error(r#"<?php copy("x");"#, "copy() takes exactly 2 arguments");
+    expect_error(r#"<?php copy("x");"#, "copy() takes 2 or 3 arguments");
 }
 
 /// Verifies `link()` rejects one argument (requires 2) with arity error.
@@ -137,9 +144,13 @@ fn test_error_getcwd_wrong_args() {
 }
 
 /// Verifies `scandir()` rejects zero arguments with arity error.
+///
+/// The wording follows the signature: php declares
+/// `scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, $context = null)`,
+/// so since the sorting order and then `$context` landed the range is 1 to 3, not exactly 1.
 #[test]
 fn test_error_scandir_wrong_args() {
-    expect_error("<?php scandir();", "scandir() takes exactly 1 argument");
+    expect_error("<?php scandir();", "scandir() takes 1 to 3 arguments");
 }
 
 /// Verifies `tempnam()` rejects one argument (requires 2) with arity error.
@@ -224,13 +235,13 @@ fn test_error_extended_stat_builtins_wrong_args() {
 /// Verifies `unlink()` rejects zero arguments with arity error.
 #[test]
 fn test_error_unlink_wrong_args() {
-    expect_error("<?php unlink();", "unlink() takes exactly 1 argument");
+    expect_error("<?php unlink();", "unlink() takes 1 or 2 arguments");
 }
 
 /// Verifies `rmdir()` rejects zero arguments with arity error.
 #[test]
 fn test_error_rmdir_wrong_args() {
-    expect_error("<?php rmdir();", "rmdir() takes exactly 1 argument");
+    expect_error("<?php rmdir();", "rmdir() takes 1 or 2 arguments");
 }
 
 /// Verifies `chdir()` rejects zero arguments with arity error.

@@ -131,6 +131,7 @@ impl Checker {
                     if method_key == "__construct" {
                         self.patch_constructor_method_env(class, method, &mut method_env);
                     }
+                    self.patch_stream_contract_method_env(class, method, &mut method_env);
 
                     self.current_class = Some(class.name.clone());
                     self.current_method = Some(method_key.clone());
@@ -163,6 +164,7 @@ impl Checker {
 
                     if !method_has_errors {
                         self.update_method_return_type(class, method, &method_env, &mut pass_errors);
+                        self.update_method_by_ref_param_types(class, method, &method_env);
                     }
                     self.current_class = None;
                     self.current_method = None;
@@ -194,6 +196,92 @@ impl Checker {
             .iter()
             .map(|name| ((*name).to_string(), crate::superglobals::superglobal_type()))
             .collect()
+    }
+
+    /// Patches an untyped stream-wrapper contract parameter with the type PHP documents for it.
+    ///
+    /// A wrapper's methods are reached through a runtime vtable with raw fixed-ABI arguments, so
+    /// `normalize_method_map_for_eir` deliberately leaves their untyped parameters alone rather
+    /// than widening them to boxed Mixed, which would desynchronize the dispatcher from the body.
+    /// The consequence was that they kept the `Int` an untyped parameter is seeded with, and an
+    /// ordinary `stream_write($data) { return strlen($data); }` — the signature the manual shows —
+    /// failed to compile with `strlen() argument must be string`.
+    ///
+    /// The dispatcher's argument types are not unknown, only undeclared: PHP specifies them. So
+    /// they are seeded here instead of widened, which leaves the fixed ABI exactly as it was and
+    /// lets the body use its own arguments. Only parameters WITHOUT a type hint are touched, and
+    /// only in a class that really is a wrapper — a lone `stream_write()` on an unrelated class
+    /// keeps its inference, because a method name is not a contract.
+    fn patch_stream_contract_method_env(
+        &mut self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        method_env: &mut TypeEnv,
+    ) {
+        let Some(ci) = self.classes.get(&class.name).cloned() else {
+            return;
+        };
+        if !declares_stream_wrapper_marker(&ci) && !declares_stream_filter_marker(&ci) {
+            return;
+        }
+        let key = crate::names::php_symbol_key(&method.name);
+        let Some(contract) = stream_wrapper_contract_param_types(&key) else {
+            return;
+        };
+        for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+            if type_ann.is_some() {
+                continue;
+            }
+            let Some(Some(ty)) = contract.get(i) else { continue };
+            method_env.insert(pname.clone(), ty.clone());
+            if let Some(ci_mut) = self.classes.get_mut(&class.name) {
+                if let Some(sig) = ci_mut.methods.get_mut(&key) {
+                    if i < sig.params.len() {
+                        sig.params[i].1 = ty.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pins the return type of an undeclared stream-wrapper contract method to the contract's.
+    ///
+    /// The wrapper's methods are reached through a runtime vtable with a FIXED ABI, and that ABI
+    /// is chosen by the return type: `stream_read()` and `dir_readdir()` are read back out of the
+    /// string-result pair (x1/x2 on AArch64, rax/rdx on x86_64), while every scalar return travels
+    /// in the single result register. Inference does not know that, so an ordinary
+    /// `stream_read($n) { return fread($this->fh, $n); }` — `fread()` answers `string|false`, so the
+    /// method infers `mixed` — returned a BOXED cell where the dispatcher reads a pointer/length
+    /// pair, and the wrapper handed back the box's own bytes instead of the data it read.
+    ///
+    /// On AArch64 the boxed cell lands in x0 while the dispatcher reads x1/x2, which the body
+    /// happened to leave holding the last string it built, so the defect stayed invisible; on
+    /// x86_64 the boxed cell lands in rax, which IS the pointer half of the pair, and the wrapper
+    /// answered three bytes of the box. Pinning the type here converts at the return instead, so
+    /// both arches hand over the same pair — the same seeding [`patch_stream_contract_method_env`]
+    /// already does for the contract's PARAMETERS, and for the same reason.
+    ///
+    /// Only methods WITHOUT a return hint are touched, only on a class that really is a wrapper,
+    /// and only when the body returns values at all: a hint is the author's own answer, a lone
+    /// `stream_read()` on an unrelated class is not a contract, and a body with no value return
+    /// keeps the `void` it infers rather than being promised a string it never produces.
+    fn stream_contract_return_type(
+        &self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        raw_inferred: &Option<PhpType>,
+    ) -> Option<PhpType> {
+        if method.is_static {
+            return None;
+        }
+        if raw_inferred.is_none() {
+            return None;
+        }
+        let class_info = self.classes.get(&class.name)?;
+        if !declares_stream_wrapper_marker(class_info) {
+            return None;
+        }
+        stream_wrapper_contract_return_type(&crate::names::php_symbol_key(&method.name))
     }
 
     /// Patches untyped constructor parameters with property types when the constructor
@@ -231,6 +319,63 @@ impl Checker {
                     }
                 }
             }
+        }
+    }
+
+    /// Re-types a method's BY-REFERENCE array parameters to what its body left them holding.
+    ///
+    /// A by-reference parameter is compiled against the CALLER's storage. When the body widens
+    /// its element representation — a loop storage contract, an element write of a `Mixed` value
+    /// — the caller's array is rewritten to boxed slots, and a caller still typed `array<int>`
+    /// reads those boxes back as ADDRESSES: `$o->go($ints)` printed two.
+    ///
+    /// Only a widening is recorded, exactly as `resolve_function_signature` does for a free
+    /// function. A method that merely sorts its parameter keeps the narrow element type the
+    /// backend can sort.
+    fn update_method_by_ref_param_types(
+        &mut self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        method_env: &TypeEnv,
+    ) {
+        let widened: Vec<(usize, PhpType)> = method
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, _, is_ref))| *is_ref)
+            .filter_map(|(index, (name, _, _, _))| {
+                let exit_ty = method_env.get(name)?;
+                Some((index, exit_ty.clone()))
+            })
+            .collect();
+        if widened.is_empty() {
+            return;
+        }
+        let key = php_symbol_key(&method.name);
+        let Some(class_info) = self.classes.get_mut(&class.name) else {
+            return;
+        };
+        let sig = if method.is_static {
+            class_info.static_methods.get_mut(&key)
+        } else {
+            class_info.methods.get_mut(&key)
+        };
+        let Some(sig) = sig else {
+            return;
+        };
+        let mut recorded = Vec::new();
+        for (index, exit_ty) in widened {
+            let Some((_, param_ty)) = sig.params.get_mut(index) else {
+                continue;
+            };
+            if crate::types::checker::array_element_representation_widens(param_ty, &exit_ty) {
+                *param_ty = exit_ty;
+                recorded.push(index);
+            }
+        }
+        let owner = format!("{}::{}", class.name, key);
+        for index in recorded {
+            self.by_ref_widened_params.insert((owner.clone(), index));
         }
     }
 
@@ -367,7 +512,8 @@ impl Checker {
                 }
             }
         } else {
-            inferred_return
+            self.stream_contract_return_type(class, method, &raw_inferred)
+                .unwrap_or(inferred_return)
         };
         if !method.is_static {
             if let Some(ci) = self.classes.get_mut(&class.name) {
@@ -492,4 +638,82 @@ fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
         }
     }
     sig
+}
+
+/// Whether a class declares a method the `streamWrapper` protocol reserves.
+///
+/// Shares [`is_user_wrapper_marker_method`] with the EIR normalizer on purpose: the two gates
+/// decide the SAME question — does the fixed raw-argument ABI apply to this class — and a class
+/// only one of them accepts gets a body expecting a boxed Mixed fed a (ptr,len) pair.
+///
+/// [`is_user_wrapper_marker_method`]: crate::codegen_support::runtime::is_user_wrapper_marker_method
+fn declares_stream_wrapper_marker(class_info: &crate::types::schema::ClassInfo) -> bool {
+    class_info
+        .methods
+        .keys()
+        .any(|key| crate::codegen_support::runtime::is_user_wrapper_marker_method(key))
+}
+
+/// Whether a class carries the userspace stream-FILTER contract.
+///
+/// A filter declares `filter()`; unlike the wrapper hooks the name is not reserved on its own, so
+/// the class must also descend from `php_user_filter`, which is what `stream_filter_register()`
+/// requires of it.
+fn declares_stream_filter_marker(class_info: &crate::types::schema::ClassInfo) -> bool {
+    class_info.methods.contains_key("filter")
+        && class_info
+            .parent
+            .as_deref()
+            .is_some_and(|parent| {
+                crate::names::php_symbol_key(parent.trim_start_matches('\\')) == "php_user_filter"
+            })
+}
+
+/// The parameter types PHP documents for each `streamWrapper` contract method.
+///
+/// Only methods that TAKE parameters appear; the rest need no seeding. `stream_open`'s fourth
+/// parameter is by-reference `?string`, and is seeded as a string because that is what the body
+/// may assign into it. Filter classes are deliberately absent: `filter()`'s first two parameters
+/// are bucket brigades, which have no PHP type to seed.
+fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<Option<PhpType>>> {
+    let ints = |n: usize| vec![Some(PhpType::Int); n];
+    let strs = |types: Vec<PhpType>| types.into_iter().map(Some).collect::<Vec<_>>();
+    Some(match method_key {
+        "stream_open" => strs(vec![PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str]),
+        "stream_write" => strs(vec![PhpType::Str]),
+        "stream_read" | "stream_truncate" | "stream_lock" | "stream_cast" => ints(1),
+        "stream_seek" => ints(2),
+        "stream_set_option" => ints(3),
+        "unlink" => strs(vec![PhpType::Str]),
+        "rename" => strs(vec![PhpType::Str, PhpType::Str]),
+        "url_stat" | "rmdir" | "dir_opendir" => strs(vec![PhpType::Str, PhpType::Int]),
+        "mkdir" => strs(vec![PhpType::Str, PhpType::Int, PhpType::Int]),
+        // A FILTER's `filter($in, $out, &$consumed, $closing)`: the first three have no PHP type
+        // to pin — two bucket brigades and a by-reference counter whose ABI the dispatcher fixes
+        // — but `$closing` is documented `bool`, and an untyped parameter otherwise infers Int.
+        // The register value is the same 0/1 either way; the TYPE is what `var_dump($closing)`
+        // renders and what `$closing === true` compares, so php printed `bool(false)` where
+        // elephc printed `int(0)` and a strict comparison against `true` could never hold.
+        "filter" => vec![None, None, None, Some(PhpType::Bool)],
+        // `$value` carries whatever the option needs: an [mtime, atime] array for
+        // STREAM_META_TOUCH, an int for ACCESS/OWNER/GROUP, a string for the
+        // *_NAME options. Only Mixed spans all three, and the ABI keeps a boxed
+        // Mixed in one register, so the pair-carrying `$path` stays aligned.
+        "stream_metadata" => strs(vec![PhpType::Str, PhpType::Int, PhpType::Mixed]),
+        _ => return None,
+    })
+}
+
+/// The return type each `streamWrapper` contract method's FIXED runtime ABI is built around.
+///
+/// Only the slots the dispatcher reads out of the string-result pair appear. The scalar slots need
+/// no entry: `bool`, `int` and a boxed `mixed` all travel in the same single result register, so an
+/// inference that lands on the wrong one of those still reaches the dispatcher intact. The stat
+/// slots are deliberately absent for the opposite reason — `stream_stat()`/`url_stat()` hand back a
+/// boxed Mixed cell on purpose, which is why the vtable documents them as having to stay untyped.
+fn stream_wrapper_contract_return_type(method_key: &str) -> Option<PhpType> {
+    match method_key {
+        "stream_read" | "dir_readdir" => Some(PhpType::Str),
+        _ => None,
+    }
 }

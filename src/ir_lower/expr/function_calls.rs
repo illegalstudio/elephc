@@ -64,6 +64,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_union_array_in_place_sort(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_array_internal_pointer(ctx, canonical, args, expr) {
         return value;
     }
@@ -81,8 +84,15 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
     let operands = if is_extern || is_user_function {
+        // php materializes a null variable before binding it to a by-reference parameter the
+        // callee writes; the caller's storage has to say so BEFORE the arguments are lowered,
+        // or the load hands over a null the callee cannot write a boxed value through.
+        if is_user_function {
+            prepare_by_ref_null_out_locals(ctx, sig.as_ref(), args);
+        }
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
+        promote_key_preserving_sort_receiver(ctx, canonical, args);
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
     let php_type = if is_extern || is_user_function {

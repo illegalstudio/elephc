@@ -12,9 +12,6 @@ use super::MIN_WRAPPER_SCHEME_LEN;
 use crate::codegen_support::runtime::data::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// The fixed warning text emitted when `fopen()` fails to open a file.
-const FOPEN_FAILED_WARNING: &str = "Warning: fopen(): Failed to open stream\n";
-
 /// fopen: open a file and return its file descriptor.
 /// Input:  x1/x2=filename string, x3/x4=mode string
 /// Output: x0=file descriptor (or negative on error)
@@ -29,9 +26,11 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.label_global("__rt_fopen");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
+    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes (48 original + 16 for filename save)
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+    emitter.instruction("str x1, [sp, #32]");                                   // save filename ptr for stream metadata recording
+    emitter.instruction("str x2, [sp, #40]");                                   // save filename len for stream metadata recording
 
     // -- recognise user-registered stream wrappers before opening a real file
     //    (Phase 10 dispatch v1: silent-false on match; the wrapper class is
@@ -58,10 +57,11 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fopen_uw_scan");                                // keep scanning for the scheme marker
 
     emitter.label("__rt_fopen_uw_check_wrappers");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x10");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_fopen_uw_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "x12");
+    emitter.instruction("cmp x11, x12");                                        // checked every allocated wrapper slot?
     emitter.instruction("b.ge __rt_fopen_uw_done");                             // no registered wrapper matched
     emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
@@ -84,6 +84,15 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fopen_uw_slot");                                // continue scanning slots
     emitter.label("__rt_fopen_uw_done");
 
+    // -- refuse plain paths while the file:// wrapper is unregistered --
+    // stream_wrapper_unregister("file") must actually stop opens, otherwise the
+    // call reports success and changes nothing. Index 0 is "file" in the built-in
+    // wrapper list.
+    abi::emit_symbol_address(emitter, "x9", "_disabled_builtin_wrappers");
+    emitter.instruction("ldr x10, [x9]");                                       // disabled built-in mask
+    emitter.instruction("tst x10, #1");                                         // is file:// unregistered?
+    emitter.instruction("b.ne __rt_fopen_fail");                                // report PHP false while it is
+
     // -- save mode string for later parsing --
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save mode ptr and len on stack
 
@@ -94,7 +103,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- parse mode string to derive open() flags --
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // reload mode ptr and len
     emitter.instruction("cmp x4, #0");                                          // reject an empty fopen() mode before reading the first byte
-    emitter.instruction("b.eq __rt_fopen_fail");                                // empty modes fail like PHP and return false
+    emitter.instruction("b.eq __rt_fopen_bad_mode");                            // php words the empty mode too: it prints `' as the value
     emitter.instruction("ldrb w9, [x3]");                                       // load first character of mode string
 
     // -- check for 'r' mode --
@@ -113,20 +122,60 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- check for 'a' mode (append) --
     emitter.label("__rt_fopen_check_a");
     emitter.instruction("cmp w9, #0x61");                                       // compare with 'a'
-    emitter.instruction("b.ne __rt_fopen_fail");                                // reject unsupported fopen() mode letters
+    emitter.instruction("b.ne __rt_fopen_check_c");                             // if not 'a', check for 'c'
     emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_append())); // O_WRONLY|O_CREAT|O_APPEND
+    emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
+
+    // -- check for 'c' mode (create or open, never truncate) --
+    emitter.label("__rt_fopen_check_c");
+    emitter.instruction("cmp w9, #0x63");                                       // compare with 'c'
+    emitter.instruction("b.ne __rt_fopen_check_x");                             // if not 'c', check for 'x'
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat())); // O_WRONLY|O_CREAT
+    emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
+
+    // -- check for 'x' mode (create exclusively) --
+    emitter.label("__rt_fopen_check_x");
+    emitter.instruction("cmp w9, #0x78");                                       // compare with 'x'
+    emitter.instruction("b.ne __rt_fopen_bad_mode");                            // reject unsupported fopen() mode letters
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_excl())); // O_WRONLY|O_CREAT|O_EXCL
     // fall through to check_plus
 
-    // -- check if second char is '+' to enable read+write --
+    // -- a '+' anywhere in the mode enables read+write --
+    // PHP looks for the character across the whole mode, so `rb+` upgrades exactly like `r+`;
+    // inspecting only the second byte left `rb+` read-only and its writes silently failing.
     emitter.label("__rt_fopen_check_plus");
-    emitter.instruction("cmp x4, #1");                                          // check if mode string has more than 1 char
-    emitter.instruction("b.le __rt_fopen_do_open");                             // if only 1 char, skip '+' check
-    emitter.instruction("ldrb w10, [x3, #1]");                                  // load second character of mode string
-    emitter.instruction("cmp w10, #0x2B");                                      // compare with '+'
-    emitter.instruction("b.ne __rt_fopen_do_open");                             // if not '+', keep original flags
+    emitter.instruction("mov x10, #0");                                         // index of the mode byte under inspection
+    emitter.label("__rt_fopen_plus_scan");
+    emitter.instruction("cmp x10, x4");                                         // scanned the whole mode string?
+    emitter.instruction("b.ge __rt_fopen_check_cloexec");                       // no '+' present: keep the base flags
+    emitter.instruction("ldrb w11, [x3, x10]");                                 // load one mode byte
+    emitter.instruction("cmp w11, #0x2B");                                      // compare with '+'
+    emitter.instruction("b.eq __rt_fopen_plus_found");                          // upgrade the access mode
+    emitter.instruction("add x10, x10, #1");                                    // advance to the next mode byte
+    emitter.instruction("b __rt_fopen_plus_scan");                              // keep scanning
+    emitter.label("__rt_fopen_plus_found");
     // -- upgrade to O_RDWR: clear O_RDONLY/O_WRONLY bits, set O_RDWR --
     emitter.instruction("and x1, x1, #0xFFFFFFFFFFFFFFFC");                     // clear lowest 2 bits (O_RDONLY/O_WRONLY)
     emitter.instruction("orr x1, x1, #0x2");                                    // set O_RDWR flag
+
+    // -- an 'e' anywhere in the mode asks for a descriptor that does not survive exec --
+    // php-src's plain-files wrapper adds O_CLOEXEC for it, and searches the WHOLE mode the same
+    // way it searches for '+', so `rbe` and `a+e` count. The bit changes nothing this process
+    // can see — only what a child of `proc_open()` inherits — which is why it is pinned by an
+    // assertion on the emitted assembly rather than by running a program.
+    emitter.label("__rt_fopen_check_cloexec");
+    emitter.instruction("mov x10, #0");                                         // index of the mode byte under inspection
+    emitter.label("__rt_fopen_cloexec_scan");
+    emitter.instruction("cmp x10, x4");                                         // scanned the whole mode string?
+    emitter.instruction("b.ge __rt_fopen_do_open");                             // no 'e' present: keep the flags as they are
+    emitter.instruction("ldrb w11, [x3, x10]");                                 // load one mode byte
+    emitter.instruction("cmp w11, #0x65");                                      // compare with 'e'
+    emitter.instruction("b.eq __rt_fopen_cloexec_found");                       // add the close-on-exec flag
+    emitter.instruction("add x10, x10, #1");                                    // advance to the next mode byte
+    emitter.instruction("b __rt_fopen_cloexec_scan");                           // keep scanning
+    emitter.label("__rt_fopen_cloexec_found");
+    emitter.instruction(&format!("mov x12, #0x{:X}", emitter.platform.o_cloexec())); // O_CLOEXEC
+    emitter.instruction("orr x1, x1, x12");                                     // set it alongside the access mode
 
     // -- perform the open syscall --
     emitter.label("__rt_fopen_do_open");
@@ -140,9 +189,54 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     }
     emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fopen_opened")); // branch if syscall succeeded
     emitter.label("__rt_fopen_fail");
-    emit_fopen_failed_warning(emitter);
+    // php-src names the path and the reason. x0 still carries the failed syscall result and
+    // the NUL-terminated path is at [sp, #0]; the two platforms report the failure
+    // differently, so the errno is normalised here rather than inside the composer.
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("neg x3, x0");                                      // Linux answers -errno
+    } else {
+        emitter.instruction("mov x3, x0");                                      // macOS answers the errno itself
+    }
+    // php-src warns TWICE when the scheme names no wrapper: first that the wrapper is missing,
+    // then the ordinary failed-open line. The order matters and the missing-wrapper line is the
+    // one that says WHY, so it goes first. The helper is silent for any path a wrapper claims.
+    emitter.instruction("str x3, [sp, #-16]!");                                 // the errno survives the extra warning
+    emitter.instruction("ldr x2, [sp, #16]");                                   // the null-terminated path
+    abi::emit_symbol_address(emitter, "x0", "_uww_name_fopen");
+    emitter.instruction(&format!("mov x1, #{}", "fopen".len()));                // bare callee name
+    emitter.instruction("bl __rt_unknown_wrapper_warning");
+    emitter.instruction("ldr x3, [sp], #16");                                   // restore the errno
+    emitter.instruction("ldr x2, [sp, #0]");                                    // the null-terminated path
+    abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fopen_prefix");
+    emitter.instruction(&format!("mov x1, #{}", "Warning: fopen(".len()));      // prefix length
+    emitter.instruction("bl __rt_open_failed_warning");
     emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
     emitter.instruction("b __rt_fopen_return");                                 // skip eof-flag reset on failed opens
+
+    // -- a mode php refuses outright: no syscall ran, so there is no errno to describe --
+    // php-src's `_php_stream_fopen` reports this through `php_stream_wrapper_log_error`, which the
+    // generic caller prints after "Failed to open stream: ":
+    //   Warning: fopen(/tmp/x): Failed to open stream: `z' is not a valid mode for fopen
+    // Sharing `__rt_fopen_fail` fed it a PATH POINTER where it expected an errno, so the line read
+    // `Unknown error: 80792944`, and it also dragged in the unknown-wrapper line, which php does
+    // not print here: the wrapper resolved fine, the MODE did not.
+    emitter.label("__rt_fopen_bad_mode");
+    // php resolves the WRAPPER before it parses the mode, so an unknown scheme is still named
+    // first and the mode line follows it. Measured: `fopen("nosuch://host/x","z")` prints the
+    // missing-wrapper line AND the mode line, while `fopen("/tmp/x","z")` prints the mode line
+    // alone — the helper is silent for any path a wrapper claims, which is what keeps them apart.
+    emitter.instruction("stp x3, x4, [sp, #-16]!");                             // the mode survives the extra warning
+    emitter.instruction("ldr x2, [sp, #16]");                                   // the null-terminated path, one push further down
+    abi::emit_symbol_address(emitter, "x0", "_uww_name_fopen");
+    emitter.instruction(&format!("mov x1, #{}", "fopen".len()));                // bare callee name
+    emitter.instruction("bl __rt_unknown_wrapper_warning");
+    emitter.instruction("ldp x3, x4, [sp], #16");                               // restore the mode pair
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the NUL-terminated path
+    emitter.instruction("mov x1, x3");                                          // the mode php quotes straight back
+    emitter.instruction("mov x2, x4");
+    emitter.instruction("bl __rt_fopen_bad_mode_warning");
+    emitter.instruction("mov x0, #-1");                                         // the caller boxes PHP false
+    emitter.instruction("b __rt_fopen_return");
 
     // -- silent-fail entry for user-registered wrappers (no warning) --
     emitter.label("__rt_fopen_silent_fail");
@@ -172,7 +266,44 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // unknown class → silent fail with -1
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper object pointer for later
 
+    // -- inject PHP's selected stream context into a declared `$context` property --
+    emitter.instruction("ldr x9, [x0]");                                        // load the wrapper class id
+    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // load this class's wrapper vtable
+    emitter.instruction("ldr x11, [x10, #184]");                                // slot 23 holds the context-property offset PLUS ONE
+    emitter.instruction("cbz x11, __rt_fopen_uw_context_dynamic");              // zero means undeclared; php invents the property and deprecates it
+    emitter.instruction("sub x11, x11, #1");                                    // recover the real offset, which may legitimately be zero
+    abi::emit_symbol_address(emitter, "x9", "_stream_current_context_handle");
+    emitter.instruction("ldr x1, [x9]");                                        // load the borrowed context selected by fopen lowering
+    emitter.instruction("cbz x1, __rt_fopen_uw_context_done");                  // callers outside fopen may have no selected context bridge
+    emitter.instruction("str x11, [sp, #56]");                                  // preserve the property offset across Mixed boxing
+    emitter.instruction("str x1, [sp, #40]");                                   // preserve the selected context while releasing the old property cell
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the wrapper object pointer
+    emitter.instruction("ldr x0, [x9, x11]");                                   // load the previous boxed Mixed context property
+    // An UNTYPED `public $context;` is initialised by its class prologue to the in-band tagged
+    // null, not to a cell pointer — the two spellings of the same PHP-null differ only in
+    // elephc's own representation. Freeing that sentinel dereferences `PHP_INT_MAX - 1`.
+    abi::emit_load_int_immediate(emitter, "x12", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("cmp x0, x12");
+    emitter.instruction("b.eq __rt_fopen_uw_context_box");                       // nothing owned yet: skip the release
+    emitter.instruction("bl __rt_mixed_free_deep");                             // release the replaced property's owned Mixed cell
+    emitter.label("__rt_fopen_uw_context_box");
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the selected context handle for boxing
+    emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
+    emitter.instruction("mov x2, #9");                                          // resource kind 9 = stream context
+    emitter.instruction("bl __rt_mixed_from_value");                            // box and retain the context for wrapper-object ownership
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the wrapper object pointer
+    emitter.instruction("ldr x10, [sp, #56]");                                  // reload the declared context-property offset
+    emitter.instruction("str x0, [x9, x10]");                                   // transfer the owned Mixed context cell into `$this->context`
+    emitter.instruction("b __rt_fopen_uw_context_done");
+    emitter.label("__rt_fopen_uw_context_dynamic");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the wrapper object
+    emitter.instruction("ldr x0, [x0]");                                        // its class id names the property's owner
+    emitter.instruction("bl __rt_dynamic_context_deprecation");
+    emitter.label("__rt_fopen_uw_context_done");
+
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the wrapper object after optional context boxing
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
@@ -183,18 +314,26 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("cbz x11, __rt_fopen_uw_fail");                         // class did not implement stream_open → silent fail
     emitter.instruction("str x11, [sp, #48]");                                  // save stream_open ptr across the upcoming blr
 
-    // -- allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("mov x12, #0");                                         // start scanning from handle slot 0
-    emitter.label("__rt_fopen_uw_handle_scan");
-    emitter.instruction("cmp x12, #256");                                       // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("b.ge __rt_fopen_uw_fail");                             // table full → silent fail (obj is freed on the shared fail path)
-    emitter.instruction("ldr x13, [x10, x12, lsl #3]");                         // load slot — null means free
-    emitter.instruction("cbz x13, __rt_fopen_uw_handle_alloc");                 // free slot found
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next handle slot
-    emitter.instruction("b __rt_fopen_uw_handle_scan");                         // keep scanning
-    emitter.label("__rt_fopen_uw_handle_alloc");
-    emitter.instruction("str x12, [sp, #40]");                                  // save the allocated handle slot index
+    // -- reserve a stream-handle slot, growing the table on demand --
+    // PHP places no limit on simultaneously open wrapper streams, so the only
+    // failure left is heap exhaustion, reported as -1.
+    emitter.instruction("bl __rt_user_wrapper_handles_reserve");                // x0 = free handle slot (-1 on heap exhaustion)
+    emitter.instruction("cmp x0, #0");                                          // did the reservation fail?
+    emitter.instruction("b.lt __rt_fopen_uw_fail");                             // silent fail (obj is freed on the shared fail path)
+    emitter.instruction("str x0, [sp, #40]");                                   // save the allocated handle slot index
+
+    // -- stand the FILTER suppression down for the length of the wrapper's PHP --
+    // A `php://filter/...` open silences its inner opener, and for a user-wrapper resource the
+    // inner opener IS this dispatch. php-src silences that open by dropping `REPORT_ERRORS` from
+    // the flags it hands down, which reaches the open's own diagnostics and stops there: PHP
+    // running inside `stream_open` warns exactly as it would anywhere else. Holding the scope
+    // across the call instead swallowed every one of those warnings. `@` is a DIFFERENT counter
+    // and is deliberately left standing, so `@fopen("php://filter/...")` is still silent
+    // throughout — including here.
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
+    emitter.instruction("ldr x10, [x9]");                                       // the filter scope this open is holding
+    emitter.instruction("str x10, [sp, #56]");                                  // park it in the dispatch scratch's spare slot
+    emitter.instruction("str xzr, [x9]");                                       // the wrapper's PHP warns in php's own words
 
     // -- call stream_open(obj, path, mode, options=0) --
     emitter.instruction("ldr x0, [sp, #32]");                                   // $this = wrapper object
@@ -216,12 +355,18 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("blr x11");                                             // invoke stream_open; x0 = owned Mixed cell
     emitter.instruction("bl __rt_wrapper_unbox_int");                           // x0 = the boolean, reference released
     emitter.label("__rt_fopen_uw_called");
+    // Back in runtime code: the enclosing filtered open is owed its scope again, and it is owed
+    // it BEFORE the fail branch, whose silent -1 the filter's own failed-open line replaces.
+    // x9/x10 only, so the boolean `stream_open` returned survives in x0.
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
+    emitter.instruction("ldr x10, [sp, #56]");                                  // the parked filter scope
+    emitter.instruction("str x10, [x9]");                                       // republish it for the rest of the open
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // stream_open returned false → silent fail (obj is freed on the shared fail path)
 
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the handle slot index
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the wrapper object pointer
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("str x13, [x10, x12, lsl #3]");                         // _user_wrapper_handles[slot] = obj
     emitter.instruction("mov x0, #0x4000");                                     // low 16 bits of USER_WRAPPER_FD_BASE = 0x40000000
     emitter.instruction("lsl x0, x0, #16");                                     // shift into bits 30..16 to form 0x40000000
@@ -239,11 +384,9 @@ pub fn emit_fopen(emitter: &mut Emitter) {
 
     // -- restore frame and return fd in x0 --
     emitter.label("__rt_fopen_opened");
-    abi::emit_symbol_address(emitter, "x9", "_eof_flags");
-    emitter.instruction("strb wzr, [x9, x0]");                                  // clear stale EOF state for the newly opened descriptor
     emitter.label("__rt_fopen_return");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller with fd in x0
 }
 
@@ -289,10 +432,11 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fopen_uw_scan_x86");                          // keep scanning for the scheme marker
 
     emitter.label("__rt_fopen_uw_check_wrappers_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
+    super::emit_load_table_base(emitter, "r10");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_fopen_uw_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "r12");
+    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_fopen_uw_done_x86");                          // no registered wrapper matched
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
@@ -317,6 +461,15 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r11");                                             // advance the slot index
     emitter.instruction("jmp __rt_fopen_uw_slot_x86");                          // continue scanning slots
     emitter.label("__rt_fopen_uw_done_x86");
+
+    // -- refuse plain paths while the file:// wrapper is unregistered --
+    // The AArch64 helper has always done this; without it here,
+    // `stream_wrapper_unregister("file")` reported success on x86_64 and then changed nothing,
+    // so opens kept working. Index 0 is "file" in the built-in wrapper list.
+    abi::emit_symbol_address(emitter, "r9", "_disabled_builtin_wrappers");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // disabled built-in mask
+    emitter.instruction("test r10, 1");                                         // is file:// unregistered?
+    emitter.instruction("jnz __rt_fopen_fail_x86");                             // report PHP false while it is
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the elephc mode pointer while the filename string is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the elephc mode length while the filename string is converted to a C string
@@ -343,14 +496,50 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fopen_check_a_x86");
     emitter.instruction("cmp r11b, 0x61");                                      // does the mode string start with 'a' for append writes?
-    emitter.instruction("jne __rt_fopen_fail_x86");                             // reject unsupported fopen() mode letters
+    emitter.instruction("jne __rt_fopen_check_c_x86");                          // if not, fall through to the create-mode check
     emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_append())); // select O_WRONLY|O_CREAT|O_APPEND for the Linux append-mode fopen() path
+    emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
 
+    emitter.label("__rt_fopen_check_c_x86");
+    emitter.instruction("cmp r11b, 0x63");                                      // does the mode string start with 'c' for create-without-truncate writes?
+    emitter.instruction("jne __rt_fopen_check_x_x86");                          // if not, fall through to the exclusive-create check
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat())); // select O_WRONLY|O_CREAT for the Linux create-mode fopen() path
+    emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
+
+    emitter.label("__rt_fopen_check_x_x86");
+    emitter.instruction("cmp r11b, 0x78");                                      // does the mode string start with 'x' for exclusive creation?
+    emitter.instruction("jne __rt_fopen_bad_mode_x86");                         // reject unsupported fopen() mode letters, and an empty mode's NUL with them
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_excl())); // select O_WRONLY|O_CREAT|O_EXCL for the Linux exclusive-create fopen() path
+
+    // See the AArch64 counterpart: PHP looks for '+' across the whole mode, so `rb+` upgrades
+    // exactly like `r+`. The C mode string is null-terminated, which bounds the scan.
     emitter.label("__rt_fopen_check_plus_x86");
-    emitter.instruction("cmp BYTE PTR [r10 + 1], 0x2B");                        // does the mode string request the read-write '+' fopen() upgrade?
-    emitter.instruction("jne __rt_fopen_do_open_x86");                          // keep the base flags when the mode string does not contain '+'
+    emitter.instruction("mov r11, r10");                                        // walk the null-terminated C mode string
+    emitter.label("__rt_fopen_plus_scan_x86");
+    emitter.instruction("movzx eax, BYTE PTR [r11]");                           // load one mode byte
+    emitter.instruction("test al, al");                                         // reached the terminator?
+    emitter.instruction("jz __rt_fopen_check_cloexec_x86");                     // no '+' present: keep the base flags
+    emitter.instruction("cmp al, 0x2B");                                        // does the mode string request the read-write '+' fopen() upgrade?
+    emitter.instruction("je __rt_fopen_plus_found_x86");                        // upgrade the access mode
+    emitter.instruction("inc r11");                                             // advance to the next mode byte
+    emitter.instruction("jmp __rt_fopen_plus_scan_x86");                        // keep scanning
+    emitter.label("__rt_fopen_plus_found_x86");
     emitter.instruction("and esi, 0xFFFFFFFC");                                 // clear the low access-mode bits before upgrading the Linux fopen() flags to O_RDWR
     emitter.instruction("or esi, 0x2");                                         // set O_RDWR so 'r+'/'w+'/'a+' open the file for both reading and writing
+
+    // See the AArch64 counterpart: an 'e' anywhere in the mode adds O_CLOEXEC.
+    emitter.label("__rt_fopen_check_cloexec_x86");
+    emitter.instruction("mov r11, r10");                                        // walk the null-terminated C mode string again
+    emitter.label("__rt_fopen_cloexec_scan_x86");
+    emitter.instruction("movzx eax, BYTE PTR [r11]");                           // load one mode byte
+    emitter.instruction("test al, al");                                         // reached the terminator?
+    emitter.instruction("jz __rt_fopen_do_open_x86");                           // no 'e' present: keep the flags as they are
+    emitter.instruction("cmp al, 0x65");                                        // does the mode ask for a close-on-exec descriptor?
+    emitter.instruction("je __rt_fopen_cloexec_found_x86");                     // add the close-on-exec flag
+    emitter.instruction("inc r11");                                             // advance to the next mode byte
+    emitter.instruction("jmp __rt_fopen_cloexec_scan_x86");                     // keep scanning
+    emitter.label("__rt_fopen_cloexec_found_x86");
+    emitter.instruction(&format!("or esi, 0x{:X}", emitter.platform.o_cloexec())); // set O_CLOEXEC alongside the access mode
 
     emitter.label("__rt_fopen_do_open_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the converted C pathname as the first libc open() argument
@@ -359,9 +548,44 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test eax, eax");                                       // did libc open() return a negative C int descriptor?
     emitter.instruction("jns __rt_fopen_opened_x86");                           // skip the warning when fopen() succeeded
     emitter.label("__rt_fopen_fail_x86");
-    emit_fopen_failed_warning(emitter);
+    // The libc wrappers report failure through errno rather than the return value, so the
+    // reason is fetched here and the composer only formats.
+    emitter.instruction("call __errno_location");
+    emitter.instruction("movsxd rcx, DWORD PTR [rax]");                         // the errno to describe
+    // php-src warns TWICE when the scheme names no wrapper: first that the wrapper is missing,
+    // then the ordinary failed-open line. The order matters and the missing-wrapper line is the
+    // one that says WHY, so it goes first. The helper is silent for any path a wrapper claims.
+    emitter.instruction("push rcx");                                            // the errno survives the extra warning
+    emitter.instruction("push rcx");                                            // keep rsp 16-byte aligned for the call
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
+    abi::emit_symbol_address(emitter, "rdi", "_uww_name_fopen");
+    emitter.instruction(&format!("mov esi, {}", "fopen".len()));                // bare callee name
+    emitter.instruction("call __rt_unknown_wrapper_warning");
+    emitter.instruction("pop rcx");                                             // discard the alignment copy
+    emitter.instruction("pop rcx");                                             // restore the errno
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
+    abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fopen_prefix");
+    emitter.instruction("mov esi, 15");                                          // prefix length
+    emitter.instruction("call __rt_open_failed_warning");
     emitter.instruction("mov rax, -1");                                         // normalize all open failures to the PHP false sentinel path
     emitter.instruction("jmp __rt_fopen_return_x86");                           // skip eof-flag reset on failed opens
+    // See the AArch64 counterpart: a mode php refuses outright ran no syscall, so there is no
+    // errno to describe and the unknown-wrapper line does not belong to it either. The ELEPHC
+    // mode pair is still in the frame, which is what php quotes back — the `__rt_cstr2` copy has
+    // no length of its own.
+    emitter.label("__rt_fopen_bad_mode_x86");
+    // See the AArch64 counterpart: php names an unknown wrapper first, then the mode.
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
+    abi::emit_symbol_address(emitter, "rdi", "_uww_name_fopen");
+    emitter.instruction(&format!("mov esi, {}", "fopen".len()));                // bare callee name
+    emitter.instruction("call __rt_unknown_wrapper_warning");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the NUL-terminated path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // the mode php quotes straight back
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_fopen_bad_mode_warning");
+    emitter.instruction("mov rax, -1");                                         // the caller boxes PHP false
+    emitter.instruction("jmp __rt_fopen_return_x86");
+
     emitter.label("__rt_fopen_silent_fail_x86");
     emitter.instruction("mov rax, -1");                                         // return -1 without emitting a warning (user wrapper match)
     emitter.instruction("jmp __rt_fopen_return_x86");                           // share the common return path
@@ -392,7 +616,49 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // unknown class → silent fail with -1
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // save the wrapper object pointer for later
 
+    // -- inject PHP's selected stream context into a declared `$context` property --
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the wrapper class id
+    abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load this class's wrapper vtable
+    emitter.instruction("mov r10, QWORD PTR [r11 + 184]");                      // slot 23 holds the offset PLUS ONE
+    emitter.instruction("test r10, r10");                                       // does the wrapper declare an injectable context property?
+    emitter.instruction("jz __rt_fopen_uw_context_dynamic_x86");                // zero means undeclared; php deprecates the invented property
+    emitter.instruction("sub r10, 1");                                          // recover the real offset, which may legitimately be zero
+    abi::emit_symbol_address(emitter, "r11", "_stream_current_context_handle");
+    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the borrowed context selected by fopen lowering
+    emitter.instruction("test rdi, rdi");                                       // did this caller publish a selected context?
+    emitter.instruction("jz __rt_fopen_uw_context_done_x86");                   // callers outside fopen may have no context bridge
+    emitter.instruction("mov QWORD PTR [rsp + 56], r10");                       // preserve the property offset across Mixed boxing
+    emitter.instruction("mov QWORD PTR [rsp + 40], rdi");                       // preserve the selected context while releasing the old property cell
+    emitter.instruction("mov r11, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10]");                      // load the previous boxed Mixed context property
+    // An UNTYPED `public $context;` is initialised by its class prologue to the in-band tagged
+    // null, not to a cell pointer — the two spellings of the same PHP-null differ only in
+    // elephc's own representation. Freeing that sentinel dereferences `PHP_INT_MAX - 1`.
+    emitter.instruction(&format!(
+        "mov r9, {}",
+        crate::codegen_support::sentinels::NULL_SENTINEL
+    ));
+    emitter.instruction("cmp rax, r9");
+    emitter.instruction("je __rt_fopen_uw_context_box_x86");                    // nothing owned yet: skip the release
+    emitter.instruction("call __rt_mixed_free_deep");                           // release the replaced property's owned Mixed cell
+    emitter.label("__rt_fopen_uw_context_box_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // reload the selected context handle for boxing
+    emitter.instruction("mov rax, 9");                                          // runtime tag 9 = resource
+    emitter.instruction("mov rsi, 9");                                          // resource kind 9 = stream context
+    emitter.instruction("call __rt_mixed_from_value");                          // box and retain the context for wrapper-object ownership
+    emitter.instruction("mov r10, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
+    emitter.instruction("mov r11, QWORD PTR [rsp + 56]");                       // reload the declared context-property offset
+    emitter.instruction("mov QWORD PTR [r10 + r11], rax");                      // transfer the owned Mixed context cell into `$this->context`
+    emitter.instruction("jmp __rt_fopen_uw_context_done_x86");
+    emitter.label("__rt_fopen_uw_context_dynamic_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // the wrapper object
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // its class id names the property's owner
+    emitter.instruction("call __rt_dynamic_context_deprecation");
+    emitter.label("__rt_fopen_uw_context_done_x86");
+
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // reload the wrapper object after optional context boxing
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
@@ -404,19 +670,13 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // no stream_open → silent fail
     emitter.instruction("mov QWORD PTR [rsp + 48], r11");                       // save stream_open ptr across the upcoming call
 
-    // -- allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("xor r12, r12");                                        // start scanning from handle slot 0
-    emitter.label("__rt_fopen_uw_handle_scan_x86");
-    emitter.instruction("cmp r12, 256");                                        // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("jge __rt_fopen_uw_fail_x86");                          // table full → silent fail (obj is freed on the shared fail path)
-    emitter.instruction("mov r13, QWORD PTR [r10 + r12 * 8]");                  // load slot — null means free
-    emitter.instruction("test r13, r13");                                       // is this slot free?
-    emitter.instruction("jz __rt_fopen_uw_handle_alloc_x86");                   // free slot found
-    emitter.instruction("inc r12");                                             // advance to the next handle slot
-    emitter.instruction("jmp __rt_fopen_uw_handle_scan_x86");                   // keep scanning
-    emitter.label("__rt_fopen_uw_handle_alloc_x86");
-    emitter.instruction("mov QWORD PTR [rsp + 40], r12");                       // save the allocated handle slot index
+    // -- reserve a stream-handle slot, growing the table on demand --
+    // PHP places no limit on simultaneously open wrapper streams, so the only
+    // failure left is heap exhaustion, reported as -1.
+    emitter.instruction("call __rt_user_wrapper_handles_reserve");              // rax = free handle slot (-1 on heap exhaustion)
+    emitter.instruction("test rax, rax");                                       // did the reservation fail?
+    emitter.instruction("js __rt_fopen_uw_fail_x86");                           // silent fail (obj is freed on the shared fail path)
+    emitter.instruction("mov QWORD PTR [rsp + 40], rax");                       // save the allocated handle slot index
 
     // -- call stream_open(obj, path, mode, options=0, opened_path_addr) --
     //    The 7th int-arg (opened_path scratch address) overflows the 6-reg
@@ -425,6 +685,14 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     //    shifts the dispatch scratch frame by +16 only across the call;
     //    we load r11 (stream_open ptr) BEFORE the sub so its [rsp+48]
     //    reference is still valid.
+    // See the AArch64 counterpart: the FILTER suppression stands down for the wrapper's PHP,
+    // and `@`'s counter is deliberately left standing. Parked before the `sub rsp, 16` below so
+    // the slot is addressed the same way on both sides of the call.
+    abi::emit_symbol_address(emitter, "r10", "_php_filter_suppression");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // the filter scope this open is holding
+    emitter.instruction("mov QWORD PTR [rsp + 56], r11");                       // park it in the dispatch scratch's spare slot
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // the wrapper's PHP warns in php's own words
+
     emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // $this = wrapper object
     emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                        // path ptr
     emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // path len
@@ -444,13 +712,18 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fopen_uw_called_x86");                         // the declared shape needs no conversion
     emitter.instruction("call __rt_wrapper_unbox_int");                         // rax = the boolean, reference released
     emitter.label("__rt_fopen_uw_called_x86");
+    // See the AArch64 counterpart: republish the parked scope BEFORE the fail branch. r10/r11
+    // only, so the boolean `stream_open` returned survives in rax.
+    abi::emit_symbol_address(emitter, "r10", "_php_filter_suppression");
+    emitter.instruction("mov r11, QWORD PTR [rsp + 56]");                       // the parked filter scope
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // republish it for the rest of the open
     emitter.instruction("test rax, rax");                                       // did stream_open return false?
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // stream_open returned false → silent fail (obj is freed on the shared fail path)
 
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("mov r12, QWORD PTR [rsp + 40]");                       // reload the handle slot index
     emitter.instruction("mov r13, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
     emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
@@ -468,30 +741,9 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fopen_opened_x86");
     emitter.instruction("cdqe");                                                // normalize the successful C int fd into the runtime's 64-bit descriptor value
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the newly opened descriptor
-    emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
     emitter.label("__rt_fopen_return_x86");
 
     emitter.instruction("add rsp, 32");                                         // release the temporary pathname and mode spill slots before returning the file descriptor
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 fopen() helper completes
     emitter.instruction("ret");                                                 // return the libc open() file descriptor or negative error value in rax
-}
-
-/// Emits the fixed "fopen() failed" warning via the diagnostic runtime helper.
-/// AArch64: passes pointer in x1, length in x2, calls `__rt_diag_warning`.
-/// x86_64: passes pointer in rdi, length in esi, calls `__rt_diag_warning`.
-/// Uses `FOPEN_FAILED_WARNING` as the diagnostic text.
-fn emit_fopen_failed_warning(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x1", "_diag_fopen_failed_msg");  // pass the fopen() warning text pointer to the diagnostic helper
-            emitter.instruction(&format!("mov x2, #{}", FOPEN_FAILED_WARNING.len())); // pass the fopen() warning byte length to the diagnostic helper
-            emitter.instruction("bl __rt_diag_warning");                        // emit or suppress the fopen() failure warning
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "rdi", "_diag_fopen_failed_msg"); // pass the fopen() warning text pointer to the diagnostic helper
-            emitter.instruction(&format!("mov esi, {}", FOPEN_FAILED_WARNING.len())); // pass the fopen() warning byte length to the diagnostic helper
-            emitter.instruction("call __rt_diag_warning");                      // emit or suppress the fopen() failure warning
-        }
-    }
 }

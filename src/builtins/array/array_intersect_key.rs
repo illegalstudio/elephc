@@ -32,6 +32,9 @@ builtin! {
 /// argument once for side effects. The result preserves the first-operand array shape.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty1 = ty1.array_or_false_member().cloned().unwrap_or(ty1);
     if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(
             cx.span,

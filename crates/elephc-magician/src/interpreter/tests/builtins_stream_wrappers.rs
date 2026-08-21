@@ -449,6 +449,78 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval passes php's own `url_stat()` flags, rebuilds php's stat array, and selects
+/// php's permission triad.
+///
+/// Three measured divergences, all silent. eval sent `$flags` 0 to every caller, where php varies
+/// it per builtin — `PHP_STREAM_URL_STAT_NOCACHE`(4) for the value readers, `|LINK`(5) for the two
+/// that do not follow a symlink, `|QUIET`(6) for the silent predicates, all three (7) for
+/// `is_link()`. `stat()` handed the wrapper's OWN array back, so a wrapper naming only string keys
+/// gave `$s[2]` nothing where php answers a full 26-entry array with every unnamed field at `0`.
+/// And the access checks tested `mode & 0o444`, so a `0400`(256) file owned by ANOTHER user read as
+/// readable; php picks ONE triad — owner on a uid match, else group, else world — and tests a
+/// single bit, so it answers false there and true for `0004`(4).
+///
+/// Every probe uses its own path: php keeps a one-entry stat cache, so reusing one path would let
+/// it skip the second `url_stat()` and the marker sequence would stop matching. Measured on php
+/// 8.5.6 as `[6][7][4][5][4][5]|[4]33188,33188,0,0,0|[4]zero|[6]r[6]-[6]r[6]-[6]-`. The owner uid
+/// is spliced in because eval has no `posix_getuid()` to ask with.
+#[test]
+fn execute_program_url_stat_uses_php_flags_shape_and_permission_triad() {
+    // SAFETY: getuid takes no arguments and cannot fail.
+    let me = unsafe { libc::getuid() };
+    let source = format!(
+        r#"class EvalStatFlagsW {{
+    public function url_stat($path, $flags) {{
+        echo "[", $flags, "]";
+        if (str_contains($path, "sparse")) {{
+            return ["mode" => 33188];
+        }}
+        if (str_contains($path, "mine")) {{
+            return ["mode" => 256, "uid" => {me}, "gid" => 4242];
+        }}
+        if (str_contains($path, "other")) {{
+            return ["mode" => 256, "uid" => 4242, "gid" => 4242];
+        }}
+        if (str_contains($path, "world")) {{
+            return ["mode" => 4, "uid" => 4242, "gid" => 4242];
+        }}
+        return ["mode" => 33188, "size" => 1234, "mtime" => 77, "uid" => 501];
+    }}
+}}
+stream_wrapper_register("uflag", "EvalStatFlagsW");
+is_dir("uflag://a");
+is_link("uflag://b");
+filemtime("uflag://c");
+filetype("uflag://d");
+stat("uflag://e");
+lstat("uflag://f");
+echo "|";
+$s = stat("uflag://sparse1");
+echo $s[2], ",", $s["mode"], ",", $s[7], ",", $s["size"], ",", $s[12];
+echo "|";
+echo filesize("uflag://sparse2") === 0 ? "zero" : "bad";
+echo "|";
+echo is_readable("uflag://mine1") ? "r" : "-";
+echo is_readable("uflag://other1") ? "r" : "-";
+echo is_readable("uflag://world1") ? "r" : "-";
+echo is_writable("uflag://mine2") ? "w" : "-";
+echo is_executable("uflag://mine3") ? "x" : "-";
+return true;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output, "[6][7][4][5][4][5]|[4]33188,33188,0,0,0|[4]zero|[6]r[6]-[6]r[6]-[6]-",
+        "php's flags per caller, php's own 26-entry array, and php's permission triad"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Starts a localhost HTTP server that returns one fixed body and then exits.
 fn spawn_http_once(body: &'static str) -> (u16, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind HTTP wrapper fixture");

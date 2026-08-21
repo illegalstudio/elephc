@@ -39,13 +39,53 @@ fn scan_radix_digits<F: Fn(char) -> bool>(cursor: &mut Cursor, is_digit: F) -> S
     s
 }
 
+/// Every word PHP's grammar reserves. A numeric literal butted straight against one of
+/// them ends at the keyword, because PHP's own lexer stops a number at the first
+/// character that cannot continue it and hands the rest to the parser:
+///
+/// ```text
+/// $ php -n -r 'var_dump(1and 2);'  => bool(true)
+/// $ php -n -r 'var_dump(1xor 2);'  => bool(false)
+/// $ php -n -r 'echo 1and 2;'       => 1
+/// ```
+///
+/// Mirrored by `elephc_magician::lexer::scan::RESERVED_WORDS_AFTER_NUMBER`, which has to
+/// draw the same boundary so a literal means the same thing compiled ahead of time and
+/// evaluated inside `eval()`.
+const RESERVED_WORDS_AFTER_NUMBER: &[&str] = &[
+    "abstract", "and", "array", "as", "break", "callable", "case", "catch", "class", "clone",
+    "const", "continue", "declare", "default", "die", "do", "echo", "else", "elseif", "empty",
+    "enddeclare", "endfor", "endforeach", "endif", "endswitch", "endwhile", "enum", "eval",
+    "exit", "extends", "final", "finally", "fn", "for", "foreach", "function", "global", "goto",
+    "if", "implements", "include", "include_once", "instanceof", "insteadof", "interface",
+    "isset", "list", "match", "namespace", "new", "or", "print", "private", "protected",
+    "public", "readonly", "require", "require_once", "return", "static", "switch", "throw",
+    "trait", "try", "unset", "use", "var", "while", "xor", "yield",
+];
+
+/// Returns true when the identifier starting at the cursor is a PHP reserved word, so the
+/// numeric literal just scanned must end here rather than be refused.
+fn next_word_is_reserved(cursor: &Cursor) -> bool {
+    let remaining = cursor.remaining();
+    let word: String = remaining
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .collect();
+    RESERVED_WORDS_AFTER_NUMBER
+        .iter()
+        .any(|keyword| word.eq_ignore_ascii_case(keyword))
+}
+
 /// After scanning a numeric literal, ensure no alphanumeric character or `_`
 /// follows. Catches malformed forms like `0o78`, `078`, `0xfg`, `0b12`, `1_`,
 /// and `1__0`, which PHP rejects at parse time but the lexer would otherwise
 /// silently split into two adjacent tokens.
+///
+/// A following PHP reserved word is not one of those: PHP terminates the number there and
+/// lexes the keyword separately, so `1and 2` is a valid expression rather than an error.
 fn validate_no_trailing_alnum(cursor: &Cursor, base_label: &str) -> Result<(), CompileError> {
     if let Some(ch) = cursor.peek() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
+        if (ch.is_ascii_alphanumeric() || ch == '_') && !next_word_is_reserved(cursor) {
             return Err(CompileError::new(
                 cursor.span(),
                 &format!("Unexpected character '{ch}' after {base_label} literal"),

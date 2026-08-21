@@ -473,6 +473,20 @@ fn test_error_sscanf_wrong_args() {
     );
 }
 
+/// Regression: `sscanf()`'s by-ref `$vars` form is bounded, and says so past the bound.
+///
+/// The form itself works now — `sscanf("alice 30", "%s %d", $name, $age)` assigns both variables
+/// and answers `int(2)`, as php does. Each arity is its own prelude function with that many
+/// by-reference parameters, so a call with more variables than the last declared arity has
+/// nothing to reach and is refused with a message that names the limit.
+#[test]
+fn test_error_sscanf_refuses_more_output_variables_than_it_declares() {
+    expect_error(
+        r#"<?php sscanf("1", "%d %d %d %d %d %d %d %d %d", $a, $b, $c, $d, $e, $f, $g, $h, $i);"#,
+        "sscanf(): at most 8 output variables are supported, got 9",
+    );
+}
+
 // --- v0.5: I/O function errors ---
 
 /// Verifies that `ptr_set()` rejects a string value, since ptr_set only accepts

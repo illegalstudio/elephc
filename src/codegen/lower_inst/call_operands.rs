@@ -84,6 +84,30 @@ pub(in crate::codegen) fn resolve_int_operand_to_result(
     Ok(())
 }
 
+/// Resolves a `?int` argument, answering `NULL_SENTINEL` when the value is null.
+///
+/// `resolve_int_operand_to_result` flattens a boxed null to `0` — the same answer a legitimate
+/// `0` gives — which is wrong for every php parameter whose null means "no bound":
+/// `fgets($h, null)` reads the whole line and `fwrite($h, $d, null)` writes every byte, while a
+/// `0` raised `Argument #2 ($length) must be greater than 0` and wrote nothing respectively. The
+/// value only reaches the builtin as a boxed cell when it arrives through a `mixed` binding —
+/// forwarding through an untyped function parameter is the usual route — so the null-typed and
+/// literal cases are settled statically and only the boxed one needs the runtime peek.
+pub(in crate::codegen) fn resolve_nullable_int_operand_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+) -> Result<()> {
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int_nullable");
+            Ok(())
+        }
+        _ => resolve_int_operand_to_result(ctx, value, context),
+    }
+}
+
 /// Moves the canonical integer result register into the target's first argument register.
 pub(super) fn move_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);

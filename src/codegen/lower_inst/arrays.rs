@@ -551,7 +551,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let index = expect_operand(inst, 1)?;
     let value = expect_operand(inst, 2)?;
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
-    let raw_value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let raw_value_ty = ctx.raw_value_php_type(value)?;
     let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
     require_integer_like_index(ctx.value_php_type(index)?, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
@@ -952,6 +952,10 @@ fn lower_array_set_aarch64(
             ctx.load_string_value_to_regs(value, "x2", "x3")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
         }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_reg(value, "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_resource");
+        }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x2")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
@@ -1096,6 +1100,10 @@ fn lower_array_set_x86_64(
             ctx.load_string_value_to_regs(value, "rdx", "rcx")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_str");
         }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_reg(value, "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_set_resource");
+        }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "rdx")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
@@ -1127,13 +1135,9 @@ fn emit_array_get_in_bounds_aarch64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            ctx.emitter.instruction(
-                &format!("add {}, {}, #24", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(
-                &format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)
-            );                                                                  // load the selected pointer-sized indexed-array element
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Resource(_) => {
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+            ctx.emitter.instruction(&format!("ldr {}, [{}, {}, lsl #3]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
             if matches!(elem_ty, PhpType::Callable) {
                 abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
             }
@@ -1222,13 +1226,9 @@ fn emit_array_get_in_bounds_x86_64(
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
-            ctx.emitter.instruction(
-                &format!("lea {}, [{} + 24]", array_reg, array_reg)
-            );                                                                  // skip the indexed-array header to reach element payloads
-            ctx.emitter.instruction(
-                &format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)
-            );                                                                  // load the selected pointer-sized indexed-array element
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Resource(_) => {
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + {} * 8]", index_reg, array_reg, index_reg)); // load the selected pointer-sized indexed-array element
             if matches!(elem_ty, PhpType::Callable) {
                 abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
             }
@@ -1534,7 +1534,7 @@ fn lower_array_push_aarch64(
     value: ValueId,
     elem_ty: &PhpType,
 ) -> Result<()> {
-    let value_ty = ctx.value_php_type(value)?;
+    let value_ty = ctx.raw_value_php_type(value)?;
     if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
         return lower_array_push_unboxed_mixed_aarch64(ctx, array, value, elem_ty);
     }
@@ -1545,11 +1545,26 @@ fn lower_array_push_aarch64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool => {
+        // `False` joins the boolean arm rather than falling through to the unsupported
+        // catch-all: it is PHP's `false` PSEUDO-TYPE, which `codegen_repr()` already
+        // represents as `Bool` and stores in the same one-word slot. A homogeneous
+        // literal narrows to it — `implode(',', [false, false])` refused to compile
+        // with `array_push for PHP type False` while `[true, false]`, which widens to
+        // `Bool`, compiled fine.
+        PhpType::Int | PhpType::Bool | PhpType::False => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_reg(value, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_resource_retain");
+            ctx.emitter.instruction("mov x1, x0");                              // pass the array-owned opaque resource handle to append
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            crate::codegen::emit_array_value_type_stamp(ctx.emitter, "x0", &value_ty);
         }
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::Int => {
             ctx.load_value_to_result(value)?;
@@ -1579,6 +1594,31 @@ fn lower_array_push_aarch64(
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the string append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
         }
+        // A NULLABLE SCALAR ARRIVES AS A UNION, NOT AS `TaggedScalar`. `raw_value_php_type`
+        // answers `int|null` for a `?int`, while its RUNTIME representation is the tagged
+        // immediate word — `codegen_repr()` says `TaggedScalar` for both the value and the
+        // element. The two arms above match the SPELLING `TaggedScalar`, so a `?int`
+        // returned from a function fell through to the refcounted arm below and
+        // `__rt_array_push_refcounted` dereferenced the tagged word as a heap pointer:
+        // `[maybe_int(1)]` crashed in `ldur x10, [x1, #-0x8]`, and `[maybe_int(0)]`
+        // printed the raw null sentinel as `int(9223372036854775806)`.
+        ref other
+            if other.codegen_repr() == PhpType::TaggedScalar
+                && elem_ty.codegen_repr() == PhpType::TaggedScalar =>
+        {
+            lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
+        }
+        ref other
+            if other.codegen_repr() == PhpType::TaggedScalar
+                && elem_ty.codegen_repr() == PhpType::Int =>
+        {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            ctx.emitter.instruction("mov x1, x0");                              // pass the nullable integer payload after PHP null-to-zero coercion
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
@@ -1602,7 +1642,7 @@ fn lower_array_push_x86_64(
     value: ValueId,
     elem_ty: &PhpType,
 ) -> Result<()> {
-    let value_ty = ctx.value_php_type(value)?;
+    let value_ty = ctx.raw_value_php_type(value)?;
     if array_push_value_needs_mixed_unbox(elem_ty, &value_ty) {
         return lower_array_push_unboxed_mixed_x86_64(ctx, array, value, elem_ty);
     }
@@ -1613,11 +1653,21 @@ fn lower_array_push_x86_64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool => {
+        // `False` joins the boolean arm here too; see the AArch64 counterpart.
+        PhpType::Int | PhpType::Bool | PhpType::False => {
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
+        PhpType::Resource(_) => {
+            ctx.load_value_to_reg(value, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_resource_retain");
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the array-owned opaque resource handle to append
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            crate::codegen::emit_array_value_type_stamp(ctx.emitter, "rax", &value_ty);
         }
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::Int => {
             ctx.load_value_to_result(value)?;
@@ -1646,6 +1696,25 @@ fn lower_array_push_x86_64(
             ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the string append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+        }
+        // See the AArch64 counterpart: a `?int` arrives as the union `int|null`, whose
+        // representation is the tagged word, so it must never reach the refcounted arm.
+        ref other
+            if other.codegen_repr() == PhpType::TaggedScalar
+                && elem_ty.codegen_repr() == PhpType::TaggedScalar =>
+        {
+            lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
+        }
+        ref other
+            if other.codegen_repr() == PhpType::TaggedScalar
+                && elem_ty.codegen_repr() == PhpType::Int =>
+        {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the nullable integer payload after PHP null-to-zero coercion
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(array, "r11")?;
@@ -1924,11 +1993,12 @@ fn lower_mixed_array_set_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     ctx.load_value_to_reg(index, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
-    if fresh_boxed_value {
-        emit_mixed_array_set_ref_marker_writeback_aarch64(ctx);
-        return Ok(());
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    // The marker write-through runs for BOTH shapes. Gating it on `fresh_boxed_value` meant a
+    // replacement that was ALREADY a boxed Mixed — everything `ichecked_add` produces, so every
+    // `$out[$i] = $a + $b` — went straight to the runtime setter, which replaces the element and
+    // never follows the marker to the caller's storage. `$out[0] = 99` wrote through and
+    // `$out[$i] = 70 + $i` did not, silently.
+    emit_mixed_array_set_ref_marker_writeback_aarch64(ctx, fresh_boxed_value);
     Ok(())
 }
 
@@ -1952,18 +2022,29 @@ fn lower_mixed_array_set_x86_64(
     ctx.load_value_to_reg(array, "rdi")?;
     ctx.load_value_to_reg(index, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
-    if fresh_boxed_value {
-        emit_mixed_array_set_ref_marker_writeback_x86_64(ctx);
-        return Ok(());
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    // See the AArch64 counterpart: the marker write-through runs for both shapes.
+    emit_mixed_array_set_ref_marker_writeback_x86_64(ctx, fresh_boxed_value);
     Ok(())
 }
 
 /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on AArch64.
-fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'_>) {
+///
+/// THE SCALAR ARM WRITES ONE WORD UNLESS THE CALLER CELL HOLDS A STRING. It used to write two
+/// unconditionally, and a caller variable holding an `int`/`float`/`bool` occupies ONE, so the
+/// second store landed in the NEIGHBOURING caller slot. `function h(&...$v) { $v[0] = 1;
+/// $v[1] = 2; }` therefore answered `(0, 2)`: writing index 1 overwrote index 0's storage with
+/// the high half of the boxed value. Writing them in the other order, or to non-adjacent
+/// indexes, worked — which is what made it look like anything but a width bug.
+///
+/// The rule mirrors `runtime_callable_invoker`'s READ path, which already loads the high word
+/// only for runtime tag 1: a string is `(pointer, length)` and every other scalar is one word.
+fn emit_mixed_array_set_ref_marker_writeback_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    fresh_boxed_value: bool,
+) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
+    let scalar_done_label = ctx.next_label("mixed_array_set_ref_scalar_done");
     let done_label = ctx.next_label("mixed_array_set_done");
 
     ctx.emitter.instruction("cmp x1, #0");                                      // reject negative indexes before checking for by-reference markers
@@ -1983,13 +2064,23 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
         &format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));             // transfer boxed Mixed replacements as handles rather than payload words
-    ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement Mixed low payload word
-    ctx.emitter.instruction("str x12, [x10]");                                  // write the replacement low word through the caller ref-cell
-    ctx.emitter.instruction("ldr x12, [x2, #16]");                              // load the replacement Mixed high payload word
-    ctx.emitter.instruction("str x12, [x10, #8]");                              // write the replacement high word through the caller ref-cell
-    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result while freeing only the Mixed wrapper
-    ctx.emitter.instruction("mov x0, x2");                                      // pass the consumed fresh Mixed wrapper to heap_free
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    ctx.emitter.instruction("ldr x9, [x2, #8]");                                // load the replacement Mixed low payload word
+    ctx.emitter.instruction("str x9, [x10]");                                   // write the replacement low word through the caller ref-cell
+    ctx.emitter.instruction(&format!("cmp x12, #{}", runtime_value_tag(&PhpType::Str))); // only a string caller cell is two words wide
+    ctx.emitter.instruction(&format!("b.ne {}", scalar_done_label));            // a one-word cell must not have its NEIGHBOUR overwritten
+    ctx.emitter.instruction("ldr x9, [x2, #16]");                               // load the replacement Mixed high payload word
+    ctx.emitter.instruction("str x9, [x10, #8]");                               // write the string length through the caller ref-cell
+    ctx.emitter.label(&scalar_done_label);
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result while disposing of only the Mixed wrapper
+    ctx.emitter.instruction("mov x0, x2");                                      // the replacement wrapper, now that its payload has been copied out
+    // A wrapper this lowering boxed itself is owned outright and freed. One that arrived ALREADY
+    // boxed was only retained on the way in, so it is RELEASED — freeing it would drop a
+    // reference the value's other holders still count on.
+    if fresh_boxed_value {
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
     ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the array pointer as the ArraySet result
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after marker write-through
 
@@ -2003,9 +2094,16 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
 }
 
 /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on x86_64.
-fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_>) {
+///
+/// Carries the same one-word/two-word rule as the AArch64 body above, for the same reason: a
+/// caller cell holding a scalar is ONE word, and writing two overwrote the neighbouring slot.
+fn emit_mixed_array_set_ref_marker_writeback_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    fresh_boxed_value: bool,
+) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
+    let scalar_done_label = ctx.next_label("mixed_array_set_ref_scalar_done");
     let done_label = ctx.next_label("mixed_array_set_done");
 
     ctx.emitter.instruction("cmp rsi, 0");                                      // reject negative indexes before checking for by-reference markers
@@ -2025,13 +2123,22 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
         &format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("je {}", mixed_cell_label));               // transfer boxed Mixed replacements as handles rather than payload words
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement Mixed low payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // write the replacement low word through the caller ref-cell
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 16]");                   // load the replacement Mixed high payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");                    // write the replacement high word through the caller ref-cell
+    ctx.emitter.instruction("mov r9, QWORD PTR [rdx + 8]");                     // load the replacement Mixed low payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10], r9");                         // write the replacement low word through the caller ref-cell
+    ctx.emitter.instruction(&format!("cmp r11, {}", runtime_value_tag(&PhpType::Str))); // only a string caller cell is two words wide
+    ctx.emitter.instruction(&format!("jne {}", scalar_done_label));             // a one-word cell must not have its NEIGHBOUR overwritten
+    ctx.emitter.instruction("mov r9, QWORD PTR [rdx + 16]");                    // load the replacement Mixed high payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r9");                     // write the string length through the caller ref-cell
+    ctx.emitter.label(&scalar_done_label);
     abi::emit_push_reg(ctx.emitter, "rdi");
-    ctx.emitter.instruction("mov rax, rdx");                                    // pass the consumed fresh Mixed wrapper to heap_free
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    ctx.emitter.instruction("mov rax, rdx");                                    // the replacement wrapper, now that its payload has been copied out
+    // See the AArch64 counterpart: a wrapper boxed here is freed, one that arrived already boxed
+    // is released.
+    if fresh_boxed_value {
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
     abi::emit_pop_reg(ctx.emitter, "rax");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after marker write-through
 
@@ -2063,6 +2170,9 @@ fn box_value_for_mixed_container(
 /// Returns the PHP element type for an indexed-array operand.
 fn indexed_array_element_type(array_ty: &PhpType, inst: &Instruction) -> Result<PhpType> {
     match array_ty {
+        PhpType::Array(elem_ty) if matches!(elem_ty.as_ref(), PhpType::Resource(_)) => {
+            Ok(elem_ty.as_ref().clone())
+        }
         PhpType::Array(elem_ty) => Ok(elem_ty.codegen_repr()),
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
@@ -2078,8 +2188,14 @@ fn effective_array_set_value_type(
     value_ty: &PhpType,
     inst: &Instruction,
 ) -> Result<PhpType> {
-    let elem_ty = elem_ty.codegen_repr();
-    let value_ty = value_ty.codegen_repr();
+    let elem_ty = match elem_ty {
+        PhpType::Resource(kind) => PhpType::Resource(kind.clone()),
+        other => other.codegen_repr(),
+    };
+    let value_ty = match value_ty {
+        PhpType::Resource(kind) => PhpType::Resource(kind.clone()),
+        other => other.codegen_repr(),
+    };
     if matches!(elem_ty, PhpType::Mixed) {
         return Ok(PhpType::Mixed);
     }
@@ -2105,6 +2221,7 @@ fn require_supported_array_set_value(value_ty: PhpType, inst: &Instruction) -> R
             | PhpType::Float
             | PhpType::Str
             | PhpType::TaggedScalar
+            | PhpType::Resource(_)
     ) {
         return Ok(value_ty);
     }
@@ -2133,6 +2250,9 @@ fn require_integer_like_index(index_ty: PhpType, inst: &Instruction) -> Result<(
 /// Rejects array-get result shapes that do not match the lowered array element type.
 fn require_array_get_result(elem_ty: &PhpType, inst: &Instruction) -> Result<()> {
     let result_ty = inst.result_php_type.codegen_repr();
+    if matches!(elem_ty, PhpType::Resource(_)) && result_ty == PhpType::Int {
+        return Ok(());
+    }
     if crate::codegen::sentinels::null_repr_is_tagged()
         && matches!(elem_ty, PhpType::Int)
         && result_ty == PhpType::TaggedScalar

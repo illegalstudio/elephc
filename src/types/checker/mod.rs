@@ -24,6 +24,7 @@ mod callables;
 mod driver;
 mod extern_decl;
 mod functions;
+pub(in crate::types) use functions::array_element_representation_widens;
 mod inference;
 mod loop_storage;
 mod method_pass;
@@ -68,6 +69,16 @@ pub(crate) struct Checker {
     pub function_variant_groups: HashMap<String, Vec<String>>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
+    /// Parameters a BODY widened, keyed by `(owner, parameter index)` — a function name, or
+    /// `Class::method`. A by-reference parameter recorded here holds boxed element slots because
+    /// its own body put them there, and no later call site may specialize it back to a narrow
+    /// element type: the caller's storage is what was widened. A parameter merely DECLARED
+    /// `array` is not in the set, which is how a `sort($a)` body keeps slots the backend sorts.
+    pub by_ref_widened_params: HashSet<(String, usize)>,
+    /// Functions whose signature is being re-resolved because their body widened a
+    /// by-reference array parameter. The set bounds that re-entry to one pass: `array<mixed>`
+    /// is the top of the element lattice, so a second pass cannot widen again.
+    pub resolving_by_ref_widening: HashSet<String>,
     /// Functions whose body is currently being checked.
     ///
     /// Recursive calls may use their provisional signature, but must not re-specialize the same

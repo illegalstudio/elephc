@@ -61,6 +61,7 @@ mod rtrim;
 mod sha1;
 mod str_contains;
 mod str_ends_with;
+pub(in crate::interpreter) mod str_getcsv;
 mod str_ireplace;
 mod str_pad;
 mod str_repeat;

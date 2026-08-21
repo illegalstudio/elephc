@@ -62,7 +62,9 @@ pub(crate) use array_keys::{
     normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
-pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
+pub(crate) use array_storage::{
+    array_storage_conversion, join_array_storage_conversion, key_preserving_sort_promotes,
+};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{

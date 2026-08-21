@@ -298,6 +298,23 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
+    // The `Directory` class and the `dir()` that mints one, injected only when the program
+    // references either. Runs beside the other class preludes, after include resolution so a
+    // reference inside an include is detected, and before name resolution so a namespaced caller
+    // resolves to it.
+    crate::progress::phase("dir-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::dir_prelude::inject_if_used(ast);
+    timings.record_since("dir-prelude", phase_started);
+
+    // php's scanf engine, injected only when the program references `sscanf()`/`fscanf()`, whose
+    // registry lowerings call into it. Runs after include resolution so a scan inside an include
+    // is detected, and before name resolution so the emitted call resolves to a declared function.
+    crate::progress::phase("scanf-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::scanf_prelude::inject_if_used(ast);
+    timings.record_since("scanf-prelude", phase_started);
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(

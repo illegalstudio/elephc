@@ -105,7 +105,9 @@ pub(super) fn normalize_method_map_for_eir(
     // Stream-wrapper and user-filter contract methods are invoked through
     // runtime vtables with raw fixed-ABI arguments; widening their untyped
     // params to boxed Mixed would desynchronize the dispatcher and the body.
-    let is_wrapper_class = methods.contains_key("stream_open");
+    let is_wrapper_class = methods
+        .keys()
+        .any(|key| crate::codegen_support::runtime::is_user_wrapper_marker_method(key));
     let is_filter_class = methods.contains_key("filter");
     for (method_key, signature) in methods.iter_mut() {
         if (is_wrapper_class

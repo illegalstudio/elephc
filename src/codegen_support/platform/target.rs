@@ -76,6 +76,20 @@ impl Platform {
         }
     }
 
+    /// `O_CLOEXEC` open flag bit — the value differs between macOS and Linux.
+    ///
+    /// php-src's plain-files wrapper sets it for an `fopen()` mode carrying an `e`
+    /// (`ext/standard/plain_wrapper.c`), which is the only way PHP code can ask for a descriptor
+    /// that does NOT survive `exec`. Nothing inside the process can observe the bit — it changes
+    /// only what a child sees — so the flag is pinned by asserting on the emitted assembly.
+    pub fn o_cloexec(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0100_0000,
+            Platform::Linux => 0x0008_0000,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `ioctl` request that reads terminal attributes — `TIOCGETA` on macOS,
     /// `TCGETS` on Linux. `stream_isatty()` issues it to detect a terminal.
     pub fn tty_get_request(&self) -> u32 {
@@ -139,6 +153,17 @@ impl Platform {
         }
     }
 
+    /// `SO_REUSEADDR` setsockopt option name. Differs between BSD (macOS) and
+    /// Linux: macOS uses 0x0004, Linux uses 2. php-src sets this on every socket
+    /// it binds, so a server that restarts can rebind a port still in TIME_WAIT.
+    pub fn so_reuseaddr(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0004,
+            Platform::Linux => 2,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `SO_BROADCAST` setsockopt option name. Differs between BSD (macOS) and
     /// Linux: macOS uses 0x0020, Linux uses 6. Enables sending to broadcast
     /// addresses on a UDP socket.
@@ -164,16 +189,6 @@ impl Platform {
         match self {
             Platform::MacOS => 27,
             Platform::Linux => 26,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-        }
-    }
-
-    /// `ECONNREFUSED` error number — 61 on macOS, 111 on Linux. `fsockopen()`
-    /// reports it generically when a connection cannot be established.
-    pub fn econnrefused(&self) -> i64 {
-        match self {
-            Platform::MacOS => 61,
-            Platform::Linux => 111,
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
@@ -210,6 +225,31 @@ impl Platform {
         match self {
             Platform::MacOS => 0x201,
             Platform::Linux => 0x41,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// Returns the `O_WRONLY | O_CREAT | O_EXCL` flag combination for `open()`.
+    ///
+    /// Creates a new file for writing and fails when one already exists, which is what PHP's
+    /// `x` fopen mode asks for.
+    pub fn o_wronly_creat_excl(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0xA01,
+            Platform::Linux => 0xC1,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// Returns the bare `O_APPEND` descriptor flag.
+    ///
+    /// Used to turn an already-open descriptor into an appending one through `fcntl(F_SETFL)`,
+    /// which is how a `php://memory` or `php://temp` stream opened with an `a` mode gets php's
+    /// "every write goes to the end" behaviour from the same code path a real file uses.
+    pub fn o_append(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0008,
+            Platform::Linux => 0x0400,
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }

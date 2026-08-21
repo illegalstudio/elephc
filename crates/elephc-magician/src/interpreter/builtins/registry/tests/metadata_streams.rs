@@ -15,9 +15,11 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             eval_declared_builtin_param_names("pclose"),
             Some(["handle"].as_slice())
         );
+        // php documents `opendir(string $directory, $context = null)`; `$context` is accepted and
+        // ignored, so the name is part of the signature even though nothing reads it.
         assert_eq!(
             eval_declared_builtin_param_names("opendir"),
-            Some(["directory"].as_slice())
+            Some(["directory", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("closedir"),
@@ -38,7 +40,6 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         for name in [
             "fclose",
             "fgetc",
-            "fgets",
             "feof",
             "fflush",
             "fpassthru",
@@ -59,9 +60,14 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             eval_declared_builtin_param_names("fread"),
             Some(["stream", "length"].as_slice())
         );
+        // fgets() carries PHP's optional $length, which bounds the line at $length - 1 bytes.
+        assert_eq!(
+            eval_declared_builtin_param_names("fgets"),
+            Some(["stream", "length"].as_slice())
+        );
         assert_eq!(
             eval_declared_builtin_param_names("fgetcsv"),
-            Some(["stream", "length", "separator"].as_slice())
+            Some(["stream", "length", "separator", "enclosure", "escape"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_default_value("fgetcsv", 2),
@@ -83,9 +89,10 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             eval_builtin_signature_shape("fsockopen").map(|shape| shape.by_ref_params),
             Some(["error_code", "error_message"].as_slice())
         );
+        // php's third parameter caps the write: `fwrite($stream, string $data, ?int $length = null)`.
         assert_eq!(
             eval_declared_builtin_param_names("fwrite"),
-            Some(["stream", "data"].as_slice())
+            Some(["stream", "data", "length"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("fseek"),
@@ -107,9 +114,11 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             eval_declared_builtin_default_value("stream_copy_to_stream", 2),
             Some(EvalBuiltinDefaultValue::Null)
         );
+        // php-src's stub is `int $offset = 0`, and `streamsfuncs.c` only seeks for `pos > 0`,
+        // so the default reads "keep the source where it is" rather than "rewind".
         assert_eq!(
             eval_declared_builtin_default_value("stream_copy_to_stream", 3),
-            Some(EvalBuiltinDefaultValue::Int(-1))
+            Some(EvalBuiltinDefaultValue::Int(0))
         );
         assert_eq!(
             eval_declared_builtin_param_names("stream_get_contents"),

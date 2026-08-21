@@ -6,8 +6,10 @@
 //!
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the file-lines helper.
-//! - The parameter list mirrors PHP's `file(string $filename, int $flags = 0)` and must stay
-//!   shape-identical to the static registry declaration, which the builtin parity gate asserts.
+//! - The parameter list mirrors PHP's `file(string $filename, int $flags = 0, $context = null)`
+//!   and must stay shape-identical to the static registry declaration, which the builtin
+//!   parity gate asserts. `$context` is accepted and ignored here: eval has no stream-context
+//!   plumbing, and dropping the parameter would put the two registries out of shape.
 
 eval_builtin! {
     contract: "file",
@@ -37,7 +39,7 @@ pub(in crate::interpreter) fn eval_file_declared_values_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
         [filename] => eval_file_result(*filename, 0, context, values),
-        [filename, flags] => {
+        [filename, flags] | [filename, flags, _] => {
             let flags = eval_int_value(*flags, values)?;
             eval_file_result(*filename, flags, context, values)
         }
@@ -57,7 +59,7 @@ pub(in crate::interpreter) fn eval_builtin_file(
             let filename = eval_expr(filename, context, scope, values)?;
             eval_file_result(filename, 0, context, values)
         }
-        [filename, flags] => {
+        [filename, flags] | [filename, flags, _] => {
             let filename = eval_expr(filename, context, scope, values)?;
             let flags = eval_expr(flags, context, scope, values)?;
             let flags = eval_int_value(flags, values)?;
@@ -86,14 +88,21 @@ pub(in crate::interpreter) fn eval_file_result(
             let bytes = values.string_bytes(result)?;
             return eval_file_lines_array(&bytes, flags, values);
         }
-        values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
-        return values.array_new(0);
+        values.warning(&format!(
+            "Warning: file({path}): Failed to open stream: {}\n",
+            crate::stream_resources::EVAL_OPEN_DEFAULT_REASON
+        ))?;
+        // php answers false for a file it cannot read, and the compiled runtime agrees.
+        return values.bool_value(false);
     }
     let bytes = match super::file_get_contents::eval_read_path_or_wrapper_bytes(&path) {
         Ok(bytes) => bytes,
-        Err(_) => {
-            values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
-            return values.array_new(0);
+        Err(reason) => {
+            values.warning(&format!(
+                "Warning: file({path}): Failed to open stream: {reason}\n"
+            ))?;
+            // php answers false for a file it cannot read, and the compiled runtime agrees.
+        return values.bool_value(false);
         }
     };
     eval_file_lines_array(&bytes, flags, values)

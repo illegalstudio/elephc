@@ -1,0 +1,506 @@
+[
+    {
+        "subject": "3432",
+        "format": "2564",
+        "expected": "[i:42]",
+        "why": "%d yields an int, not the matched string"
+    },
+    {
+        "subject": "2d3432",
+        "format": "2564",
+        "expected": "[i:-42]",
+        "why": "a leading minus belongs to the number"
+    },
+    {
+        "subject": "2b3432",
+        "format": "2564",
+        "expected": "[i:42]",
+        "why": "a leading plus is accepted and dropped"
+    },
+    {
+        "subject": "20203432",
+        "format": "2564",
+        "expected": "[i:42]",
+        "why": "%d skips leading whitespace"
+    },
+    {
+        "subject": "090a203432",
+        "format": "2564",
+        "expected": "[i:42]",
+        "why": "every whitespace byte is skipped, not just spaces"
+    },
+    {
+        "subject": "3432616263",
+        "format": "2564",
+        "expected": "[i:42]",
+        "why": "the scan stops at the first non-digit"
+    },
+    {
+        "subject": "30373737",
+        "format": "2564",
+        "expected": "[i:777]",
+        "why": "%d is decimal: leading zeros do not select octal"
+    },
+    {
+        "subject": "39323233333732303336383534373735383038",
+        "format": "2564",
+        "expected": "[i:9223372036854775807]",
+        "why": "an overflowing magnitude saturates at PHP_INT_MAX"
+    },
+    {
+        "subject": "2d3939393939393939393939393939393939393939",
+        "format": "2564",
+        "expected": "[i:-9223372036854775808]",
+        "why": "and at PHP_INT_MIN going the other way"
+    },
+    {
+        "subject": "332e35",
+        "format": "2566",
+        "expected": "[f:3.5]",
+        "why": "%f yields a float"
+    },
+    {
+        "subject": "2d332e356532",
+        "format": "2566",
+        "expected": "[f:-350.0]",
+        "why": "the exponent is part of the token"
+    },
+    {
+        "subject": "2e35",
+        "format": "2566",
+        "expected": "[f:0.5]",
+        "why": "a leading decimal point needs no integer part"
+    },
+    {
+        "subject": "352e",
+        "format": "2566",
+        "expected": "[f:5.0]",
+        "why": "and a trailing one needs no fraction"
+    },
+    {
+        "subject": "312e3565",
+        "format": "2566",
+        "expected": "[f:1.5]",
+        "why": "an incomplete exponent is backed off, not failed"
+    },
+    {
+        "subject": "6e616e",
+        "format": "2566",
+        "expected": "[NULL]",
+        "why": "php's %f does not accept nan"
+    },
+    {
+        "subject": "696e66",
+        "format": "2566",
+        "expected": "[NULL]",
+        "why": "nor inf"
+    },
+    {
+        "subject": "68656c6c6f20776f726c64",
+        "format": "2573",
+        "expected": "[s:hello]",
+        "why": "%s stops at whitespace"
+    },
+    {
+        "subject": "202068656c6c6f",
+        "format": "2573",
+        "expected": "[s:hello]",
+        "why": "%s skips leading whitespace"
+    },
+    {
+        "subject": "6666",
+        "format": "2578",
+        "expected": "[i:255]",
+        "why": "%x reads hexadecimal"
+    },
+    {
+        "subject": "30786666",
+        "format": "2578",
+        "expected": "[i:255]",
+        "why": "and accepts the 0x prefix"
+    },
+    {
+        "subject": "3078",
+        "format": "2578",
+        "expected": "[i:0]",
+        "why": "an incomplete prefix still yields the leading zero"
+    },
+    {
+        "subject": "4646",
+        "format": "2578",
+        "expected": "[i:255]",
+        "why": "uppercase digits count"
+    },
+    {
+        "subject": "7a",
+        "format": "2578",
+        "expected": "[NULL]",
+        "why": "a non-hex byte fails the conversion"
+    },
+    {
+        "subject": "373737",
+        "format": "256f",
+        "expected": "[i:511]",
+        "why": "%o reads octal"
+    },
+    {
+        "subject": "3139",
+        "format": "256f",
+        "expected": "[i:1]",
+        "why": "and stops at the first non-octal digit"
+    },
+    {
+        "subject": "3432",
+        "format": "2569",
+        "expected": "[i:42]",
+        "why": "%i reads decimal when nothing selects another base"
+    },
+    {
+        "subject": "30783141",
+        "format": "2569",
+        "expected": "[i:26]",
+        "why": "0x selects hexadecimal"
+    },
+    {
+        "subject": "303132",
+        "format": "2569",
+        "expected": "[i:10]",
+        "why": "a leading zero selects octal"
+    },
+    {
+        "subject": "2d30783130",
+        "format": "2569",
+        "expected": "[i:0]",
+        "why": "but NOT after a sign: php scans -0 and stops at the x"
+    },
+    {
+        "subject": "3432",
+        "format": "2575",
+        "expected": "[i:42]",
+        "why": "%u fits an int while it can"
+    },
+    {
+        "subject": "2d31",
+        "format": "2575",
+        "expected": "[s:18446744073709551615]",
+        "why": "a negative %u is the unsigned reading, too large for an int"
+    },
+    {
+        "subject": "3138343436373434303733373039353531363135",
+        "format": "2575",
+        "expected": "[s:18446744073709551615]",
+        "why": "ULONG_MAX comes back as its decimal string"
+    },
+    {
+        "subject": "3939393939393939393939393939393939393939",
+        "format": "2575",
+        "expected": "[s:18446744073709551615]",
+        "why": "and anything past it saturates there"
+    },
+    {
+        "subject": "616263",
+        "format": "2563",
+        "expected": "[s:a]",
+        "why": "%c takes one byte"
+    },
+    {
+        "subject": "2061",
+        "format": "2563",
+        "expected": "[s:]",
+        "why": "%c does NOT skip whitespace: it matches nothing and yields ''"
+    },
+    {
+        "subject": "68656c6c6f",
+        "format": "256e2573256e",
+        "expected": "[i:0,s:hello,i:5]",
+        "why": "%n reports how many bytes have been consumed"
+    },
+    {
+        "subject": "31303025",
+        "format": "25642525",
+        "expected": "[i:100]",
+        "why": "%% matches a literal percent and stores nothing"
+    },
+    {
+        "subject": "6162636465666768",
+        "format": "253373",
+        "expected": "[s:abc]",
+        "why": "a width bounds %s"
+    },
+    {
+        "subject": "3132333435",
+        "format": "253364",
+        "expected": "[i:123]",
+        "why": "and %d"
+    },
+    {
+        "subject": "312e35353535",
+        "format": "253466",
+        "expected": "[f:1.55]",
+        "why": "and %f, counting bytes rather than digits"
+    },
+    {
+        "subject": "616263",
+        "format": "253573",
+        "expected": "[s:abc]",
+        "why": "a width larger than the input is not an error"
+    },
+    {
+        "subject": "61626364",
+        "format": "253363",
+        "expected": "[s:abc]",
+        "why": "%c takes up to width bytes"
+    },
+    {
+        "subject": "612062",
+        "format": "253363",
+        "expected": "[s:a]",
+        "why": "but still stops at whitespace"
+    },
+    {
+        "subject": "616263",
+        "format": "253073",
+        "expected": "[s:abc]",
+        "why": "width 0 means no width at all"
+    },
+    {
+        "subject": "3131203232",
+        "format": "252a64202564",
+        "expected": "[i:22]",
+        "why": "a suppressed conversion consumes input and stores nothing"
+    },
+    {
+        "subject": "3131203232",
+        "format": "252a6420252a64",
+        "expected": "[]",
+        "why": "so a wholly suppressed format yields an empty array"
+    },
+    {
+        "subject": "616263313233",
+        "format": "255b612d7a5d",
+        "expected": "[s:abc]",
+        "why": "a range accepts every byte between its ends"
+    },
+    {
+        "subject": "616263313233",
+        "format": "255b5e302d395d",
+        "expected": "[s:abc]",
+        "why": "a leading caret negates the set"
+    },
+    {
+        "subject": "313233616263",
+        "format": "255b612d7a5d",
+        "expected": "[NULL]",
+        "why": "a class that matches nothing fails the conversion"
+    },
+    {
+        "subject": "5d78",
+        "format": "255b5d5d",
+        "expected": "[s:]]",
+        "why": "a ']' first in the set is a literal, not the terminator"
+    },
+    {
+        "subject": "6162635d",
+        "format": "255b612d635d5d",
+        "expected": "[s:abc]",
+        "why": "the set ends at the first later ']'"
+    },
+    {
+        "subject": "2d2d",
+        "format": "255b2d5d",
+        "expected": "[s:--]",
+        "why": "a '-' with nothing to span is a literal"
+    },
+    {
+        "subject": "615e62",
+        "format": "255b615e5d",
+        "expected": "[s:a^]",
+        "why": "and so is a '^' that is not first"
+    },
+    {
+        "subject": "616263",
+        "format": "25325b612d7a5d",
+        "expected": "[s:ab]",
+        "why": "a width bounds a class too"
+    },
+    {
+        "subject": "6167653d3432",
+        "format": "6167653d2564",
+        "expected": "[i:42]",
+        "why": "literal bytes must match"
+    },
+    {
+        "subject": "6167653d3432",
+        "format": "616765203d202564",
+        "expected": "[i:42]",
+        "why": "format whitespace matches ZERO or more input whitespace"
+    },
+    {
+        "subject": "616765203d203432",
+        "format": "6167653d2564",
+        "expected": "[NULL]",
+        "why": "so an absent literal still fails"
+    },
+    {
+        "subject": "6162",
+        "format": "612062",
+        "expected": "[]",
+        "why": "a format with no conversion yields an empty array either way"
+    },
+    {
+        "subject": "78",
+        "format": "79",
+        "expected": "[]",
+        "why": "even when nothing matched"
+    },
+    {
+        "subject": "3120322033",
+        "format": "2564202564202564",
+        "expected": "[i:1,i:2,i:3]",
+        "why": "every conversion assigns when the input allows"
+    },
+    {
+        "subject": "3120782033",
+        "format": "2564202564202564",
+        "expected": "[i:1,NULL,NULL]",
+        "why": "the scan STOPS at the first failure; the rest are null"
+    },
+    {
+        "subject": "7820322033",
+        "format": "2564202564202564",
+        "expected": "[NULL,NULL,NULL]",
+        "why": "including when the very first one fails"
+    },
+    {
+        "subject": "312032",
+        "format": "2564202564202564",
+        "expected": "[i:1,i:2,NULL]",
+        "why": "input exhausted after an assignment yields a trailing null"
+    },
+    {
+        "subject": "31",
+        "format": "2564202564",
+        "expected": "[i:1,NULL]",
+        "why": "the array still carries one entry per conversion"
+    },
+    {
+        "subject": "",
+        "format": "2564",
+        "expected": "NULL",
+        "why": "end of input before ANY assignment is a null RESULT, not an array"
+    },
+    {
+        "subject": "202020",
+        "format": "2564",
+        "expected": "NULL",
+        "why": "whitespace-only input reaches the same end of input"
+    },
+    {
+        "subject": "",
+        "format": "2573",
+        "expected": "NULL",
+        "why": "for every conversion"
+    },
+    {
+        "subject": "",
+        "format": "2563",
+        "expected": "NULL",
+        "why": "including %c"
+    },
+    {
+        "subject": "",
+        "format": "616263",
+        "expected": "NULL",
+        "why": "and for a literal that never gets its byte"
+    },
+    {
+        "subject": "2d",
+        "format": "2564",
+        "expected": "NULL",
+        "why": "a sign then end of input assigns nothing"
+    },
+    {
+        "subject": "2d2035",
+        "format": "2564",
+        "expected": "[NULL]",
+        "why": "but a sign then a non-digit is an ordinary failure"
+    },
+    {
+        "subject": "2e",
+        "format": "2566",
+        "expected": "NULL",
+        "why": "the same split applies to %f"
+    },
+    {
+        "subject": "2e78",
+        "format": "2566",
+        "expected": "[NULL]",
+        "why": "on both sides of it"
+    },
+    {
+        "subject": "616263",
+        "format": "2564",
+        "expected": "[NULL]",
+        "why": "a conversion that consumed nothing mid-input is a null ENTRY"
+    },
+    {
+        "subject": "202020",
+        "format": "2563",
+        "expected": "[s:]",
+        "why": "%c assigns '' rather than reaching end of input"
+    },
+    {
+        "subject": "616263",
+        "format": "",
+        "expected": "[]",
+        "why": "an empty format never fails"
+    },
+    {
+        "subject": "",
+        "format": "",
+        "expected": "[]",
+        "why": "not even on empty input"
+    },
+    {
+        "subject": "616c70686120313220332e35",
+        "format": "2573202564202566",
+        "expected": "[s:alpha,i:12,f:3.5]",
+        "why": "the manual's own example"
+    },
+    {
+        "subject": "35",
+        "format": "256c64",
+        "expected": "[i:5]",
+        "why": "an l modifier is consumed and ignored"
+    },
+    {
+        "subject": "35",
+        "format": "256864",
+        "expected": "[i:5]",
+        "why": "so is h"
+    },
+    {
+        "subject": "35",
+        "format": "254c66",
+        "expected": "[f:5.0]",
+        "why": "and L"
+    },
+    {
+        "subject": "35",
+        "format": "2544",
+        "expected": "[i:5]",
+        "why": "uppercase D is a php spelling of %d"
+    },
+    {
+        "subject": "35",
+        "format": "2558",
+        "expected": "[i:5]",
+        "why": "and X of %x"
+    },
+    {
+        "subject": "35",
+        "format": "2545",
+        "expected": "[f:5.0]",
+        "why": "and E of %e"
+    }
+]

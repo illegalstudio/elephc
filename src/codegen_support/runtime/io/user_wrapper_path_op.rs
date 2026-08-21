@@ -89,10 +89,11 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uwpo_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x10");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwpo_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "x12");
+    emitter.instruction("cmp x11, x12");                                        // checked every allocated wrapper slot?
     emitter.instruction("b.ge __rt_uwpo_false");                                // no registered wrapper matched the scheme → false
     emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
@@ -151,7 +152,17 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the wrapper method's bool result
     emitter.instruction("b __rt_uwpo_ret");                                     // share the common return path
 
+    // -- the class does not implement the method: warn the way php does, then answer false --
+    // The caller's name and the method's name were published by the lowering, because this one
+    // helper serves unlink/rename/mkdir/rmdir and the stream_metadata family alike.
     emitter.label("__rt_uwpo_false_obj");
+    emitter.instruction("ldr x0, [sp, #56]");                                   // the wrapper object
+    emitter.instruction("ldr x0, [x0]");                                        // class_id stored at its head
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_head");
+    emitter.instruction("ldp x1, x2, [x9]");                                    // the caller's half
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_tail");
+    emitter.instruction("ldp x3, x4, [x9]");                                    // the method's half
+    emitter.instruction("bl __rt_wrapper_missing_hook_warning");
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload the throwaway wrapper object
     emitter.instruction("bl __rt_decref_any");                                  // free it before returning false
     emitter.label("__rt_uwpo_false");
@@ -207,10 +218,11 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwpo_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
+    super::emit_load_table_base(emitter, "r10");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwpo_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "r12");
+    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_uwpo_false_x86");                             // no registered wrapper matched the scheme → false
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
@@ -279,7 +291,18 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the wrapper method's bool result
     emitter.instruction("jmp __rt_uwpo_ret_x86");                               // share the common return path
 
+    // -- the class does not implement the method: warn the way php does, then answer false --
+    // See the AArch64 counterpart on why the names are published rather than passed.
     emitter.label("__rt_uwpo_false_obj_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // the wrapper object
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // class_id stored at its head
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_head");
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // the caller's half
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_tail");
+    emitter.instruction("mov rcx, QWORD PTR [r10]");                            // the method's half
+    emitter.instruction("mov r8, QWORD PTR [r10 + 8]");
+    emitter.instruction("call __rt_wrapper_missing_hook_warning");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free it before returning false
     emitter.label("__rt_uwpo_false_x86");
@@ -356,10 +379,11 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uwrn_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x10");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwrn_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "x12");
+    emitter.instruction("cmp x11, x12");                                        // checked every allocated wrapper slot?
     emitter.instruction("b.ge __rt_uwrn_false");                                // no registered wrapper matched the scheme → false
     emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
@@ -416,7 +440,15 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper's bool result
     emitter.instruction("b __rt_uwrn_ret");                                     // share the common return path
 
+    // -- the class does not implement rename: warn the way php does, then answer false --
     emitter.label("__rt_uwrn_false_obj");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the wrapper object
+    emitter.instruction("ldr x0, [x0]");                                        // class_id stored at its head
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_head");
+    emitter.instruction("ldp x1, x2, [x9]");                                    // the caller's half
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_tail");
+    emitter.instruction("ldp x3, x4, [x9]");                                    // the method's half
+    emitter.instruction("bl __rt_wrapper_missing_hook_warning");
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the throwaway wrapper object
     emitter.instruction("bl __rt_decref_any");                                  // free it before returning false
     emitter.label("__rt_uwrn_false");
@@ -470,10 +502,11 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwrn_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
+    super::emit_load_table_base(emitter, "r10");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwrn_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "r12");
+    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_uwrn_false_x86");                             // no registered wrapper matched the scheme → false
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
@@ -536,7 +569,17 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the wrapper's bool result
     emitter.instruction("jmp __rt_uwrn_ret_x86");                               // share the common return path
 
+    // -- the class does not implement rename: warn the way php does, then answer false --
     emitter.label("__rt_uwrn_false_obj_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // the wrapper object
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // class_id stored at its head
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_head");
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // the caller's half
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_tail");
+    emitter.instruction("mov rcx, QWORD PTR [r10]");                            // the method's half
+    emitter.instruction("mov r8, QWORD PTR [r10 + 8]");
+    emitter.instruction("call __rt_wrapper_missing_hook_warning");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free it before returning false
     emitter.label("__rt_uwrn_false_x86");

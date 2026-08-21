@@ -18,6 +18,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
         }
     }
     emit_eval_literal_aot_marker(ctx, inst)?;
+    let parse_site = eval_parse_site(ctx, inst)?;
     let code = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(code)?.codegen_repr();
     if ty != PhpType::Str {
@@ -51,7 +52,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_execute");
     abi::emit_call_label(ctx.emitter, &symbol);
     pop_eval_context_class_scope(ctx, pushed_class_scope);
-    emit_eval_status_check(ctx);
+    emit_eval_status_check_at(ctx, parse_site);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
@@ -60,6 +61,34 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
     store_if_result(ctx, inst)
+}
+
+/// Resolves where php would say THIS `eval()` failed to parse.
+///
+/// The call line comes from the instruction span, the same source `set_eval_call_site` uses for
+/// `__LINE__`. The line inside the fragment is only knowable for a literal one, and only by
+/// parsing it again here — the bridge answers a status code and nothing else. A fragment that
+/// is not a literal, or one elephc's own parser accepts, reports line 1: php's own answer for
+/// every single-line fragment, which is nearly all of them.
+fn eval_parse_site(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Option<EvalParseSite>> {
+    let Some(call_line) = inst.span.map(|span| span.line) else {
+        return Ok(None);
+    };
+    let fragment_line = match eval_literal_fragment(ctx, inst)? {
+        Some(fragment) => crate::eval_aot::literal_fragment_parse_error_line(
+            &fragment,
+            super::super::instruction_strict_php_profile(inst),
+        )
+        .unwrap_or(1),
+        None => 1,
+    };
+    Ok(Some(EvalParseSite {
+        call_line,
+        fragment_line,
+    }))
 }
 
 /// Calls a pre-lowered internal EIR function for no-scope literal eval fragments.

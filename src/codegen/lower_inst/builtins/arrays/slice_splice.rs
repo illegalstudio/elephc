@@ -432,7 +432,11 @@ pub(super) fn array_pad_runtime_helper(source_elem_ty: &PhpType) -> &'static str
 
 /// Returns the helper that matches the source element ownership representation.
 pub(super) fn array_slice_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
-    if source_elem_ty.is_refcounted() {
+    if source_elem_ty.codegen_repr() == PhpType::Str {
+        // Indexed string arrays store 16-byte `{pointer, length}` slots; the shared helpers
+        // copy 8 bytes at a time, which would return raw pointers as PHP integers.
+        "__rt_array_slice_str"
+    } else if source_elem_ty.is_refcounted() {
         "__rt_array_slice_refcounted"
     } else {
         "__rt_array_slice"

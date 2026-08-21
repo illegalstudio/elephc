@@ -43,6 +43,7 @@ mod eval_facade;
 pub(crate) mod io;
 mod isset;
 mod count_empty;
+mod expect_array_arg;
 mod function_queries;
 mod member_queries;
 mod scalar_metadata;
@@ -64,6 +65,7 @@ pub(crate) mod strings;
 pub(crate) mod types;
 
 pub(crate) use count_empty::*;
+pub(crate) use expect_array_arg::*;
 pub(in crate::codegen::lower_inst) use eval_facade::*;
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;

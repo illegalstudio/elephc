@@ -798,6 +798,178 @@ fn web_reset_clears_static_property() {
     assert!(r2.ends_with("1"), "second response body: {:?}", r2);
 }
 
+/// Verifies an output buffer left open at request end is flushed, and does not swallow
+/// the responses that follow.
+///
+/// PHP flushes whatever `ob_start()` left open at request shutdown. The `--web`
+/// epilogue skipped that drain, so the request itself returned nothing and the leaked
+/// nesting level captured every later response served by the same worker.
+#[test]
+fn web_unbalanced_output_buffer_is_flushed_and_not_inherited() {
+    let dir = make_test_dir("web_ob_leak");
+    let src = r#"<?php
+if (isset($_GET["leak"])) {
+    ob_start();
+    echo "buffered";
+} else {
+    echo "plain-ok";
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?leak=1");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        first.ends_with("buffered"),
+        "an output buffer left open was not flushed at request end: {:?}",
+        first
+    );
+    assert!(
+        second.ends_with("plain-ok"),
+        "a leaked output-buffer level swallowed the next response: {:?}",
+        second
+    );
+    assert!(third.ends_with("plain-ok"), "third response body: {:?}", third);
+}
+
+/// Verifies a worker survives reading the wrapper registry after an earlier request
+/// registered one.
+///
+/// `stream_wrapper_register()` keeps its tables in the PHP arena, which the per-request
+/// reset wipes, but reaches them through process-lifetime pointers. Left dangling, the
+/// next `stream_get_wrappers()` read a garbage slot count and allocated until the heap
+/// was exhausted, killing the worker — the response simply never arrived.
+#[test]
+fn web_wrapper_registry_does_not_outlive_the_request_arena() {
+    let dir = make_test_dir("web_wrapper_registry_arena");
+    let src = r#"<?php
+class ArenaWrapper {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_close(): void {}
+}
+
+if (isset($_GET["register"])) {
+    stream_wrapper_register("arena.probe", "ArenaWrapper");
+    echo "registered";
+} else {
+    echo "wrappers=", (int) in_array("php", stream_get_wrappers(), true);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?register=1");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("registered"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("wrappers=1"),
+        "reading the wrapper registry after a registration killed the worker: {:?}",
+        second
+    );
+    assert!(third.ends_with("wrappers=1"), "third response body: {:?}", third);
+}
+
+/// Verifies a worker survives a request that grows the resource registry past its
+/// static slots, and the one after it.
+///
+/// The registry starts in a static eight-slot block and grows onto the PHP arena. That
+/// block hid the defect for small requests; past eight resources the next request
+/// walked slots the arena reset had already reclaimed.
+#[test]
+fn web_resource_registry_growth_survives_the_request_arena() {
+    let dir = make_test_dir("web_resource_registry_growth");
+    let src = r#"<?php
+$streams = [];
+for ($i = 0; $i < 40; $i++) {
+    $streams[] = fopen("php://memory", "r+");
+}
+echo "opened=", count($streams);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("opened=40"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("opened=40"),
+        "a grown resource registry did not survive the request arena reset: {:?}",
+        second
+    );
+    assert!(third.ends_with("opened=40"), "third response body: {:?}", third);
+}
+
+/// Verifies request reset closes an abandoned user-wrapper resource exactly
+/// once before the next request runs in the same worker process.
+#[test]
+fn web_stream_registry_request_reset_closes_abandoned_resource_once() {
+    let dir = make_test_dir("web_stream_registry_reset");
+    let count_file = dir
+        .join("close-count.txt")
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let src = r#"<?php
+class RequestCloseWrapper {
+    public $context;
+
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_close(): void {
+        $count = file_exists("__COUNT_FILE__")
+            ? (int) file_get_contents("__COUNT_FILE__")
+            : 0;
+        file_put_contents("__COUNT_FILE__", (string) ($count + 1));
+    }
+}
+
+if (!in_array("reqclose", stream_get_wrappers(), true)) {
+    stream_wrapper_register("reqclose", "RequestCloseWrapper");
+}
+
+if (isset($_GET["hold"])) {
+    $heldStream = fopen("reqclose://request", "r");
+    echo is_resource($heldStream) ? "held" : "open-failed";
+} else {
+    echo "closed=";
+    echo file_exists("__COUNT_FILE__")
+        ? file_get_contents("__COUNT_FILE__")
+        : "0";
+}
+"#
+    .replace("__COUNT_FILE__", &count_file);
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?hold=1");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("held"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("closed=1"),
+        "second response did not observe exact-once stream cleanup: {:?}",
+        second
+    );
+}
+
 /// Verifies that "Hello World" is served as the response body.
 #[test]
 fn web_server_serves_echo_body() {
@@ -2357,6 +2529,33 @@ echo $s['opcache_statistics']['start_time'], ':', \
     assert_eq!(
         a, b,
         "start_time / num_cached_scripts must not drift between requests"
+    );
+}
+
+/// Verifies the request-global default stream context is recreated as a live
+/// resource after each request reset rather than reusing a stale registry handle.
+#[test]
+fn web_default_stream_context_is_live_on_every_request() {
+    let dir = make_test_dir("web_default_stream_context_reset");
+    let src = "<?php $context = stream_context_get_default(); \
+        echo is_resource($context) ? get_resource_type($context) : 'dead';";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        first.ends_with("stream-context"),
+        "first request returned a non-live default context: {:?}",
+        first
+    );
+    assert!(
+        second.ends_with("stream-context"),
+        "request reset left a stale default-context handle: {:?}",
+        second
     );
 }
 

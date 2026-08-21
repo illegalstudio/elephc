@@ -193,8 +193,7 @@ echo $result[0] . " " . $result[1];
     assert_eq!(out, "John 30");
 }
 
-/// sscanf %f captures a float slice. Like %d, sscanf returns the matched
-/// substring (Array(Str)), so the assertion compares the captured text.
+/// sscanf %f yields a FLOAT, so echoing it prints php's float rendering.
 #[test]
 fn test_sscanf_float() {
     let out = compile_and_run(
@@ -206,7 +205,12 @@ echo $r[0];
     assert_eq!(out, "3.14");
 }
 
-/// %f accepts a leading sign and a scientific exponent.
+/// %f accepts a leading sign and a scientific exponent, and CONVERTS them.
+///
+/// This assertion used to read `-2.5e3`, the matched slice the old `__rt_sscanf` assembly
+/// pushed back verbatim: a test written from the implementation, pinning the very divergence
+/// it should have caught. `php -n` (8.5.6) answers `float(-2500)`, so echoing it prints
+/// `-2500` — a value, not the text it was scanned from.
 #[test]
 fn test_sscanf_float_negative_and_exponent() {
     let out = compile_and_run(
@@ -215,7 +219,7 @@ $r = sscanf("-2.5e3", "%f");
 echo $r[0];
 "#,
     );
-    assert_eq!(out, "-2.5e3");
+    assert_eq!(out, "-2500");
 }
 
 /// %f composes with %s and %d in one format, each capturing its slice.

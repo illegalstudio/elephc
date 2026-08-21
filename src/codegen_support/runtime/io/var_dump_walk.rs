@@ -1016,7 +1016,14 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_vd_val_hash");                               // recurse into the hash walker
     emitter.instruction("cmp x0, #6");                                          // tag 6 = object
     emitter.instruction("b.eq __rt_vd_val_obj");                                // recurse into the object walker
-    emitter.instruction("b __rt_vd_val_null");                                  // tag 8 null / 9 resource → NULL
+    emitter.instruction("cmp x0, #9");                                          // tag 9 = resource
+    emitter.instruction("b.eq __rt_vd_val_res");                                // render the resource line
+    emitter.instruction("b __rt_vd_val_null");                                  // tag 8 null → NULL
+
+    emitter.label("__rt_vd_val_res");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the resource payload
+    emitter.instruction("bl __rt_var_dump_emit_resource_line");                 // emit `<indent>resource(N) of type (T)\n`
+    emitter.instruction("b __rt_vd_val_done");                                  // value rendered
 
     emitter.label("__rt_vd_val_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the integer payload
@@ -1138,7 +1145,14 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_vd_val_hash_x86");                             // recurse into the hash walker
     emitter.instruction("cmp rax, 6");                                          // tag 6 = object
     emitter.instruction("je __rt_vd_val_obj_x86");                              // recurse into the object walker
-    emitter.instruction("jmp __rt_vd_val_null_x86");                            // tag 8 null / 9 resource → NULL
+    emitter.instruction("cmp rax, 9");                                          // tag 9 = resource
+    emitter.instruction("je __rt_vd_val_res_x86");                              // render the resource line
+    emitter.instruction("jmp __rt_vd_val_null_x86");                            // tag 8 null → NULL
+
+    emitter.label("__rt_vd_val_res_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the resource payload
+    emitter.instruction("call __rt_var_dump_emit_resource_line");               // emit `<indent>resource(N) of type (T)`
+    emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
 
     emitter.label("__rt_vd_val_int_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the integer payload
@@ -1730,4 +1744,73 @@ fn emit_var_dump_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rdi");                                             // restore preserved walker state
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the walker
+}
+
+/// Emits `__rt_var_dump_emit_resource_line`, the `<indent>resource(N) of type (T)` line.
+///
+/// A resource nested in a container had no renderer at all: `__rt_var_dump_value` sent tag 9 to
+/// the NULL arm, so `var_dump([$fh])`, `var_dump(['h' => $fh])` and a resource property all
+/// printed `NULL` while a resource dumped on its own printed correctly. The pieces are the same
+/// ones the top-level line uses — `__rt_resource_id_of` for the number and
+/// `__rt_resource_type_name` for the label, which is what renames a CLOSED handle to `Unknown`.
+///
+/// # Input
+/// - AArch64: `x0` the resource payload. x86_64: `rax` the resource payload.
+pub fn emit_var_dump_emit_resource_line(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: var_dump_emit_resource_line ---");
+    emitter.label_global("__rt_var_dump_emit_resource_line");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #32");                             // frame plus the payload slot
+            emitter.instruction("stp x29, x30, [sp, #16]");                     // save frame pointer and return address
+            emitter.instruction("add x29, sp, #16");                            // establish the helper frame
+            emitter.instruction("str x0, [sp, #0]");                            // the payload must survive every call below
+            emitter.instruction("bl __rt_vd_pad");                              // write `_vd_indent` spaces first
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_res_prefix");
+            emitter.instruction("mov x2, #9");                                  // len("resource(")
+            emitter.instruction("bl __rt_vd_write");
+            emitter.instruction("ldr x0, [sp, #0]");                            // the payload
+            emitter.instruction("bl __rt_resource_id_of");                      // x0 = php's resource number
+            emitter.instruction("bl __rt_itoa");                                // x1/x2 = its digits
+            emitter.instruction("bl __rt_vd_write");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_res_middle");
+            emitter.instruction("mov x2, #11");                                 // len(") of type (")
+            emitter.instruction("bl __rt_vd_write");
+            emitter.instruction("ldr x0, [sp, #0]");                            // the payload again
+            emitter.instruction("bl __rt_resource_type_name");                  // x1/x2 = the type label
+            emitter.instruction("bl __rt_vd_write");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_vd_close_paren");
+            emitter.instruction("mov x2, #2");                                  // len(")\n")
+            emitter.instruction("bl __rt_vd_write");
+            emitter.instruction("ldp x29, x30, [sp, #16]");                     // restore frame pointer and return address
+            emitter.instruction("add sp, sp, #32");                             // release the frame
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 16");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rax");                // the payload must survive every call below
+            emitter.instruction("call __rt_vd_pad");                            // write `_vd_indent` spaces first
+            crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_vd_res_prefix");
+            emitter.instruction("mov rdx, 9");                                  // len("resource(")
+            emitter.instruction("call __rt_vd_write");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // the payload
+            emitter.instruction("call __rt_resource_id_of");                    // rax = php's resource number
+            emitter.instruction("call __rt_itoa");                              // rax/rdx = its digits
+            emitter.instruction("call __rt_vd_write");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_vd_res_middle");
+            emitter.instruction("mov rdx, 11");                                 // len(") of type (")
+            emitter.instruction("call __rt_vd_write");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // the payload again
+            emitter.instruction("call __rt_resource_type_name");                // rax/rdx = the type label
+            emitter.instruction("call __rt_vd_write");
+            crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_vd_close_paren");
+            emitter.instruction("mov rdx, 2");                                  // len(")\n")
+            emitter.instruction("call __rt_vd_write");
+            emitter.instruction("leave");
+            emitter.instruction("ret");
+        }
+    }
 }

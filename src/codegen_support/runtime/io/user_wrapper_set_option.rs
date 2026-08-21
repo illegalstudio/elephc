@@ -52,7 +52,7 @@ pub fn emit_user_wrapper_set_option(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov x9, #0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("sub x9, x0, x9");                                      // x9 = handle slot index = fd - BASE
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
     emitter.instruction("cbz x0, __rt_uwsetopt_false");                         // empty slot → false
 
@@ -88,7 +88,7 @@ fn emit_user_wrapper_set_option_linux_x86_64(emitter: &mut Emitter) {
     // -- resolve the open wrapper instance from the synthetic fd --
     emitter.instruction("mov r9, rdi");                                         // copy the synthetic fd
     emitter.instruction("sub r9, 0x40000000");                                  // r9 = handle slot index = fd - USER_WRAPPER_FD_BASE
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // empty slot?
     emitter.instruction("jz __rt_uwsetopt_false_x86");                          // empty slot → false

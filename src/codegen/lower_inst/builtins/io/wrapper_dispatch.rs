@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen_support::runtime::io::STAT_FIELD_SIZE;
 
 /// The `url_stat()` flags PHP hands a wrapper, per stat-family builtin.
 ///
@@ -20,16 +21,35 @@ use super::*;
 /// decide whether to warn therefore sees the same value it would under PHP. Each predicate
 /// calls `url_stat()` exactly ONCE, which is why the permission ones read `mode`, `uid` and
 /// `gid` out of a single result instead of one field per call.
+// UNRECONCILED after the origin/main merge: both branches grew a full stat dispatcher, and
+// `stat_ops.rs` routes to the other one (`stat_wrapper_dispatch.rs`). These are kept rather than
+// deleted because they are upstream's implementation, not leftovers — silently removing them
+// would revert that work exactly as silently as "take ours" would have. Reconciling the two into
+// one dispatcher is a change of its own; until then the compiler is told this is deliberate.
+#[allow(dead_code)]
 pub(super) const URL_STAT_FLAGS_NOCACHE: u64 = 4;
 /// `lstat()`: the no-cache bit plus `STREAM_URL_STAT_LINK`.
+#[allow(dead_code)]
 pub(super) const URL_STAT_FLAGS_LINK: u64 = 5;
 /// The existence predicates: the no-cache bit plus `STREAM_URL_STAT_QUIET`.
+#[allow(dead_code)]
 const URL_STAT_FLAGS_QUIET: u64 = 6;
 
 /// Emits the wrapper-vs-filesystem dispatch for `readfile()`.
-pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let wrapper = ctx.next_label("readfile_wrapper");
     let after = ctx.next_label("readfile_after");
+    let url_failed = ctx.next_label("readfile_url_failed");
+    let done_all = ctx.next_label("readfile_done_all");
+    // A `php://filter/...` filename reads through the chain, then streams the bytes to the
+    // output sink like any other readfile; the route's fall-through continues into the
+    // ordinary dispatch below with the path still staged.
+    let filtered = super::emit_dynamic_php_filter_read_route(
+        ctx,
+        "_diag_open_failed_readfile_prefix",
+        "Warning: readfile(",
+        "readfile",
+    )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #16");                         // reserve path scratch storage across the wrapper probe
@@ -42,11 +62,42 @@ pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("ldr x2, [sp, #8]");                        // restore the path length for the chosen readfile helper
             ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper));          // registered wrapper schemes stream through the wrapper helper
             abi::emit_call_label(ctx.emitter, "__rt_readfile");
+            // A remote URL cannot be opened as a path, and `__rt_readfile` reports that
+            // with -2. Rather than duplicate its scheme matching, reuse the reader
+            // file_get_contents() already uses and stream what it returns. Only the
+            // already-failing case takes this branch, so ordinary files keep streaming
+            // instead of being buffered whole.
+            ctx.emitter.instruction("mov x9, #-2");                             // the open-failure sentinel
+            ctx.emitter.instruction("cmp x0, x9");
+            ctx.emitter.instruction(&format!("b.ne {}", after));                // a real read needs no fallback
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // restore the path pointer for the URL reader
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // restore the path length for the URL reader
+            abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
+            ctx.emitter.instruction(&format!("cbz x1, {}", url_failed));        // still unreadable: keep the -2 failure
+            ctx.emitter.instruction("str x2, [sp, #0]");                        // preserve the byte count across the write
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the bytes through the ob/web-aware sink
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // readfile() returns the byte count
+            ctx.emitter.instruction(&format!("b {}", after));
+            ctx.emitter.label(&url_failed);
+            ctx.emitter.instruction("mov x0, #-2");                             // restore the open-failure sentinel
             ctx.emitter.instruction(&format!("b {}", after));                   // skip the wrapper readfile helper after native streaming
             ctx.emitter.label(&wrapper);
             abi::emit_call_label(ctx.emitter, "__rt_readfile_wrapper");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add sp, sp, #16");                         // release path scratch storage
+            ctx.emitter.instruction(&format!("b {}", done_all));
+            // -- the filter route's exit: bytes (or a null pointer) in the string registers --
+            ctx.emitter.label(&filtered);
+            ctx.emitter.instruction(&format!("cbz x1, {}_failed", filtered));   // a failed filtered open reads as -2, like any failed open
+            ctx.emitter.instruction("sub sp, sp, #16");
+            ctx.emitter.instruction("str x2, [sp, #0]");                        // readfile() returns the byte count
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the filtered bytes through the ob/web-aware sink
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            ctx.emitter.instruction("add sp, sp, #16");
+            ctx.emitter.instruction(&format!("b {}", done_all));
+            ctx.emitter.label(&format!("{}_failed", filtered));
+            ctx.emitter.instruction("mov x0, #-2");                             // the open-failure sentinel the boxing reads as false
+            ctx.emitter.label(&done_all);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("sub rsp, 16");                             // reserve path scratch storage across the wrapper probe
@@ -60,13 +111,47 @@ pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the path length for the chosen readfile helper
             ctx.emitter.instruction(&format!("jnz {}", wrapper));               // registered wrapper schemes stream through the wrapper helper
             abi::emit_call_label(ctx.emitter, "__rt_readfile");
+            // See the AArch64 counterpart.
+            ctx.emitter.instruction("cmp rax, -2");                             // the open-failure sentinel
+            ctx.emitter.instruction(&format!("jne {}", after));                 // a real read needs no fallback
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the path pointer for the URL reader
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the path length for the URL reader
+            abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", url_failed));             // still unreadable: keep the -2 failure
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rdx");            // preserve the byte count across the write
+            // `__rt_vd_write` takes its buffer in rsi, not in the string-result register: the
+            // AArch64 helper's x1/x2 happen to BE the string pair, which is why the missing move
+            // was invisible there and `readfile()` over HTTP wrote uninitialised memory here.
+            ctx.emitter.instruction("mov rsi, rax");                            // the bytes the URL reader returned
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the bytes through the ob/web-aware sink
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // readfile() returns the byte count
+            ctx.emitter.instruction(&format!("jmp {}", after));
+            ctx.emitter.label(&url_failed);
+            ctx.emitter.instruction("mov rax, -2");                             // restore the open-failure sentinel
             ctx.emitter.instruction(&format!("jmp {}", after));                 // skip the wrapper readfile helper after native streaming
             ctx.emitter.label(&wrapper);
             abi::emit_call_label(ctx.emitter, "__rt_readfile_wrapper");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add rsp, 16");                             // release path scratch storage
+            ctx.emitter.instruction(&format!("jmp {}", done_all));
+            // -- the filter route's exit: bytes (or a null pointer) in the string registers --
+            ctx.emitter.label(&filtered);
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}_failed", filtered));        // a failed filtered open reads as -2, like any failed open
+            ctx.emitter.instruction("sub rsp, 16");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rdx");            // readfile() returns the byte count
+            ctx.emitter.instruction("mov rsi, rax");                            // `__rt_vd_write` takes its buffer in rsi
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the filtered bytes through the ob/web-aware sink
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");
+            ctx.emitter.instruction("add rsp, 16");
+            ctx.emitter.instruction(&format!("jmp {}", done_all));
+            ctx.emitter.label(&format!("{}_failed", filtered));
+            ctx.emitter.instruction("mov rax, -2");                             // the open-failure sentinel the boxing reads as false
+            ctx.emitter.label(&done_all);
         }
     }
+    Ok(())
 }
 
 /// Lowers `file_exists()` through userspace `url_stat()` before filesystem stat.
@@ -76,6 +161,13 @@ pub(super) fn lower_file_exists_with_wrapper(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "file_exists", 1)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_file_exists",
+        WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS.len(),
+        "_uwmh_tail_url_stat",
+        WRAPPER_MISSING_HOOK_TAIL_URL_STAT.len(),
+    );
     load_string_to_result(ctx, path, "file_exists")?;
     emit_file_exists_wrapper_dispatch(ctx);
     store_if_result(ctx, inst)
@@ -92,8 +184,7 @@ pub(super) fn emit_file_exists_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the path length for filesystem stat
             ctx.emitter.instruction("mov x0, x1");                              // pass the path pointer to url_stat
             ctx.emitter.instruction("mov x1, x2");                              // pass the path length to url_stat
-            ctx.emitter
-                .instruction(&format!("mov x2, #{}", URL_STAT_FLAGS_QUIET));    // PHP passes NOCACHE|QUIET for the existence predicates
+            ctx.emitter.instruction(&format!("mov x2, #{}", URL_STAT_FLAGS_EXISTS)); // the url_stat flags php passes file_exists()
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_url_stat");
             abi::emit_symbol_address(ctx.emitter, "x9", "_url_stat_matched");
             ctx.emitter.instruction("ldrb w9, [x9]");                           // read whether a registered wrapper scheme matched
@@ -118,8 +209,7 @@ pub(super) fn emit_file_exists_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the path length for filesystem stat
             ctx.emitter.instruction("mov rdi, rax");                            // pass the path pointer to url_stat
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the path length to url_stat
-            ctx.emitter
-                .instruction(&format!("mov edx, {}", URL_STAT_FLAGS_QUIET));    // PHP passes NOCACHE|QUIET for the existence predicates
+            ctx.emitter.instruction(&format!("mov rdx, {}", URL_STAT_FLAGS_EXISTS)); // the url_stat flags php passes file_exists()
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_url_stat");
             abi::emit_symbol_address(ctx.emitter, "r9", "_url_stat_matched");
             ctx.emitter.instruction("movzx r9d, BYTE PTR [r9]");                // read whether a registered wrapper scheme matched
@@ -152,6 +242,7 @@ pub(super) fn emit_file_exists_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
 /// went straight to the filesystem, so `stat("scheme://x")` on a wrapper returned the
 /// filesystem's answer for a path that does not exist there. The flags are PHP's own,
 /// observed from a wrapper that echoes them: `stat()` passes 4 and `lstat()` 5.
+#[allow(dead_code)]
 pub(super) fn lower_path_stat_with_wrapper(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -233,8 +324,25 @@ fn emit_path_stat_wrapper_dispatch(
 pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "filesize", 1)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_filesize",
+        WRAPPER_MISSING_HOOK_HEAD_FILESIZE.len(),
+        "_uwmh_tail_url_stat",
+        WRAPPER_MISSING_HOOK_TAIL_URL_STAT.len(),
+    );
     load_string_to_result(ctx, path, "filesize")?;
-    emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0, URL_STAT_FLAGS_NOCACHE);
+    emit_stat_scratch_open(ctx);
+    emit_url_stat_int_or_fallback(ctx, "__rt_filesize", STAT_FIELD_SIZE, URL_STAT_FLAGS_VALUE);
+    emit_stat_failed_warning(
+        ctx,
+        "_uwmh_head_filesize",
+        WRAPPER_MISSING_HOOK_HEAD_FILESIZE.len(),
+        "_stat_failed_tail",
+        STAT_FAILED_TAIL.len(),
+        StatResultShape::IntPair,
+    );
+    emit_stat_scratch_close(ctx);
     box_stat_int_or_false_result(ctx);
     store_if_result(ctx, inst)
 }
@@ -243,238 +351,193 @@ pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &
 pub(super) fn lower_is_file_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "is_file", 1)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_is_file",
+        WRAPPER_MISSING_HOOK_HEAD_IS_FILE.len(),
+        "_uwmh_tail_url_stat",
+        WRAPPER_MISSING_HOOK_TAIL_URL_STAT.len(),
+    );
     load_string_to_result(ctx, path, "is_file")?;
     emit_is_file_wrapper_dispatch(ctx);
     store_if_result(ctx, inst)
 }
 
-/// Emits a wrapper url_stat field lookup with a native filesystem fallback.
-///
-/// SHARED between `filesize()` (field 0) and `is_file()` (field 1). Both arms leave an int|false
-/// success flag in `x1`/`rdx` next to the payload — `__rt_user_wrapper_url_stat_field` on the
-/// wrapper arm, the runtime helper on the fallback arm. `is_file()` reads the payload register
-/// only, so the flag is inert for it; do not remove it on the assumption that this composer has
-/// one caller.
-pub(super) fn emit_url_stat_field_or_fallback(
-    ctx: &mut FunctionContext<'_>,
-    fallback_runtime: &str,
-    field_selector: usize,
-    url_stat_flags: u64,
-) {
-    let fallback = ctx.next_label("url_stat_field_fs");
-    let done = ctx.next_label("url_stat_field_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("sub sp, sp, #16");                         // reserve path scratch storage across url_stat
-            ctx.emitter.instruction("str x1, [sp, #0]");                        // preserve the path pointer for filesystem fallback
-            ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the path length for filesystem fallback
-            ctx.emitter.instruction("mov x0, x1");                              // pass the path pointer to url_stat field lookup
-            ctx.emitter.instruction("mov x1, x2");                              // pass the path length to url_stat field lookup
-            ctx.emitter.instruction(&format!("mov x2, #{}", field_selector));   // select the url_stat field to extract
-            ctx.emitter
-                .instruction(&format!("mov x3, #{}", url_stat_flags));          // PHP's own url_stat flags for the calling builtin
-            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_url_stat_field");
-            abi::emit_symbol_address(ctx.emitter, "x9", "_url_stat_matched");
-            ctx.emitter.instruction("ldrb w9, [x9]");                           // read whether a registered wrapper scheme matched
-            ctx.emitter.instruction(&format!("cbz w9, {}", fallback));          // fall back to filesystem stat when no wrapper matched
-            ctx.emitter.instruction(&format!("b {}", done));                    // keep the wrapper field result
-            ctx.emitter.label(&fallback);
-            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // restore the path pointer for filesystem fallback
-            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // restore the path length for filesystem fallback
-            abi::emit_call_label(ctx.emitter, fallback_runtime);
-            ctx.emitter.label(&done);
-            ctx.emitter.instruction("add sp, sp, #16");                         // release path scratch storage
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("sub rsp, 16");                             // reserve path scratch storage across url_stat
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the path pointer for filesystem fallback
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the path length for filesystem fallback
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the path pointer to url_stat field lookup
-            ctx.emitter.instruction("mov rsi, rdx");                            // pass the path length to url_stat field lookup
-            ctx.emitter.instruction(&format!("mov edx, {}", field_selector));   // select the url_stat field to extract
-            ctx.emitter
-                .instruction(&format!("mov ecx, {}", url_stat_flags));          // PHP's own url_stat flags for the calling builtin
-            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_url_stat_field");
-            abi::emit_symbol_address(ctx.emitter, "r9", "_url_stat_matched");
-            ctx.emitter.instruction("movzx r9d, BYTE PTR [r9]");                // read whether a registered wrapper scheme matched
-            ctx.emitter.instruction("test r9d, r9d");                           // test the url_stat matched flag
-            ctx.emitter.instruction(&format!("jz {}", fallback));               // fall back to filesystem stat when no wrapper matched
-            ctx.emitter.instruction(&format!("jmp {}", done));                  // keep the wrapper field result
-            ctx.emitter.label(&fallback);
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the path pointer for filesystem fallback
-            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the path length for filesystem fallback
-            abi::emit_call_label(ctx.emitter, fallback_runtime);
-            ctx.emitter.label(&done);
-            ctx.emitter.instruction("add rsp, 16");                             // release path scratch storage
-        }
-    }
-}
-
-/// `S_IFMT` mask isolating the file-type bits of a `url_stat()` mode.
-const STAT_FILE_TYPE_MASK: u32 = 0xF000;
-/// `S_IFREG`, the file-type bits of a regular file.
-const STAT_TYPE_REGULAR: u32 = 0x8000;
-/// `S_IFDIR`, the file-type bits of a directory.
-const STAT_TYPE_DIRECTORY: u32 = 0x4000;
-
-/// Lowers `filemtime()` through userspace `url_stat()['mtime']` before filesystem stat.
-pub(super) fn lower_filemtime_with_wrapper(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "filemtime", 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, "filemtime")?;
-    emit_url_stat_field_or_fallback(ctx, "__rt_filemtime", 2, URL_STAT_FLAGS_NOCACHE);
-    box_stat_int_or_false_result(ctx);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `is_dir()` through userspace `url_stat()['mode']` before filesystem stat.
-pub(super) fn lower_is_dir_with_wrapper(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, "is_dir", 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, "is_dir")?;
-    emit_file_type_wrapper_dispatch(ctx, "__rt_is_dir", STAT_TYPE_DIRECTORY, "is_dir");
-    store_if_result(ctx, inst)
-}
-
-/// `__rt_user_wrapper_url_stat_field` selector for `is_readable()`.
-const ACCESS_SELECTOR_READ: usize = 3;
-/// `__rt_user_wrapper_url_stat_field` selector for `is_writable()`.
-const ACCESS_SELECTOR_WRITE: usize = 4;
-/// `__rt_user_wrapper_url_stat_field` selector for `is_executable()`.
-const ACCESS_SELECTOR_EXECUTE: usize = 5;
-
-/// Lowers `is_readable()` through userspace `url_stat()` before the filesystem check.
-pub(super) fn lower_is_readable_with_wrapper(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    lower_access_predicate_with_wrapper(
-        ctx,
-        inst,
-        "is_readable",
-        "__rt_is_readable",
-        ACCESS_SELECTOR_READ,
-    )
-}
-
-/// Lowers `is_writable()`/`is_writeable()` through userspace `url_stat()`.
-pub(super) fn lower_is_writable_with_wrapper(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-) -> Result<()> {
-    lower_access_predicate_with_wrapper(ctx, inst, name, "__rt_is_writable", ACCESS_SELECTOR_WRITE)
-}
-
-/// Lowers `is_executable()` through userspace `url_stat()` before the filesystem check.
-pub(super) fn lower_is_executable_with_wrapper(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    lower_access_predicate_with_wrapper(
-        ctx,
-        inst,
-        "is_executable",
-        "__rt_is_executable",
-        ACCESS_SELECTOR_EXECUTE,
-    )
-}
-
-/// Lowers one permission predicate through a wrapper's `url_stat()`.
-///
-/// The runtime helper already answers 0/1 for these selectors — PHP's triad rule needs
-/// `mode`, `uid` and `gid` together, which no per-field selector can express — so unlike
-/// the file-type predicates there is nothing left to adjust at the call site.
-fn lower_access_predicate_with_wrapper(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    fallback_runtime: &str,
-    selector: usize,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, name)?;
-    emit_url_stat_field_or_fallback(ctx, fallback_runtime, selector, URL_STAT_FLAGS_QUIET);
-    store_if_result(ctx, inst)
-}
-
-/// Emits `is_file()` wrapper url_stat mode extraction plus file-type test.
+/// Emits `is_file()`'s wrapper `url_stat()` mode test, sharing the whole stat family's reader.
 pub(super) fn emit_is_file_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
-    emit_file_type_wrapper_dispatch(ctx, "__rt_is_file", STAT_TYPE_REGULAR, "is_file");
+    emit_url_stat_regular_file_predicate(ctx);
 }
 
-/// Emits a wrapper `url_stat()['mode']` file-type predicate with a filesystem fallback.
+/// Publishes the caller/method names the wrapper path-op helper warns with when the hook is absent.
 ///
-/// Shared by `is_file()` and `is_dir()`: the two differ only in the `S_IFMT` value they
-/// compare against, and writing them separately is how `is_dir()` came to have no wrapper
-/// dispatch at all while its twin did.
-fn emit_file_type_wrapper_dispatch(
+/// `__rt_user_wrapper_path_op` serves unlink/rename/mkdir/rmdir and the whole `stream_metadata`
+/// family, so it cannot know which builtin reached it; php names the CALLER
+/// ("Warning: chmod(): W::stream_metadata is not implemented!"), which only the lowering knows.
+/// The helper reads these only on the missing-method path, which runs no user code, so no
+/// dispatch can overwrite them in between.
+pub(super) fn emit_publish_missing_hook_message(
     ctx: &mut FunctionContext<'_>,
-    fallback_runtime: &str,
-    file_type: u32,
-    name: &str,
+    head_symbol: &str,
+    head_len: usize,
+    tail_symbol: &str,
+    tail_len: usize,
 ) {
-    emit_url_stat_field_or_fallback(ctx, fallback_runtime, 1, URL_STAT_FLAGS_QUIET);
-    let no_wrapper = ctx.next_label(&format!("{}_no_wrapper_adjust", name));
-    let done = ctx.next_label(&format!("{}_adjust_done", name));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x9", "_url_stat_matched");
-            ctx.emitter.instruction("ldrb w9, [x9]");                           // read whether the mode came from a wrapper
-            ctx.emitter.instruction(&format!("cbz w9, {}", no_wrapper));        // native fallback already returned a boolean
-            ctx.emitter
-                .instruction(&format!("and x0, x0, #{:#x}", STAT_FILE_TYPE_MASK)); // isolate mode file-type bits from wrapper url_stat
-            ctx.emitter.instruction(&format!("mov x9, #{:#x}", file_type));     // materialize the file type this predicate accepts
-            ctx.emitter.instruction("cmp x0, x9");                              // compare wrapper mode against that type
-            ctx.emitter.instruction("cset x0, eq");                             // return true only for a matching mode
-            ctx.emitter.instruction(&format!("b {}", done));                    // skip the native-result path
-            ctx.emitter.label(&no_wrapper);
-            ctx.emitter.label(&done);
+            abi::emit_symbol_address(ctx.emitter, "x9", head_symbol);
+            ctx.emitter.instruction(&format!("mov x10, #{}", head_len));
+            abi::emit_symbol_address(ctx.emitter, "x11", "_uwmh_head");
+            ctx.emitter.instruction("stp x9, x10, [x11]");                      // publish the caller's half
+            abi::emit_symbol_address(ctx.emitter, "x9", tail_symbol);
+            ctx.emitter.instruction(&format!("mov x10, #{}", tail_len));
+            abi::emit_symbol_address(ctx.emitter, "x11", "_uwmh_tail");
+            ctx.emitter.instruction("stp x9, x10, [x11]");                      // publish the method's half
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "r9", "_url_stat_matched");
-            ctx.emitter.instruction("movzx r9d, BYTE PTR [r9]");                // read whether the mode came from a wrapper
-            ctx.emitter.instruction("test r9d, r9d");                           // test the url_stat matched flag
-            ctx.emitter.instruction(&format!("jz {}", no_wrapper));             // native fallback already returned a boolean
-            ctx.emitter
-                .instruction(&format!("and eax, {:#x}", STAT_FILE_TYPE_MASK));  // isolate mode file-type bits from wrapper url_stat
-            ctx.emitter.instruction(&format!("cmp eax, {:#x}", file_type));     // compare wrapper mode against that type
-            ctx.emitter.instruction("sete al");                                 // return true only for a matching mode
-            ctx.emitter.instruction("movzx eax, al");                           // widen the boolean into the result register
-            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the native-result path
-            ctx.emitter.label(&no_wrapper);
-            ctx.emitter.label(&done);
+            abi::emit_symbol_address(ctx.emitter, "r9", head_symbol);
+            abi::emit_symbol_address(ctx.emitter, "r10", "_uwmh_head");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // publish the caller's half
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", head_len));
+            abi::emit_symbol_address(ctx.emitter, "r9", tail_symbol);
+            abi::emit_symbol_address(ctx.emitter, "r10", "_uwmh_tail");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // publish the method's half
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", tail_len));
         }
     }
 }
 
-/// Lowers a single-path wrapper-aware filesystem mutation.
-pub(super) fn lower_single_path_wrapper_op(
+/// Emits `mkdir()`'s wrapper-vs-filesystem dispatch, threading `$permissions` and `$recursive`.
+///
+/// Both are RUNTIME values, so unlike [`emit_single_path_wrapper_dispatch_with_options`] they are
+/// staged in the frame rather than materialized as constants. The path arrives in the string pair
+/// (`x1`/`x2`, or `rax`/`rdx`), and both routes read the same slots afterwards:
+///
+/// - the POSIX route gets the mode and the recursive flag, so `__rt_mkdir` can create parents;
+/// - the wrapper route gets `$mode` and an `$options` of
+///   `STREAM_REPORT_ERRORS | STREAM_MKDIR_RECURSIVE`, the value measured out of php 8.5.6.
+///
+/// Absent arguments use php's own defaults: `0777` and `false`.
+pub(super) fn emit_mkdir_wrapper_dispatch(
     ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    runtime_label: &str,
-    vtable_slot: usize,
+    permissions: Option<ValueId>,
+    recursive: Option<ValueId>,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, name)?;
-    emit_single_path_wrapper_dispatch(ctx, runtime_label, vtable_slot);
-    store_if_result(ctx, inst)
+    let wrapper = ctx.next_label("mkdir_wrapper");
+    let after = ctx.next_label("mkdir_after");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve path, mode and recursive scratch storage
+            ctx.emitter.instruction("str x1, [sp, #0]");                        // preserve the directory path pointer
+            ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the directory path length
+            match permissions {
+                Some(mode) => {
+                    require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "mkdir permissions")?;
+                }
+                None => ctx.emitter.instruction(&format!("mov x0, #{}", MKDIR_DEFAULT_MODE)),
+            }
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the requested permissions
+            match recursive {
+                Some(flag) => {
+                    ctx.load_value_to_result(flag)?;
+                }
+                None => ctx.emitter.instruction("mov x0, #0"),
+            }
+            ctx.emitter.instruction("str x0, [sp, #24]");                       // preserve the recursive flag
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass path pointer to the wrapper-scheme probe
+            ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass path length to the wrapper-scheme probe
+            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
+            ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper));          // registered wrapper schemes dispatch to the wrapper's mkdir()
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // pass path pointer to the POSIX mkdir
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // pass path length to the POSIX mkdir
+            ctx.emitter.instruction("ldr x3, [sp, #16]");                       // pass the requested mode to the POSIX mkdir
+            ctx.emitter.instruction("ldr x4, [sp, #24]");                       // pass the recursive flag to the POSIX mkdir
+            ctx.emitter.instruction("add sp, sp, #32");                         // release scratch before the POSIX mkdir
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir");
+            ctx.emitter.instruction(&format!("b {}", after));                   // skip the wrapper route after the POSIX mkdir
+            ctx.emitter.label(&wrapper);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass the wrapper path pointer
+            ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass the wrapper path length
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_WRAPPER_MKDIR_SLOT)); // select the mkdir vtable slot
+            ctx.emitter.instruction("ldr x3, [sp, #16]");                       // pass $mode through unchanged
+            ctx.emitter.instruction("ldr x4, [sp, #24]");                       // reload the recursive flag to fold into $options
+            ctx.emitter.instruction("cmp x4, #0");                              // normalize any truthy flag to exactly one bit
+            ctx.emitter.instruction("cset x4, ne");
+            ctx.emitter.instruction(&format!("orr x4, x4, #{}", STREAM_REPORT_ERRORS)); // php always reports errors on this route
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
+            ctx.emitter.instruction("add sp, sp, #32");                         // release scratch after the wrapper mkdir
+            ctx.emitter.label(&after);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve path, mode and recursive scratch storage
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the directory path pointer
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the directory path length
+            match permissions {
+                Some(mode) => {
+                    require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "mkdir permissions")?;
+                }
+                None => ctx.emitter.instruction(&format!("mov rax, {}", MKDIR_DEFAULT_MODE)),
+            }
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the requested permissions
+            match recursive {
+                Some(flag) => {
+                    ctx.load_value_to_result(flag)?;
+                }
+                None => ctx.emitter.instruction("xor eax, eax"),
+            }
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");           // preserve the recursive flag
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass path pointer to the wrapper-scheme probe
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass path length to the wrapper-scheme probe
+            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
+            ctx.emitter.instruction("test rax, rax");                           // test whether the path scheme matched a registered wrapper
+            ctx.emitter.instruction(&format!("jnz {}", wrapper));               // registered wrapper schemes dispatch to the wrapper's mkdir()
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // pass path pointer to the POSIX mkdir
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // pass path length to the POSIX mkdir
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");           // pass the requested mode to the POSIX mkdir
+            ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 24]");            // pass the recursive flag to the POSIX mkdir
+            ctx.emitter.instruction("add rsp, 32");                             // release scratch before the POSIX mkdir
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir");
+            ctx.emitter.instruction(&format!("jmp {}", after));                 // skip the wrapper route after the POSIX mkdir
+            ctx.emitter.label(&wrapper);
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass the wrapper path pointer
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass the wrapper path length
+            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_WRAPPER_MKDIR_SLOT)); // select the mkdir vtable slot
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");           // pass $mode through unchanged
+            ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 24]");            // reload the recursive flag to fold into $options
+            ctx.emitter.instruction("test r8, r8");                             // normalize any truthy flag to exactly one bit
+            ctx.emitter.instruction("setne r8b");
+            ctx.emitter.instruction("movzx r8, r8b");
+            ctx.emitter.instruction(&format!("or r8, {}", STREAM_REPORT_ERRORS)); // php always reports errors on this route
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
+            ctx.emitter.instruction("add rsp, 32");                             // release scratch after the wrapper mkdir
+            ctx.emitter.label(&after);
+        }
+    }
+    Ok(())
 }
 
 /// Emits wrapper dispatch for a single-path mutation with native fallback.
+///
+/// The wrapper method receives no extra arguments; use
+/// [`emit_single_path_wrapper_dispatch_with_options`] when php documents one.
 pub(super) fn emit_single_path_wrapper_dispatch(
     ctx: &mut FunctionContext<'_>,
     libc_helper: &str,
     vtable_slot: usize,
+) {
+    emit_single_path_wrapper_dispatch_with_options(ctx, libc_helper, vtable_slot, 0, 0);
+}
+
+/// Emits wrapper dispatch for a single-path mutation, passing two CONSTANT extra arguments.
+///
+/// `arg3`/`arg4` land after the path's (ptr,len) pair, so they are the wrapper method's second and
+/// third parameters — `rmdir($path, $options)` reads `arg3`. Hard-coding zero here was a measured
+/// divergence: php passes `STREAM_REPORT_ERRORS` to `rmdir()`, not 0.
+pub(super) fn emit_single_path_wrapper_dispatch_with_options(
+    ctx: &mut FunctionContext<'_>,
+    libc_helper: &str,
+    vtable_slot: usize,
+    arg3: usize,
+    arg4: usize,
 ) {
     let wrapper = ctx.next_label("path_op_wrapper");
     let after = ctx.next_label("path_op_after");
@@ -495,8 +558,8 @@ pub(super) fn emit_single_path_wrapper_dispatch(
             ctx.emitter.instruction("mov x0, x1");                              // pass the wrapper path pointer
             ctx.emitter.instruction("mov x1, x2");                              // pass the wrapper path length
             ctx.emitter.instruction(&format!("mov x2, #{}", vtable_slot));      // pass the wrapper vtable slot
-            ctx.emitter.instruction("mov x3, #0");                              // pass default mode/options argument
-            ctx.emitter.instruction("mov x4, #0");                              // pass default value/options argument
+            ctx.emitter.instruction(&format!("mov x3, #{}", arg3));             // pass the wrapper method's mode/options argument
+            ctx.emitter.instruction(&format!("mov x4, #{}", arg4));             // pass the wrapper method's value/options argument
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add sp, sp, #16");                         // release path scratch storage
@@ -518,8 +581,8 @@ pub(super) fn emit_single_path_wrapper_dispatch(
             ctx.emitter.instruction("mov rdi, rax");                            // pass the wrapper path pointer
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the wrapper path length
             ctx.emitter.instruction(&format!("mov rdx, {}", vtable_slot));      // pass the wrapper vtable slot
-            ctx.emitter.instruction("xor ecx, ecx");                            // pass default mode/options argument
-            ctx.emitter.instruction("xor r8d, r8d");                            // pass default value/options argument
+            ctx.emitter.instruction(&format!("mov rcx, {}", arg3));             // pass the wrapper method's mode/options argument
+            ctx.emitter.instruction(&format!("mov r8, {}", arg4));              // pass the wrapper method's value/options argument
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add rsp, 16");                             // release path scratch storage
@@ -627,6 +690,13 @@ pub(super) fn lower_rename_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &In
     super::super::ensure_arg_count(inst, "rename", 2)?;
     let from = expect_operand(inst, 0)?;
     let to = expect_operand(inst, 1)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_rename",
+        WRAPPER_MISSING_HOOK_HEAD_RENAME.len(),
+        "_uwmh_tail_rename",
+        WRAPPER_MISSING_HOOK_TAIL_RENAME.len(),
+    );
     let wrapper = ctx.next_label("rename_wrapper");
     let after = ctx.next_label("rename_after");
     match ctx.emitter.target.arch {

@@ -41,8 +41,22 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         self.runtime_retain(value)
     }
     /// Records fake PHP warnings without writing to stderr.
+    ///
+    /// Gated on the `@` depth exactly like the real bridge, so a test asserting the
+    /// suppression sees the same silence a compiled program produces.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        if self.suppress_depth > 0 {
+            return Ok(());
+        }
         self.runtime_warning(message)
+    }
+
+    fn suppress_begin(&mut self) {
+        self.suppress_depth = self.suppress_depth.saturating_add(1);
+    }
+
+    fn suppress_end(&mut self) {
+        self.suppress_depth = self.suppress_depth.saturating_sub(1);
     }
     /// Creates a fake null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {

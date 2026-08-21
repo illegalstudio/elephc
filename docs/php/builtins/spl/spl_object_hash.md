@@ -2,7 +2,7 @@
 title: "spl_object_hash()"
 description: "Return hash id for given object."
 sidebar:
-  order: 381
+  order: 393
 ---
 
 ## spl_object_hash()

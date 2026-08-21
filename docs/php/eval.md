@@ -946,6 +946,15 @@ where listed below unless a note says otherwise.
 
 ## Builtin notes
 
+Resources cross the eval boundary in both directions and share ONE numbering
+space with the compiled program, so a mixed program reports the same ids PHP
+does. A stream opened inside `eval()` materializes the request's default stream
+context first, exactly as a compiled `fopen()` does, which is what keeps id 4
+reserved for it; `hash_init()` returns an object and consumes no id at all. A
+handle the compiled program closed reports type `Unknown` when it is displayed
+from inside `eval()`, matching what the same program prints natively. See
+[Streams](streams.md#resource-ids).
+
 Eval `settype()` mutates direct variables, array elements, object properties
 including dynamic property names, and static properties including dynamic
 receivers or dynamic property names. Callable dispatch of `settype()` remains

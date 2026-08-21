@@ -2,19 +2,19 @@
 title: "rewinddir()"
 description: "Rewind directory handle."
 sidebar:
-  order: 214
+  order: 219
 ---
 
 ## rewinddir()
 
 ```php
-function rewinddir(resource $dir_handle): void
+function rewinddir(resource $dir_handle = null): void
 ```
 
 Rewind directory handle.
 
 **Parameters**:
-- `$dir_handle` (`resource`)
+- `$dir_handle` (`resource`), default `null`, optional
 
 **Returns**: `void`
 

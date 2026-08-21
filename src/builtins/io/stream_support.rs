@@ -36,6 +36,12 @@ pub(crate) fn validate_registered_stream_class(
     let ExprKind::StringLiteral(class_name) = &class_arg.kind else {
         return Ok(());
     };
+    // An EMPTY class name is php's own `ValueError: Argument #2 ($class) must be a non-empty
+    // string`, raised at run time where the caller can catch it. Reporting it here as an
+    // undefined class would refuse the program instead, and name a class nobody wrote.
+    if class_name.is_empty() {
+        return Ok(());
+    }
     if stream_registered_class_exists(checker, class_name) {
         return Ok(());
     }

@@ -51,21 +51,60 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // ================================================================
     // __rt_mkdir: create a directory
-    // Input:  x1/x2=path
+    // Input:  x1/x2=path, x3=mode, x4=recursive
     // Output: x0=1 on success, 0 on failure
+    //
+    // The mode was hard-coded to 0755 and `$recursive` had nowhere to arrive,
+    // because the contract stopped at one parameter. With `$recursive` set the
+    // helper walks the C string and creates each parent in turn: `_cstr_buf` is
+    // our own scratch, so a separator can be overwritten with a terminator to
+    // name the prefix and put back afterwards, with no second buffer. Parent
+    // failures are ignored on purpose — the usual one is EEXIST, and only the
+    // LEAF decides the return value, which is what php reports.
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
     emitter.label_global("__rt_mkdir");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
+    emitter.instruction("sub sp, sp, #48");                                     // allocate frame for mode, flag, buffer and scan index
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
+    emitter.instruction("str x3, [sp, #16]");                                   // save the requested mode across __rt_cstr
+    emitter.instruction("str x4, [sp, #24]");                                   // save the recursive flag across __rt_cstr
 
-    // -- null-terminate path and call mkdir --
+    // -- null-terminate the path into our own scratch buffer --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
-    emitter.instruction("mov x1, #0x1ED");                                      // mode 0755 (octal)
+    emitter.instruction("str x0, [sp, #32]");                                   // save the buffer base for both routes
+    emitter.instruction("ldr x4, [sp, #24]");                                   // reload the recursive flag
+    emitter.instruction("cbz x4, __rt_mkdir_leaf");                             // not recursive: create only the named directory
+
+    // -- recursive: create every parent component in turn --
+    emitter.instruction("mov x10, #0");                                         // scan index into the C string
+    emitter.label("__rt_mkdir_walk");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the buffer base
+    emitter.instruction("ldrb w11, [x9, x10]");                                 // load the byte at the scan index
+    emitter.instruction("cbz w11, __rt_mkdir_leaf");                            // terminator reached: only the leaf is left
+    emitter.instruction("cmp w11, #47");                                        // is this byte a '/' separator?
+    emitter.instruction("b.ne __rt_mkdir_walk_next");                           // ordinary byte — keep scanning
+    emitter.instruction("cbz x10, __rt_mkdir_walk_next");                       // a leading '/' names the root, which always exists
+    emitter.instruction("strb wzr, [x9, x10]");                                 // terminate here so the buffer names the parent
+    emitter.instruction("mov x0, x9");                                          // pass the parent path to mkdir
+    emitter.instruction("ldr x1, [sp, #16]");                                   // parents are created with the requested mode
+    emitter.instruction("str x10, [sp, #40]");                                  // preserve the scan index across the syscall
+    emitter.syscall(136);
+    emitter.instruction("ldr x10, [sp, #40]");                                  // restore the scan index
+    emitter.instruction("ldr x9, [sp, #32]");                                   // restore the buffer base
+    emitter.instruction("mov w11, #47");                                        // the separator byte we overwrote
+    emitter.instruction("strb w11, [x9, x10]");                                 // put the separator back before scanning on
+    emitter.label("__rt_mkdir_walk_next");
+    emitter.instruction("add x10, x10, #1");                                    // advance the scan index
+    emitter.instruction("b __rt_mkdir_walk");                                   // continue walking the path
+
+    // -- create the named directory; its result is the answer --
+    emitter.label("__rt_mkdir_leaf");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the full path
+    emitter.instruction("ldr x1, [sp, #16]");                                   // the requested mode
     emitter.syscall(136);
 
     // -- return success/failure --
@@ -74,7 +113,7 @@ pub fn emit_fs(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // deallocate stack frame
+    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // ================================================================
@@ -219,7 +258,7 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mkdir ---");
     emitter.label_global("__rt_mkdir");
-    emit_single_path_libc_bool_helper(emitter, "mkdir", Some("mov rsi, 0x1ED"));
+    emit_mkdir_libc_helper(emitter);
 
     emitter.blank();
     emitter.comment("--- runtime: rmdir ---");
@@ -286,6 +325,58 @@ fn emit_fs_linux_x86_64(emitter: &mut Emitter) {
 /// extra arguments (e.g., mode for `mkdir`). The C path is passed via `__rt_cstr`
 /// output in `rax`; the libc result is compared against 0 and returned as 1 (success) or
 /// 0 (failure) in `rax`.
+/// Emits the x86_64 `__rt_mkdir` body: honours `$permissions` and creates parents when asked.
+///
+/// Input: rax/rdx = path pair, rcx = mode, r8 = recursive. Mirrors the AArch64 helper above,
+/// including the in-place separator trick over `_cstr_buf` — see its comment for why that is safe.
+/// The mode and flag are spilled first because `__rt_cstr` uses r8-r11 as scratch, so they would
+/// not survive the conversion in registers.
+fn emit_mkdir_libc_helper(emitter: &mut Emitter) {
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the helper makes libc calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned helper body
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for the mode, the flag, the buffer base and the scan index
+    emitter.instruction("mov QWORD PTR [rbp - 8], rcx");                        // save the requested mode across __rt_cstr
+    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // save the recursive flag across __rt_cstr
+    emitter.instruction("call __rt_cstr");                                      // convert the elephc path in rax/rdx into a null-terminated C string in rax
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the buffer base for both routes
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // reload the recursive flag
+    emitter.instruction("test r9, r9");                                         // was a recursive create requested?
+    emitter.instruction("jz __rt_mkdir_leaf");                                  // not recursive: create only the named directory
+
+    emitter.instruction("xor r10, r10");                                        // scan index into the C string
+    emitter.label("__rt_mkdir_walk");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the buffer base
+    emitter.instruction("movzx eax, BYTE PTR [r11 + r10]");                     // load the byte at the scan index
+    emitter.instruction("test al, al");                                         // is it the terminator?
+    emitter.instruction("jz __rt_mkdir_leaf");                                  // terminator reached: only the leaf is left
+    emitter.instruction("cmp al, 47");                                          // is this byte a '/' separator?
+    emitter.instruction("jne __rt_mkdir_walk_next");                            // ordinary byte — keep scanning
+    emitter.instruction("test r10, r10");                                       // is the separator the leading one?
+    emitter.instruction("jz __rt_mkdir_walk_next");                             // a leading '/' names the root, which always exists
+    emitter.instruction("mov BYTE PTR [r11 + r10], 0");                         // terminate here so the buffer names the parent
+    emitter.instruction("mov rdi, r11");                                        // pass the parent path to libc mkdir()
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // parents are created with the requested mode
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // preserve the scan index across the libc call
+    emitter.instruction("call mkdir");                                          // create the parent, ignoring EEXIST and every other failure
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // restore the scan index
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // restore the buffer base
+    emitter.instruction("mov BYTE PTR [r11 + r10], 47");                        // put the separator back before scanning on
+    emitter.label("__rt_mkdir_walk_next");
+    emitter.instruction("inc r10");                                             // advance the scan index
+    emitter.instruction("jmp __rt_mkdir_walk");                                 // continue walking the path
+
+    emitter.label("__rt_mkdir_leaf");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the full path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // the requested mode
+    emitter.instruction("call mkdir");                                          // create the named directory; its result is the answer
+    emitter.instruction("cmp eax, 0");                                          // libc mkdir() returns zero as a C int on success
+    emitter.instruction("sete al");                                             // convert the success code into a boolean byte
+    emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the canonical integer result register
+    emitter.instruction("add rsp, 32");                                         // release the aligned stack locals used by mkdir()
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the libc helper returns
+    emitter.instruction("ret");                                                 // return the file-system success predicate to the caller
+}
+
 fn emit_single_path_libc_bool_helper(emitter: &mut Emitter, symbol: &str, extra_setup: Option<&str>) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the helper makes libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned helper body

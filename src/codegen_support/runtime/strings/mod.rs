@@ -12,6 +12,7 @@ mod itoa;
 mod concat;
 mod concat_scratch;
 mod ftoa;
+mod nan_string_coercion_warning;
 mod php_num_scan;
 mod str_eq;
 mod str_loose_eq;
@@ -43,9 +44,13 @@ mod strncasecmp;
 mod str_starts_with;
 mod str_ends_with;
 mod str_replace;
+mod str_replace_arrays;
+mod str_replace_subject;
 mod explode;
 mod implode;
 mod implode_bool;
+mod implode_dyn;
+mod implode_float;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
@@ -94,7 +99,6 @@ mod hash_hmac;
 mod openssl_methods;
 mod openssl;
 mod digest_to_string;
-mod sscanf;
 mod rtrim_mask;
 mod ltrim_mask;
 mod trim_mask;
@@ -108,6 +112,9 @@ pub use itoa::emit_itoa;
 pub use concat::emit_concat;
 /// Emit string concatenation helper.
 pub use ftoa::{emit_ftoa, emit_ftoa_repr};
+pub use nan_string_coercion_warning::{
+    emit_nan_string_coercion_warning, NAN_STRING_COERCION_MESSAGES,
+};
 pub use php_num_scan::emit_php_num_scan;
 /// Emit float-to-string conversion helper.
 pub use str_eq::emit_str_eq;
@@ -171,6 +178,8 @@ pub use str_starts_with::emit_str_starts_with;
 pub use str_ends_with::emit_str_ends_with;
 /// Emit check for string suffix match.
 pub use str_replace::emit_str_replace;
+pub use str_replace_arrays::emit_str_replace_search_array;
+pub use str_replace_subject::emit_str_replace_subject_array;
 /// Emit string replace helper.
 pub use explode::emit_explode;
 /// Emit explode (split by delimiter) helper.
@@ -180,6 +189,10 @@ pub use implode_int::emit_implode_int;
 /// Emit integer-optimized implode helper.
 pub use implode_bool::emit_implode_bool;
 /// Emit bool-element implode helper (`true` → `"1"`, `false` → `""`).
+pub use implode_dyn::emit_implode_dyn;
+/// Emit the Mixed-operand implode element-layout dispatcher.
+pub use implode_float::emit_implode_float;
+/// Emit float-element implode helper (PHP `precision = 14` spellings through `__rt_ftoa`).
 pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
@@ -272,7 +285,6 @@ pub use hash_equals::emit_hash_equals;
 /// Emit timing-safe string-equality helper.
 pub use digest_to_string::emit_digest_to_string;
 /// Emit the shared raw-digest-to-PHP-string formatter used by hash/md5/sha1.
-pub use sscanf::emit_sscanf;
 /// Emit string scanf parsing helper.
 pub use rtrim_mask::emit_rtrim_mask;
 /// Emit right trim with custom mask helper.

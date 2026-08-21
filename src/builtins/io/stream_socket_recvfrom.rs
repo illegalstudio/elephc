@@ -5,14 +5,13 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates arg[0] is a stream resource and that `address` (arg[3]), if provided,
-//!   is a plain string variable (it is written by reference). The double-infer of arg[3]
-//!   matches the legacy behavior.
-//! - Arguments are pre-inferred by the registry before the hook runs.
+//! - `check` validates arg[0] is a stream resource. `address` needs no check: its `ref(Str)`
+//!   declaration is what requires a variable and what binds that variable to `string`.
+//! - Arguments are pre-inferred by the registry before the hook runs, except `address`, which is
+//!   written rather than read.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -23,24 +22,12 @@ builtin! {
     ),
 }
 
-/// Validates arg[0] is a stream resource and that `address` (arg[3]) is a plain string variable.
+/// Validates arg[0] is a stream resource, then returns PHP's `string|false` result.
+///
+/// `$address` needs no check here: the `ref(Str)` declaration is what requires it to be a
+/// variable and what binds it to `string`, including when the caller passes it undeclared as
+/// PHP's own idiom does.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(cx.checker, cx.name, &cx.args[0], cx.env)?;
-    if cx.args.len() == 4 {
-        let addr = &cx.args[3];
-        if !matches!(addr.kind, ExprKind::Variable(_)) {
-            return Err(CompileError::new(
-                addr.span,
-                "stream_socket_recvfrom() parameter $address must be passed a variable",
-            ));
-        }
-        let ty = cx.checker.infer_type(addr, cx.env)?;
-        if ty != PhpType::Str {
-            return Err(CompileError::new(
-                addr.span,
-                "stream_socket_recvfrom() parameter $address must be a string",
-            ));
-        }
-    }
     Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
 }

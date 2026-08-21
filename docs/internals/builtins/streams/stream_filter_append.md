@@ -2,7 +2,7 @@
 title: "stream_filter_append() — internals"
 description: "Compiler internals for stream_filter_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 387
+  order: 399
 ---
 
 ## `stream_filter_append()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_filter_append.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_filter_append.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:544](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L544) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:551](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L551) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_filter_append(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed
+function stream_filter_append(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): mixed
 ```
 
 ## What the type checker enforces

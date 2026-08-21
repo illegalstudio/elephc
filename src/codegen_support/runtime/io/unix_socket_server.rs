@@ -21,6 +21,8 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
 
+use super::socket_errno;
+
 /// unix_socket_server: open a bound Unix-domain socket.
 /// Input:  AArch64 x0 = path pointer, x1 = path length, x2 = sock_type
 ///         x86_64  rdi = path pointer, rsi = path length, rdx = sock_type
@@ -54,6 +56,7 @@ pub fn emit_unix_socket_server(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_sock_ok")); // continue when socket succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why socket() failed
     emitter.instruction("b __rt_unix_socket_server_fail");                      // socket() failed
     emitter.label("__rt_unix_socket_server_sock_ok");
     emitter.instruction("str x0, [sp, #0]");                                    // save the socket descriptor
@@ -71,6 +74,7 @@ pub fn emit_unix_socket_server(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_bind_ok")); // continue when bind succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why bind() failed, before close() overwrites x0
     emitter.instruction("b __rt_unix_socket_server_fail_close");                // bind() failed
     emitter.label("__rt_unix_socket_server_bind_ok");
 
@@ -90,6 +94,7 @@ pub fn emit_unix_socket_server(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_unix_socket_server_ok")); // continue when listen succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why listen() failed, before close() overwrites x0
     emitter.instruction("b __rt_unix_socket_server_fail_close");                // listen() failed
 
     emitter.label("__rt_unix_socket_server_ok");
@@ -156,7 +161,10 @@ fn emit_unix_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 41");                                         // Linux x86_64 syscall 41 = socket
     emitter.instruction("syscall");                                             // create the socket
     emitter.instruction("test rax, rax");                                       // did socket() fail?
-    emitter.instruction("js __rt_unix_socket_server_fail_x86");                 // socket() failed
+    emitter.instruction("jns __rt_unix_socket_server_sock_ok_x86");             // continue when socket succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why socket() failed
+    emitter.instruction("jmp __rt_unix_socket_server_fail_x86");                // socket() failed
+    emitter.label("__rt_unix_socket_server_sock_ok_x86");
     emitter.instruction("mov QWORD PTR [rsp + 0], rax");                        // save the socket descriptor
 
     // -- build the sockaddr_un at [rsp + 24]: family then sun_path --
@@ -183,7 +191,10 @@ fn emit_unix_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 49");                                         // Linux x86_64 syscall 49 = bind
     emitter.instruction("syscall");                                             // bind the socket
     emitter.instruction("test rax, rax");                                       // did bind() fail?
-    emitter.instruction("js __rt_unix_socket_server_fail_close_x86");           // bind() failed
+    emitter.instruction("jns __rt_unix_socket_server_bind_ok_x86");             // continue when bind succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why bind() failed, before close() overwrites rax
+    emitter.instruction("jmp __rt_unix_socket_server_fail_close_x86");          // bind() failed
+    emitter.label("__rt_unix_socket_server_bind_ok_x86");
 
     // -- listen(fd, 128) for SOCK_STREAM only; SOCK_DGRAM has no accept() --
     emitter.instruction("mov r10, QWORD PTR [rsp + 152]");                      // reload the sock_type
@@ -195,7 +206,10 @@ fn emit_unix_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 50");                                         // Linux x86_64 syscall 50 = listen
     emitter.instruction("syscall");                                             // mark the socket as listening
     emitter.instruction("test rax, rax");                                       // did listen() fail?
-    emitter.instruction("js __rt_unix_socket_server_fail_close_x86");           // listen() failed
+    emitter.instruction("jns __rt_unix_socket_server_listen_ok_x86");           // continue when listen succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why listen() failed, before close() overwrites rax
+    emitter.instruction("jmp __rt_unix_socket_server_fail_close_x86");          // listen() failed
+    emitter.label("__rt_unix_socket_server_listen_ok_x86");
 
     emitter.label("__rt_unix_socket_server_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rsp + 0]");                        // return the bound descriptor

@@ -137,11 +137,15 @@ def _check_backend_contracts(
     expected_counts = {
         "language-construct": 5,
         "dedicated-syntax": 1,
-        "prelude": 4,
+        "prelude": 5,
         "none": 3,
     }
-    if len(non_registry) != 13:
-        errors.append(f"expected 13 non-registry contracts, found {len(non_registry)}")
+    # MEASURED on the merged catalogue, which is neither branch's number: this branch counted 15
+    # non-registry contracts and main counted 13, because main promoted get_object_vars out of the
+    # external surface while this branch added to the prelude routes. Fourteen is what the two
+    # together actually produce.
+    if len(non_registry) != 14:
+        errors.append(f"expected 14 non-registry contracts, found {len(non_registry)}")
     if dict(route_counts) != expected_counts:
         errors.append(
             f"non-registry AOT route counts differ: expected {expected_counts}, "

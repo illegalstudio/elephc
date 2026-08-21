@@ -2,7 +2,7 @@
 title: "hash_final()"
 description: "Finalizes an incremental hashing context and returns the digest (hex, or raw bytes when $binary). Provided by the compiler-injected hash prelude in compiled code."
 sidebar:
-  order: 408
+  order: 420
 ---
 
 ## hash_final()
@@ -21,7 +21,7 @@ Finalizes an incremental hashing context and returns the digest (hex, or raw byt
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected hash prelude.
+- **Compiled (AOT)**: supported through a compiler-injected PHP prelude.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._

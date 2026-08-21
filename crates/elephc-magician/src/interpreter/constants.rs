@@ -71,17 +71,17 @@ pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
 
 /// Built-in stream wrappers reported by eval `stream_get_wrappers()`.
 pub(super) const EVAL_STREAM_WRAPPERS: &[&str] = &[
-    "file",
-    "php",
-    "data",
-    "ftp",
-    "http",
     "https",
     "ftps",
     "compress.zlib",
     "compress.bzip2",
-    "phar",
+    "php",
+    "file",
     "glob",
+    "data",
+    "http",
+    "ftp",
+    "phar",
 ];
 
 /// Built-in stream transports reported by eval `stream_get_transports()`.
@@ -95,20 +95,15 @@ pub(super) static EVAL_RANDOM_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Built-in stream filters reported by eval `stream_get_filters()`.
 pub(super) const EVAL_STREAM_FILTERS: &[&str] = &[
+    "zlib.*",
+    "bzip2.*",
+    "convert.iconv.*",
+    "string.rot13",
     "string.toupper",
     "string.tolower",
-    "string.rot13",
-    "string.strip_tags",
-    "convert.base64-encode",
-    "convert.base64-decode",
-    "convert.quoted-printable-encode",
-    "convert.quoted-printable-decode",
-    "convert.iconv.*",
+    "convert.*",
+    "consumed",
     "dechunk",
-    "zlib.deflate",
-    "zlib.inflate",
-    "bzip2.compress",
-    "bzip2.decompress",
 ];
 
 /// SPL/core type names reported by eval `spl_classes()`.

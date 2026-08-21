@@ -258,6 +258,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
+    /// Dispatches `str_getcsv(...)`.
+    StrGetcsv,
     /// Dispatches string search predicate builtins.
     StringSearch,
     /// Dispatches `explode(...)` and `implode(...)`.
@@ -497,6 +499,11 @@ impl EvalDirectHook {
                 "strrpos" => eval_builtin_strrpos(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::StrGetcsv => {
+                crate::interpreter::builtins::string::str_getcsv::eval_builtin_str_getcsv(
+                    args, context, scope, values,
+                )
+            }
             Self::StringSearch => match name {
                 "str_contains" => eval_builtin_str_contains(args, context, scope, values),
                 "str_ends_with" => eval_builtin_str_ends_with(args, context, scope, values),

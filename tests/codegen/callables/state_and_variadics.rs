@@ -769,6 +769,123 @@ echo $collector->count_args("first") . ":" . $collector->count_args([1, 2], 3.5)
     assert_eq!(out, "1:2");
 }
 
+// --- Variadic tail element type across call sites ---
+//
+// An UNTYPED `...$rest` has no declared element type, so the checker infers one. It used to
+// infer it from the FIRST call site that resolved the function and never revisit it: the
+// ordinary call path (`respecialized_param_types_for_call`) walks only
+// `seen_idx < regular_param_count`, which structurally excludes the variadic slot from every
+// widening branch. A later call site whose tail held a DIFFERENT scalar type then pushed its
+// raw machine word into an array laid out for the first type, and the value was read back
+// reinterpreted — silently, with no warning and no crash. The cases below pin each direction
+// of that reinterpretation against `php -n` 8.5.6.
+
+/// Verifies a float in the tail survives a call site that earlier passed an int.
+///
+/// PHP 8.5.6 prints `[1]` then `[1.5]`. elephc printed `[1]` then `[4609434218613702656]` —
+/// the IEEE-754 bit pattern of `1.5` read as an integer, because the tail was frozen to
+/// `array<int>` by the first call. Note both calls have the SAME arity: the trigger is a
+/// difference in tail ELEMENT TYPE between call sites, not a difference in argument count.
+#[test]
+fn test_variadic_tail_widens_when_a_later_call_passes_a_float() {
+    let out = compile_and_run(
+        r#"<?php
+function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+v("a", 1);
+v("c", 1.5);
+"#,
+    );
+    assert_eq!(out, "[1]\n[1.5]\n");
+}
+
+/// Verifies an int in the tail survives a call site that earlier passed a float.
+///
+/// The mirror image of the case above. PHP 8.5.6 prints `[1.5]` then `[1]`; elephc printed
+/// `[1.5]` then `[5.0e-324]` — the integer `1` reinterpreted as a subnormal double.
+#[test]
+fn test_variadic_tail_widens_when_a_later_call_passes_an_int() {
+    let out = compile_and_run(
+        r#"<?php
+function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+v("c", 1.5);
+v("a", 1);
+"#,
+    );
+    assert_eq!(out, "[1.5]\n[1]\n");
+}
+
+/// Verifies a bool in the tail keeps its type after an int call site.
+///
+/// PHP 8.5.6 prints `[1]`, `[true]`, `[true,false]`. elephc printed `[1]`, `[1]`, `[1,0]`,
+/// having frozen the tail to `array<int>`, so `json_encode` emitted integers where PHP emits
+/// booleans.
+#[test]
+fn test_variadic_tail_widens_when_a_later_call_passes_a_bool() {
+    let out = compile_and_run(
+        r#"<?php
+function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+v("a", 1);
+v("d", true);
+v("e", true, false);
+"#,
+    );
+    assert_eq!(out, "[1]\n[true]\n[true,false]\n");
+}
+
+/// Verifies a tail that is heterogeneous ACROSS call sites and WITHIN one call compiles and
+/// keeps every element's type, including `null`.
+///
+/// PHP 8.5.6 prints `["s"]`, `["s",1]`, `[1,"s"]`, `["s",1,2.5,true,null]`. elephc refused
+/// the whole program with `EIR backend error: unsupported EIR backend feature: array_push for
+/// PHP type Void` — the frozen tail type left no slot a `null` could be pushed into.
+#[test]
+fn test_variadic_tail_accepts_heterogeneous_elements_across_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+v("a", "s");
+v("b", "s", 1);
+v("c", 1, "s");
+v("d", "s", 1, 2.5, true, null);
+"#,
+    );
+    assert_eq!(
+        out,
+        "[\"s\"]\n[\"s\",1]\n[1,\"s\"]\n[\"s\",1,2.5,true,null]\n"
+    );
+}
+
+/// Verifies the same widening on an instance METHOD variadic, whose signatures are stored and
+/// respecialized by a separate code path from free functions. PHP 8.5.6: `[1]` then `[1.5]`.
+#[test]
+fn test_variadic_method_tail_widens_between_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+}
+$c = new C();
+$c->v("a", 1);
+$c->v("c", 1.5);
+"#,
+    );
+    assert_eq!(out, "[1]\n[1.5]\n");
+}
+
+/// Verifies the widening also holds when the variadic has NO fixed parameter in front of it,
+/// so the tail starts at argument index 0. PHP 8.5.6 prints `[1]` then `[1.5]`.
+#[test]
+fn test_variadic_tail_without_fixed_parameter_widens_between_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+function v(...$rest) { echo json_encode($rest), "\n"; }
+v(1);
+v(1.5);
+"#,
+    );
+    assert_eq!(out, "[1]\n[1.5]\n");
+}
+
 /// Verifies associative-array COW cloning retains receiver-bound callable
 /// descriptors. Later insertions must not free descriptors already stored under
 /// earlier keys when their source locals leave scope.
@@ -882,4 +999,97 @@ echo $ok ? "yes" : "no";
 "#,
     );
     assert_eq!(out, "42|yes");
+}
+
+/// Verifies a by-reference VARIADIC writes through to the caller for a computed index.
+///
+/// `function f(&...$out) { $out[$i] = …; }` is how a variadic out-parameter is written, and the
+/// write reached the caller only when the replacement was a raw scalar the lowering boxed itself.
+/// A value that arrived ALREADY boxed — which is everything `ichecked_add` and concatenation
+/// produce, so every `$out[$i] = $a + $b` — skipped the marker write-through entirely and went to
+/// the runtime setter, which replaces the array element and never follows the marker to the
+/// caller's storage. `$out[0] = 99` wrote through and `$out[$i] = 70 + $i` did not, silently.
+///
+/// The literal rows are kept beside the computed ones because they were the ones that always
+/// worked: a fix that merely moved which shape is broken would still pass half this test.
+/// `loopstr` is here for the two-word case — a string caller cell is a pointer AND a length, and
+/// writing one word where two belong leaves the length behind.
+#[test]
+fn test_by_ref_variadic_writes_through_for_a_computed_index() {
+    let out = compile_and_run(
+        r#"<?php
+function lit(&...$out): void { $out[0] = 99; $out[1] = 88; }
+function idx(int $k, &...$out): void { $out[$k] = 77; }
+function loopwrite(&...$out): void { $n = count($out); for ($i = 0; $i < $n; $i++) { $out[$i] = 70 + $i; } }
+function loopstr(&...$out): void { for ($i = 0; $i < 2; $i++) { $out[$i] = "s" . $i; } }
+$a = 0; $b = 0;
+lit($a, $b);
+var_dump($a, $b);
+$c = 0; $d = 0;
+idx(1, $c, $d);
+var_dump($c, $d);
+$e = 0; $f = 0; $g = 0;
+loopwrite($e, $f, $g);
+var_dump($e, $f, $g);
+$h = ""; $i = "";
+loopstr($h, $i);
+var_dump($h, $i);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(99)\nint(88)\n",
+            "int(0)\nint(77)\n",
+            "int(70)\nint(71)\nint(72)\n",
+            "string(2) \"s0\"\nstring(2) \"s1\"\n",
+        )
+    );
+}
+
+/// Verifies a by-reference variadic written through a `foreach` key, and over `null` callers.
+///
+/// `foreach ($out as $i => $_) { $out[$i] = …; }` is the natural way to fill a variadic
+/// out-parameter, and it reached the caller for none of its variables. A `foreach` key is a boxed
+/// Mixed in EIR, so the write lowers to `__rt_array_set_mixed_key` instead of the direct setter;
+/// its integer-key path delegates to `__rt_array_set_mixed`, which had no marker detection of its
+/// own and simply replaced the array element.
+///
+/// The `null` callers are the second half. A by-reference variadic argument still holding `null`
+/// has no Mixed storage for the write to land in, so the write went through the marker into a
+/// slot the caller read as null-typed — every variable stayed NULL with nothing reported.
+///
+/// The typed-caller row is kept beside it so a fix that only handles one of the two shapes cannot
+/// pass, and the string row covers the two-word caller cell.
+#[test]
+fn test_by_ref_variadic_writes_through_a_foreach_key() {
+    let out = compile_and_run(
+        r#"<?php
+function fill(int $base, &...$out): int {
+    $n = 0;
+    foreach ($out as $i => $_) { $out[$i] = $base + $i; $n = $n + 1; }
+    return $n;
+}
+function fillstr(&...$out): void {
+    foreach ($out as $i => $_) { $out[$i] = "v" . $i; }
+}
+$a = null; $b = null; $c = null;
+var_dump(fill(10, $a, $b, $c));
+var_dump($a, $b, $c);
+$d = 0; $e = 0;
+var_dump(fill(50, $d, $e));
+var_dump($d, $e);
+$f = null; $g = null;
+fillstr($f, $g);
+var_dump($f, $g);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(3)\nint(10)\nint(11)\nint(12)\n",
+            "int(2)\nint(50)\nint(51)\n",
+            "string(2) \"v0\"\nstring(2) \"v1\"\n",
+        )
+    );
 }

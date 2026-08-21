@@ -28,6 +28,10 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    // An `array|false` union — scandir(), glob(), file() — is accepted by reading through to
+    // its array member: the argument lowering pairs this with an unbox-or-throw, so a runtime
+    // `false` raises php's TypeError rather than compiling `in_array($x, scandir($d))` away.
+    let arr_ty = arr_ty.array_or_false_member().cloned().unwrap_or(arr_ty);
     if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(
             cx.span,

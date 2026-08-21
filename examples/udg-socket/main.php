@@ -7,7 +7,9 @@
 $path = "/tmp/elephc-udg-example.sock";
 unlink($path);
 
-$server = stream_socket_server("udg://" . $path);
+// STREAM_SERVER_BIND, not the default flags: those also ask for listen(), which
+// a datagram transport cannot do, and PHP fails the call outright.
+$server = stream_socket_server("udg://" . $path, $errno, $errstr, STREAM_SERVER_BIND);
 $client = stream_socket_client("udg://" . $path);
 echo "udg sockets opened\n";
 

@@ -2,7 +2,7 @@
 title: "hash_init() — internals"
 description: "Compiler internals for hash_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 410
+  order: 422
 ---
 
 ## `hash_init()` — internals
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by the compiler-injected hash prelude.
+- Implemented by a compiler-injected PHP prelude.
 
 ## Semantic descriptor
 

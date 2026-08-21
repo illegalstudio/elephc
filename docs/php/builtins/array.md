@@ -15,7 +15,7 @@ sidebar:
 | [`array_column()`](./array/array_column.md) | `(array $array, string $column_key): array` | `array` | ✓ | ✓ |
 | [`array_combine()`](./array/array_combine.md) | `(array $keys, array $values): array` | `array` | ✓ | ✓ |
 | [`array_count_values()`](./array/array_count_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_diff()`](./array/array_diff.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
+| [`array_diff()`](./array/array_diff.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | ✓ |
 | [`array_diff_assoc()`](./array/array_diff_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
 | [`array_diff_key()`](./array/array_diff_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_fill()`](./array/array_fill.md) | `(int $start_index, int $count, mixed $value): array` | `array` | ✓ | ✓ |
@@ -23,7 +23,7 @@ sidebar:
 | [`array_filter()`](./array/array_filter.md) | `(array $array, callable $callback = null, int $mode = 0): array` | `array` | ✓ | ✓ |
 | [`array_find()`](./array/array_find.md) | `(mixed $array, mixed $callback): mixed` | `mixed` | ✓ | — |
 | [`array_flip()`](./array/array_flip.md) | `(array $array): array` | `array` | ✓ | ✓ |
-| [`array_intersect()`](./array/array_intersect.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
+| [`array_intersect()`](./array/array_intersect.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | ✓ |
 | [`array_intersect_assoc()`](./array/array_intersect_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
 | [`array_intersect_key()`](./array/array_intersect_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_is_list()`](./array/array_is_list.md) | `(mixed $array): bool` | `bool` | ✓ | — |

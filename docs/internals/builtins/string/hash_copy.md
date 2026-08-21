@@ -2,7 +2,7 @@
 title: "hash_copy() — internals"
 description: "Compiler internals for hash_copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 406
+  order: 418
 ---
 
 ## `hash_copy()` — internals
@@ -16,7 +16,7 @@ sidebar:
 
 ### Lowering notes
 
-- Implemented by the compiler-injected hash prelude.
+- Implemented by a compiler-injected PHP prelude.
 
 ## Semantic descriptor
 

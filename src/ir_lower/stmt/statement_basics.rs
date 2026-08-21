@@ -48,19 +48,35 @@ pub(super) fn lower_block(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
     }
 }
 
+/// Returns true when an echoed value can reach the float-to-string formatter.
+///
+/// A `Mixed` cell is included because its echo ladder dispatches on the runtime tag and takes the
+/// float arm for a float — the type that says "could be anything" is exactly the one that cannot
+/// rule a NaN out.
+fn echo_can_coerce_a_float(ir_type: crate::ir::IrType) -> bool {
+    matches!(
+        ir_type,
+        crate::ir::IrType::F64 | crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+    )
+}
+
 /// Emits EIR for `echo`.
 pub(super) fn lower_echo(ctx: &mut LoweringContext<'_, '_>, expr: &Expr, span: Span) {
     let value = lower_expr(ctx, expr);
     if ctx.builder.insertion_block_is_terminated() {
         return;
     }
-    ctx.emit_void(
-        Op::EchoValue,
-        vec![value.value],
-        None,
-        Op::EchoValue.default_effects(),
-        Some(span),
-    );
+    // A float reaching the output formatter can be NaN, and PHP warns when it is
+    // (`unexpected NAN value was coerced to string`). The warning is raised by `__rt_ftoa` in the
+    // runtime, which has no idea what line it is on, so the ` in FILE on line N` tail can only
+    // come from this instruction admitting that it may warn. The admission is made HERE rather
+    // than in `default_effects` so only an echo that can actually reach a float pays for it: an
+    // `echo "literal"` is by far the common case and cannot warn.
+    let mut effects = Op::EchoValue.default_effects();
+    if echo_can_coerce_a_float(value.ir_type) {
+        effects |= crate::ir::Effects::MAY_WARN;
+    }
+    ctx.emit_void(Op::EchoValue, vec![value.value], None, effects, Some(span));
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }

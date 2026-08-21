@@ -29,6 +29,9 @@ pub(in crate::interpreter) fn eval_builtin_implode(
     };
     let separator = eval_expr(separator, context, scope, values)?;
     let array = eval_expr(array, context, scope, values)?;
+    super::super::array::array_arg_check::eval_expect_implode_args(
+        separator, array, context, values,
+    )?;
     eval_implode_result(separator, array, values)
 }
 
@@ -57,12 +60,19 @@ pub(in crate::interpreter) fn eval_implode_result(
 }
 
 /// Dispatches evaluated `implode()` calls through the builtin leaf.
+///
+/// The evaluated-argument road needs the eval context for the same reason the direct one
+/// does: a badly typed argument leaves through a catchable `TypeError`, not a fatal.
 pub(in crate::interpreter) fn eval_implode_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [separator, array] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    super::super::array::array_arg_check::eval_expect_implode_args(
+        *separator, *array, context, values,
+    )?;
     eval_implode_result(*separator, *array, values)
 }

@@ -6,9 +6,10 @@
 //!
 //! Key details:
 //! - Verifies the Phase 03 ownership surface emits explicit acquire/release
-//!   markers for refcounted local values before the future EIR backend exists.
+//!   markers for lifetime-tracked local values before backend lowering.
 
-use crate::ir::{print_module, Op, Ownership, ValueDef};
+use crate::ir::{print_module, Immediate, Op, Ownership, ValueDef};
+use crate::types::PhpType;
 
 /// Returns the printed EIR for `main`, excluding built-in helper and property-init functions.
 fn main_function_text(text: &str) -> &str {
@@ -114,6 +115,109 @@ fn overwriting_string_local_emits_release() {
     let text = print_module(&module);
     assert!(text.contains("acquire"), "expected acquire in {text}");
     assert!(text.contains("release"), "expected release in {text}");
+}
+
+/// Verifies copying and then overwriting a concrete Resource local retains the copy
+/// and releases its previous runtime ownership before the replacement store.
+#[test]
+fn resource_local_copy_emits_acquire_and_release() {
+    let module = super::lower_source(
+        r#"<?php
+$source = stream_context_get_default();
+$copy = $source;
+$copy = stream_context_get_default();
+"#,
+    );
+    let module_text = print_module(&module);
+    let main_text = main_function_text(&module_text);
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("expected main EIR function");
+    let copy_slot = function
+        .locals
+        .iter()
+        .find(|local| local.name.as_deref() == Some("copy"))
+        .map(|local| local.id)
+        .expect("expected the copied Resource local");
+    let copy_stores = function
+        .instructions
+        .iter()
+        .enumerate()
+        .filter(|(_, inst)| {
+            inst.op == Op::StoreLocal
+                && matches!(
+                    inst.immediate.as_ref(),
+                    Some(Immediate::LocalSlot(slot)) if *slot == copy_slot
+                )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        copy_stores.len(),
+        2,
+        "expected the Resource copy and overwrite stores in {}",
+        main_text
+    );
+
+    let (copy_store_index, copy_store) = copy_stores[0];
+    let copied_value = copy_store.operands[0];
+    let copied_metadata = function.value(copied_value).expect("copied Resource value");
+    assert!(
+        matches!(copied_metadata.php_type, PhpType::Resource(_)),
+        "the retained copy must preserve concrete Resource metadata"
+    );
+    let ValueDef::Instruction {
+        inst: acquire_inst, ..
+    } = copied_metadata.def
+    else {
+        panic!("the copied Resource must be produced by Acquire");
+    };
+    assert_eq!(
+        function
+            .instruction(acquire_inst)
+            .expect("Resource Acquire instruction")
+            .op,
+        Op::Acquire
+    );
+
+    let overwrite_store_index = copy_stores[1].0;
+    let released_value = function.instructions[copy_store_index + 1..overwrite_store_index]
+        .iter()
+        .find(|inst| {
+            inst.op == Op::Release
+                && inst.operands.first().is_some_and(|value| {
+                    function
+                        .value(*value)
+                        .is_some_and(|value| matches!(value.php_type, PhpType::Resource(_)))
+                })
+        })
+        .and_then(|inst| inst.operands.first())
+        .copied()
+        .unwrap_or_else(|| {
+            panic!(
+                "overwriting the copied Resource must release its previous owner before the store: {}",
+                main_text
+            )
+        });
+    let ValueDef::Instruction {
+        inst: load_inst, ..
+    } = function
+        .value(released_value)
+        .expect("released Resource value")
+        .def
+    else {
+        panic!("the released Resource owner must be loaded from the copied slot");
+    };
+    let load = function
+        .instruction(load_inst)
+        .expect("Resource cleanup load instruction");
+    assert_eq!(load.op, Op::LoadLocal);
+    assert_eq!(
+        load.immediate,
+        Some(Immediate::LocalSlot(copy_slot)),
+        "the release must target the previous owner stored in `$copy`"
+    );
 }
 
 /// Verifies a borrowed string result is retained before its aliased source slot is released.

@@ -25,6 +25,8 @@ mod misc;
 mod openssl;
 #[path = "strings/parse_url.rs"]
 mod parse_url;
+#[path = "strings/scanf.rs"]
+mod scanf;
 
 /// Verifies `mb_strlen()` counts valid UTF-8 across ASCII, multibyte, and empty strings.
 #[test]

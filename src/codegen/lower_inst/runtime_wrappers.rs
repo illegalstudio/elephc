@@ -236,6 +236,21 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         crate::builtins::semantics::LoweredBuiltinValue { value }
     }
 
+    /// Refuses to intern a PHP function name, which a synthetic wrapper cannot reach.
+    ///
+    /// Interning needs the module data pool, and this adapter only owns a function `Builder`.
+    /// The only builtins that ask for it are the ones whose implementation is an injected
+    /// prelude function — `sscanf()`/`fscanf()` — and those declare
+    /// `BuiltinCallablePolicy::StaticOnly`, so no synthetic callable wrapper is ever built for
+    /// them. A builtin reaching here would be one that lowers through `Op::Call` while claiming
+    /// to be dynamically callable, which is a registry contradiction rather than a user error.
+    fn intern_function_name(&mut self, name: &str) -> crate::ir::DataId {
+        unreachable!(
+            "a synthetic callable wrapper cannot intern the function name {name}: \
+             builtins lowering through Op::Call must declare BuiltinCallablePolicy::StaticOnly"
+        )
+    }
+
     /// Emits one typed runtime operation into the synthetic wrapper body.
     fn emit_runtime_call(
         &mut self,

@@ -77,7 +77,7 @@ pub(crate) use simple::{
     lower_binary_string_runtime, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,
     lower_trim_like, lower_ucfirst,
 };
-pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split};
+pub(crate) use split::{lower_explode, lower_implode, lower_str_split};
 
 #[allow(unused_imports)]
 pub(super) use common::{

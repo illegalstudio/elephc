@@ -3820,9 +3820,12 @@ echo $row[1];
 
 unlink("a.txt");
 "#;
+    // php -n 8.5.6 answers ["o", "e"]: fgetcsv strips the record's trailing newline
+    // BEFORE splitting on the separator. The previous "o:e\n" expectation pinned the
+    // explode()-based READ_CSV that kept the terminator glued to the last field.
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_csv_current", source),
-        "o:e\n"
+        "o:e"
     );
 }
 
@@ -3858,6 +3861,11 @@ unlink("stream.txt");
 }
 
 /// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.
+///
+/// The `fgetc()` pair reads `bb`, not `aa`: `getCurrentLine()` is php's ALIAS of `fgets()`
+/// and CONSUMES the first line. This assertion read `aa` while elephc answered the cached
+/// current line without advancing the stream — measured on `php -n` 8.5.6, this exact
+/// program prints `aa\n|bb|FE|8|7|`.
 #[test]
 fn ir_backend_handles_spl_file_object_state_helpers() {
     let source = r#"<?php
@@ -3884,7 +3892,7 @@ unlink("meta.txt");
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_state_helpers", source),
-        "aa\n|aa|FE|8|7|"
+        "aa\n|bb|FE|8|7|"
     );
 }
 
@@ -4857,13 +4865,17 @@ fn ir_backend_handles_indexed_array_merge_empty_left() {
 fn ir_backend_handles_indexed_array_set_operations() {
     for (name, source, expected) in [
         (
+            // The survivors keep their SOURCE keys, as php does: `array_diff([1,2,3,4], [2,4])`
+            // is `{0:1, 2:3}`, so the second survivor is read at `[2]`.
             "array_diff_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[2];",
             "2:1:3",
         ),
         (
+            // Likewise `array_intersect([1,2,3,4], [2,4,6])` is `{1:2, 3:4}` — neither survivor
+            // sits at key 0, which is exactly what a reindexed result got wrong.
             "array_intersect_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[1]; echo ':'; echo $c[3];",
             "2:2:4",
         ),
     ] {
@@ -5844,8 +5856,15 @@ echo "after";
         "after"
     );
     let stderr = String::from_utf8(missing.stderr).expect("stderr should be utf8");
+    // php-src names the path and the reason: `file_get_contents(missing.txt): Failed to
+    // open stream: No such file or directory`. Asserting the whole message, rather than
+    // just the function name, is what would have caught the bare `file_get_contents()`
+    // form this test used to accept.
     assert!(
-        stderr.contains("Warning: file_get_contents()"),
+        stderr.contains(
+            "Warning: file_get_contents(missing.txt): Failed to open stream: \
+             No such file or directory"
+        ),
         "expected file_get_contents warning, got stderr={stderr}"
     );
 }
@@ -6401,11 +6420,14 @@ echo chdir("sub") ? "D" : "!";
 $after = getcwd();
 echo strlen($after) > strlen($before) ? "W" : "!";
 echo ":";
-echo sys_get_temp_dir();
+// A RELATIONSHIP, not a literal: php derives this from TMPDIR, which on macOS is a private
+// per-user directory and not /tmp. The point here is that the IR backend dispatches the call.
+$t = sys_get_temp_dir();
+echo strlen($t) > 0 && substr($t, 0, 1) === "/" ? "T" : "!";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("working_directory", source),
-        "CMDW:/tmp"
+        "CMDW:T"
     );
 }
 

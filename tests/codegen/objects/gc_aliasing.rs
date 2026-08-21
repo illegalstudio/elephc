@@ -272,6 +272,10 @@ echo $padded[1][0] . "|" . $padded[2][0];
 }
 
 /// Verifies that an inner array in array_unique output survives unset of the original.
+/// Fixture: src contains inner array twice and a separate element, run array_unique, unset src and inner, verify count and read values.
+/// Regression: ensures array_unique preserves GC alias for deduplicated inner arrays.
+/// The survivors keep their SOURCE keys, as php does, so the second one is read at `[2]` — where
+/// the source held it — and not at the `[1]` a reindexed result used to put it at.
 /// Fixture: src holds the same inner array twice, run array_unique, unset src and inner, read
 /// the survivor through the deduplicated result.
 /// Regression: ensures array_unique preserves the GC alias for a deduplicated inner array.
@@ -291,6 +295,7 @@ $src = [$inner, $inner];
 $uniq = array_unique($src);
 unset($src);
 unset($inner);
+echo count($uniq) . "|" . $uniq[0][0] . "|" . $uniq[2][0];
 echo count($uniq) . "|" . $uniq[0][0];
 "#,
     );
@@ -337,6 +342,8 @@ echo $diff[0][0];
 /// Verifies that an inner array in array_intersect output survives unset of the originals.
 /// Fixture: left contains inner array and another element, right contains inner array, intersect, unset all, read result.
 /// Regression: ensures array_intersect output preserves GC alias for nested inner arrays.
+/// The survivor keeps its SOURCE key, as php does: `$inner` sits at index 1 of `$left`, so the
+/// result is read at `[1]` and not at the `[0]` a reindexed result used to put it at.
 #[test]
 fn test_gc_array_intersect_borrowed_array_survives_unset() {
     let out = compile_and_run(
@@ -348,7 +355,7 @@ $both = array_intersect($left, $right);
 unset($left);
 unset($right);
 unset($inner);
-echo $both[0][0];
+echo $both[1][0];
 "#,
     );
     assert_eq!(out, "9");

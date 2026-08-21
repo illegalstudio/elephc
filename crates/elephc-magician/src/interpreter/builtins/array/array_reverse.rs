@@ -49,13 +49,17 @@ pub(in crate::interpreter) fn eval_builtin_array_reverse(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
+        // php evaluates every argument before the type check throws, so the check waits
+        // for the whole operand list.
         [array] => {
             let array = eval_expr(array, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args("array_reverse", &[array], context, values)?;
             eval_array_reverse_result(array, false, values)
         }
         [array, preserve_keys] => {
             let array = eval_expr(array, context, scope, values)?;
             let preserve_keys = eval_expr(preserve_keys, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args("array_reverse", &[array], context, values)?;
             let preserve_keys = values.truthy(preserve_keys)?;
             eval_array_reverse_result(array, preserve_keys, values)
         }

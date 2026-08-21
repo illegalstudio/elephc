@@ -29,5 +29,7 @@ mod paths;
 mod modify;
 #[path = "io/streams_ext.rs"]
 mod streams_ext;
+#[path = "io/stream_context_propagation.rs"]
+mod stream_context_propagation;
 #[path = "io/symlinks.rs"]
 mod symlinks;

@@ -25,10 +25,13 @@
 //!   preserved two ways: (1) `transplant_callee_body` reproduces the callee's
 //!   per-slot cleanup decisions only when all direct-returning paths transfer the
 //!   same slot — parameter and uniformly directly-returned slots become
-//!   `BorrowedTemp` (epilogue-excluded), ordinary refcounted internal locals stay
-//!   `PhpLocal` so the host epilogue still frees them; (2) the destructor-free
-//!   restriction makes the only residual difference — deferring those frees to the
-//!   host epilogue — unobservable (no `__destruct`, no object identity).
+//!   `BorrowedTemp` (epilogue-excluded); (2) every other owning internal local is
+//!   released at the continuation block, where the callee frame would have died.
+//!   Deferring those frees to the host epilogue instead is NOT unobservable, as this
+//!   pass long assumed: the host epilogue runs once, so a spliced body inside a loop
+//!   overwrote the same slot on every iteration and freed only the last value —
+//!   measured at 5 leaked blocks per iteration for a four-element string array, and a
+//!   `scandir()` body of that shape exhausted the heap where php runs to completion.
 //!   Objects/closures/resources/`mixed`/`iterable` and by-ref params are excluded
 //!   because their cleanup timing or aliasing cannot be reproduced by a value-copy splice.
 //! - String arguments add one more call-site condition: PHP concatenation builds
@@ -369,6 +372,43 @@ fn callee_directly_returned_slots(callee: &Function) -> HashSet<LocalSlotId> {
         }
     }
     slots
+}
+
+/// Returns the transplanted host slots that must be released where the callee frame
+/// would have died, paired for `ReleaseLocalSlot` + `UnsetLocal` emission.
+///
+/// A callee's internal locals are freed by the callee's own epilogue, which the transplant
+/// does not carry over: the host epilogue runs ONCE, so an inlined body inside a loop
+/// overwrote the same slot on every iteration and only the last value was ever freed
+/// (`function f() { $a = ["a","b"]; return count($a); }` called 200 times leaked 200 arrays
+/// and their strings, and a `scandir()` body of the same shape exhausted the heap where php
+/// runs to completion). Parameters and directly-returned slots are excluded exactly as the
+/// callee epilogue excludes them: the caller owns the arguments, and a returned value's
+/// ownership has moved to the continuation.
+fn callee_slots_needing_release(
+    callee: &Function,
+    excluded_from_cleanup: &HashSet<LocalSlotId>,
+    local_map: &HashMap<LocalSlotId, LocalSlotId>,
+) -> Vec<LocalSlotId> {
+    callee
+        .locals
+        .iter()
+        .filter(|local| !excluded_from_cleanup.contains(&local.id))
+        .filter(|local| {
+            matches!(
+                local.kind,
+                LocalKind::PhpLocal
+                    | LocalKind::HiddenTemp
+                    | LocalKind::OwnedTemp
+                    | LocalKind::NamedArgTemp
+            )
+        })
+        .filter(|local| {
+            let ty = local.php_type.codegen_repr();
+            ty.is_refcounted() || matches!(ty, PhpType::Str | PhpType::Callable)
+        })
+        .filter_map(|local| local_map.get(&local.id).copied())
+        .collect()
 }
 
 /// Returns the callee local slots that hold parameters (by name), which the callee
@@ -817,10 +857,39 @@ fn apply_inline_at_site(
     host.blocks
         .push(BasicBlock::new(cont_id, cont_name, cont_params));
 
+    // Release the callee's owning internal locals at the join, where the callee frame
+    // would have died. The host epilogue alone runs ONCE, so an inlined body in a loop
+    // leaked every iteration but the last; releasing here reproduces the callee
+    // epilogue's timing. `UnsetLocal` follows each release so the host epilogue — still
+    // the net for paths that leave through a throw — cannot release the slot twice.
+    let excluded_from_cleanup: HashSet<LocalSlotId> = callee_param_slots(callee)
+        .into_iter()
+        .chain(callee_directly_returned_slots(callee))
+        .collect();
+    let mut cleanup_instructions: Vec<InstId> = Vec::new();
+    for slot in callee_slots_needing_release(callee, &excluded_from_cleanup, &local_map) {
+        for op in [Op::ReleaseLocalSlot, Op::UnsetLocal] {
+            let iid = InstId::from_raw(host.instructions.len() as u32);
+            host.instructions.push(Instruction::new(
+                op,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+                op.default_effects(),
+                None,
+            ));
+            cleanup_instructions.push(iid);
+        }
+    }
+
     // Install post-call tail into continuation; fix value defs for moved result producers.
     {
         let contb = host.block_mut(cont_id).unwrap();
-        contb.instructions = tail;
+        contb.instructions = cleanup_instructions;
+        contb.instructions.extend(tail);
         let cont_instrs: Vec<(usize, InstId)> = contb
             .instructions
             .iter()

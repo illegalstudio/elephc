@@ -8,6 +8,9 @@
 //! - Leaf files register metadata through `eval_builtin!` and own the concrete
 //!   direct or evaluated-argument adapter used by registry hooks.
 
+// `implode()` lives in the string area but carries an ARRAY argument, so the shared
+// checker has to be reachable from outside this module.
+pub(in crate::interpreter) mod array_arg_check;
 mod array_chunk;
 mod array_column;
 mod array_combine;

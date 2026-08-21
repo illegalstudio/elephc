@@ -23,6 +23,9 @@ use crate::source::SourceMode;
 /// # Errors
 /// Returns `CompileError` when PHP mode lacks its opening tag, LFC contains a
 /// physical PHP tag at a code boundary, or either mode contains invalid syntax.
+///
+/// A `?>` closing tag is handled by [`scan_inline_html`], which turns the literal text that
+/// follows into an ordinary `echo` of a string constant.
 pub fn scan_tokens(
     source: &str,
     mode: SourceMode,
@@ -42,6 +45,13 @@ pub fn scan_tokens(
                 cursor.advance();
             }
             tokens.push(spanned(Token::OpenTag, span));
+        } else if cursor.remaining().starts_with("<?=") {
+            // php's short echo opens a file as readily as `<?php` does.
+            for _ in 0..3 {
+                cursor.advance();
+            }
+            tokens.push(spanned(Token::OpenTag, span));
+            tokens.push(spanned(Token::Echo, cursor.span()));
         } else {
             return Err(CompileError::new(span, "Expected '<?php' at start of file"));
         }
@@ -66,6 +76,18 @@ pub fn scan_tokens(
                 span,
                 "PHP opening and closing tags are not valid in .lfc source files",
             ));
+        } else if cursor.remaining().starts_with("?>") {
+            // A closing tag ENDS the statement and hands the rest of the file to the output.
+            //
+            // php treats `?>` as an implicit `;`, swallows ONE newline directly after it, and
+            // echoes everything up to the next `<?php` verbatim. Measured on `php -n` 8.5.6:
+            // `<?php echo "A";?>\nX\n<?php echo "B";` prints `AX\nB` — the newline after the tag
+            // is gone, the one after `X` is not.
+            //
+            // The literal text becomes `echo <string>;` at the TOKEN level, so nothing downstream
+            // needs to learn about inline HTML: the parser, the checker and codegen all see an
+            // ordinary echo of a string constant.
+            scan_inline_html(&mut cursor, &mut tokens);
         } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
@@ -101,6 +123,106 @@ pub fn scan_tokens(
     Ok(tokens)
 }
 
+
+
+/// Skips a `//` or `#` line comment, which php ends at a newline OR at a CLOSING TAG.
+///
+/// `<?php echo "A"; // comment ?>TEXT` prints `ATEXT`: the `?>` inside the comment closes the tag
+/// and hands `TEXT` to the output. Running to the newline instead swallowed the tag, and the
+/// `<?php` on the next line then arrived as code — a parse error on a file php accepts. Measured on
+/// `php -n` 8.5.6, for both comment introducers.
+///
+/// A `/* */` block comment does NOT stop there: `/* block ?> still comment */ echo "B";` prints
+/// `AB`, so the tag inside it is ordinary comment text and only `*/` ends it.
+///
+/// The tag itself is left UNCONSUMED, so the scan loop sees it and takes the inline-HTML path.
+fn skip_line_comment(cursor: &mut Cursor) {
+    while let Some(ch) = cursor.peek() {
+        if cursor.remaining().starts_with("?>") {
+            return;
+        }
+        cursor.advance();
+        if ch == '\n' {
+            return;
+        }
+    }
+}
+
+/// Consumes a `?>` closing tag and the literal text after it, emitting `; echo <text>;`.
+///
+/// php's rules here are three, and each is measured on `php -n` 8.5.6:
+///
+/// - `?>` terminates the current statement, so a trailing `;` is optional before it.
+/// - ONE newline directly after the tag is swallowed. `<?php echo "A";?>\nX\n<?php echo "B";`
+///   prints `AX\nB`: the newline after the tag is gone, the one after `X` is not. A `\r\n` counts
+///   as that one newline.
+/// - Everything up to the next `<?php` — or to end of file — is output verbatim, whatever it
+///   contains. It is not PHP and is never scanned as PHP.
+///
+/// Emitting `echo` + a string literal + `;` keeps the whole feature inside the lexer: the parser
+/// sees an ordinary echo statement, so nothing downstream needs an inline-HTML node. Empty text
+/// emits nothing at all, which is what `?><?php` should cost.
+fn scan_inline_html(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) {
+    let tag_span = cursor.span();
+    cursor.advance();                                                   // '?'
+    cursor.advance();                                                   // '>'
+    // The closing tag stands in for the statement's semicolon — but only where one belongs. php
+    // accepts the empty statement a doubled `;` makes; this parser has no such production, so
+    // `<?php echo "A"; ?>` would fail on the spare token. Nor does a `;` belong after the tokens
+    // that OPEN something: `<?php ?>`, a `{` or `}` around a block, or the `:` of the alternative
+    // `if (...): ?>` form, which php uses precisely to wrap literal text.
+    if !matches!(
+        tokens.last().map(|(token, _)| token),
+        Some(Token::Semicolon | Token::LBrace | Token::RBrace | Token::OpenTag | Token::Colon)
+    ) {
+        tokens.push(spanned(Token::Semicolon, tag_span));
+    }
+
+    if cursor.remaining().starts_with("\r\n") {
+        cursor.advance();
+        cursor.advance();
+    } else if cursor.peek() == Some('\n') {
+        cursor.advance();
+    }
+
+    let text_span = cursor.span();
+    let mut text = String::new();
+    let mut short_echo = false;
+    while !cursor.is_eof() {
+        if cursor.remaining().starts_with("<?php") {
+            for _ in 0..5 {
+                cursor.advance();
+            }
+            break;
+        }
+        // `<?=` is an opening tag too — php's short echo, exactly `<?php echo`. It has to be
+        // recognised HERE or the text swallows it: measured on `php -n` 8.5.6,
+        // `Hello <?= $name ?>!` prints the value, and a `<?=` inside what looked like literal
+        // text is a parse error, not literal output.
+        if cursor.remaining().starts_with("<?=") {
+            for _ in 0..3 {
+                cursor.advance();
+            }
+            short_echo = true;
+            break;
+        }
+        if let Some(ch) = cursor.advance() {
+            text.push(ch);
+        }
+    }
+
+    if !text.is_empty() {
+        tokens.push(spanned(Token::Echo, text_span));
+        tokens.push(spanned(Token::StringLiteral(text), text_span));
+        tokens.push(spanned(Token::Semicolon, text_span));
+    }
+    if short_echo {
+        // The expression that follows is scanned as ordinary PHP; its `?>` supplies the `;`,
+        // and an explicit one is equally accepted.
+        tokens.push(spanned(Token::Echo, cursor.span()));
+    }
+}
+
 /// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute
 /// groups), and `/* */` block comments. Uses `continue` to re-check after each comment
 /// type so adjacent comment forms are all skipped.
@@ -115,17 +237,13 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         if cursor.remaining().starts_with("//") {
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor);
             continue;
         }
 
         if cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#[") {
             // PHP line comment introduced by `#` (but `#[` opens an attribute group).
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor);
             continue;
         }
 

@@ -32,8 +32,5 @@ pub(in crate::interpreter) fn eval_readdir_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match evaluated_args {
-        [dir_handle] => super::closedir::eval_unary_directory_result("readdir", *dir_handle, context, values),
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
+    super::closedir::eval_unary_directory_values_result("readdir", evaluated_args, context, values)
 }

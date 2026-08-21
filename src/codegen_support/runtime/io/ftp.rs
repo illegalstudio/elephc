@@ -34,7 +34,7 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     // __rt_ftp_send_recv: send a command and read the server reply.
     // Input: x0 = fd, x1 = command pointer, x2 = command length.
     // Dispatches both the write and the read through elephc-tls when
-    // _tls_sessions[fd] holds a non-zero handle (ftps:// after AUTH TLS).
+    // _ftp_tls_control holds a non-zero handle (ftps:// after AUTH TLS).
     // ================================================================
     emitter.blank();
     emitter.comment("--- runtime: ftp_send_recv ---");
@@ -45,8 +45,8 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the control descriptor
 
     // -- write phase: TLS-aware dispatch --
-    abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
-    emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
+    abi::emit_symbol_address(emitter, "x13", "_ftp_tls_control");
+    emitter.instruction("ldr x14, [x13]");                                      // control-connection session (0 = plain TCP)
     emitter.instruction("cbz x14, __rt_ftp_sr_plain_write");                    // no TLS → plain write syscall
     emitter.instruction("mov x0, x14");                                         // TLS handle as first arg (x1/x2 still hold cmd ptr/len)
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_write_fn");
@@ -59,8 +59,8 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     // -- read phase: TLS-aware dispatch into _ftp_resp_buf --
     emitter.label("__rt_ftp_sr_read_phase");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload control fd
-    abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
-    emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // load runtime value
+    abi::emit_symbol_address(emitter, "x13", "_ftp_tls_control");
+    emitter.instruction("ldr x14, [x13]");                                      // control-connection session
     emitter.instruction("cbz x14, __rt_ftp_sr_plain_read");                     // no TLS → plain read syscall
     emitter.instruction("mov x0, x14");                                         // TLS handle as first arg
     abi::emit_symbol_address(emitter, "x1", "_ftp_resp_buf");
@@ -230,7 +230,7 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #4096");                                       // prepare AArch64 call argument
     emitter.syscall(3);                                                         // read AUTH TLS reply (expect 234)
     // Promote the control fd to TLS via elephc_tls_attach_fd; store the
-    // returned handle in _tls_sessions[fd] so __rt_ftp_send_recv routes
+    // returned handle in _ftp_tls_control so __rt_ftp_send_recv routes
     // subsequent USER/PASS/PBSZ/PROT/PASV through elephc-tls.
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd → first arg
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_attach_fd_fn");
@@ -240,8 +240,8 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // compare runtime values for the next branch
     emitter.instruction("b.lt __rt_ftp_open_fail");                             // TLS handshake failed
     emitter.instruction("ldr x10, [sp, #0]");                                   // fd
-    abi::emit_symbol_address(emitter, "x11", "_tls_sessions");
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // _tls_sessions[fd] = handle
+    abi::emit_symbol_address(emitter, "x11", "_ftp_tls_control");
+    emitter.instruction("str x0, [x11]");                                       // publish the control-connection session
     emitter.label("__rt_ftp_open_skip_auth_tls");
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // control descriptor for the USER command
@@ -300,8 +300,8 @@ pub fn emit_ftp(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // compare runtime values for the next branch
     emitter.instruction("b.lt __rt_ftp_open_fail");                             // data-channel TLS handshake failed
     emitter.instruction("ldr x10, [sp, #24]");                                  // data fd
-    abi::emit_symbol_address(emitter, "x11", "_tls_sessions");
-    emitter.instruction("str x0, [x11, x10, lsl #3]");                          // _tls_sessions[data_fd] = handle
+    abi::emit_symbol_address(emitter, "x11", "_ftp_tls_data");
+    emitter.instruction("str x0, [x11]");                                       // publish the data-connection session
     emitter.label("__rt_ftp_open_skip_data_tls");
 
     // -- optional REST <N>\r\n send when stream_context_options['ftp']['resume_pos'] is set --
@@ -379,8 +379,8 @@ fn emit_ftp_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save command length (call write may clobber rdx)
 
     // -- write phase: TLS-aware dispatch --
-    abi::emit_symbol_address(emitter, "r10", "_tls_sessions");                  // load runtime data address
-    emitter.instruction("mov r11, QWORD PTR [r10 + rdi * 8]");                  // _tls_sessions[fd] handle (0 = plain TCP)
+    abi::emit_symbol_address(emitter, "r10", "_ftp_tls_control");               // control-connection session slot
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // control-connection session (0 = plain TCP)
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_ftp_sr_plain_write_x");                        // branch when the checked value is zero or equal
     emitter.instruction("mov rdi, r11");                                        // TLS handle as first arg
@@ -393,8 +393,8 @@ fn emit_ftp_linux_x86_64(emitter: &mut Emitter) {
     // -- read phase: TLS-aware dispatch into _ftp_resp_buf --
     emitter.label("__rt_ftp_sr_read_phase_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload control fd
-    abi::emit_symbol_address(emitter, "r10", "_tls_sessions");                  // load runtime data address
-    emitter.instruction("mov r11, QWORD PTR [r10 + rdi * 8]");                  // _tls_sessions[fd] handle
+    abi::emit_symbol_address(emitter, "r10", "_ftp_tls_control");               // control-connection session slot
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // control-connection session
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_ftp_sr_plain_read_x");                         // branch when the checked value is zero or equal
     emitter.instruction("mov rdi, r11");                                        // TLS handle
@@ -565,8 +565,8 @@ fn emit_ftp_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // compare runtime values for the next branch
     emitter.instruction("jl __rt_ftp_open_fail_x86");                           // TLS handshake failed
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // fd
-    abi::emit_symbol_address(emitter, "r10", "_tls_sessions");                  // load runtime data address
-    emitter.instruction("mov QWORD PTR [r10 + rcx * 8], rax");                  // _tls_sessions[fd] = handle
+    abi::emit_symbol_address(emitter, "r10", "_ftp_tls_control");               // control-connection session slot
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the control-connection session
     emitter.label("__rt_ftp_open_skip_auth_tls_x");
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // control descriptor for the USER command
@@ -625,8 +625,8 @@ fn emit_ftp_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 0");                                          // compare runtime values for the next branch
     emitter.instruction("jl __rt_ftp_open_fail_x86");                           // data-channel TLS handshake failed
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // data fd
-    abi::emit_symbol_address(emitter, "r10", "_tls_sessions");                  // load runtime data address
-    emitter.instruction("mov QWORD PTR [r10 + rcx * 8], rax");                  // _tls_sessions[data_fd] = handle
+    abi::emit_symbol_address(emitter, "r10", "_ftp_tls_data");                  // data-connection session slot
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish the data-connection session
     emitter.label("__rt_ftp_open_skip_data_tls_x");
 
     // -- optional REST <N>\r\n send when stream_context_options['ftp']['resume_pos'] is set --

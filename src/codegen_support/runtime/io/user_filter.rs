@@ -49,11 +49,34 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_filter_register ---");
     emitter.label_global("__rt_stream_filter_register");
 
-    // Frame: [sp,#0..16] x29/x30, [sp,#16] free slot base, [sp,#24] class-name
-    //   pointer, [sp,#32] class-name length.
-    emitter.instruction("sub sp, sp, #48");                                     // frame for the two string-persist calls
-    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    // php refuses a name that is ALREADY TAKEN, and answers `false` rather than replacing the
+    // registration: `stream_filter_register('string.toupper', ...)` is false because php owns
+    // that name, and registering the same fresh name twice is false the second time. elephc
+    // stored into the first EMPTY slot without comparing names at all, so both answered true and
+    // a program branching on the result took the wrong path. Measured on `php -n` 8.5.6.
+    //
+    // php does NOT check that the CLASS exists here — a name registered against a missing class
+    // registers fine and only fails when a stream tries to attach it.
+    emitter.instruction("sub sp, sp, #48");                                     // frame for the built-in name probe
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // preserve the filter name across the probe
+    emitter.instruction("stp x2, x3, [sp, #16]");                               // and the class name
+    // php's filter hash holds the `string.*` trio, `dechunk` and `consumed` under their EXACT
+    // names, but the `convert.*`, `zlib.*` and `bzip2.*` families are WILDCARD factories whose
+    // literal names are not keys — so php lets a program register `convert.base64-encode` and
+    // refuses `string.toupper`. Measured on `php -n` 8.5.6. `__rt_builtin_filter_id` knows the
+    // convert names as exact ids (6..9), which is right for ATTACHING and wrong for this
+    // question, so those ids are excluded here rather than treated as taken.
+    abi::emit_call_label(emitter, "__rt_builtin_filter_id");                    // which built-in name is this, if any?
+    emitter.instruction("cbz x0, __rt_sfr_not_owned");                          // not a built-in name at all
+    emitter.instruction("sub x9, x0, #6");                                      // the convert.* family occupies ids 6..9
+    emitter.instruction("cmp x9, #4");
+    emitter.instruction("b.lo __rt_sfr_not_owned");                             // a wildcard family name IS registrable
+    emitter.instruction("b __rt_sfr_taken");                                    // php owns this exact name
+    emitter.label("__rt_sfr_not_owned");
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // reload the filter name
+    emitter.instruction("ldp x2, x3, [sp, #16]");                               // and the class name
 
     abi::emit_symbol_address(emitter, "x4", "_user_filter_registry");
     emitter.instruction("mov x5, #0");                                          // filter slot index
@@ -63,29 +86,56 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
     emitter.instruction("ldr x7, [x6]");                                        // load the slot's filter-name pointer
     emitter.instruction("cbz x7, __rt_sfr_store");                              // a null pointer marks an empty slot
+    // An occupied slot: compare its name with the one being registered.
+    emitter.instruction("ldr x8, [x6, #8]");                                    // the slot's name length
+    emitter.instruction("cmp x8, x1");                                          // a different length cannot match
+    emitter.instruction("b.ne __rt_sfr_next");
+    emitter.instruction("mov x9, #0");                                          // byte index
+    emitter.label("__rt_sfr_cmp_byte");
+    emitter.instruction("cmp x9, x1");                                          // compared every byte?
+    emitter.instruction("b.hs __rt_sfr_taken");                                 // the names agree
+    emitter.instruction("ldrb w10, [x0, x9]");                                  // one candidate byte
+    emitter.instruction("ldrb w11, [x7, x9]");                                  // the corresponding stored byte
+    emitter.instruction("cmp w10, w11");
+    emitter.instruction("b.ne __rt_sfr_next");                                  // this slot holds a different name
+    emitter.instruction("add x9, x9, #1");
+    emitter.instruction("b __rt_sfr_cmp_byte");
+    emitter.label("__rt_sfr_next");
     emitter.instruction("add x5, x5, #1");                                      // advance the slot index
     emitter.instruction("b __rt_sfr_scan");                                     // continue scanning
 
+    emitter.label("__rt_sfr_taken");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the frame
+    emitter.instruction("mov x0, #0");                                          // php answers false for a name already taken
+    emitter.instruction("ret");
+
     emitter.label("__rt_sfr_store");
-    emitter.instruction("str x6, [sp, #16]");                                   // save the free slot base across the persist calls
-    emitter.instruction("str x2, [sp, #24]");                                   // save the class-name pointer across the filter-name persist
-    emitter.instruction("str x3, [sp, #32]");                                   // save the class-name length across the filter-name persist
-    emitter.instruction("mov x2, x1");                                          // filter-name length → persist length input
-    emitter.instruction("mov x1, x0");                                          // filter-name pointer → persist pointer input
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned filter name, x2 = length
-    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
-    emitter.instruction("str x1, [x6]");                                        // owned filter-name pointer
-    emitter.instruction("str x2, [x6, #8]");                                    // filter-name length
-    emitter.instruction("ldr x1, [sp, #24]");                                   // class-name pointer → persist pointer input
-    emitter.instruction("ldr x2, [sp, #32]");                                   // class-name length → persist length input
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned class name, x2 = length
-    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
-    emitter.instruction("str x1, [x6, #16]");                                   // owned class-name pointer
-    emitter.instruction("str x2, [x6, #24]");                                   // class-name length
+    // The registry OUTLIVES the call, so it cannot keep the caller's pointer: a name built at
+    // run time, or handed over from a `foreach` temporary, is storage the program reuses for the
+    // next iteration. The stored slot then described whatever occupied that memory later — which
+    // is what made a second registration of a DIFFERENT name compare equal to the first.
+    emitter.instruction("stp x6, x2, [sp, #-16]!");                             // hold the slot base and the class pointer
+    emitter.instruction("stp x3, x1, [sp, #-16]!");                             // and the class length and name length
+    emitter.instruction("mov x2, x1");                                          // __rt_str_persist takes the length in x2
+    emitter.instruction("mov x1, x0");                                          // and the pointer in x1
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // x1 = owned copy, x2 = its length
+    emitter.instruction("mov x7, x1");                                          // the owned name pointer
+    emitter.instruction("mov x8, x2");                                          // and its length
+    emitter.instruction("ldp x3, x9, [sp], #16");                               // reload the class length
+    emitter.instruction("ldp x6, x2, [sp], #16");                               // and the slot base and class pointer
+    emitter.instruction("str x7, [x6]");                                        // filter-name pointer
+    emitter.instruction("str x8, [x6, #8]");                                    // filter-name length
+    emitter.instruction("str x2, [x6, #16]");                                   // class-name pointer
+    emitter.instruction("str x3, [x6, #24]");                                   // class-name length
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
     emitter.instruction("b __rt_sfr_ret");                                      // share the common epilogue
 
     emitter.label("__rt_sfr_full");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #0");                                          // return false when the registry is full
 
     emitter.label("__rt_sfr_ret");
@@ -100,11 +150,29 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_filter_register ---");
     emitter.label_global("__rt_stream_filter_register");
 
-    // Frame: [rbp-8] free slot base, [rbp-16] class-name pointer, [rbp-24]
-    //   class-name length. push rbp then sub rsp,48 keeps rsp 16-aligned.
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // frame for the two string-persist calls
+    // See the AArch64 arm: php answers `false` for a name that is already taken, whether php owns
+    // it or an earlier call registered it, and does NOT validate the class here.
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 48");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the filter name across the probe
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // and the class name
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");
+    // See the AArch64 arm: only the exact-name filters are php's; ids 6..9 are the wildcard
+    // `convert.*` family, which php lets a program register over.
+    abi::emit_call_label(emitter, "__rt_builtin_filter_id");                    // which built-in name is this, if any?
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sfr_not_owned_x86");                           // not a built-in name at all
+    emitter.instruction("sub rax, 6");                                          // the convert.* family occupies ids 6..9
+    emitter.instruction("cmp rax, 4");
+    emitter.instruction("jb __rt_sfr_not_owned_x86");                           // a wildcard family name IS registrable
+    emitter.instruction("jmp __rt_sfr_taken_x86");                              // php owns this exact name
+    emitter.label("__rt_sfr_not_owned_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the filter name
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // and the class name
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");
 
     abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
@@ -117,29 +185,48 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the slot's filter-name pointer
     emitter.instruction("test r11, r11");                                       // a null pointer marks an empty slot
     emitter.instruction("jz __rt_sfr_store_x86");                               // store here
+    // An occupied slot: compare its name with the one being registered.
+    emitter.instruction("cmp QWORD PTR [r10 + 8], rsi");                        // a different length cannot match
+    emitter.instruction("jne __rt_sfr_next_x86");
+    emitter.instruction("xor rax, rax");                                        // byte index
+    emitter.label("__rt_sfr_cmp_byte_x86");
+    emitter.instruction("cmp rax, rsi");                                        // compared every byte?
+    emitter.instruction("jae __rt_sfr_taken_x86");                              // the names agree
+    emitter.instruction("mov r12b, BYTE PTR [rdi + rax]");                      // one candidate byte
+    emitter.instruction("cmp r12b, BYTE PTR [r11 + rax]");                      // against the stored byte
+    emitter.instruction("jne __rt_sfr_next_x86");                               // this slot holds a different name
+    emitter.instruction("inc rax");
+    emitter.instruction("jmp __rt_sfr_cmp_byte_x86");
+    emitter.label("__rt_sfr_next_x86");
     emitter.instruction("inc r9");                                              // advance the slot index
     emitter.instruction("jmp __rt_sfr_scan_x86");                               // continue scanning
 
+    emitter.label("__rt_sfr_taken_x86");
+    emitter.instruction("leave");
+    emitter.instruction("xor eax, eax");                                        // php answers false for a name already taken
+    emitter.instruction("ret");
+
     emitter.label("__rt_sfr_store_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the free slot base across the persist calls
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the class-name pointer across the filter-name persist
-    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the class-name length across the filter-name persist
-    emitter.instruction("mov rax, rdi");                                        // filter-name pointer → persist pointer input
-    emitter.instruction("mov rdx, rsi");                                        // filter-name length → persist length input
-    emitter.instruction("call __rt_str_persist");                               // rax = owned filter name, rdx = length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
-    emitter.instruction("mov QWORD PTR [r10], rax");                            // owned filter-name pointer
+    // See the AArch64 arm: the registry outlives the call, so it must own the name rather than
+    // point at the caller's storage.
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // hold the slot base
+    emitter.instruction("mov rax, rdi");                                        // __rt_str_persist takes the pointer in rax
+    emitter.instruction("mov rdx, rsi");                                        // and the length in rdx
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // rax = owned copy, rdx = its length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the slot base
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the class name
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // filter-name pointer
     emitter.instruction("mov QWORD PTR [r10 + 8], rdx");                        // filter-name length
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // class-name pointer → persist pointer input
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // class-name length → persist length input
-    emitter.instruction("call __rt_str_persist");                               // rax = owned class name, rdx = length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
-    emitter.instruction("mov QWORD PTR [r10 + 16], rax");                       // owned class-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], rdx");                       // class-name length
+    emitter.instruction("mov rdx, rdi");                                        // the class pointer goes in the next slot
+    emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // class-name pointer
+    emitter.instruction("mov QWORD PTR [r10 + 24], rcx");                       // class-name length
+    emitter.instruction("leave");
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
     emitter.instruction("jmp __rt_sfr_ret_x86");                                // share the common epilogue
 
     emitter.label("__rt_sfr_full_x86");
+    emitter.instruction("leave");
     emitter.instruction("xor eax, eax");                                        // return false when the registry is full
 
     emitter.label("__rt_sfr_ret_x86");
@@ -243,10 +330,16 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #16]");                                   // save boxed filter params
 
     // -- resolve filter name → id --
+    // The name is preserved so an unknown user filter can still be matched
+    // against the built-in table. The lowering only recognises built-ins when the
+    // name is a literal, so `stream_filter_append($s, $name)` used to attach
+    // nothing at all for e.g. "string.toupper".
+    emitter.instruction("str x1, [sp, #32]");                                   // save name_ptr for the built-in fallback
+    emitter.instruction("str x2, [sp, #40]");                                   // save name_len for the built-in fallback
     emitter.instruction("mov x0, x1");                                          // move name_ptr into the resolver's first arg
     emitter.instruction("mov x1, x2");                                          // move name_len into the resolver's second arg
     emitter.instruction("bl __rt_resolve_user_filter_id");                      // x0 = id (>=128) or 0
-    emitter.instruction("cbz x0, __rt_sfau_fail_release_params");               // unknown filter name → fail and release params
+    emitter.instruction("cbz x0, __rt_sfau_try_builtin");                       // not a user filter: try the built-in table
     emitter.instruction("str x0, [sp, #24]");                                   // save the resolved id across __rt_new_by_name
 
     // -- look up class_name in the registry slot --
@@ -276,6 +369,33 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // restore obj pointer after the release call
     emitter.label("__rt_sfau_params_done");
 
+    // -- seed php_user_filter::$filtername, also before onCreate() observes $this --
+    // php reports the name the filter was ATTACHED under, not the class: the same class
+    // registered under two names answers each in turn. The bytes come from the registry slot
+    // rather than the caller's argument because the registry owns a persisted copy, so the
+    // property cannot outlive the string it names.
+    emitter.instruction("ldr x6, [x0]");                                        // class_id at the head of the obj
+    abi::emit_symbol_address(emitter, "x7", "_user_filter_vtable_ptrs");
+    emitter.instruction("ldr x7, [x7, x6, lsl #3]");                            // per-class user-filter vtable
+    emitter.instruction("ldr x9, [x7, #40]");                                   // slot 5 = filtername property byte offset
+    emitter.instruction("cbz x9, __rt_sfau_filtername_done");                   // class without the inherited property
+    emitter.instruction("str x9, [sp, #40]");                                   // hold the offset across the boxing call
+    emitter.instruction("ldr x10, [sp, #24]");                                  // the resolved user-filter id
+    emitter.instruction("sub x10, x10, #128");                                  // slot_index = id - USER_FILTER_ID_BASE
+    abi::emit_symbol_address(emitter, "x11", "_user_filter_registry");
+    emitter.instruction("add x11, x11, x10, lsl #5");                           // registry entry = base + slot_index * 32
+    emitter.instruction("ldr x1, [x11]");                                       // the persisted filter-name pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // and its length
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // x0 = boxed filter name
+    emitter.instruction("mov x10, x0");                                         // hold the boxed value
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the property offset
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the filter object
+    emitter.instruction("str x10, [x0, x9]");                                   // store the name in the inherited slot
+    emitter.instruction("add x11, x0, x9");                                     // the property slot address
+    emitter.instruction("str xzr, [x11, #8]");                                  // clear the high word of the Mixed pointer slot
+    emitter.label("__rt_sfau_filtername_done");
+
     // -- onCreate() lifecycle hook (vtable slot 1). When present, the
     //    user's filter class can refuse the attach by returning false.
     //    If the method is absent in the vtable, the slot is null and we
@@ -298,6 +418,11 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
 
     // -- record state per direction bit --
     emitter.instruction("ldr x4, [sp, #0]");                                    // reload fd
+    // A NEGATIVE DESCRIPTOR MEANS "NODE MODE". The caller wants the instance for a
+    // filter chain node and must NOT also see it registered in the per-descriptor
+    // tables: the runtime's rule is that a filter lives in exactly one mechanism, so
+    // registering both would apply it twice on every read and write.
+    emitter.instruction("tbnz x4, #63, __rt_sfau_node_mode");                   // node mode: hand back the instance, register nothing
     emitter.instruction("ldr x5, [sp, #8]");                                    // reload mode
     emitter.instruction("ldr x6, [sp, #24]");                                   // reload resolved id (u8 in the low byte)
     abi::emit_symbol_address(emitter, "x10", "_user_filter_instances");
@@ -326,6 +451,36 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the caller
 
+    emitter.label("__rt_sfau_node_mode");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the created instance, for the caller's chain node
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // non-zero instance doubles as the success flag
+
+    // -- built-in fallback: stamp the descriptor slots with the built-in id --
+    emitter.label("__rt_sfau_try_builtin");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // restore name_ptr
+    emitter.instruction("ldr x1, [sp, #40]");                                   // restore name_len
+    emitter.instruction("bl __rt_builtin_filter_id");                           // x0 = built-in id or 0
+    emitter.instruction("cbz x0, __rt_sfau_fail_release_params");               // genuinely unknown filter name
+    emitter.instruction("mov x6, x0");                                          // built-in filter id
+    emitter.instruction("ldr x4, [sp, #0]");                                    // descriptor
+    emitter.instruction("ldr x5, [sp, #8]");                                    // requested direction bits
+    emitter.instruction("tst x5, #1");                                          // STREAM_FILTER_READ set?
+    emitter.instruction("b.eq __rt_sfau_bi_skip_read");
+    abi::emit_symbol_address(emitter, "x12", "_stream_read_filters");
+    emitter.instruction("strb w6, [x12, x4]");                                  // _stream_read_filters[fd] = built-in id
+    emitter.label("__rt_sfau_bi_skip_read");
+    emitter.instruction("tst x5, #2");                                          // STREAM_FILTER_WRITE set?
+    emitter.instruction("b.eq __rt_sfau_bi_skip_write");
+    abi::emit_symbol_address(emitter, "x12", "_stream_write_filters");
+    emitter.instruction("strb w6, [x12, x4]");                                  // _stream_write_filters[fd] = built-in id
+    emitter.label("__rt_sfau_bi_skip_write");
+    emitter.instruction("mov x0, #1");                                          // report a successful attach
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return to the caller
+
     emitter.label("__rt_sfau_fail_release_params");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload boxed params that were never transferred
     emitter.instruction("bl __rt_decref_any");                                  // release params before reporting attach failure
@@ -350,17 +505,22 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 40] obj_ptr stash
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // helper frame
+    emitter.instruction("sub rsp, 64");                                         // helper frame (covers the built-in fallback name slots)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save mode
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save boxed filter params
 
     // -- resolve filter name → id --
+    // The name is preserved so an unknown user filter can still be matched
+    // against the built-in table; the lowering only recognises built-ins when the
+    // name is a compile-time literal.
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // save name_ptr for the built-in fallback
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save name_len for the built-in fallback
     emitter.instruction("mov rdi, rsi");                                        // move name_ptr into the resolver's first arg
     emitter.instruction("mov rsi, rdx");                                        // move name_len into the resolver's second arg
     emitter.instruction("call __rt_resolve_user_filter_id");                    // rax = id or 0
     emitter.instruction("test rax, rax");                                       // unknown filter name?
-    emitter.instruction("jz __rt_sfau_fail_release_params_x86");                // fail and release params without touching state
+    emitter.instruction("jz __rt_sfau_try_builtin_x86");                        // not a user filter: try the built-in table
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save resolved id
 
     // -- look up class_name in the registry slot --
@@ -393,6 +553,30 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore obj pointer after the release call
     emitter.label("__rt_sfau_params_done_x86");
 
+    // -- seed php_user_filter::$filtername, also before onCreate() — see the ARM64 path. --
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of the obj
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_vtable_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-filter vtable
+    emitter.instruction("mov r9, QWORD PTR [r11 + 40]");                        // slot 5 = filtername property byte offset
+    emitter.instruction("test r9, r9");                                         // class without the inherited property
+    emitter.instruction("jz __rt_sfau_filtername_done_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // hold the offset across the boxing call
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the resolved user-filter id
+    emitter.instruction("sub r10, 128");                                        // slot_index = id - USER_FILTER_ID_BASE
+    emitter.instruction("shl r10, 5");                                          // slot offset = slot_index * 32
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_registry");
+    emitter.instruction("add r11, r10");                                        // registry entry
+    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // the persisted filter-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // and its length
+    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // rax = boxed filter name
+    emitter.instruction("mov r10, rax");                                        // hold the boxed value
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the property offset
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the filter object
+    emitter.instruction("mov QWORD PTR [rax + r9], r10");                       // store the name in the inherited slot
+    emitter.instruction("mov QWORD PTR [rax + r9 + 8], 0");                     // clear the high word
+    emitter.label("__rt_sfau_filtername_done_x86");
+
     // -- onCreate() lifecycle hook (vtable slot 1) — see ARM64 path. --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of the obj
     abi::emit_symbol_address(emitter, "r11", "_user_filter_vtable_ptrs");       // load runtime data address
@@ -414,6 +598,10 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
 
     // -- record state per direction bit --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd
+    // See the AArch64 counterpart: a negative descriptor means the caller wants the
+    // instance for a chain node and no per-descriptor registration.
+    emitter.instruction("test rdi, rdi");                                       // node mode is signalled by a negative descriptor
+    emitter.instruction("js __rt_sfau_node_mode_x86");                          // hand back the instance, register nothing
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload mode
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload resolved id (u8 in the low byte)
     abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");          // instances table base
@@ -440,8 +628,38 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sfau_skip_write_x86");
 
     emitter.instruction("mov eax, 1");                                          // success
-    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_sfau_node_mode_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the created instance, for the caller's chain node
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // non-zero instance doubles as the success flag
+
+    // -- built-in fallback: stamp the descriptor slots with the built-in id --
+    emitter.label("__rt_sfau_try_builtin_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // restore name_ptr
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // restore name_len
+    emitter.instruction("call __rt_builtin_filter_id");                         // rax = built-in id or 0
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sfau_fail_release_params_x86");                // genuinely unknown filter name
+    emitter.instruction("mov rdx, rax");                                        // built-in filter id
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // descriptor
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // requested direction bits
+    emitter.instruction("test rcx, 1");                                         // STREAM_FILTER_READ set?
+    emitter.instruction("jz __rt_sfau_bi_skip_read_x86");
+    abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");
+    emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_read_filters[fd] = built-in id
+    emitter.label("__rt_sfau_bi_skip_read_x86");
+    emitter.instruction("test rcx, 2");                                         // STREAM_FILTER_WRITE set?
+    emitter.instruction("jz __rt_sfau_bi_skip_write_x86");
+    abi::emit_symbol_address(emitter, "r11", "_stream_write_filters");
+    emitter.instruction("mov BYTE PTR [r11 + rdi], dl");                        // _stream_write_filters[fd] = built-in id
+    emitter.label("__rt_sfau_bi_skip_write_x86");
+    emitter.instruction("mov eax, 1");                                          // report a successful attach
+    emitter.instruction("leave");                                               // restore rbp + rsp
     emitter.instruction("ret");                                                 // return to the caller
 
     emitter.label("__rt_sfau_fail_release_params_x86");
@@ -449,7 +667,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // release params before reporting attach failure
     emitter.label("__rt_sfau_fail_x86");
     emitter.instruction("xor eax, eax");                                        // failure
-    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 }
@@ -477,15 +695,23 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
     emitter.comment("--- runtime: apply_user_stream_filter ---");
     emitter.label_global("__rt_apply_user_stream_filter");
 
-    emitter.instruction("sub sp, sp, #16");                                     // helper frame
-    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
-
     // -- look up the cached instance: _user_filter_instances[fd*2 + dir] --
     emitter.instruction("add x4, x0, x0");                                      // fd*2
     emitter.instruction("add x4, x4, x3");                                      // fd*2 + dir
     abi::emit_symbol_address(emitter, "x5", "_user_filter_instances");
     emitter.instruction("ldr x0, [x5, x4, lsl #3]");                            // obj = instances[slot] (loaded into the method's $this register)
+    emitter.instruction("b __rt_apply_user_filter_obj");                        // dispatch on the instance; x1/x2 already hold the buffer pair
+
+    // The instance-keyed half is its own entry point so a FILTER CHAIN NODE, which
+    // stores the `php_user_filter` in its state rather than in the per-descriptor
+    // table, can dispatch the very same way. The lookup above is a leaf sequence, so
+    // the branch here costs nothing and both callers share one dispatch body.
+    emitter.blank();
+    emitter.comment("--- runtime: apply_user_filter_obj (instance-keyed dispatch) ---");
+    emitter.label_global("__rt_apply_user_filter_obj");
+    emitter.instruction("sub sp, sp, #16");                                     // helper frame
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
     emitter.instruction("cbz x0, __rt_aufs_passthrough");                       // no instance attached → pass the buffer through unchanged
 
     // -- look up the filter() method pointer in the class's user-filter vtable --
@@ -538,15 +764,21 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: apply_user_stream_filter ---");
     emitter.label_global("__rt_apply_user_stream_filter");
 
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-
     // -- look up the cached instance: _user_filter_instances[fd*2 + dir] --
     emitter.instruction("mov r9, rdi");                                         // fd
     emitter.instruction("add r9, r9");                                          // fd*2
     emitter.instruction("add r9, rcx");                                         // fd*2 + dir
     abi::emit_symbol_address(emitter, "r10", "_user_filter_instances");         // load runtime data address
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = instances[slot] (loaded into the method's $this register)
+    emitter.instruction("jmp __rt_apply_user_filter_obj");                      // dispatch on the instance; the buffer pair is already in place
+
+    // See the AArch64 counterpart: the instance-keyed half is its own entry point so a
+    // filter chain node can dispatch the same way from its stored `php_user_filter`.
+    emitter.blank();
+    emitter.comment("--- runtime: apply_user_filter_obj (instance-keyed dispatch) ---");
+    emitter.label_global("__rt_apply_user_filter_obj");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("test rdi, rdi");                                       // any instance attached?
     emitter.instruction("jz __rt_aufs_passthrough_x86");                        // no instance → pass the buffer through unchanged
 
@@ -704,6 +936,29 @@ pub fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release runtime stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- instance-keyed onClose, for a filter that lives on the chain --
+    // A user filter carried by a chain node has no entry in `_user_filter_instances`,
+    // so the per-descriptor sweep above can never reach it. `onClose()` still has to
+    // fire exactly once when its stream closes, which is what the chain teardown calls.
+    emitter.blank();
+    emitter.comment("--- runtime: user_filter_release_obj (instance-keyed onClose) ---");
+    emitter.label_global("__rt_user_filter_release_obj");
+    emitter.instruction("cbz x0, __rt_ufro_done");                              // no instance: nothing to close
+    emitter.instruction("sub sp, sp, #16");                                     // frame for the onClose call
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("ldr x12, [x0]");                                       // class_id at obj head
+    abi::emit_symbol_address(emitter, "x13", "_user_filter_vtable_ptrs");
+    emitter.instruction("ldr x13, [x13, x12, lsl #3]");                         // per-class vtable
+    emitter.instruction("ldr x14, [x13, #16]");                                 // slot 2 = onClose method ptr
+    emitter.instruction("cbz x14, __rt_ufro_no_method");                        // method absent → nothing to call
+    emitter.instruction("blr x14");                                             // call onClose($this) — return discarded
+    emitter.label("__rt_ufro_no_method");
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.label("__rt_ufro_done");
+    emitter.instruction("ret");                                                 // return to caller
 }
 
 /// Emits the Linux x86_64 stream runtime helper for user filter release fd.
@@ -754,5 +1009,27 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // preserve fd
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return to caller
+
+    // -- instance-keyed onClose, for a filter that lives on the chain --
+    // See the AArch64 counterpart: a chain-carried user filter has no per-descriptor
+    // entry, so the sweep above cannot reach it, yet `onClose()` must still fire once.
+    emitter.blank();
+    emitter.comment("--- runtime: user_filter_release_obj (instance-keyed onClose) ---");
+    emitter.label_global("__rt_user_filter_release_obj");
+    emitter.instruction("test rdi, rdi");                                       // no instance: nothing to close
+    emitter.instruction("jz __rt_ufro_done_x86");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // class_id at obj head
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_vtable_ptrs");       // load runtime data address
+    emitter.instruction("mov r10, QWORD PTR [r10 + r11 * 8]");                  // per-class vtable
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // slot 2 = onClose method ptr
+    emitter.instruction("test r11, r11");                                       // method absent?
+    emitter.instruction("jz __rt_ufro_no_method_x86");                          // nothing to call
+    emitter.instruction("call r11");                                            // call onClose($this) — return discarded
+    emitter.label("__rt_ufro_no_method_x86");
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.label("__rt_ufro_done_x86");
     emitter.instruction("ret");                                                 // return to caller
 }

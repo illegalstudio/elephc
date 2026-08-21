@@ -20,6 +20,7 @@ macro_rules! param {
             ty: TypeSpec::$ty,
             default: None,
             by_ref: false,
+writes: None,
         }
     };
     ($name:literal, $ty:ident = $default:expr) => {
@@ -28,6 +29,7 @@ macro_rules! param {
             ty: TypeSpec::$ty,
             default: Some($default),
             by_ref: false,
+writes: None,
         }
     };
 }
@@ -45,6 +47,7 @@ macro_rules! surface {
             kind: BuiltinKind::$kind,
             params: &[$($param),*],
             variadic: $variadic,
+            variadic_writes: None,
             min_args: None,
             max_args: None,
             arity_error: None,
@@ -82,6 +85,18 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         None,
         Void,
         "Terminates execution with an optional status."
+    ),
+    surface!(
+        "dir",
+        Io,
+        PreludeProvided,
+        [
+            param!("directory", Str),
+            param!("context", Mixed = DefaultSpec::Null),
+        ],
+        None,
+        Mixed,
+        "Opens a directory and returns a Directory object, or false."
     ),
     surface!(
         "empty",

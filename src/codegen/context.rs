@@ -631,6 +631,26 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Stores an SSA value into an addressable local slot, keeping the value's own reference.
+    ///
+    /// The ordinary store lets Mixed boxing CONSUME the source's owned reference, which is right
+    /// when the store is the value's last use. A mutating builtin whose receiver EIR still
+    /// releases after the call (the hash sort family: the receiver is loaded, published back, then
+    /// released) is not that case: consuming there releases the container twice and the write-back
+    /// leaves the slot pointing at freed storage.
+    pub(super) fn store_borrowed_value_to_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                self.store_value_to_raw_local_with_ownership(slot, value, false)
+            }
+            _ => self.store_value_to_local(slot, value),
+        }
+    }
+
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
         match self.local_slot_representation(slot) {
@@ -696,10 +716,24 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
     ) -> Result<()> {
+        self.store_value_to_raw_local_with_ownership(slot, value, true)
+    }
+
+    /// Stores an SSA value into a raw local slot, choosing whether Mixed boxing may consume it.
+    ///
+    /// `may_consume_source` is what separates a final store (the value's last use, so the box may
+    /// take over its owned reference) from a republish (`store_borrowed_value_to_local`), where the
+    /// EIR still holds and releases the same reference afterwards.
+    fn store_value_to_raw_local_with_ownership(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+        may_consume_source: bool,
+    ) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
         if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-            if self.value_can_own_mixed_box_source(value)? {
+            if may_consume_source && self.value_can_own_mixed_box_source(value)? {
                 emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
             } else {
                 emit_box_current_value_as_mixed(self.emitter, &source_ty);

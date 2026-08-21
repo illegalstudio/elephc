@@ -8,7 +8,7 @@ sidebar:
 ## disk_free_space()
 
 ```php
-function disk_free_space(string $directory): float
+function disk_free_space(string $directory): mixed
 ```
 
 Returns available space on filesystem or disk partition.
@@ -16,7 +16,7 @@ Returns available space on filesystem or disk partition.
 **Parameters**:
 - `$directory` (`string`)
 
-**Returns**: `float`
+**Returns**: `mixed`
 
 ## Availability
 

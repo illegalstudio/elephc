@@ -9,7 +9,6 @@
 
 use super::*;
 
-use crate::codegen::lower_inst::builtins::arrays::values::emit_loaded_assoc_array_values;
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
 pub(super) struct SplitStringTempCleanups {
@@ -249,19 +248,6 @@ fn emit_explode_separator_guard(
     ctx.emitter.label(&ok_label);
 }
 
-/// Lowers `sscanf(string, format)` into the shared scanner helper.
-pub(crate) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.len() < 2 {
-        return Err(CodegenIrError::invalid_module(format!(
-            "sscanf expected at least 2 args, got {}",
-            inst.operands.len()
-        )));
-    }
-    load_input_and_pattern_args(ctx, inst, "sscanf")?;
-    abi::emit_call_label(ctx.emitter, "__rt_sscanf");
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
 pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
@@ -305,37 +291,85 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     let array_index = inst.operands.len() - 1;
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
-    let hash_copy = implode_hash_value_type(ctx, inst, array_index)?;
+    // A hash operand is joined through a temporary indexed array of its values, built by the
+    // argument materialization above and owned by this lowering. It holds persisted string copies
+    // and retained heap payloads, so it is deep-freed once the join has read it — around the
+    // string result, which the free helper's own argument register would otherwise destroy.
+    let ownership = implode_temp_ownership(ctx, inst, array_index)?;
+    let array_arg_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdx",
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index)?,
         Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
     }
-    let Some(value_ty) = hash_copy else {
-        abi::emit_call_label(ctx.emitter, runtime_label);
-        return store_if_result(ctx, inst);
-    };
-    // The hash operand was copied into a fresh indexed array the caller owns. It has to
-    // outlive the join and then be released, and the join answers in the STRING result
-    // register PAIR — so the answer is stacked while the copy is released, rather than the
-    // copy being released first, which would free the payload the join just read.
-    let array_reg = implode_array_argument_reg(ctx);
-    abi::emit_push_reg(ctx.emitter, array_reg);
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(value_ty)));
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    match ownership {
+        ImplodeTempOwnership::Borrowed => {
+            abi::emit_call_label(ctx.emitter, runtime_label);
+        }
+        ImplodeTempOwnership::Owned => {
+            abi::emit_push_reg(ctx.emitter, array_arg_reg);                     // preserve the temporary values array across the join
+            abi::emit_call_label(ctx.emitter, runtime_label);
+            emit_implode_free_values_temp(ctx, None);
+        }
+        // A `Mixed` operand only learns at RUNTIME whether it was handed hash storage, so the
+        // materialization flag `lower_implode_*` left in the scratch register travels to the free
+        // alongside the array pointer: the indexed case must NOT free the caller's own array.
+        ImplodeTempOwnership::Dynamic => {
+            let flag_reg = implode_dynamic_temp_flag_reg(ctx.emitter.target.arch);
+            abi::emit_push_reg_pair(ctx.emitter, array_arg_reg, flag_reg);      // preserve the joined array and its ownership flag across the join
+            abi::emit_call_label(ctx.emitter, runtime_label);
+            let skip = ctx.next_label("implode_dyn_temp_borrowed");
+            emit_implode_free_values_temp(ctx, Some(skip));
+        }
+    }
     store_if_result(ctx, inst)
 }
 
-/// The register the implode ABI leaves the array argument in, per target.
-fn implode_array_argument_reg(ctx: &FunctionContext<'_>) -> &'static str {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => "x3",
-        Arch::X86_64 => "rdx",
+/// Releases the temporary values array `implode()` materialized, preserving the joined string.
+///
+/// The array pointer sits 16 bytes below the string result this helper pushes. When `skip_label`
+/// is given the slot next to it holds the runtime materialization flag, and a zero flag means the
+/// operand was the caller's own indexed array, which must not be freed.
+fn emit_implode_free_values_temp(ctx: &mut FunctionContext<'_>, skip_label: Option<String>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);                     // preserve the joined string across the deep free
+    let free_arg_reg = abi::int_result_reg(ctx.emitter);
+    if let Some(skip) = skip_label.as_deref() {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter
+                    .instruction(&format!("ldr {}, [sp, #24]", free_arg_reg));   // reload the runtime materialization flag
+                ctx.emitter
+                    .instruction(&format!("cbz {}, {}", free_arg_reg, skip));    // an indexed operand was borrowed, so nothing was materialized to free
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!(
+                    "mov {}, QWORD PTR [rsp + 24]",
+                    free_arg_reg
+                ));                                                             // reload the runtime materialization flag
+                ctx.emitter
+                    .instruction(&format!("test {}, {}", free_arg_reg, free_arg_reg)); // an indexed operand was borrowed, so nothing was materialized to free
+                ctx.emitter.instruction(&format!("jz {}", skip));
+            }
+        }
     }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx
+            .emitter
+            .instruction(&format!("ldr {}, [sp, #16]", free_arg_reg)),           // reload the temporary values array pointer
+        Arch::X86_64 => ctx.emitter.instruction(&format!(
+            "mov {}, QWORD PTR [rsp + 16]",
+            free_arg_reg
+        )),                                                                     // reload the temporary values array pointer
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_free_deep");
+    if let Some(skip) = skip_label {
+        ctx.emitter.label(&skip);
+    }
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);                      // restore the joined string
+    abi::emit_release_temporary_stack(ctx.emitter, 16);                         // drop the temporary values array slot
 }
 /// Materializes delimiter/payload string pairs plus the optional `$limit` for `explode()`.
 pub(super) fn load_split_pair_args(
@@ -464,52 +498,6 @@ pub(super) fn emit_split_string_temp_cleanups(
     }
     abi::emit_release_temporary_stack(ctx.emitter, cleanups.bytes);
 }
-/// Materializes primary input and pattern strings for scanner-style helpers.
-pub(super) fn load_input_and_pattern_args(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => load_input_and_pattern_args_aarch64(ctx, inst, name),
-        Arch::X86_64 => load_input_and_pattern_args_x86_64(ctx, inst, name),
-    }
-}
-
-/// Materializes AArch64 input and pattern strings for `sscanf()`.
-pub(super) fn load_input_and_pattern_args_aarch64(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-) -> Result<()> {
-    let input = expect_string_operand(ctx, inst, 0, name)?;
-    let pattern = expect_string_operand(ctx, inst, 1, name)?;
-    ctx.load_string_value_to_regs(input, "x1", "x2")?;
-    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the scanner input while materializing the pattern string
-    ctx.load_string_value_to_regs(pattern, "x1", "x2")?;
-    ctx.emitter.instruction("mov x3, x1");                                      // pass the pattern pointer as the secondary scanner argument
-    ctx.emitter.instruction("mov x4, x2");                                      // pass the pattern length as the secondary scanner argument
-    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the scanner input into primary argument registers
-    Ok(())
-}
-
-/// Materializes x86_64 input and pattern strings for `sscanf()`.
-pub(super) fn load_input_and_pattern_args_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-) -> Result<()> {
-    let input = expect_string_operand(ctx, inst, 0, name)?;
-    let pattern = expect_string_operand(ctx, inst, 1, name)?;
-    ctx.load_string_value_to_regs(input, "rax", "rdx")?;
-    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    ctx.load_string_value_to_regs(pattern, "rax", "rdx")?;
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the pattern pointer as the secondary scanner argument
-    ctx.emitter.instruction("mov rsi, rdx");                                    // pass the pattern length as the secondary scanner argument
-    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
-    Ok(())
-}
-
 /// Materializes AArch64 source string and optional chunk length for `str_split()`.
 pub(super) fn lower_str_split_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let source = expect_string_operand(ctx, inst, 0, "str_split")?;
@@ -571,11 +559,52 @@ pub(super) fn implode_runtime_label(
 ) -> Result<&'static str> {
     let array = expect_operand(inst, array_index)?;
     match ctx.value_php_type(array)? {
-        PhpType::Array(elem_ty) => implode_element_runtime_label(&elem_ty),
-        // PHP joins an associative array's VALUES and ignores its keys, so the renderer is
-        // chosen the same way; the values are copied into an indexed array first.
-        PhpType::AssocArray { value, .. } => implode_element_runtime_label(&value),
-        PhpType::Mixed | PhpType::Union(_) => Ok("__rt_implode"),
+        PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
+            // PHP stringifies bool elements as "1"/"" — NOT as the "1"/"0" that
+            // `__rt_implode_int`'s `__rt_itoa` pass would produce — so bool arrays get their
+            // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
+            PhpType::Bool => Ok("__rt_implode_bool"),
+            PhpType::Int => Ok("__rt_implode_int"),
+            // Raw 8-byte doubles need PHP's `precision = 14` spelling, which only `__rt_ftoa`
+            // produces: `implode(",", [1.5, 2.0])` is `"1.5,2"`, not `"1.5,2.0"`.
+            PhpType::Float => Ok("__rt_implode_float"),
+            // An empty array literal carries an uninhabited element type (`Never`, or
+            // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
+            // dereference an element, so the generic string helper is the safe choice and
+            // keeps `implode("", [])` / `join([])` from being rejected at lowering time.
+            PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => {
+                Ok("__rt_implode")
+            }
+            other => Err(CodegenIrError::unsupported(format!(
+                "implode array element PHP type {:?}",
+                other
+            ))),
+        },
+        // A `Mixed` operand carries NO compile-time element type, so the renderer cannot be picked
+        // here: `$r = eval('return [1,2];'); implode(",", $r)` reaches this arm with an array whose
+        // runtime slots are 8-byte ints, and `__rt_implode` reads 16-byte string pointer/length
+        // pairs — it dereferenced the payload `1` as a string pointer and SIGSEGVed. The layout is
+        // only knowable from the array's runtime value_type tag, so the choice moves to
+        // `__rt_implode_dyn`, which reads that tag and tail-branches to the right renderer.
+        PhpType::Mixed | PhpType::Union(_) => Ok("__rt_implode_dyn"),
+        // php's `implode()` reads only the VALUES, in insertion order, so a hash joins exactly
+        // like the indexed array of its values — which is what the key-preserving builtins
+        // (`array_diff`, `array_intersect`, `array_unique`, `array_slice($a,$o,$l,true)`) return.
+        // The values are materialized into a temporary indexed array and the existing renderer
+        // is reused, so the element rules — bool as `"1"`/`""`, ints through `__rt_itoa` — stay
+        // in one place instead of being restated for hash storage.
+        PhpType::AssocArray { value, .. } => match value.codegen_repr() {
+            PhpType::Bool => Ok("__rt_implode_bool"),
+            PhpType::Int => Ok("__rt_implode_int"),
+            // `emit_loaded_assoc_array_values` stamps the values array with value_type tag 2 and
+            // appends the raw f64 payloads as 8-byte words, so the float renderer reads it as-is.
+            PhpType::Float => Ok("__rt_implode_float"),
+            PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => Ok("__rt_implode"),
+            other => Err(CodegenIrError::unsupported(format!(
+                "implode hash value PHP type {:?}",
+                other
+            ))),
+        },
         other => Err(CodegenIrError::unsupported(format!(
             "implode array PHP type {:?}",
             other
@@ -583,40 +612,45 @@ pub(super) fn implode_runtime_label(
     }
 }
 
-/// Picks the `implode()` renderer for one element type.
-fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
-    match elem_ty.codegen_repr() {
-        // PHP stringifies bool elements as "1"/"" — NOT as the "1"/"0" that
-        // `__rt_implode_int`'s `__rt_itoa` pass would produce — so bool arrays get their
-        // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
-        PhpType::Bool => Ok("__rt_implode_bool"),
-        PhpType::Int => Ok("__rt_implode_int"),
-        // An empty array literal carries an uninhabited element type (`Never`, or
-        // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
-        // dereference an element, so the generic string helper is the safe choice and
-        // keeps `implode("", [])` / `join([])` from being rejected at lowering time.
-        PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => Ok("__rt_implode"),
-        other => Err(CodegenIrError::unsupported(format!(
-            "implode array element PHP type {:?}",
-            other
-        ))),
-    }
+/// How an `implode()` lowering owns the array it hands to the renderer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ImplodeTempOwnership {
+    /// The renderer reads the caller's own array; the lowering allocates and frees nothing.
+    Borrowed,
+    /// The operand is statically hash storage, always materialized into a temporary values array.
+    Owned,
+    /// The operand is statically `Mixed`: only the runtime heap kind says whether the join read a
+    /// materialized temporary (hash storage) or the caller's own indexed array.
+    Dynamic,
 }
 
-/// Returns the associative-array VALUE type when `implode()` must copy its values first.
+/// Reports how an `implode()` array operand's renderer input is owned.
 ///
-/// The renderers walk a dense indexed payload, so a hash operand is converted through the
-/// same extraction `array_values()` uses. That copy is a fresh owned array, which is why the
-/// caller has to release it once the join has read it.
-fn implode_hash_value_type(
+/// A hash operand is joined through a TEMPORARY indexed array of its values, which this lowering
+/// owns: it holds persisted string copies and retained heap payloads, so it must be deep-freed
+/// after the join or every `implode(",", array_diff(...))` would leak its elements. A `Mixed`
+/// operand may be either storage at runtime, so its free is guarded by a runtime flag instead.
+pub(super) fn implode_temp_ownership(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     array_index: usize,
-) -> Result<Option<PhpType>> {
+) -> Result<ImplodeTempOwnership> {
     let array = expect_operand(inst, array_index)?;
-    match ctx.value_php_type(array)? {
-        PhpType::AssocArray { value, .. } => Ok(Some(value.codegen_repr())),
-        _ => Ok(None),
+    Ok(match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::AssocArray { .. } => ImplodeTempOwnership::Owned,
+        PhpType::Mixed | PhpType::Union(_) => ImplodeTempOwnership::Dynamic,
+        _ => ImplodeTempOwnership::Borrowed,
+    })
+}
+
+/// Returns the scratch register carrying the runtime materialization flag of a `Mixed` operand.
+///
+/// Neither register belongs to the shared renderer ABI (AArch64 `x1`/`x2`/`x3`, x86_64
+/// `rdi`/`rsi`/`rdx`), so the flag survives the glue reload that follows the array materialization.
+fn implode_dynamic_temp_flag_reg(arch: Arch) -> &'static str {
+    match arch {
+        Arch::AArch64 => "x4",
+        Arch::X86_64 => "r8",
     }
 }
 
@@ -680,14 +714,16 @@ pub(super) fn load_implode_array_aarch64(
             ctx.load_value_to_reg(array, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to implode()
-            Ok(())
+            emit_dynamic_implode_hash_values_aarch64(ctx)
         }
-        // A hash has no dense payload for the renderers to walk, so its values are copied
-        // into a fresh indexed array first — the same extraction `array_values()` uses.
-        // `lower_implode` releases that copy once the join has read it.
+        // Hash storage carries its values in table entries the indexed-array renderer cannot walk,
+        // so they are copied into a temporary indexed array first; `lower_implode` deep-frees it.
         PhpType::AssocArray { value, .. } => {
-            ctx.load_value_to_reg(array, "x0")?;
-            emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
+            ctx.load_value_to_result(array)?;
+            super::super::arrays::values::emit_loaded_assoc_array_values(
+                ctx,
+                &value.codegen_repr(),
+            )
         }
         _ => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -706,16 +742,72 @@ pub(super) fn load_implode_array_x86_64(
             ctx.load_value_to_reg(array, "rax")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed array payload to implode()
-            Ok(())
+            emit_dynamic_implode_hash_values_x86_64(ctx)
         }
-        // See the AArch64 loader: a hash operand is copied into an indexed array first.
+        // Hash storage carries its values in table entries the indexed-array renderer cannot walk,
+        // so they are copied into a temporary indexed array first; `lower_implode` deep-frees it.
         PhpType::AssocArray { value, .. } => {
-            ctx.load_value_to_reg(array, "rax")?;
-            emit_loaded_assoc_array_values(ctx, &value.codegen_repr())
+            ctx.load_value_to_result(array)?;
+            super::super::arrays::values::emit_loaded_assoc_array_values(
+                ctx,
+                &value.codegen_repr(),
+            )
         }
         _ => {
             ctx.load_value_to_reg(array, "rax")?;
             Ok(())
         }
     }
+}
+
+/// Materializes hash values behind an AArch64 `Mixed` `implode()` operand, flagging ownership.
+///
+/// A `Mixed` operand carries no compile-time storage kind, and hash storage keeps its values in
+/// table entries no indexed renderer can walk — `__rt_implode` read the entry table as 16-byte
+/// string slots and SIGSEGVed. The runtime heap kind decides: kind 3 copies the values into a
+/// temporary indexed array of boxed Mixed cells (the layout `__rt_implode` already renders through
+/// `__rt_mixed_cast_string`), every other kind keeps the caller's own pointer. `x4` records which
+/// happened so `lower_implode` frees the temporary WITHOUT ever freeing the caller's array.
+///
+/// Input: `x0` = unboxed array payload. Output: `x0` = renderer input, `x4` = 1 when materialized.
+fn emit_dynamic_implode_hash_values_aarch64(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let hash_case = ctx.next_label("implode_mixed_hash");
+    let done = ctx.next_label("implode_mixed_storage_done");
+    abi::emit_push_reg(ctx.emitter, "x0");                                      // preserve the unboxed payload across the heap-kind probe
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    ctx.emitter.instruction("cmp x0, #3");                                      // detect associative hash storage hidden behind a Mixed operand
+    ctx.emitter.instruction(&format!("b.eq {}", hash_case));                    // hash storage must be flattened before any indexed renderer reads it
+    abi::emit_pop_reg(ctx.emitter, "x0");                                       // restore the caller's own indexed array pointer
+    ctx.emitter.instruction("mov x4, #0");                                      // the renderer reads borrowed storage, so nothing may be freed afterwards
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the hash-value materialization for indexed storage
+    ctx.emitter.label(&hash_case);
+    abi::emit_pop_reg(ctx.emitter, "x0");                                       // restore the hash pointer for the values walk
+    super::super::arrays::values::emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
+    ctx.emitter.instruction("mov x4, #1");                                      // the renderer reads a temporary this lowering owns and must deep-free
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Materializes hash values behind an x86_64 `Mixed` `implode()` operand, flagging ownership.
+///
+/// Mirror of `emit_dynamic_implode_hash_values_aarch64`; `__rt_heap_kind` takes and returns `rax`
+/// on this target, and `r8` carries the materialization flag.
+///
+/// Input: `rax` = unboxed array payload. Output: `rax` = renderer input, `r8` = 1 when materialized.
+fn emit_dynamic_implode_hash_values_x86_64(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let hash_case = ctx.next_label("implode_mixed_hash");
+    let done = ctx.next_label("implode_mixed_storage_done");
+    abi::emit_push_reg(ctx.emitter, "rax");                                     // preserve the unboxed payload across the heap-kind probe
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    ctx.emitter.instruction("cmp rax, 3");                                      // detect associative hash storage hidden behind a Mixed operand
+    ctx.emitter.instruction(&format!("je {}", hash_case));                      // hash storage must be flattened before any indexed renderer reads it
+    abi::emit_pop_reg(ctx.emitter, "rax");                                      // restore the caller's own indexed array pointer
+    ctx.emitter.instruction("mov r8, 0");                                       // the renderer reads borrowed storage, so nothing may be freed afterwards
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the hash-value materialization for indexed storage
+    ctx.emitter.label(&hash_case);
+    abi::emit_pop_reg(ctx.emitter, "rax");                                      // restore the hash pointer for the values walk
+    super::super::arrays::values::emit_loaded_assoc_array_values(ctx, &PhpType::Mixed)?;
+    ctx.emitter.instruction("mov r8, 1");                                       // the renderer reads a temporary this lowering owns and must deep-free
+    ctx.emitter.label(&done);
+    Ok(())
 }

@@ -40,6 +40,24 @@ pub(crate) fn ensure_stream_resource(
     }
 }
 
+/// Validates a stream-resource argument whose parameter is declared `?resource ... = null`.
+///
+/// `readdir()`, `rewinddir()` and `closedir()` accept an explicit `null` and read php's last
+/// opened directory stream instead, so a written `null` is legal where `ensure_stream_resource`
+/// would refuse it. Everything else is judged exactly as the required form.
+pub(crate) fn ensure_optional_stream_resource(
+    checker: &mut Checker,
+    name: &str,
+    arg: &Expr,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    // `PhpType::Void` IS elephc's `null`, so this is the written-`null` case and nothing else.
+    if matches!(checker.infer_type(arg, env)?, PhpType::Void) {
+        return Ok(());
+    }
+    ensure_stream_resource(checker, name, arg, env)
+}
+
 /// Checks whether `actual` can satisfy a stream resource expectation.
 ///
 /// Returns true if `checker.type_accepts(expected, actual)` is true, if `actual` is `Mixed`,

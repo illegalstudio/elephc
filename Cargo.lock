@@ -681,6 +681,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "serde_json",
+ "sha1",
  "sha2 0.10.9",
  "stacker",
  "tar",
@@ -789,8 +790,10 @@ name = "elephc-tls"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "md-5 0.10.6",
  "rustls",
  "rustls-pemfile",
+ "sha1",
  "webpki-roots 0.26.11",
 ]
 

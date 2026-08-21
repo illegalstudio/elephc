@@ -746,7 +746,7 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 ///
 /// The merge operation supports widening (e.g., `Int | Float` from separate assignments)
 /// and preserves type specificity where possible.
-fn merge_local_assignment_type(
+pub(crate) fn merge_local_assignment_type(
     checker: &Checker,
     name: &str,
     ty: &PhpType,

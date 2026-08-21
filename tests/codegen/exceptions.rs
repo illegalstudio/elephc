@@ -231,9 +231,12 @@ try {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "");
     assert!(
-        out.stderr.contains("Warning: file_get_contents()"),
-        "expected runtime warning after unwinding @ scope, got stderr={}",
-        out.stderr
+        out.diagnostics.contains(
+            "Warning: file_get_contents(missing.txt): Failed to open stream: \
+             No such file or directory"
+        ),
+        "expected runtime warning after unwinding @ scope, got diagnostics={}",
+        out.diagnostics
     );
 }
 

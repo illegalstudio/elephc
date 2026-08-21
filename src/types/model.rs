@@ -165,6 +165,35 @@ impl PhpType {
     /// Lower high-level checker-only types to the runtime representation used by codegen.
     /// `Iterable` keeps its own runtime shape (raw heap pointer dispatched via the heap-kind tag),
     /// so it is no longer collapsed to `Mixed` here.
+    /// Returns the array member of an `array|false`-shaped union.
+    ///
+    /// The shape the `array|false` builtins declare — scandir, glob, file, fgetcsv — is a
+    /// union whose only non-`False` member is ONE array. The check hooks of the array-taking
+    /// family accept that shape by reading through to the member, and the argument lowering
+    /// pairs the acceptance with an unbox-or-throw, so a runtime `false` raises php's
+    /// TypeError instead of being read as an array pointer. Anything else — a second array
+    /// member, a scalar member, bare `Mixed` — answers `None` and keeps its existing
+    /// treatment.
+    pub fn array_or_false_member(&self) -> Option<&PhpType> {
+        let PhpType::Union(members) = self else {
+            return None;
+        };
+        let mut array = None;
+        for member in members {
+            match member {
+                PhpType::False => {}
+                m @ (PhpType::Array(_) | PhpType::AssocArray { .. }) => {
+                    if array.is_some() {
+                        return None;
+                    }
+                    array = Some(m);
+                }
+                _ => return None,
+            }
+        }
+        array
+    }
+
     pub fn codegen_repr(&self) -> PhpType {
         match self {
             PhpType::Union(members)

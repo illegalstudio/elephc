@@ -540,7 +540,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Regression for issue #647: the same miss taken from a hash source whose value type is
@@ -557,7 +557,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done\n");
-    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+    assert!(out.diagnostics.contains(r#"Warning: Undefined array key "zz""#));
 }
 
 /// Regression for issue #647: a hash source whose value type is itself a hash routes to
@@ -574,7 +574,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done\n");
-    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+    assert!(out.diagnostics.contains(r#"Warning: Undefined array key "zz""#));
 }
 
 /// Regression for issue #647's post-`main` integration: object rendering was added after
@@ -594,7 +594,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Verifies return mode leaves its capture buffer empty when an object-typed missed read
@@ -615,7 +615,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "[] len=0\ndone\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Regression for issue #647: a miss forwarded through `?? null` keeps the sentinel payload
@@ -633,6 +633,7 @@ echo "done\n";
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done\n");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for issue #647: the return mode renders into the capture buffer instead of
@@ -650,7 +651,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "[] len=0\ndone\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Regression for issue #647: the runtime-flag mode picks echo or return at run time from
@@ -669,7 +670,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "[1]\ndone\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Guard for issue #647: a genuine null local and present indexed/associative arrays keep
@@ -693,6 +694,7 @@ echo "done\n";
         "Array\n(\n    [0] => x\n    [1] => y\n)\nArray\n(\n    [k] => v\n)\ndone\n"
     );
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for issue #647: the null-container sentinel must be recognized before the

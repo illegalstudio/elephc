@@ -85,6 +85,7 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "__elephc_phar_set_zip_password",
             "__elephc_phar_sign_hash",
             "__elephc_phar_sign_openssl",
+            "__elephc_zip_stat_entries",
         ],
     ) {
         return PHAR;

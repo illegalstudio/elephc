@@ -83,10 +83,14 @@ echo $f === false ? "false" : "resource";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
+    // php-src puts the PATH inside the parentheses and the reason after it; the bare
+    // `fopen()` this used to assert named neither.
     assert!(
-        out.stderr.contains("Warning: fopen()"),
-        "expected fopen warning, got stderr={}",
-        out.stderr
+        out.diagnostics.contains(
+            "Warning: fopen(no_such_file.txt): Failed to open stream: No such file or directory"
+        ),
+        "expected the path and reason in the warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -103,6 +107,7 @@ echo $f === false ? "false" : "resource";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "boolean|false");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies fopen() returns false for invalid or empty mode strings without emitting a warning.
@@ -119,6 +124,7 @@ echo ($empty === false ? "e" : "!");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ze");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies a stream resource passed through a mixed-type parameter preserves its resource type.
@@ -463,6 +469,96 @@ unlink("out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies fgetcsv() honors a custom separator.
+#[test]
+fn test_fgetcsv_custom_separator() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fwrite($f, "a;b;c\n1;2;3\n");
+rewind($f);
+$row1 = fgetcsv($f, 0, ";");
+$row2 = fgetcsv($f, 0, ";");
+echo $row1[0] . $row1[1] . $row1[2] . "\n";
+echo $row2[0] . $row2[1] . $row2[2] . "\n";
+"#,
+    );
+    assert_eq!(out, "abc\n123\n");
+}
+
+/// Verifies fgetcsv() honors a custom enclosure character.
+#[test]
+fn test_fgetcsv_custom_enclosure() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fwrite($f, "'a','b,c','d'\n");
+rewind($f);
+$row = fgetcsv($f, 0, ",", "'");
+echo $row[0] . "|" . $row[1] . "|" . $row[2] . "\n";
+"#,
+    );
+    assert_eq!(out, "a|b,c|d\n");
+}
+
+/// Verifies fgetcsv() with PHP 8.4 doubling mode (escape="").
+#[test]
+fn test_fgetcsv_php84_doubling() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fwrite($f, "\"a\"\"b\",\"c\"\n");
+rewind($f);
+$row = fgetcsv($f, 0, ",", "\"", "");
+echo $row[0] . "|" . $row[1] . "\n";
+"#,
+    );
+    assert_eq!(out, "a\"b|c\n");
+}
+
+/// Verifies fputcsv() honors custom separator and enclosure.
+#[test]
+fn test_fputcsv_custom_separator_enclosure() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fputcsv($f, ["a", "b;c", "d"], ";", "'");
+rewind($f);
+echo fread($f, 100);
+"#,
+    );
+    assert_eq!(out, "a;'b;c';d\n");
+}
+
+/// Verifies fputcsv() honors a custom end-of-line string.
+#[test]
+fn test_fputcsv_custom_eol() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r#"<?php
+$f = fopen("php://memory", "r+");
+fputcsv($f, ["a", "b"], ",", "\"", "\\", "\r\n");
+rewind($f);
+echo bin2hex(fread($f, 100));
+"#,
+    );
+    assert_eq!(out, "612c620d0a");
+}
+
+/// Verifies fputcsv+fgetcsv round-trip with custom delimiters and doubling mode.
+#[test]
+fn test_fputcsv_fgetcsv_roundtrip_custom() {
+    let (out, _dir) = compile_and_run_in_dir(
+        r##"<?php
+$f = fopen("php://memory", "r+");
+fputcsv($f, ["a;b", 'c"d'], ";", "#", "", "\n");
+rewind($f);
+$r = fgetcsv($f, 0, ";", "#", "");
+echo $r[0] . "|" . $r[1] . "\n";
+"##,
+    );
+    assert_eq!(out, "a;b|c\"d\n");
+}
+
 /// Verifies rewind() resets the read position to the start and data can be re-read.
 #[test]
 fn test_rewind() {
@@ -591,29 +687,1661 @@ fn test_stream_is_local_and_supports_lock_are_true() {
     assert_eq!(out, "LS");
 }
 
+/// Verifies `fgetcsv()` ends the manual's own read loop instead of spinning on it.
+///
+/// The runtime signals end-of-input with a null array pointer. Storing that raw left it
+/// reading as `null`, and `null !== false` holds, so
+/// `while (($row = fgetcsv($h)) !== false)` — the loop PHP's manual shows — ran forever;
+/// a loop that guarded itself fatalled on `count(null)` instead. The counter here is the
+/// point: a test that only checked the parsed fields passed throughout.
+#[test]
+fn test_fgetcsv_reports_false_at_end_of_input() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("csv_eof.csv", "a,b\nc,d\n");
+$f = fopen("csv_eof.csv", "r");
+$rows = 0;
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+fclose($f);
+echo $rows;
+unlink("csv_eof.csv");
+"#,
+    );
+    assert_eq!(out, "2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a row read by `fgetcsv()` can be written straight back by `fputcsv()`.
+///
+/// This is the pair's whole point, and it is the shape that broke when `fgetcsv()` started
+/// reporting `array<string>|false`: the row is stored boxed, and the writer accepted only
+/// an unboxed string array, so the read-transform-write pipeline stopped COMPILING. The
+/// union is what makes unwrapping safe — it guarantees the payload is a string array.
+#[test]
+fn test_fgetcsv_row_can_be_written_back_by_fputcsv() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("pipe_in.csv", "1,x\n2,\"y,z\"\n");
+$in = fopen("pipe_in.csv", "r");
+$out = fopen("pipe_out.csv", "w");
+while (($rec = fgetcsv($in, 0, ",", "\"", "\\")) !== false) {
+    fputcsv($out, $rec, ",", "\"", "\\");
+}
+fclose($in);
+fclose($out);
+echo file_get_contents("pipe_out.csv");
+unlink("pipe_in.csv");
+unlink("pipe_out.csv");
+"#,
+    );
+    assert_eq!(out, "1,x\n2,\"y,z\"\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies writing an end-of-input `fgetcsv()` result raises php-src's own `TypeError`.
+#[test]
+fn test_fputcsv_rejects_a_false_fields_argument() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("empty_in.csv", "");
+$in = fopen("empty_in.csv", "r");
+$out = fopen("t_out.csv", "w");
+$rec = fgetcsv($in, 0, ",", "\"", "\\");
+try {
+    fputcsv($out, $rec, ",", "\"", "\\");
+} catch (TypeError $e) {
+    echo $e->getMessage();
+}
+fclose($in);
+fclose($out);
+unlink("empty_in.csv");
+unlink("t_out.csv");
+"#,
+    );
+    assert_eq!(
+        out,
+        "fputcsv(): Argument #2 ($fields) must be of type array, false given"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a BLANK LINE reads back as php's `[null]` record rather than `[""]`.
+///
+/// php-src decides "no line at all" and "a line with no fields" in two different places:
+/// `PHP_FUNCTION(fgetcsv)` answers `false` when `php_stream_get_line()` returns NULL, and only
+/// then calls `php_fgetcsv()`, whose own NULL (`first_field && bptr == line_end`) becomes
+/// `php_bc_fgetcsv_empty_line()` — one element holding null. elephc collapsed both onto one null
+/// pointer, so a blank line came back as a one-element array holding the EMPTY STRING. The
+/// record COUNT is half the point: `[""]` and `[null]` both have one element, so a test that
+/// only counted rows passed throughout. Measured on `php -n` 8.5.6.
+#[test]
+fn test_fgetcsv_reads_a_blank_line_as_a_null_record() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("blank_mid.csv", "a,b\n\nc,d\n");
+$f = fopen("blank_mid.csv", "r");
+$seen = "";
+$rows = 0;
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $seen = $seen . json_encode($row) . ";";
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+fclose($f);
+echo $seen, "|", $rows;
+unlink("blank_mid.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\"];[null];[\"c\",\"d\"];|3");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a file ENDING in a blank line yields a trailing `[null]`, then `false`.
+///
+/// This is the case that proves the two markers stayed apart: the blank record and end of input
+/// arrive back to back, so collapsing them either loses the last row or spins the manual's loop.
+#[test]
+fn test_fgetcsv_blank_last_line_is_a_null_record_then_false() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("blank_end.csv", "a,b\nc,d\n\n");
+$f = fopen("blank_end.csv", "r");
+$seen = "";
+$rows = 0;
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $seen = $seen . json_encode($row) . ";";
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+fclose($f);
+echo $seen, "|", $rows;
+unlink("blank_end.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\"];[\"c\",\"d\"];[null];|3");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies only the LINE TERMINATOR is stripped before the blank test — whitespace is a field.
+///
+/// `php_fgetcsv_lookup_trailing_spaces()` drops one `\r\n`, `\n` or `\r` and nothing else despite
+/// its name, so `"   \n"` and `"\t\n"` are one field of whitespace while `"\n"` and `"\r\n"` are
+/// no record at all. Without this control a "trim the line" rule looks equally correct and
+/// silently turns every whitespace-only row into `[null]`.
+#[test]
+fn test_fgetcsv_treats_a_whitespace_only_line_as_a_field_not_a_blank() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("ws.csv", "a,b\n   \n\t\n\nc,d\n");
+$f = fopen("ws.csv", "r");
+$seen = "";
+$rows = 0;
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $seen = $seen . json_encode($row) . ";";
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+fclose($f);
+echo $seen, "|", $rows;
+unlink("ws.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\"];[\"   \"];[\"\\t\"];[null];[\"c\",\"d\"];|5");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a file of nothing but one blank line yields ONE `[null]` row, not zero and not two.
+///
+/// The sharpest test of the split markers: the very first read is a blank record and the very
+/// next is end of input, so a single marker answers one of them wrongly whichever way it leans.
+/// A `\r\n` blank line is the same record, since one terminator is stripped as a unit.
+#[test]
+fn test_fgetcsv_separates_a_blank_record_from_end_of_input() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("only_blank.csv", "\n");
+file_put_contents("empty.csv", "");
+file_put_contents("crlf.csv", "a,b\n\r\nc,d\n");
+$seen = "";
+foreach (["only_blank.csv", "empty.csv", "crlf.csv"] as $name) {
+    $f = fopen($name, "r");
+    $rows = 0;
+    while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+        $seen = $seen . json_encode($row) . ";";
+        $rows = $rows + 1;
+        if ($rows > 8) { echo "RUNAWAY"; break; }
+    }
+    fclose($f);
+    $seen = $seen . "|" . $rows . " ";
+    unlink($name);
+}
+echo $seen;
+"#,
+    );
+    assert_eq!(
+        out,
+        "[null];|1 |0 [\"a\",\"b\"];[null];[\"c\",\"d\"];|3 "
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fputcsv()` writes a `[null]` row back as the blank line it came from.
+///
+/// The round-trip is the pair's whole point and the consumer most exposed to the row's element
+/// type changing from `string` to `mixed`: the writer now receives a boxed cell holding null
+/// where it used to receive a string slot, and php writes that as an empty line.
+#[test]
+fn test_fputcsv_writes_back_a_null_record_read_by_fgetcsv() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("bp_in.csv", "a,b\n\nc,d\n");
+$in = fopen("bp_in.csv", "r");
+$out = fopen("bp_out.csv", "w");
+while (($rec = fgetcsv($in, 0, ",", "\"", "\\")) !== false) {
+    fputcsv($out, $rec, ",", "\"", "\\");
+}
+fclose($in);
+fclose($out);
+echo json_encode(file_get_contents("bp_out.csv"));
+unlink("bp_in.csv");
+unlink("bp_out.csv");
+"#,
+    );
+    assert_eq!(out, "\"a,b\\n\\nc,d\\n\"");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `SplFileObject::fgetcsv()` reports a blank line as `[null]` too.
+///
+/// The SPL method body is synthesized and has no checked call-site type, so it reads the row
+/// through the EIR fallback rather than the checker's union — a second authority that has to
+/// agree about the boxed-`Mixed` cells, and the one that silently handed back header words as
+/// integers the last time `fgetcsv()`'s representation moved.
+#[test]
+fn test_spl_file_object_fgetcsv_reads_a_blank_line_as_null() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("spl_blank.csv", "a,b\n\nc,d\n");
+$f = new SplFileObject("spl_blank.csv");
+$seen = "";
+$rows = 0;
+while (!$f->eof()) {
+    $row = $f->fgetcsv(",", "\"", "\\");
+    if ($row === false) { break; }
+    $seen = $seen . json_encode($row) . ";";
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+unset($f);
+echo $seen;
+unlink("spl_blank.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\"];[null];[\"c\",\"d\"];");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an UNTYPED `public $context;` receives its context — the spelling the manual shows.
+///
+/// `public mixed $context;` already worked. The untyped form was read as declaring nothing, so
+/// the wrapper never got its context and collected the dynamic-property deprecation meant for
+/// classes that really declared none. The two spellings are the same PHP null and differ only in
+/// elephc's representation: an untyped property is initialised to the in-band tagged null rather
+/// than to a cell pointer, which the context injection was freeing as though it were one.
+#[test]
+fn test_an_untyped_context_property_receives_its_context() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("w", "W");
+$h = fopen("w://x", "r");
+echo $h === false ? "false" : "resource";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "resource");
+    assert!(
+        !out.diagnostics.contains("dynamic property"),
+        "a declared $context must not be deprecated as invented, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies the dynamic-property deprecation still fires for a wrapper that declares NO context.
+///
+/// The guard above widens which spellings count as declared, so this pins the other side of it:
+/// PHP assigns the context whether or not the class declared a property for it, and deprecates
+/// the invented assignment.
+#[test]
+fn test_a_wrapper_without_a_context_property_is_still_deprecated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class N {
+    public function stream_open($path, $mode, $options, &$opened) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("n", "N");
+$h = fopen("n://x", "r");
+echo $h === false ? "false" : "resource";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "resource");
+    assert!(
+        out.diagnostics
+            .contains("Creation of dynamic property N::$context is deprecated"),
+        "expected PHP 8.2's deprecation, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies an unknown scheme reports the MISSING WRAPPER, which is the reason php gives first.
+///
+/// php-src emits two warnings here. elephc emitted only the second, which says "No such file or
+/// directory" — true of the path, and silent about the cause.
+#[test]
+fn test_unknown_wrapper_names_itself_like_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("bogus://x", "r");
+echo $h === false ? "false" : "resource";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert!(
+        out.diagnostics.contains(
+            "Warning: fopen(): Unable to find the wrapper \"bogus\" - did you forget to enable it when you configured PHP?"
+        ),
+        "missing the unknown-wrapper warning, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics.contains("Warning: fopen(bogus://x): Failed to open stream:"),
+        "the failed-open warning must still follow it, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies the unknown-wrapper warning stays silent for every scheme that DOES have a wrapper.
+///
+/// The check has to run at run time, not at lowering: `stream_wrapper_register()` is a runtime
+/// call, so a scheme the compiler never heard of can be perfectly valid by the time an open
+/// happens. Both authorities are consulted, and a path with no scheme at all is not a wrapper.
+#[test]
+fn test_a_known_wrapper_does_not_report_itself_missing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Mem {
+    public $context;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) { return true; }
+    public function stream_read($n) { $this->pos = $this->pos + 1; return $this->pos > 1 ? "" : "hi"; }
+    public function stream_eof() { return $this->pos > 1; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("mine", "Mem");
+$h = fopen("mine://x", "r");
+fclose($h);
+$p = fopen("php://memory", "w+");
+fclose($p);
+$m = @fopen("/no/such/file", "r");
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        !out.diagnostics.contains("Unable to find the wrapper"),
+        "a registered wrapper, a built-in scheme and a plain path must all stay quiet, got diagnostics={}",
+        out.diagnostics
+    );
+    assert_eq!(out.stdout, "done");
+}
+
+/// Verifies `fputcsv()` casts each element LAYOUT, as `php_fputcsv` does per field.
+///
+/// One case per layout rather than one test for all six. The layout is what the writer has to
+/// read — 16-byte (ptr, len) slots for strings, 8-byte payloads for int/float/bool, 8-byte cell
+/// pointers for a gradual array — so a single combined test can only report that one of six is
+/// wrong, which is useless on an architecture this host cannot run. Every expectation was
+/// measured against `php -n` 8.5.6.
+fn fputcsv_layout_case(row: &str, expected: &str) {
+    let source = format!(
+        r#"<?php
+$out = fopen("cast_out.csv", "w");
+fputcsv($out, {row}, ",", "\"", "\\");
+fclose($out);
+echo file_get_contents("cast_out.csv");
+unlink("cast_out.csv");
+"#
+    );
+    let (out, dir) = compile_and_run_in_dir(&source);
+    assert_eq!(out, expected, "row {row} rendered wrongly");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fputcsv_string_layout() {
+    fputcsv_layout_case(r#"["a", "b"]"#, "a,b\n");
+}
+
+#[test]
+fn test_fputcsv_int_layout() {
+    fputcsv_layout_case("[1, 2, 3]", "1,2,3\n");
+}
+
+#[test]
+fn test_fputcsv_float_layout() {
+    fputcsv_layout_case("[1.5, 2.25]", "1.5,2.25\n");
+}
+
+#[test]
+fn test_fputcsv_bool_layout() {
+    fputcsv_layout_case("[true, false]", "1,\n");
+}
+
+#[test]
+fn test_fputcsv_boxed_mixed_layout() {
+    fputcsv_layout_case(r#"["name", 42, 3.5, true, null]"#, "name,42,3.5,1,\n");
+}
+
+#[test]
+fn test_fputcsv_boxed_layout_still_quotes() {
+    fputcsv_layout_case(r#"["with,comma", 7]"#, "\"with,comma\",7\n");
+}
+
+#[test]
+fn test_fputcsv_empty_row() {
+    fputcsv_layout_case("[]", "\n");
+}
+
+/// Verifies a `foreach` row reaches the writer as its ARRAY, not as the Mixed cell carrying it.
+///
+/// A gradually-typed row arrives boxed. Writing the box would not merely mis-render a field: the
+/// cell's tag word reads as a length, so this two-field row came out as four fields of raw header
+/// bytes before the writer unwrapped it.
+#[test]
+fn test_fputcsv_writes_a_foreach_row_not_its_box() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$out = fopen("rows_out.csv", "w");
+foreach ([[1, 2], [3, 4]] as $row) {
+    fputcsv($out, $row, ",", "\"", "\\");
+}
+fclose($out);
+echo file_get_contents("rows_out.csv");
+unlink("rows_out.csv");
+"#,
+    );
+    assert_eq!(out, "1,2\n3,4\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a long numeric run hands its formatting scratch back, row by row.
+///
+/// `__rt_itoa` formats into the shared 64 KiB concat arena and advances its cursor. A writer that
+/// never reclaimed the row's scratch would walk off the arena long before this loop ends, so the
+/// failure this pins is a silent memory overrun rather than a wrong field.
+#[test]
+fn test_fputcsv_reclaims_its_cast_scratch_across_many_rows() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$out = fopen("many.csv", "w");
+for ($i = 0; $i < 4000; $i++) {
+    fputcsv($out, [$i, $i * 2, $i * 3], ",", "\"", "\\");
+}
+fclose($out);
+$lines = file("many.csv");
+echo count($lines), "|", trim($lines[0]), "|", trim($lines[3999]);
+unlink("many.csv");
+"#,
+    );
+    assert_eq!(out, "4000|0,0,0|3999,7998,11997");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a `php://filter` chain runs EVERY filter, in order.
+///
+/// Only the first name was applied, so `read=a|b` silently produced `a`'s output — which
+/// looks plausible and is wrong. `convert.base64-encode` and `string.toupper` do not
+/// commute, so swapping them proves the ORDER is right rather than just the count.
+#[test]
+fn test_php_filter_chain_applies_every_filter_in_order() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("fchain.txt", "Hello World");
+$a = fopen("php://filter/read=convert.base64-encode|string.toupper/resource=fchain.txt", "r");
+echo stream_get_contents($a), "|";
+fclose($a);
+$b = fopen("php://filter/read=string.toupper|convert.base64-encode/resource=fchain.txt", "r");
+echo stream_get_contents($b), "|";
+fclose($b);
+$c = fopen("php://filter/read=string.toupper|no.such.filter/resource=fchain.txt", "r");
+echo stream_get_contents($c);
+fclose($c);
+unlink("fchain.txt");
+"#,
+    );
+    // The third case pins what an UNKNOWN name does: `php -n` skips it, keeps its
+    // neighbours, and still opens. Cancelling the whole chain reads as just as plausible,
+    // which is why it is measured rather than reasoned about.
+    assert_eq!(out, "SGVSBG8GV29YBGQ=|SEVMTE8gV09STEQ=|HELLO WORLD");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a failed open names WHICH path failed and WHY, as php-src does.
+///
+/// The message was a bare `fopen(): Failed to open stream` — neither the path nor the
+/// reason, which is most of what it exists for when several opens share a line. The
+/// remaining difference from PHP is the ` in FILE on line N` suffix elephc never adds.
+#[test]
+fn test_failed_open_warning_names_the_path_and_the_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$f = fopen("/no/such/dir/missing.txt", "r");
+echo $f === false ? "false" : "open";
+$c = file_get_contents("/no/such/dir/other.txt");
+echo $c === false ? "|false" : "|read";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|false");
+    assert!(
+        out.diagnostics.contains(
+            "Warning: fopen(/no/such/dir/missing.txt): Failed to open stream: No such file or directory"
+        ),
+        "fopen warning lost the path or the reason, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics.contains(
+            "Warning: file_get_contents(/no/such/dir/other.txt): Failed to open stream: No such file or directory"
+        ),
+        "file_get_contents warning lost the path or the reason, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies an invalid `fopen()` mode is reported in php's words, not as a bogus errno.
+///
+/// No syscall runs for a mode php refuses, so there is no errno to describe. The failure shared
+/// the errno path anyway, which read `x0`/`rax` — still carrying the PATH POINTER on that branch
+/// — and handed it to `strerror`.
+///
+/// RED before the fix, `php -n` 8.5.6 on the left and elephc on the right:
+///   fopen(F,"z")  ``Failed to open stream: `z' is not a valid mode for fopen``
+///                 vs `Failed to open stream: Unknown error: 80792944`
+///   fopen(F,"")   ``Failed to open stream: `' is not a valid mode for fopen``
+///                 vs the same garbage
+///
+/// The quoting is php-src's own and is NOT symmetrical: an opening backtick, a closing
+/// apostrophe. The empty mode is included because it takes a different branch in `__rt_fopen`
+/// (a length test, before the first byte is ever read) and shares only the wording.
+#[test]
+fn test_invalid_fopen_mode_is_reported_in_phps_words() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$f = "invalid_mode_probe.txt";
+file_put_contents($f, "hello");
+var_dump(fopen($f, "z"));
+var_dump(fopen($f, ""));
+$m = "br";
+var_dump(fopen($f, $m));
+unlink($f);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    for reason in ["`z'", "`'", "`br'"] {
+        assert!(
+            out.diagnostics.contains(&format!(
+                "Warning: fopen(invalid_mode_probe.txt): Failed to open stream: {reason} is not a valid mode for fopen"
+            )),
+            "missing php's wording for mode {reason}, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+    assert!(
+        !out.diagnostics.contains("Unknown error"),
+        "the mode failure still went through the errno path, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies php validates only the FIRST byte of an `fopen()` mode, and the rest is free.
+///
+/// php-src's `php_stream_parse_fopen_modes` switches on `mode[0]` and then only ever asks
+/// `strchr(mode, '+')`. So `rz`, `rbz`, `rw`, `ra` and even `"r "` all open, while `br`, `tr`,
+/// `+r` and `" r"` do not — the letters are not a SET, they are a first character. Measured
+/// across 20 spellings on `php -n` 8.5.6; this pins the eight that make the rule visible.
+///
+/// It guards the fix above rather than the parse: rewording the failure must not move the line
+/// between accept and reject, and `rz`/`rw`/`ra` are exactly the spellings a "valid letters"
+/// reading would start rejecting.
+#[test]
+fn test_only_the_first_fopen_mode_byte_decides_validity() {
+    let out = compile_and_run(
+        r#"<?php
+$f = "first_byte_mode_probe.txt";
+file_put_contents($f, "hello");
+foreach (["rz", "rbz", "rw", "ra", "r ", "br", "+r", " r"] as $m) {
+    $h = @fopen($f, $m);
+    echo $h === false ? "-" : "+";
+    if ($h) fclose($h);
+}
+unlink($f);
+"#,
+    );
+    assert_eq!(out, "+++++---");
+}
+
+/// Verifies every wrapper-refusal diagnostic still obeys `@`.
+///
+/// These lines reach stderr by four different routes — a compile-time literal interned whole, a
+/// run-time composition inside `__rt_data_stream_dynamic`, another inside `__rt_php_wrapper_open`,
+/// and three `__rt_diag_warning` fragments emitted by the `glob://` lowering — and only the last
+/// of those goes through the path the older diagnostics used. A route that reached `write(2)`
+/// without consulting the suppression depth would make `@fopen(...)` noisy, which is a silent
+/// break of the one thing `@` is for.
+///
+/// The unsuppressed line at the end is the control: without it, a fix that disabled the
+/// diagnostics entirely would pass.
+#[test]
+fn test_wrapper_refusal_diagnostics_obey_the_error_suppression_operator() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("sup_probe.txt", "x");
+var_dump(@fopen("php://bogus", "r"));
+var_dump(@fopen("glob://*.php", "r"));
+var_dump(@fopen("data://text/plain;base64,!!!bad!!!", "r"));
+var_dump(@fopen("sup_probe.txt", "z"));
+$u = "php://bogus"; var_dump(@fopen($u, "r"));
+$g = "glob://*.php"; var_dump(@fopen($g, "r"));
+$d = "data://nocomma"; var_dump(@fopen($d, "r"));
+var_dump(fopen("glob://*.php", "r"));
+unlink("sup_probe.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n".repeat(8));
+    assert_eq!(
+        out.diagnostics.trim(),
+        "Warning: fopen(glob://*.php): Failed to open stream: wrapper does not support stream open",
+        "`@` let a wrapper-refusal line through, or the control line went missing"
+    );
+}
+
+/// Verifies `stream_get_meta_data()` returns php's keys in php's ORDER.
+///
+/// A PHP array remembers insertion order and this one is routinely dumped whole, so an array with
+/// identical contents in a different order still prints differently under `print_r()`,
+/// `var_export()`, `json_encode()` or `foreach`. php-src fills it in `_php_stream_get_metadata`:
+/// the three fallback flags, then `wrapper_type`, `stream_type`, `mode`, `unread_bytes`,
+/// `seekable`, and `uri` last.
+///
+/// RED before the fix — elephc put `unread_bytes` third and `stream_type` ahead of
+/// `wrapper_type`:
+///   php     timed_out,blocked,eof,wrapper_type,stream_type,mode,unread_bytes,seekable,uri
+///   elephc  timed_out,blocked,eof,unread_bytes,stream_type,wrapper_type,mode,seekable,uri
+///
+/// Three stream kinds are checked because the order comes from one shared builder and a
+/// per-wrapper divergence would otherwise hide behind whichever one the test happened to pick.
+#[test]
+fn test_stream_get_meta_data_keys_are_in_phps_order() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("meta_order.txt", "hi");
+foreach ([fopen("meta_order.txt", "r"), fopen("php://memory", "w+"), fopen("php://stdout", "w")] as $h) {
+    echo implode(",", array_keys(stream_get_meta_data($h))), "\n";
+    fclose($h);
+}
+unlink("meta_order.txt");
+"#,
+    );
+    let expected =
+        "timed_out,blocked,eof,wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n";
+    assert_eq!(out, expected.repeat(3));
+}
+
+/// Verifies `seekable` names the descriptor's TYPE rather than whether `lseek` happened to work.
+///
+/// php-src decides it once, at open: `php_stream_fopen_from_fd` sets `is_pipe` from
+/// `!S_ISREG(sb.st_mode)` and that becomes `PHP_STREAM_FLAG_NO_SEEK`, which is what
+/// `_php_stream_get_metadata` reports. elephc asked a different question — `lseek(fd, 0,
+/// SEEK_CUR)` — and the two answers only agree for regular files, sockets and FIFOs. They part
+/// company on a CHARACTER DEVICE, which is seekable to the kernel and not a file to PHP.
+///
+/// Measured with `php -n` 8.5.6:
+///
+/// ```text
+/// fopen('/dev/null', 'r')  seekable => bool(false)   elephc said bool(true)
+/// fopen('/dev/zero', 'r')  seekable => bool(false)   elephc said bool(true)
+/// popen('echo hi', 'r')    seekable => bool(false)   elephc agreed
+/// ```
+///
+/// The same divergence is what made `php://stdin` answer `true` under `< /dev/null` where php
+/// answers `false`; a regular file on stdin makes BOTH answer `true`, so the descriptor kind —
+/// not the wrapper name — is the thing under test.
+#[test]
+fn test_stream_get_meta_data_seekable_follows_the_descriptor_kind() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("seekable_probe.txt", "hi");
+foreach (["seekable_probe.txt", "/dev/null", "/dev/zero"] as $path) {
+    $h = fopen($path, "r");
+    echo $path, "=", var_export(stream_get_meta_data($h)["seekable"], true), "\n";
+    fclose($h);
+}
+unlink("seekable_probe.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "seekable_probe.txt=true\n/dev/null=false\n/dev/zero=false\n"
+    );
+}
+
+/// Verifies the three fallback flags appear only on the streams php puts them on.
+///
+/// `timed_out`, `blocked` and `eof` are not unconditional in php-src: `_php_stream_get_metadata`
+/// emits them only when the stream answers `PHP_STREAM_OPTION_META_DATA_API`, and the `php://`
+/// wrapper answers it for `memory` but not for `temp`. `data:` never answers it at all. elephc
+/// wrote all three onto every stream, so `php://temp` reported nine keys where php reports six.
+///
+/// Measured with `php -n` 8.5.6 — `implode(",", array_keys(...))`:
+///
+/// ```text
+/// php://memory   timed_out,blocked,eof,wrapper_type,stream_type,mode,unread_bytes,seekable,uri
+/// php://temp     wrapper_type,stream_type,mode,unread_bytes,seekable,uri
+/// data://...     mediatype,base64,wrapper_type,stream_type,mode,unread_bytes,seekable,uri
+/// ```
+///
+/// `php://temp/maxmemory:1024` is included because it is the same sub-wrapper reached through a
+/// longer URI, and a check that only looked at the exact string `php://temp` would miss it.
+#[test]
+fn test_stream_get_meta_data_omits_the_fallback_flags_php_omits() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([
+    fopen("php://memory", "r+"),
+    fopen("php://temp", "r+"),
+    fopen("php://temp/maxmemory:1024", "r+"),
+] as $h) {
+    $keys = array_keys(stream_get_meta_data($h));
+    echo implode(",", $keys), "\n";
+    fclose($h);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "timed_out,blocked,eof,wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n\
+         wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n\
+         wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n"
+    );
+}
+
+/// Verifies a `php://filter` stream names PHP as its wrapper, not the resource it wraps.
+///
+/// The URL is resolved by `php_stream_url_wrap_php`, so the stream php hands back belongs to the
+/// `php` wrapper however ordinary the thing behind it is. elephc opened the inner resource and
+/// left ITS identity on the handle, so a filter over a plain file called itself `plainfile`.
+///
+/// Measured with `php -n` 8.5.6 on `php://filter/read=string.toupper/resource=<file>`:
+///
+/// ```text
+/// wrapper_type => "PHP"          elephc said "plainfile"
+/// stream_type  => "STDIO"        (the INNER identity, which php keeps)
+/// uri          => the whole php://filter/... URL
+/// ```
+///
+/// `stream_type` is asserted alongside because it is the half php does NOT move: the two names
+/// disagree on purpose, and a fix that dragged both to `PHP` would trade one divergence for
+/// another. That is also why only a plain-path resource is re-stamped — a filter over
+/// `php://memory` reports `MEMORY`, and the name is derived from the recorded URI.
+///
+/// Scope: the LITERAL URL route. A URL computed at run time still reports the inner wrapper,
+/// because the dynamic route swaps the URL for its resource before the open and stamps the
+/// resource opener's own id; that half is measured and unfixed.
+#[test]
+fn test_stream_get_meta_data_names_php_as_the_filter_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("filter_meta.txt", "hi\n");
+$m = stream_get_meta_data(fopen("php://filter/read=string.toupper/resource=filter_meta.txt", "r"));
+echo $m["wrapper_type"], "|", $m["stream_type"], "|", $m["uri"], "\n";
+unlink("filter_meta.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "PHP|STDIO|php://filter/read=string.toupper/resource=filter_meta.txt\n"
+    );
+}
+
+/// Verifies a `data:` stream's metadata carries the URI's own media type, its parameters and the
+/// base64 flag, each as its own key ahead of `wrapper_type`.
+///
+/// php-src's `php_stream_url_wrap_rfc2397` builds the metadata array while it PARSES the URI, so
+/// every `name=value` before the comma lands as a separate key in the order it was written, the
+/// media type lands under `mediatype`, and `base64` is a bool that is present even when false.
+/// elephc reported none of them.
+///
+/// Measured with `php -n` 8.5.6:
+///
+/// ```text
+/// data://text/plain,hello                 mediatype=text/plain base64=false
+/// data://text/plain;charset=utf-8,x       mediatype=text/plain charset=utf-8 base64=false
+/// data://text/plain;base64,aGVsbG8=       mediatype=text/plain base64=true
+/// data://text/plain;charset=utf-8;foo=bar,x
+///                                         mediatype/charset/foo then base64=false
+/// data:,justtext                          no mediatype key at all, base64=false
+/// ```
+///
+/// The bare `data:,justtext` row is the one that pins the key as OPTIONAL: php emits `base64`
+/// unconditionally but `mediatype` only when the URI spells one.
+#[test]
+fn test_stream_get_meta_data_exposes_the_data_uri_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([
+    "data://text/plain,hello",
+    "data://text/plain;charset=utf-8,x",
+    "data://text/plain;base64,aGVsbG8=",
+    "data://text/plain;charset=utf-8;foo=bar,x",
+    "data:,justtext",
+] as $uri) {
+    $m = stream_get_meta_data(fopen($uri, "r"));
+    $parts = [];
+    foreach ($m as $key => $value) {
+        if ($key === "wrapper_type") {
+            break;
+        }
+        $parts[] = $key . "=" . var_export($value, true);
+    }
+    echo implode(" ", $parts), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "mediatype='text/plain' base64=false\n\
+         mediatype='text/plain' charset='utf-8' base64=false\n\
+         mediatype='text/plain' base64=true\n\
+         mediatype='text/plain' charset='utf-8' foo='bar' base64=false\n\
+         base64=false\n"
+    );
+}
+
+/// Verifies the eval interpreter accepts every `fopen()` mode php accepts.
+///
+/// `EvalOpenMode::parse` refused any mode carrying a byte outside `rwaxc+bte`. php has no such
+/// rule: `php_stream_parse_fopen_modes` switches on `mode[0]` and afterwards only ever asks
+/// `strchr(mode, '+')`. So the interpreter refused three spellings that `php -n` 8.5.6 AND
+/// elephc's own AOT backend both open — the backend and the interpreter disagreeing about the
+/// same PHP is worse than either being wrong alone.
+///
+/// RED, over `["r","rb","rn","rz","r ","rt","w","x","br","+r","q",""]`:
+///   php / AOT backend  +++++++-----
+///   eval interpreter   ++---++-----
+/// (`x` is `-` on both because the file already exists.) The `_ => return None` arm on the first
+/// character is the whole of php's check, so the extra filter could only refuse too much.
+#[test]
+fn test_eval_fopen_accepts_every_mode_php_accepts() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("evalmode_probe.txt", "hello");
+eval('
+foreach (["r", "rb", "rn", "rz", "r ", "rt", "w", "x", "br", "+r", "q", ""] as $m) {
+    $h = @fopen("evalmode_probe.txt", $m);
+    echo $h === false ? "-" : "+";
+    if ($h) fclose($h);
+}
+');
+unlink("evalmode_probe.txt");
+"#,
+    );
+    assert_eq!(out, "+++++++-----");
+}
+
+/// Verifies a `data:` URI php refuses is refused, and named with php's own `rfc2397:` sentence.
+///
+/// The `unable to decode` case was not just undiagnosed: the run-time opener asked
+/// `__rt_base64_decode` for its LAX mode — and asked in the wrong register, since the flag is
+/// `x3`/`rdi` and it wrote `x0`/`edi` — so `data://text/plain;base64,!!!not-base64!!!` opened a
+/// stream over the lax decoder's salvage. php answers false. That is a silent wrong VALUE, not a
+/// missing message, which is why it leads here.
+///
+/// Measured on `php -n` 8.5.6; each of the four sentences is a different php-src call site, and
+/// which one applies is not guessable from the URI's shape — `;,` and `;BASE64,` are `illegal
+/// parameter`, not `illegal media type`, because the TYPE is only the first `;`-segment.
+///
+/// RED before the fix (dynamic form, `$u` a loop variable):
+///   `!!!not-base64!!!`  php `false` + `rfc2397: unable to decode`   vs elephc a stream of `''`
+///   `data://`           php `rfc2397: no comma in URL`              vs elephc silent `false`
+#[test]
+fn test_refused_data_uris_carry_phps_rfc2397_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+foreach ([
+    "data://text/plain;base64,!!!not-base64!!!",
+    "data://nocomma",
+    "data://text;base64,SGk=",
+    "data://text/plain;,hi",
+] as $u) {
+    var_dump(fopen($u, "r"));
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\nbool(false)\n");
+    for (url, reason) in [
+        ("data://text/plain;base64,!!!not-base64!!!", "rfc2397: unable to decode"),
+        ("data://nocomma", "rfc2397: no comma in URL"),
+        ("data://text;base64,SGk=", "rfc2397: illegal media type"),
+        ("data://text/plain;,hi", "rfc2397: illegal parameter"),
+    ] {
+        assert!(
+            out.diagnostics.contains(&format!(
+                "Warning: fopen({url}): Failed to open stream: {reason}"
+            )),
+            "missing php's reason for {url}, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+}
+
+/// Verifies the `data:` scheme opens with or without the `//`, as php-src special-cases it.
+///
+/// `php_stream_locate_url_wrapper` normally demands `://`, but its test is
+/// `!strncmp("//", p+1, 2) || (n == 4 && !memcmp("data:", path, 5))` — `data` is the one scheme
+/// exempted. elephc matched `data://` only, so `data:text/plain,hi` went to the FILE opener and
+/// reported `No such file or directory`.
+///
+/// RED before the fix: php `'hi'` / `'Hi'`, elephc `false` twice with a filesystem errno.
+/// Both the compile-time literal and the run-time value are covered — they are separate dispatches.
+#[test]
+fn test_data_scheme_opens_without_the_double_slash() {
+    let out = compile_and_run(
+        r#"<?php
+echo stream_get_contents(fopen("data:text/plain,hi", "r"));
+echo "|";
+$u = "data:text/plain;base64,SGk=";
+echo stream_get_contents(fopen($u, "r"));
+echo "|";
+echo stream_get_contents(fopen("data://text/plain,slashes", "r"));
+"#,
+    );
+    assert_eq!(out, "hi|Hi|slashes");
+}
+
+/// Verifies an unrecognised `php://` target prints php's TWO lines instead of nothing.
+///
+/// The pair is structural, not decorative. `php_stream_url_wrap_php` reports the first with a
+/// DIRECT `php_error_docref`, so it prints at once as `fopen(): …` and leaves the wrapper error
+/// stack empty — which is exactly why the generic failed-open line that follows has nothing left
+/// to say but `operation failed`. Getting one without the other would be wrong twice over.
+///
+/// `php://fd/` is the exception and is asserted with them: it goes through
+/// `php_stream_wrapper_log_error` like an ordinary wrapper, so it prints ONE line carrying its own
+/// sentence. Measured on `php -n` 8.5.6; elephc answered a silent `false` for every case here.
+///
+/// Both dispatches are covered: a literal URL is refused during lowering, a run-time one inside
+/// `__rt_php_wrapper_open`, and the two compose the same text by different means.
+#[test]
+fn test_unknown_php_target_prints_both_of_phps_lines() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(fopen("php://bogus", "r"));
+$u = "php://foo/bar";
+var_dump(fopen($u, "r"));
+var_dump(fopen("php://fd/", "r"));
+$v = "php://fd/";
+var_dump(fopen($v, "r"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\nbool(false)\n");
+    assert_eq!(
+        out.diagnostics.matches("Warning: fopen(): Invalid php:// URL specified").count(),
+        2,
+        "the direct php_error_docref line is missing or duplicated, got diagnostics={}",
+        out.diagnostics
+    );
+    for url in ["php://bogus", "php://foo/bar"] {
+        assert!(
+            out.diagnostics.contains(&format!(
+                "Warning: fopen({url}): Failed to open stream: operation failed"
+            )),
+            "missing the failed-open line for {url}, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+    assert_eq!(
+        out.diagnostics
+            .matches(
+                "Warning: fopen(php://fd/): Failed to open stream: \
+                 php://fd/ stream must be specified in the form php://fd/<orig fd>"
+            )
+            .count(),
+        2,
+        "php://fd/ lost its own sentence on one of the two dispatches, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        !out.diagnostics.contains("No such file or directory"),
+        "a php:// URL reached the file opener, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies `php://fd/N` says WHY it could not open the descriptor, the three ways php does.
+///
+/// This is the only diagnostic in php that prints an errno NUMBER in brackets AND its `strerror`
+/// text; every other failed open prints the text alone. Measured on `php -n` 8.5.6, with
+/// `getdtablesize()` answering 61440 on the measuring host:
+///
+/// ```text
+/// fopen("php://fd/99")     Error duping file descriptor 99; possibly it doesn't exist:
+///                          [9]: Bad file descriptor
+/// fopen("php://fd/-1")     The file descriptors must be non-negative numbers smaller than 61440
+/// fopen("php://fd/61440")  the same sentence: the bound is exclusive
+/// fopen("php://fd/abc")    php://fd/ stream must be specified in the form php://fd/<orig fd>
+/// ```
+///
+/// The bound itself is asserted only as a PREFIX: it is `getdtablesize()`, a property of the
+/// running process, and the number differs between this host and CI.
+///
+/// RED before the fix: elephc answered a silent `false` for the first three and reported the
+/// filesystem's `No such file or directory` for `abc`, about a path nothing had looked for.
+/// Both dispatches are covered — a literal URL is opened during lowering, a run-time one inside
+/// `__rt_php_wrapper_open` — because they parse the descriptor by different means.
+#[test]
+fn test_php_fd_refusals_carry_phps_two_sentences() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(fopen("php://fd/99", "r"));
+var_dump(fopen("php://fd/-1", "r"));
+var_dump(fopen("php://fd/abc", "r"));
+$a = "php://fd/99";
+var_dump(fopen($a, "r"));
+$b = "php://fd/-1";
+var_dump(fopen($b, "r"));
+$c = "php://fd/abc";
+var_dump(fopen($c, "r"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n".repeat(6));
+    assert_eq!(
+        out.diagnostics
+            .matches(
+                "Warning: fopen(php://fd/99): Failed to open stream: \
+                 Error duping file descriptor 99; possibly it doesn't exist: \
+                 [9]: Bad file descriptor"
+            )
+            .count(),
+        2,
+        "the duping refusal is missing on one of the two dispatches, got diagnostics={}",
+        out.diagnostics
+    );
+    assert_eq!(
+        out.diagnostics
+            .matches(
+                "Warning: fopen(php://fd/-1): Failed to open stream: \
+                 The file descriptors must be non-negative numbers smaller than "
+            )
+            .count(),
+        2,
+        "the range refusal is missing on one of the two dispatches, got diagnostics={}",
+        out.diagnostics
+    );
+    assert_eq!(
+        out.diagnostics
+            .matches(
+                "Warning: fopen(php://fd/abc): Failed to open stream: \
+                 php://fd/ stream must be specified in the form php://fd/<orig fd>"
+            )
+            .count(),
+        2,
+        "a descriptor that is not a number lost php's form sentence, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        !out.diagnostics.contains("No such file or directory"),
+        "a php://fd/ URL reached the file opener, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        !out.diagnostics.contains("Invalid php:// URL specified"),
+        "php://fd/abc was reported as an unknown php:// target, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies a `php://fd/N` naming a descriptor that DOES exist still opens, and says nothing.
+///
+/// The refusal wording above is only correct if it stays off the ordinary path: php duplicates
+/// the descriptor and hands the copy out, so writing to `php://fd/1` reaches standard output and
+/// no diagnostic is printed. Measured on `php -n` 8.5.6.
+#[test]
+fn test_php_fd_opens_an_existing_descriptor_quietly() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://fd/1", "w");
+var_dump($h !== false);
+fwrite($h, "literal\n");
+$u = "php://fd/1";
+$g = fopen($u, "w");
+var_dump($g !== false);
+fwrite($g, "runtime\n");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nliteral\nbool(true)\nruntime\n");
+    assert!(
+        !out.diagnostics.contains("Warning"),
+        "a descriptor that exists warned about itself, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies `fopen("glob://…")` is refused for the reason php gives, with no filesystem consulted.
+///
+/// php-src registers `glob` with NO `stream_opener`, so the generic caller reports the absence
+/// itself. elephc sent the URL to the file opener, which answered `No such file or directory`
+/// about a path nothing had ever looked for — a message that would send a reader hunting for a
+/// missing file when the wrapper simply has no such operation.
+///
+/// RED before the fix: `wrapper does not support stream open` vs `No such file or directory`,
+/// on both the literal and the run-time dispatch.
+#[test]
+fn test_fopen_on_glob_is_refused_by_the_wrapper_not_the_filesystem() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(fopen("glob://*.php", "r"));
+$u = "glob:///tmp/*";
+var_dump(fopen($u, "r"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\n");
+    for url in ["glob://*.php", "glob:///tmp/*"] {
+        assert!(
+            out.diagnostics.contains(&format!(
+                "Warning: fopen({url}): Failed to open stream: wrapper does not support stream open"
+            )),
+            "missing php's reason for {url}, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+    assert!(
+        !out.diagnostics.contains("No such file or directory"),
+        "a glob:// URL reached the file opener, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies a filter name that resolves to nothing is REPORTED, naming the filter.
+///
+/// Returning `false` silently left a misspelled filter indistinguishable from one that
+/// attached — the caller's data simply came through untransformed. php-src names both the
+/// function and the filter, and `@` suppresses it like any warning.
+#[test]
+fn test_stream_filter_attach_warns_and_names_an_unknown_filter() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_append($h, "no.such.filter"));
+var_dump(stream_filter_prepend($h, "also.missing"));
+var_dump(@stream_filter_append($h, "suppressed.one"));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    assert!(
+        out.diagnostics
+            .contains("Warning: stream_filter_append(): Unable to locate filter \"no.such.filter\""),
+        "missing the append warning, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics
+            .contains("Warning: stream_filter_prepend(): Unable to locate filter \"also.missing\""),
+        "missing the prepend warning, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        !out.diagnostics.contains("suppressed.one"),
+        "`@` must suppress the warning, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies the CSV family deprecates an OMITTED `$escape`, and only an omitted one.
+///
+/// PHP 8.5 raises it because 9.0 changes the default from `"\\"` to `""`, which silently
+/// changes how existing files parse. It keys on the argument being absent, so passing the
+/// default explicitly stays quiet — the count is what pins that: three calls omit it and
+/// three pass it, and exactly three notices come out.
+#[test]
+fn test_csv_family_deprecates_an_omitted_escape_argument() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("dep.csv", "a,b\n");
+$r = fopen("dep.csv", "r");
+fgetcsv($r);
+fgetcsv($r, 0, ",", "\"", "\\");
+fclose($r);
+$w = fopen("dep_out.csv", "w");
+fputcsv($w, ["a"]);
+fputcsv($w, ["a"], ",", "\"", "\\");
+fclose($w);
+str_getcsv("a,b");
+str_getcsv("a,b", ",", "\"", "\\");
+echo "done";
+unlink("dep.csv");
+unlink("dep_out.csv");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    let notices = out.diagnostics.matches("the $escape parameter must be provided").count();
+    assert_eq!(notices, 3, "expected three notices, got diagnostics={}", out.diagnostics);
+    for name in ["fgetcsv", "fputcsv", "str_getcsv"] {
+        assert!(
+            out.diagnostics
+                .contains(&format!("Deprecated: {name}(): the $escape parameter")),
+            "missing the {name} notice, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+}
+
+/// Verifies the `$escape` deprecation is VERSION-GATED, as the rest of the notice surface is.
+///
+/// PHP 8.4 introduced it; 8.2 and 8.3 print nothing. elephc emitted it at every
+/// `--php-version`, which makes a program built for 8.3 noisier than the interpreter it is
+/// asked to imitate. The DIAGNOSTIC stream is what has to be inspected — the notice never
+/// reaches the program's own output, so a stdout-only check reads the same for a gate that
+/// works and a gate that is missing.
+#[test]
+fn test_csv_escape_deprecation_is_gated_by_php_version() {
+    let source = r#"<?php
+$h = fopen("php://memory", "r+");
+fputcsv($h, ["a"]);
+str_getcsv("a,b");
+echo "done";
+"#;
+    let modern =
+        compile_and_run_capture_with_php_version(source, elephc::php_version::PhpVersion::Php84);
+    assert!(modern.success, "8.4 run failed: {}", modern.stderr);
+    assert_eq!(modern.stdout, "done");
+    assert_eq!(
+        modern
+            .diagnostics
+            .matches("the $escape parameter must be provided")
+            .count(),
+        2,
+        "8.4 must still raise both notices, got diagnostics={}",
+        modern.diagnostics
+    );
+
+    for version in [
+        elephc::php_version::PhpVersion::Php82,
+        elephc::php_version::PhpVersion::Php83,
+    ] {
+        let old = compile_and_run_capture_with_php_version(source, version);
+        assert!(old.success, "{version:?} run failed: {}", old.stderr);
+        assert_eq!(old.stdout, "done");
+        assert!(
+            !old.diagnostics.contains("$escape parameter"),
+            "{version:?} must print nothing, got diagnostics={}",
+            old.diagnostics
+        );
+    }
+}
+
+/// Verifies an OMITTED `$escape` writes with `"\\"`, not with RFC 4180 doubling.
+///
+/// `fgetcsv()` and `str_getcsv()` already defaulted to the backslash; `fputcsv()` defaulted to
+/// the zero byte the helper reads as doubling mode, so the very row `fgetcsv()` would read back
+/// came out differently depending on whether the argument was spelled. Measured on `php -n`
+/// 8.5.6: with an escape in force the quote is NOT doubled, because the escape already
+/// neutralizes it. The bytes are compared in hex because the difference is one `"` character.
+#[test]
+fn test_fputcsv_default_escape_is_the_backslash_not_doubling() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ['a\\"b']);
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+fclose($h);
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ['a\\"b'], ",", "\"", "\\");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+fclose($h);
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ['a\\"b'], ",", "\"", "");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "22615c2262220a|7\n22615c2262220a|7\n22615c222262220a|8\n",
+        "an omitted $escape must write exactly what the explicit backslash writes"
+    );
+}
+
+/// Verifies `str_getcsv()`'s omitted `$escape` is the backslash the manual documents.
+///
+/// The lowering pushed a zero byte for every absent control and let the runtime pick, which is
+/// right for the separator and the enclosure and WRONG for the escape: zero is doubling mode
+/// there, php's 9.0 default, not today's `"\\"`.
+#[test]
+fn test_str_getcsv_default_escape_matches_the_explicit_backslash() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "\"a\\\"b\",c";
+echo json_encode(str_getcsv($s)), "|", json_encode(str_getcsv($s, ",", "\"", "\\")), "\n";
+"#,
+    );
+    let (omitted, explicit) = out.trim_end().split_once('|').expect("two records");
+    assert_eq!(
+        omitted, explicit,
+        "an omitted $escape must parse exactly like the explicit backslash"
+    );
+}
+
+/// Verifies an EMPTY `$eol` writes no terminator, while an ABSENT one still writes `"\n"`.
+///
+/// Measured on `php -n` 8.5.6: `fputcsv($h, ["a", "b"], ",", '"', "\\", "")` answers 3 and
+/// leaves `a,b`; omitting the argument answers 4 and leaves `a,b\n`. A zero LENGTH cannot tell
+/// the two apart, so the helper used to substitute the newline for both.
+#[test]
+fn test_fputcsv_empty_eol_writes_no_terminator() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ["a", "b"], ",", "\"", "\\", "");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+fclose($h);
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ["a", "b"], ",", "\"", "\\");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+fclose($h);
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ["a", "b"], ",", "\"", "\\", "\r\n");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+"#,
+    );
+    assert_eq!(out, "612c62|3\n612c620a|4\n612c620d0a|5\n");
+}
+
+/// Verifies every CSV control argument raises php-src's own `ValueError` unless it is one byte.
+///
+/// elephc read the first byte and dropped the rest in silence, so `fgetcsv($h, 0, "::")` parsed
+/// on `:`; an EMPTY separator or enclosure quietly selected the default. php rejects all of
+/// them, and only `$escape` accepts the empty string. Each function names its OWN argument
+/// position, which is why one rule cannot cover the three: the reader counts a `$length` first.
+/// Every message below is `php -n` 8.5.6 verbatim.
+#[test]
+fn test_csv_controls_must_be_a_single_character() {
+    let out = compile_and_run(
+        r#"<?php
+function t(callable $c): void {
+    try { $c(); echo "NO-THROW\n"; }
+    catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+}
+$r = fopen("php://memory", "r+");
+fwrite($r, "a,b,c\n");
+rewind($r);
+$w = fopen("php://memory", "r+");
+t(fn() => str_getcsv("a,b", ",,", "\"", "\\"));
+t(fn() => str_getcsv("a,b", "", "\"", "\\"));
+t(fn() => str_getcsv("a,b", ",", "''", "\\"));
+t(fn() => str_getcsv("a,b", ",", "", "\\"));
+t(fn() => str_getcsv("a,b", ",", "\"", "\\\\"));
+t(fn() => fgetcsv($r, 0, ",,", "\"", "\\"));
+t(fn() => fgetcsv($r, 0, ",", "", "\\"));
+t(fn() => fgetcsv($r, 0, ",", "\"", "ab"));
+t(fn() => fputcsv($w, ["a"], ",,", "\"", "\\"));
+t(fn() => fputcsv($w, ["a"], ",", "", "\\"));
+t(fn() => fputcsv($w, ["a"], ",", "\"", "\\\\"));
+echo json_encode(str_getcsv("a,b", ",", "\"", "")), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "str_getcsv(): Argument #2 ($separator) must be a single character\n\
+         str_getcsv(): Argument #2 ($separator) must be a single character\n\
+         str_getcsv(): Argument #3 ($enclosure) must be a single character\n\
+         str_getcsv(): Argument #3 ($enclosure) must be a single character\n\
+         str_getcsv(): Argument #4 ($escape) must be empty or a single character\n\
+         fgetcsv(): Argument #3 ($separator) must be a single character\n\
+         fgetcsv(): Argument #4 ($enclosure) must be a single character\n\
+         fgetcsv(): Argument #5 ($escape) must be empty or a single character\n\
+         fputcsv(): Argument #3 ($separator) must be a single character\n\
+         fputcsv(): Argument #4 ($enclosure) must be a single character\n\
+         fputcsv(): Argument #5 ($escape) must be empty or a single character\n\
+         [\"a\",\"b\"]\n"
+    );
+}
+
+/// Verifies `str_getcsv()` parses one record, with a newline as DATA rather than a break.
+///
+/// It is not `fgetcsv()` over a line, and the difference is not obvious: only a trailing
+/// newline is structural, and php-src strips one in two separate places. `"a\nb"` is one
+/// field containing a newline; `"a,b\n\n"` still yields two fields because both trailing
+/// newlines go. The expectations come from `php -n` 8.5.6.
+#[test]
+fn test_str_getcsv_treats_an_interior_newline_as_data() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = ["a,b,\"c,d\"", "a,\"b\"\"c\",d", "a\nb", "a,b\n", "a,b\n\n", "\na,b", " \n", "a,b\r\n"];
+foreach ($cases as $c) { echo json_encode(str_getcsv($c, ",", "\"", "\\")), "|"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "[\"a\",\"b\",\"c,d\"]|[\"a\",\"b\\\"c\",\"d\"]|[\"a\\nb\"]|[\"a\",\"b\"]|[\"a\",\"b\"]|[\"\\na\",\"b\"]|[\" \"]|[\"a\",\"b\"]|"
+    );
+}
+
+/// Verifies `str_getcsv()` answers the same through `eval()` as it does compiled.
+#[test]
+fn test_str_getcsv_matches_between_compiled_and_eval() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(str_getcsv("a,\"b,c\",d", ",", "\"", "\\")), "|";
+eval('echo json_encode(str_getcsv("a,\"b,c\",d", ",", "\"", "\\\\"));');
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b,c\",\"d\"]|[\"a\",\"b,c\",\"d\"]");
+}
+
+/// Verifies a quoted CSV field may span newlines, as one field of one record.
+///
+/// The reader took one line at a time, so `1,"line one\nline two"` came back as two
+/// records with the field cut in half and a stray quote left on the second — silent
+/// corruption of a legal, common export shape. The record count is what pins it: a test
+/// that only inspected the first row saw nothing wrong.
+#[test]
+fn test_fgetcsv_continues_a_quoted_field_across_newlines() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("ml.csv", "id,note\n1,\"line one\nline two\"\n2,plain\n");
+$f = fopen("ml.csv", "r");
+$rows = 0;
+$note = "";
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+    if ($rows == 2) { $note = $row[1]; }
+}
+fclose($f);
+echo $rows, "|", strlen($note), "|", $note;
+unlink("ml.csv");
+"#,
+    );
+    assert_eq!(out, "3|17|line one\nline two");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fputcsv()` doubles an embedded enclosure instead of backslash-escaping it.
+///
+/// elephc wrote `"with\"quote"` where PHP writes `"with""quote"` — not valid CSV, and PHP
+/// itself reads it back as a different value. php-src also tracks whether the escape
+/// character shielded the enclosure: `back\"quote` keeps its single quote rather than
+/// gaining a doubled one, and the escape character is never doubled on output. The whole
+/// existing fputcsv suite passed either way, because none of it wrote an embedded quote.
+#[test]
+fn test_fputcsv_doubles_an_embedded_enclosure() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("fp_dq.csv", "w");
+fputcsv($h, ["with\"quote"], ",", "\"", "\\");
+fputcsv($h, ["a\"b\"c"], ",", "\"", "\\");
+fputcsv($h, ["back\\slash"], ",", "\"", "\\");
+fputcsv($h, ["back\\\"shielded"], ",", "\"", "\\");
+fclose($h);
+echo file_get_contents("fp_dq.csv");
+unlink("fp_dq.csv");
+"#,
+    );
+    assert_eq!(
+        out,
+        "\"with\"\"quote\"\n\"a\"\"b\"\"c\"\n\"back\\slash\"\n\"back\\\"shielded\"\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `SplFileObject::fgetcsv()` still yields strings after `fgetcsv()` began boxing.
+///
+/// The SPL method body is synthesized, so it has no checked call-site type and takes the
+/// EIR fallback instead. While that fallback still claimed `array<string>`, the boxed
+/// `array|false` cell was read as a raw array pointer and every field came back as an
+/// integer — a silent corruption no `fgetcsv()` test could see.
+#[test]
+fn test_spl_file_object_fgetcsv_reads_fields_not_pointers() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("spl_csv.csv", "a,b\nc,d\n");
+$f = new SplFileObject("spl_csv.csv");
+$seen = "";
+while (!$f->eof()) {
+    $row = $f->fgetcsv(",", "\"", "\\");
+    if ($row === false) { break; }
+    foreach ($row as $field) { $seen = $seen . $field; }
+}
+unset($f);
+echo $seen;
+unlink("spl_csv.csv");
+"#,
+    );
+    assert_eq!(out, "abcd");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a refused write reports failure rather than its errno.
+///
+/// macOS returns a failed `write` as the POSITIVE errno with the carry flag set, which is
+/// indistinguishable from a byte count: writing to a read-only handle answered `int(9)`
+/// — EBADF — where PHP answers `false`. Asserting on the exact value matters, because
+/// `9` is truthy and every `if (fwrite(...))` guard read it as success.
+#[test]
+fn test_fwrite_to_a_read_only_stream_reports_false() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("fw_ro.txt", "seed");
+$h = fopen("fw_ro.txt", "r");
+var_dump(@fwrite($h, "XY"));
+fclose($h);
+echo file_get_contents("fw_ro.txt");
+unlink("fw_ro.txt");
+"#,
+    );
+    assert_eq!(out, "bool(false)\nseed");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_is_local()` classifies a path that only exists at run time.
+///
+/// A literal is folded at compile time, so the loop is what exercises the runtime
+/// classifier — before it existed this failed to compile rather than answering wrongly.
+/// The expectations are `php -n` 8.5.6's: `data:` is remote with or without slashes,
+/// scheme matching folds case, and the scheme needs its full `://`.
+#[test]
+fn test_stream_is_local_classifies_a_runtime_path() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [
+    "plain.txt", "/etc/hosts", "file:///etc/hosts",
+    "http://example.com/x", "https://example.com/x",
+    "ftp://example.com/x", "ftps://example.com/x",
+    "php://memory", "glob://*.txt", "phar://a.phar/b.txt",
+    "compress.zlib://a.gz", "data://text/plain,hello", "data:text/plain,hello",
+    "HTTP://example.com/x", "hTTps://example.com", "FTP://x",
+    "httpx://x", "http:/one-slash", "http", "my.http://x", "",
+];
+foreach ($cases as $c) { echo stream_is_local($c) ? "L" : "r"; }
+"#,
+    );
+    assert_eq!(out, "LLLrrrrLLLLrrrrrLLLLL");
+}
+
+/// Verifies `stream_supports_lock()` answers per wrapper rather than always true.
+///
+/// php-src answers from the stream's ops: a descriptor-backed stream carries the lock
+/// option, the memory and output wrappers do not. elephc answered a blanket `true`, which
+/// told a caller that `flock()` on `php://memory` would serialise something. A descriptor
+/// test cannot decide it, because elephc backs `php://memory` with a real temporary file.
+#[test]
+fn test_stream_supports_lock_is_false_for_the_memory_wrappers() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("lk.txt", "x");
+echo stream_supports_lock(fopen("lk.txt", "r")) ? "L" : "n";
+echo stream_supports_lock(fopen("php://memory", "w+")) ? "L" : "n";
+echo stream_supports_lock(fopen("php://temp", "w+")) ? "L" : "n";
+echo stream_supports_lock(fopen("php://output", "w")) ? "L" : "n";
+echo stream_supports_lock(fopen("php://stdout", "w")) ? "L" : "n";
+echo stream_supports_lock(tmpfile()) ? "L" : "n";
+echo stream_supports_lock(STDIN) ? "L" : "n";
+unlink("lk.txt");
+"#,
+    );
+    assert_eq!(out, "LnnnLLL");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies compiled PHP output for stream get wrappers lists known wrappers.
 #[test]
 fn test_stream_get_wrappers_lists_known_wrappers() {
-    // Full PHP-published wrapper list (Phase D: surface 100%). ftps,
-    // compress.*, phar, glob are accepted at runtime but currently
-    // return false from fopen — the listing is the PHP-spec surface.
+    // php's registration order, measured on php 8.5.6 and frozen in
+    // `tests/php_oracle/manifests/streams`:
+    //   https, ftps, compress.zlib, compress.bzip2, php, file, glob, data,
+    //   http, ftp, phar, zip
+    // php's probe reads `12:https,compress.bzip2,file` and so does elephc's: `zip` is now
+    // really readable through the elephc-phar bridge, so advertising it is no longer a lie.
+    // This assertion read `11:https,compress.bzip2,file` while the wrapper was missing, and
+    // before that the list started at `file` and the probe read `11:file,ftp,https`.
     let out = compile_and_run(
-        r#"<?php $w = stream_get_wrappers(); echo count($w) . ":" . $w[0] . "," . $w[3] . "," . $w[5];"#,
+        r#"<?php $w = stream_get_wrappers(); echo count($w) . ":" . $w[0] . "," . $w[3] . "," . $w[5] . "," . $w[11];"#,
     );
-    assert_eq!(out, "11:file,ftp,https");
+    assert_eq!(out, "12:https,compress.bzip2,file,zip");
 }
 
 /// Verifies compiled PHP output for stream get transports and filters.
 #[test]
 fn test_stream_get_transports_and_filters() {
-    // Full PHP-published transport and filter lists. tlsv1.0/1.1/1.2/1.3
-    // + sslv2/3 route through the same enable_crypto path; the extended
-    // filter list registers strip_tags / base64-* / qp-* / dechunk as
-    // passthrough stubs so stream_filter_append succeeds.
+    // The transport list is php-src's exactly: ten entries, tlsv1.0/1.1/1.2/1.3 routing
+    // through the same enable_crypto path. `sslv2`/`sslv3` used to be listed and are not
+    // any more — PHP 8.5.6 does not publish them and the protocols are dead.
+    //
+    // The filter list is now php's too: php publishes nine FAMILIES (`zlib.*`,
+    // `bzip2.*`, `convert.*`, `convert.iconv.*`) rather than the concrete names
+    // behind them. Publishing fourteen concrete names both over-promised
+    // (`string.strip_tags` has not existed since php 8.0) and mis-shaped the
+    // list. Measured `10,9`; this assertion read `10,14`.
     let out = compile_and_run(
         r#"<?php echo count(stream_get_transports()) . "," . count(stream_get_filters());"#,
     );
-    assert_eq!(out, "12,14");
+    assert_eq!(out, "10,9");
+}
+
+/// Verifies the published filter list matches php's families, in php's order.
+#[test]
+fn test_stream_get_filters_publishes_php_families_in_order() {
+    // `php -n -r 'var_export(stream_get_filters());'` on 8.5.6.
+    let out = compile_and_run(r#"<?php echo implode(",", stream_get_filters());"#);
+    assert_eq!(
+        out,
+        "zlib.*,bzip2.*,convert.iconv.*,string.rot13,string.toupper,string.tolower,convert.*,consumed,dechunk"
+    );
 }
 
 /// Verifies compiled PHP output for stream filter rot13 on read.
@@ -717,6 +2445,104 @@ fclose($f);
     assert_eq!(out, "resource|raw bytes");
 }
 
+/// Verifies a FAILED filtered open names the whole filter URL, not the resource inside it.
+///
+/// elephc opened the resource the URL wrapped and let THAT opener warn, so the message named a
+/// path the program never wrote and a reason php never gives —
+/// `Warning: fopen(absent_abc.txt): Failed to open stream: No such file or directory`.
+/// `php -n` 8.5.6 prints, for the same call, `Warning:
+/// fopen(php://filter/read=string.toupper/resource=absent_abc.txt): Failed to open stream:
+/// operation failed`.
+/// php-src's `php_stream_url_wrap_php` returns NULL the moment the inner open fails, so the
+/// generic caller composes the line from the URL it was HANDED and the wrapper's fixed reason —
+/// the inner errno never reaches the user. The write direction is probed too because the two
+/// spellings take different openers underneath and only one of them was ever measured.
+#[test]
+fn test_failed_filter_open_names_the_url_not_the_wrapped_resource() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = fopen("php://filter/read=string.toupper/resource=absent_abc.txt", "r");
+var_dump($a);
+$b = @fopen("php://filter/read=string.toupper/resource=absent_abc.txt", "r");
+var_dump($b);
+$c = fopen("php://filter/write=string.rot13/resource=missing_dir_abc/out.txt", "w");
+var_dump($c);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(php://filter/read=string.toupper/resource=absent_abc.txt): \
+         Failed to open stream: operation failed\n\
+         Warning: fopen(php://filter/write=string.rot13/resource=missing_dir_abc/out.txt): \
+         Failed to open stream: operation failed\n",
+        "php's wording and the WHOLE URL; `@` still silences it like any other warning"
+    );
+}
+
+/// Verifies an unknown `php://filter` name warns TWICE and still hands back the stream.
+///
+/// elephc resolved the chain, quietly dropped the name it did not know and said nothing, so a
+/// typo in a filter name became a silently unfiltered read. `php -n` 8.5.6 prints two lines per
+/// failed creation — `php_stream_filter_create` cannot locate it, then
+/// `php_stream_apply_filter_list` cannot create it — and neither cancels the open:
+///
+/// ```text
+/// Warning: fopen(): Unable to locate filter "no.such.filter"
+/// Warning: fopen(): Unable to create filter (no.such.filter)
+/// resource(5) of type (stream)
+/// ```
+///
+/// Four things beyond the bare pair are pinned, each measured rather than reasoned about:
+/// - the chain CONTINUES, so `one.bad|string.toupper|two.bad` still uppercases and warns for
+///   both unknown names, in chain order;
+/// - a name with no `read=`/`write=` prefix is tried once per DIRECTION the mode names, so the
+///   same URL warns twice over on `r+` and NOT AT ALL on `x`, which names neither;
+/// - `@` silences the pair, since it goes through the same depth counter as every warning;
+/// - a FAILED open never reaches the filters, so it prints the failed-open line ALONE — php
+///   returns NULL before a single filter is created.
+#[test]
+fn test_unknown_php_filter_name_warns_twice_and_keeps_the_stream() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = fopen("php://filter/read=no.such.filter/resource=data://text/plain,hi", "r");
+echo is_resource($a) ? "resource" : "false", "|", stream_get_contents($a), "|";
+$b = fopen("php://filter/read=one.bad|string.toupper|two.bad/resource=data://text/plain,hi", "r");
+echo stream_get_contents($b), "|";
+$c = fopen("php://filter/only.bad/resource=php://temp", "r+");
+echo is_resource($c) ? "resource" : "false", "|";
+$d = fopen("php://filter/only.bad/resource=php://temp", "x");
+echo is_resource($d) ? "resource" : "false", "|";
+$e = @fopen("php://filter/read=quiet.bad/resource=php://temp", "r");
+echo is_resource($e) ? "resource" : "false", "|";
+$f = fopen("php://filter/read=never.reached/resource=absent_abc.txt", "r");
+var_dump($f);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "resource|hi|HI|resource|resource|resource|bool(false)\n"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(): Unable to locate filter \"no.such.filter\"\n\
+         Warning: fopen(): Unable to create filter (no.such.filter)\n\
+         Warning: fopen(): Unable to locate filter \"one.bad\"\n\
+         Warning: fopen(): Unable to create filter (one.bad)\n\
+         Warning: fopen(): Unable to locate filter \"two.bad\"\n\
+         Warning: fopen(): Unable to create filter (two.bad)\n\
+         Warning: fopen(): Unable to locate filter \"only.bad\"\n\
+         Warning: fopen(): Unable to create filter (only.bad)\n\
+         Warning: fopen(): Unable to locate filter \"only.bad\"\n\
+         Warning: fopen(): Unable to create filter (only.bad)\n\
+         Warning: fopen(php://filter/read=never.reached/resource=absent_abc.txt): \
+         Failed to open stream: operation failed\n",
+        "two lines per failed creation, once per applied direction, never on a failed open"
+    );
+}
+
 /// Verifies compiled PHP output for fprintf formats and writes to stream.
 #[test]
 fn test_fprintf_formats_and_writes_to_stream() {
@@ -737,7 +2563,7 @@ fclose($f);
 /// Verifies compiled PHP output for fscanf float via shared sscanf engine.
 #[test]
 fn test_fscanf_float_via_shared_sscanf_engine() {
-    // fscanf shares __rt_sscanf, so the new %f branch must work through it too.
+    // fscanf shares the injected scanf prelude, so %f must work through it too.
     let out = compile_and_run(
         r#"<?php
 $g = fopen("php://temp", "r+");
@@ -792,7 +2618,8 @@ fclose($f);
 /// Verifies compiled PHP output for stream filter prepend and remove.
 #[test]
 fn test_stream_filter_prepend_and_remove() {
-    // stream_filter_prepend attaches a filter; stream_filter_remove drops it.
+    // stream_filter_prepend attaches a filter; stream_filter_remove drops that one
+    // filter and leaves the rest of the chain attached.
     let out = compile_and_run(
         r#"<?php
 $m = fopen("php://memory", "r+");
@@ -808,7 +2635,12 @@ echo fread($m, 32);
 fclose($m);
 "#,
     );
-    assert_eq!(out, "first pass|FIRST PASS");
+    // The prepended `string.tolower` survives removing the appended `string.rot13`,
+    // so the second read is still lowercased. The previous expectation of
+    // "FIRST PASS" encoded the old two-slot table, whose removal cleared every
+    // slot on the descriptor and so detached unrelated filters. Verified against
+    // the PHP 8.5.6 CLI, which prints "first pass|first pass".
+    assert_eq!(out, "first pass|first pass");
 }
 
 /// Verifies compiled PHP output for stream filter zlib deflate compresses.
@@ -848,6 +2680,227 @@ fclose($r);
 "#,
     );
     assert_eq!(out, "elephc compress.zlib round-trip payload");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `compress.zlib://` was READ-ONLY: an open in `w` mode silently wrote plain bytes.
+///
+/// php's wrapper is `gzopen`-backed and writes in BOTH directions. `fopen(..., 'w')` +
+/// `fwrite()` produces a real GZIP member — header, deflate body, CRC/ISIZE trailer — that
+/// `gzdecode()` and `gunzip` both read. elephc opened the underlying file read-only whatever the
+/// mode said, attached the DEcompressor, and let the writes through untouched, so the file was
+/// never compressed at all and the `.gz` name was a lie.
+///
+/// MEASURED on `php -n` 8.5.6, writing `"abc"` through the wrapper:
+///
+/// ```text
+/// bin2hex(substr($raw, 0, 4))     1f8b0800
+/// bin2hex(substr($raw, 9, 1))     13          <- the OS byte, PLATFORM-dependent
+/// bin2hex(substr($raw, 10))       4a4c4a06000000ffff0300c241243503000000
+/// strlen($raw)                    29
+/// gzinflate(substr($raw, 10, -8)) "abc"
+/// fwrite("ab") + fwrite("c")      byte-identical to the single write
+/// fopen("compress.zlib://…","r+") false
+/// fopen("compress.zlib://…","x")  false
+/// ```
+///
+/// The assertion deliberately skips bytes 4..10. Four of them are MTIME and one is zlib's
+/// `OS_CODE`, which is `0x13` on Apple and `0x03` on Linux — pinning the whole header would pass
+/// on the macOS shards and fail on the x86 ones for a reason that has nothing to do with this
+/// change. Everything that carries meaning is pinned: the magic, the deflate body, and the
+/// CRC32/ISIZE trailer.
+///
+/// The body hex is worth reading. `4a4c4a0600` is `gzdeflate("abc")` with BFINAL clear (`0x4a`
+/// where `gzdeflate` has `0x4b`), then `0000ffff` is a `Z_SYNC_FLUSH` marker, then `0300` is the
+/// empty final block from `Z_FINISH`. php's wrapper flushes twice like that, which is why its
+/// output is six bytes longer than `gzencode()` of the same payload — and why the close helper
+/// grew a sync pass that the `zlib.deflate` FILTER must not have. The filter's own output stays
+/// `4b4c4a0600`, measured, and its test above still pins it.
+///
+/// The mode rule is php's own: the wrapper reads the FIRST character only and refuses any `+`,
+/// so `rw` READS and `x`/`c` are refused outright.
+///
+/// The read half had to move for the round trip to close: elephc's attach inflated with raw
+/// windowBits, which cannot read a gzip header, so a file this very test writes was unreadable
+/// through the wrapper that wrote it. The attach now picks its framing from the payload's two
+/// magic bytes, which keeps the `zlib.deflate` pairing above working unchanged.
+#[test]
+fn test_compress_zlib_wrapper_writes_a_real_gzip_member() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("compress.zlib://czw.gz", "w");
+var_dump($h !== false);
+var_dump(fwrite($h, "abc"));
+fclose($h);
+$raw = file_get_contents("czw.gz");
+echo "head=", bin2hex(substr($raw, 0, 4)), "\n";
+echo "body=", bin2hex(substr($raw, 10)), "\n";
+var_dump(strlen($raw));
+var_dump(gzinflate(substr($raw, 10, -8)) === "abc");
+
+$m = fopen("compress.zlib://czm.gz", "w");
+fwrite($m, "ab");
+fwrite($m, "c");
+fclose($m);
+var_dump(file_get_contents("czm.gz") === $raw);
+
+$r = fopen("compress.zlib://czw.gz", "r");
+var_dump(stream_get_contents($r) === "abc");
+fclose($r);
+
+var_dump(@fopen("compress.zlib://czw.gz", "r+"));
+var_dump(@fopen("compress.zlib://czx.gz", "x"));
+unlink("czw.gz");
+unlink("czm.gz");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "int(3)\n",
+            "head=1f8b0800\n",
+            "body=4a4c4a06000000ffff0300c241243503000000\n",
+            "int(29)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+        ),
+        "the wrapper writes php's own gzip bytes, and reads them back through itself"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The `compress.zlib://` wrapper ignored the stream context's `zlib.level`.
+///
+/// php reads it in `ext/zlib/zlib_fopen_wrapper.c` and hands it straight to `deflateInit2_`, so
+/// the option is observable in the output SIZE. MEASURED on `php -n` 8.5.6 over
+/// `str_repeat("The quick brown fox jumps over the lazy dog. ", 200)`:
+///
+/// ```text
+/// zlib.level => 1     147 bytes
+/// zlib.level => 9     113 bytes
+/// no context          113 bytes    (Z_DEFAULT_COMPRESSION, -1, which is level 6's tree here)
+/// ```
+///
+/// The level is only knowable at RUN time: `stream_context_create(['zlib' => ['level' => 9]])`
+/// builds a live hash that the compiler never reads, and the `$context` reaching
+/// `file_put_contents()` is a variable. The opener walks the context and publishes the answer to
+/// `_zlib_wrapper_level`, which the inline deflate initialization loads.
+///
+/// An out-of-range level is a DELIBERATE divergence: php passes it through, `deflateInit2_`
+/// refuses it, and the stream then writes nothing at all (measured: `level => 12` leaves a
+/// 0-byte file and `fwrite()` answers 0). elephc's deflate helpers loop until zlib consumes
+/// their input, so an uninitialized stream would spin forever instead of writing zero bytes.
+/// Clamping to -1..9 keeps the absurd input producing a correct file; every level php accepts
+/// passes through untouched, which is what the two sizes above prove.
+#[test]
+fn test_compress_zlib_wrapper_honours_the_context_zlib_level() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$data = str_repeat("The quick brown fox jumps over the lazy dog. ", 200);
+$fast = stream_context_create(["zlib" => ["level" => 1]]);
+$best = stream_context_create(["zlib" => ["level" => 9]]);
+
+$h = fopen("compress.zlib://lvl1.gz", "w", false, $fast);
+fwrite($h, $data);
+fclose($h);
+$h = fopen("compress.zlib://lvl9.gz", "w", false, $best);
+fwrite($h, $data);
+fclose($h);
+$h = fopen("compress.zlib://lvld.gz", "w");
+fwrite($h, $data);
+fclose($h);
+
+var_dump(filesize("lvl1.gz"));
+var_dump(filesize("lvl9.gz"));
+var_dump(filesize("lvld.gz"));
+
+$r = fopen("compress.zlib://lvl1.gz", "r");
+var_dump(stream_get_contents($r) === $data);
+fclose($r);
+$r = fopen("compress.zlib://lvl9.gz", "r");
+var_dump(stream_get_contents($r) === $data);
+fclose($r);
+
+unlink("lvl1.gz"); unlink("lvl9.gz"); unlink("lvld.gz");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(147)\n",
+            "int(113)\n",
+            "int(113)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        ),
+        "level 1 and level 9 disagree by php's own byte counts, and both still read back"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `file_put_contents("compress.zlib://out.gz", …)` created a file NAMED after the URL.
+///
+/// The one-shot writer never recognised the scheme, so the wrapper prefix became part of the
+/// filename and the bytes landed uncompressed. php opens the wrapper, deflates through it and
+/// closes, answering the INPUT byte count — not the compressed one.
+///
+/// MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// file_put_contents("compress.zlib://fpc.gz", $data)   1175   <- strlen($data)
+/// bin2hex(substr($raw, 0, 4))                          1f8b0800
+/// gzinflate(substr($raw, 10, -8)) === $data            true
+/// stream_get_contents(fopen("compress.zlib://…","r"))  === $data
+/// zlib.level => 1 / => 9                               147 / 113 bytes
+/// file_put_contents("compress.zlib://nodir/x.gz", "x") false
+/// ```
+///
+/// The route deliberately reuses the `fopen()` wrapper open rather than growing a second
+/// compressor: the framing, the context's `zlib.level` and the sync-flushed tail all come from
+/// one place, so the two entry points cannot drift apart.
+#[test]
+fn test_file_put_contents_writes_through_the_compress_zlib_wrapper() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$data = str_repeat("elephc file_put_contents through compress.zlib\n", 25);
+var_dump(file_put_contents("compress.zlib://fpc.gz", $data));
+$raw = file_get_contents("fpc.gz");
+echo "head=", bin2hex(substr($raw, 0, 4)), "\n";
+var_dump(strlen($raw) < strlen($data));
+var_dump(gzinflate(substr($raw, 10, -8)) === $data);
+$r = fopen("compress.zlib://fpc.gz", "r");
+var_dump(stream_get_contents($r) === $data);
+fclose($r);
+
+$ctx1 = stream_context_create(["zlib" => ["level" => 1]]);
+$ctx9 = stream_context_create(["zlib" => ["level" => 9]]);
+$big = str_repeat("The quick brown fox jumps over the lazy dog. ", 200);
+file_put_contents("compress.zlib://f1.gz", $big, 0, $ctx1);
+file_put_contents("compress.zlib://f9.gz", $big, 0, $ctx9);
+var_dump(filesize("f1.gz"));
+var_dump(filesize("f9.gz"));
+var_dump(@file_put_contents("compress.zlib://nodir/x.gz", "x"));
+unlink("fpc.gz"); unlink("f1.gz"); unlink("f9.gz");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(1175)\n",
+            "head=1f8b0800\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "int(147)\n",
+            "int(113)\n",
+            "bool(false)\n",
+        ),
+        "the one-shot writer now goes through the wrapper, level and all"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1191,6 +3244,1338 @@ fclose($m);
     assert_eq!(out, "abc=C3=A9=0A=3D");
 }
 
+/// Verifies the quoted-printable encoder leaves SPACE and TAB literal, as php's default does.
+///
+/// php escapes whitespace only under the filter's `binary` option; the default answers
+/// `a b=3Dc d` for `a b=c d`. elephc passed through 33..126 only, which escaped both — php's
+/// BINARY rule applied to every call, so `a b` came back as `a=20b` and a plain sentence round
+/// -tripped into something php never writes. Measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_filter_qp_encode_keeps_space_and_tab_literal() {
+    let out = compile_and_run(
+        r#"<?php
+function qp(string $data): string {
+    $m = fopen("php://memory", "r+");
+    stream_filter_append($m, "convert.quoted-printable-encode", STREAM_FILTER_WRITE);
+    fwrite($m, $data);
+    rewind($m);
+    $out = (string) stream_get_contents($m);
+    fclose($m);
+    return $out;
+}
+echo qp("a b=c d"), "|";
+echo qp("Hello World!"), "|";
+echo qp("a\tb"), "|";
+echo qp(" "), "|";
+// A newline is still escaped: only SPACE and TAB are exempt, and `=` still becomes `=3D`.
+echo qp("x\ny"), "|";
+echo qp("caf\xe9 au lait");
+"#,
+    );
+    assert_eq!(
+        out,
+        "a b=3Dc d|Hello World!|a\tb| |x=0Ay|caf=E9 au lait"
+    );
+}
+
+/// Verifies `Foo::class` names a stream wrapper/filter class as well as a string literal does.
+///
+/// `Foo::class` does not lower to `Op::ConstStr` — it is its own opcode indexing the class-name
+/// table — so the reachability rule that decides which classes keep their runtime metadata could
+/// not see it. The registration still SUCCEEDED and the scheme still appeared in
+/// `stream_get_wrappers()`, but the class carried no vtable, so every `fopen()` through it failed
+/// with no diagnostic at all. `Foo::class` is the refactor-safe spelling the manual and php-src's
+/// own tests use, so it has to bind the class exactly as `'Foo'` does.
+#[test]
+fn test_class_constant_names_a_registered_stream_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ClassConstWrapper {
+    public $context;
+    private int $pos = 0;
+    private string $data = "wrapped!";
+    function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    function stream_read($n): string {
+        $out = substr($this->data, $this->pos, $n);
+        $this->pos += strlen($out);
+        return $out;
+    }
+    function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+    function stream_stat(): array { return []; }
+}
+class ClassConstFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = strtoupper($b->data);
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+echo var_export(stream_wrapper_register("ccw", ClassConstWrapper::class), true), "|";
+$h = fopen("ccw://x", "r");
+echo ($h === false ? "OPEN-FAILED" : stream_get_contents($h)), "|";
+
+echo var_export(stream_filter_register("cc.up", ClassConstFilter::class), true), "|";
+$m = fopen("php://memory", "r+");
+$f = stream_filter_append($m, "cc.up", STREAM_FILTER_WRITE);
+echo ($f === false ? "ATTACH-FAILED" : ""), "";
+fwrite($m, "hello");
+rewind($m);
+echo stream_get_contents($m);
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "true|wrapped!|true|HELLO");
+}
+
+/// Verifies `fflush()` is a flush point for a `zlib.deflate` filter, as it is in php.
+///
+/// A deflate stream holds its bytes until zlib's own window fills, so nothing reached the stream
+/// until it CLOSED: a long-lived stream — a socket, say — compressed everything and sent none of
+/// it. php pushes a `Z_SYNC_FLUSH` pass on `fflush()`, which closes the current block and emits the
+/// `00 00 ff ff` marker. Measured on `php -n` 8.5.6 over 400 bytes to a file, `filesize()` reads 0
+/// after the write, 12 after `fflush()` and 14 after `fclose()` — the close adds only the finishing
+/// block; elephc read 0, 0, then 8.
+///
+/// The pass belongs to `fflush()` and NOT to the write path: with `Z_NO_FLUSH` per write, a
+/// write-then-close stream still answers exactly `gzdeflate()`, which is what php answers for the
+/// same program. Both are asserted, and so is the round trip through a mid-stream flush.
+#[test]
+fn test_fflush_pushes_the_deflate_sync_flush() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$data = str_repeat("a", 400);
+$p = "zflushtest.bin";
+$h = fopen($p, "wb");
+stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($h, $data);
+clearstatcache();
+printf("after write: %d\n", filesize($p));
+fflush($h);
+clearstatcache();
+printf("after fflush: %d\n", filesize($p));
+fclose($h);
+clearstatcache();
+printf("after close: %d\n", filesize($p));
+unlink($p);
+// Without a flush the stream is byte-for-byte gzdeflate(), which the write path must not change.
+$p2 = "zflushtest2.bin";
+$h = fopen($p2, "wb");
+stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($h, $data);
+fclose($h);
+$raw = file_get_contents($p2);
+unlink($p2);
+printf("no flush: %d equals gzdeflate=%s\n", strlen($raw), var_export($raw === gzdeflate($data), true));
+// A payload written across a flush still round-trips whole.
+$p3 = "zflushtest3.bin";
+$h = fopen($p3, "wb");
+stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($h, $data);
+fflush($h);
+fwrite($h, $data);
+fclose($h);
+$raw = file_get_contents($p3);
+unlink($p3);
+printf("round trip: %s\n", var_export(gzinflate($raw) === $data . $data, true));
+// fflush on a stream carrying no filter is untouched.
+$p4 = "zflushtest4.bin";
+$h = fopen($p4, "wb");
+fwrite($h, "plain");
+fflush($h);
+clearstatcache();
+printf("unfiltered: %d\n", filesize($p4));
+fclose($h);
+unlink($p4);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "after write: 0\n",
+            "after fflush: 12\n",
+            "after close: 14\n",
+            "no flush: 8 equals gzdeflate=true\n",
+            "round trip: true\n",
+            "unfiltered: 5\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the closing dispatch delivers an EMPTY BRIGADE, so a mutating filter runs once.
+///
+/// php gives a filter one final `filter(..., $closing = true)` with no buckets at all. elephc built
+/// a bucket whatever the input length, so `while ($b = stream_bucket_make_writeable($in))` ran a
+/// second time over an empty `$b->data` and the filter applied TWICE: `$b->data = "<" . $b->data .
+/// ">"` over "abc" answered "<<abc>>" where php answers "<abc>".
+///
+/// A filter that only FORWARDS its buckets cannot see the difference — an extra empty bucket
+/// concatenates to nothing — which is why every existing test passed. The withholding filter is
+/// here because it is the case the empty brigade must not break: it answers `PSFS_FEED_ME` until
+/// `$closing`, and only then emits, so removing the bucket must not remove the dispatch.
+#[test]
+fn test_closing_dispatch_delivers_an_empty_brigade() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class Mark extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = "<" . $b->data . ">";
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("mark2", "Mark");
+$h = fopen("php://memory", "w+");
+fwrite($h, "abc");
+rewind($h);
+stream_filter_append($h, "mark2", STREAM_FILTER_READ);
+var_dump(stream_get_contents($h));
+fclose($h);
+$h = fopen("php://memory", "w+");
+stream_filter_append($h, "mark2", STREAM_FILTER_WRITE);
+fwrite($h, "xyz");
+rewind($h);
+var_dump(stream_get_contents($h));
+fclose($h);
+class Hold extends php_user_filter {
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $this->buf .= $b->data;
+            $consumed += $b->datalen;
+        }
+        if ($closing) {
+            $b = stream_bucket_new($this->stream, strrev($this->buf));
+            stream_bucket_append($out, $b);
+            return PSFS_PASS_ON;
+        }
+        return PSFS_FEED_ME;
+    }
+}
+stream_filter_register("hold", "Hold");
+$h = fopen("php://memory", "w+");
+fwrite($h, "abcdef");
+rewind($h);
+stream_filter_append($h, "hold", STREAM_FILTER_READ);
+var_dump(stream_get_contents($h));
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"<abc>\"\nstring(5) \"<xyz>\"\nstring(6) \"fedcba\"\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `php_user_filter::$stream` is the stream being filtered, for the duration of `filter()`.
+///
+/// The property stayed null, so a filter could not reach the stream it was filtering — the manual's
+/// own example does. php publishes it for the DURATION of each `filter()` call and nowhere else:
+/// measured on `php -n` 8.5.6 it is UNSET inside `onCreate()`, a live resource inside `filter()`,
+/// and NULL again inside `onClose()`. All three are asserted, because publishing it permanently
+/// would be as wrong as never publishing it.
+#[test]
+fn test_user_filter_stream_property_is_live_during_filter() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class Probe extends php_user_filter {
+    public function onCreate(): bool {
+        printf("onCreate %s\n", isset($this->stream) ? gettype($this->stream) : "unset");
+        return true;
+    }
+    public function filter($in, $out, &$consumed, $closing): int {
+        printf("filter %s %s %s\n",
+            gettype($this->stream),
+            var_export(is_resource($this->stream), true),
+            is_resource($this->stream) ? stream_get_meta_data($this->stream)["stream_type"] : "-");
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+    public function onClose(): void {
+        printf("onClose %s\n", gettype($this->stream));
+    }
+}
+stream_filter_register("probe", "Probe");
+$h = fopen("php://memory", "w+");
+fwrite($h, "hello");
+rewind($h);
+stream_filter_append($h, "probe", STREAM_FILTER_READ);
+var_dump(stream_get_contents($h));
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "onCreate unset\n",
+            "filter resource true MEMORY\n",
+            "filter resource true MEMORY\n",
+            "string(5) \"hello\"\n",
+            "onClose NULL\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies php's two explanations for a stream `stream_select()` cannot represent.
+///
+/// The `ValueError` that follows was already right, but it arrived with nothing to say WHICH stream
+/// caused it. php names the class when it defines no `stream_cast()` — `W::stream_cast is not
+/// implemented!` — and then always reports `Cannot represent a stream of type user-space as a
+/// select()able descriptor`. A class that DOES define the method and simply answers `false` gets
+/// only the second, which is what separates the two here. Measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_select_explains_an_uncastable_stream() {
+    let missing = compile_and_run_expect_failure(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+}
+stream_wrapper_register("nocast2", "W");
+$h = fopen("nocast2://x", "rb");
+$r = [$h]; $w = null; $e = null;
+stream_select($r, $w, $e, 0, 0);
+"#,
+    );
+    assert!(
+        missing.contains("Warning: stream_select(): W::stream_cast is not implemented!"),
+        "missing-method warning absent: {missing}"
+    );
+    assert!(
+        missing.contains(
+            "Warning: stream_select(): Cannot represent a stream of type user-space \
+             as a select()able descriptor"
+        ),
+        "unrepresentable warning absent: {missing}"
+    );
+
+    // A class that defines the method and refuses gets ONLY the second warning.
+    let refusing = compile_and_run_expect_failure(
+        r#"<?php
+class C {
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_cast($as) { return false; }
+}
+stream_wrapper_register("hascast3", "C");
+$h = fopen("hascast3://x", "rb");
+$r = [$h]; $w = null; $e = null;
+stream_select($r, $w, $e, 0, 0);
+"#,
+    );
+    assert!(
+        !refusing.contains("stream_cast is not implemented"),
+        "named a method the class defines: {refusing}"
+    );
+    assert!(
+        refusing.contains(
+            "Warning: stream_select(): Cannot represent a stream of type user-space \
+             as a select()able descriptor"
+        ),
+        "unrepresentable warning absent: {refusing}"
+    );
+}
+
+/// Verifies a wrapper is READ in chunks, and that php's last `stream_read()` is not skipped.
+///
+/// `fgets()` asked the wrapper for ONE BYTE per iteration, so reading 100 bytes cost a HUNDRED
+/// calls into user code where php makes six. php reads a chunk and keeps what the line does not
+/// need, and that buffer survives the call — which is why the byte count below is reached with six
+/// reads however many `fgets()` calls consume it.
+///
+/// `stream_get_contents()` had the opposite problem: it asked `stream_eof()` first and skipped the
+/// final `stream_read()` when the answer was true. php does not gate on eof at all — it keeps
+/// calling until one call answers an EMPTY string, which is the seventh here.
+#[test]
+fn test_user_wrapper_reads_are_chunked_like_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class R {
+    public $context;
+    public static array $reads = [];
+    public int $pos = 0;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) {
+        self::$reads[] = $n;
+        $r = substr(str_repeat("a", 100), $this->pos, $n);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_write($d) { return strlen($d); }
+    public function stream_eof() { return $this->pos >= 100; }
+    public function stream_tell() { return $this->pos; }
+    public function stream_seek($o, $w) { return false; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("chunkread", "R");
+// stream_get_contents: the seventh call is the empty one that stops php's loop.
+$h = fopen("chunkread://x", "rb");
+stream_set_chunk_size($h, 17);
+$s = stream_get_contents($h);
+fclose($h);
+printf("contents len=%d reads=%s\n", strlen($s), implode(",", R::$reads));
+// fgets: six reads for the whole file, not one per byte.
+R::$reads = [];
+$h = fopen("chunkread://x", "rb");
+stream_set_chunk_size($h, 17);
+$n = 0;
+while (($l = fgets($h)) !== false) {
+    $n += strlen($l);
+}
+fclose($h);
+printf("fgets len=%d reads=%d\n", $n, count(R::$reads));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "contents len=100 reads=17,17,17,17,17,17,17\n",
+            "fgets len=100 reads=6\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a user wrapper's `stream_write()` receives CHUNKS, not the whole payload.
+///
+/// php hands a userspace wrapper at most `chunk_size` bytes per call, so 70 bytes to a stream whose
+/// chunk size is 42 calls `stream_write()` twice, with 42 then 28. elephc made one call with all
+/// 70, which a wrapper that counts or frames its writes observes directly.
+///
+/// Two details had to be measured rather than assumed. The default here is 8192 — the value
+/// `stream_set_chunk_size()` itself reports as the previous one — not the 4096
+/// `__rt_stream_chunk_size` answers, which is a read-loop fallback. And a SHORT write is not the
+/// end: php re-offers from the new position, so a wrapper accepting four bytes of every ten still
+/// receives the whole payload, as `10,10,10,10,10,10,6,2` for 30 bytes at chunk 10.
+#[test]
+fn test_user_wrapper_write_is_split_at_the_chunk_size() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class W {
+    public $context;
+    public static array $writes = [];
+    public static int $accept = -1;   // -1 = take everything
+    public function stream_open($path, $mode, $options, &$opened) { return true; }
+    public function stream_write($data) {
+        self::$writes[] = strlen($data);
+        return self::$accept < 0 ? strlen($data) : min(self::$accept, strlen($data));
+    }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_tell() { return 0; }
+    public function stream_seek($o, $w) { return false; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("chunked", "W");
+function run(int $chunk, int $bytes, int $accept): void {
+    W::$writes = [];
+    W::$accept = $accept;
+    $h = fopen("chunked://x", "wb");
+    stream_set_chunk_size($h, $chunk);
+    $n = fwrite($h, str_repeat("a", $bytes));
+    fclose($h);
+    printf("chunk=%d bytes=%d accept=%d -> returned=%s writes=%s\n",
+        $chunk, $bytes, $accept, var_export($n, true), implode(",", W::$writes));
+}
+run(42, 70, -1);
+run(10, 25, -1);
+run(100, 25, -1);
+run(1, 3, -1);
+run(10, 30, 4);
+// The default chunk size is 8192, which is what stream_set_chunk_size() reports as the previous.
+W::$writes = [];
+W::$accept = -1;
+$h = fopen("chunked://x", "wb");
+var_dump(stream_set_chunk_size($h, 42));
+fclose($h);
+$h = fopen("chunked://x", "wb");
+$n = fwrite($h, str_repeat("b", 9000));
+fclose($h);
+printf("default -> returned=%s writes=%s\n", var_export($n, true), implode(",", W::$writes));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "chunk=42 bytes=70 accept=-1 -> returned=70 writes=42,28\n",
+            "chunk=10 bytes=25 accept=-1 -> returned=25 writes=10,10,5\n",
+            "chunk=100 bytes=25 accept=-1 -> returned=25 writes=25\n",
+            "chunk=1 bytes=3 accept=-1 -> returned=3 writes=1,1,1\n",
+            "chunk=10 bytes=30 accept=4 -> returned=30 writes=10,10,10,10,10,10,6,2\n",
+            "int(8192)\n",
+            "default -> returned=9000 writes=8192,808\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an INCOMPLETE line is refused and kept on the stream, not handed back.
+///
+/// php's `stream_get_line()` answers `false` when it finds neither the delimiter nor the length cap
+/// and the stream is not at EOF, and the bytes it read stay ON the stream. elephc consumed them and
+/// answered them as a line php never breaks — so a reader assembling records off a non-blocking
+/// socket saw a record split wherever the packets happened to land.
+///
+/// EOF is NOT that case, which is why the file half is here: a blocking file whose last line has no
+/// delimiter still answers that line. Nor is the length cap: `stream_get_line($h, 4, "\n")` answers
+/// four bytes with no delimiter in sight.
+///
+/// The bytes go back into the stream's read buffer, which php shares with every read function — a
+/// refused `stream_get_line()` followed by `fread()` sees them, and so does one followed by
+/// `fgets()`. `fgets()` takes them one at a time rather than in bulk because they CAN contain a
+/// newline: `stream_get_line()` refuses on ITS delimiter, not on `\n`.
+#[test]
+fn test_stream_get_line_keeps_an_incomplete_line_on_the_stream() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($pair[0], false);
+fwrite($pair[1], "abc");
+var_dump(stream_get_line($pair[0], 100, "
+"));
+fwrite($pair[1], "def
+ghi");
+var_dump(stream_get_line($pair[0], 100, "
+"));
+var_dump(stream_get_line($pair[0], 100, "
+"));
+fclose($pair[0]);
+fclose($pair[1]);
+// The retained bytes belong to the stream, so every reader sees them.
+$p2 = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($p2[0], false);
+fwrite($p2[1], "abc");
+var_dump(stream_get_line($p2[0], 100, "
+"), fread($p2[0], 10));
+fclose($p2[0]);
+fclose($p2[1]);
+$p3 = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($p3[0], false);
+fwrite($p3[1], "abc");
+var_dump(stream_get_line($p3[0], 100, "
+"), fgets($p3[0]));
+fclose($p3[0]);
+fclose($p3[1]);
+// EOF still hands back a last line with no delimiter, and the cap still wins.
+$f = "sglkeep.txt";
+file_put_contents($f, "one
+two
+three");
+$h = fopen($f, "rb");
+var_dump(stream_get_line($h, 100, "
+"), stream_get_line($h, 100, "
+"));
+var_dump(stream_get_line($h, 100, "
+"), stream_get_line($h, 100, "
+"));
+fclose($h);
+unlink($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(false)\nstring(6) \"abcdef\"\nbool(false)\n",
+            "bool(false)\nstring(3) \"abc\"\n",
+            "bool(false)\nstring(3) \"abc\"\n",
+            "string(3) \"one\"\nstring(3) \"two\"\n",
+            "string(5) \"three\"\nbool(false)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies removing a `zlib.deflate` STOPS it, and flushes its tail where php flushes it.
+///
+/// The filter runs as an inline shape keyed on the descriptor, so unlinking its node retired the
+/// resource and left the shape running: the stream went on compressing after
+/// `stream_filter_remove()` had reported success, and a following `fwrite("plain text here")`
+/// landed as deflate output.
+///
+/// The ORDER is the second half of the rule. php flushes the encoder's tail when the filter is
+/// REMOVED, so the two-byte deflate sync marker precedes the plain text; elephc emitted it at
+/// `fclose()`, which put the same bytes out back to front. Measured on `php -n` 8.5.6.
+#[test]
+fn test_removing_an_inline_shape_filter_stops_it_and_flushes_its_tail() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$p = "zdefremove.bin";
+$h = fopen($p, "wb");
+$z = stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+stream_filter_remove($z);
+fwrite($h, "plain text here");
+fclose($h);
+echo bin2hex(file_get_contents($p)), "\n";
+unlink($p);
+// The tail reaches a memory stream too, and only once the filter is removed.
+$h = fopen("php://memory", "w+");
+$z = stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+$n = fwrite($h, str_repeat("a", 400));
+var_dump($n, ftell($h));
+stream_filter_remove($z);
+rewind($h);
+var_dump(strlen((string) stream_get_contents($h)));
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // the deflate sync marker, THEN "plain text here"
+            "0300", "706c61696e2074657874206865726", "5\n",
+            "int(400)\nint(0)\n",
+            "int(8)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the filters compiled as an inline shape still hand back the resource php documents.
+///
+/// `zlib.*`, `bzip2.*` and `convert.iconv.*` filter through code emitted over the DESCRIPTOR rather
+/// than through a chain node, so they filtered but minted nothing: `is_resource()` on the result
+/// answered false and `get_resource_type()` answered "Unknown", where php answers a live
+/// `stream filter`. Nothing observed the filter's lifetime — neither `stream_filter_remove()` nor
+/// the invalidation php performs when the owning stream closes.
+///
+/// The node minted for them is INERT: no built-in id and no `php_user_filter`, which is what makes
+/// the chain applier pass it by while the inline shape keeps doing the filtering. It joins the
+/// chain all the same, because that is what makes `fclose()` close it — the case this test pins
+/// with `closed`.
+#[test]
+fn test_inline_shape_filters_still_mint_their_resource() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function shape($r): string {
+    return var_export(is_resource($r), true) . " " . (is_resource($r) ? get_resource_type($r) : "-");
+}
+$h = fopen("php://memory", "w+");
+$z = stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+echo "deflate  ", shape($z), "\n";
+echo "remove   ", var_export(stream_filter_remove($z), true), " ", shape($z), "\n";
+fclose($h);
+$h = fopen("php://memory", "w+");
+$i = stream_filter_append($h, "zlib.inflate", STREAM_FILTER_READ);
+echo "inflate  ", shape($i), "\n";
+fclose($h);
+echo "closed   ", shape($i), "\n";
+$h = fopen("php://memory", "w+");
+echo "bzip2    ", shape(stream_filter_append($h, "bzip2.compress", STREAM_FILTER_WRITE)), "\n";
+fclose($h);
+$h = fopen("php://memory", "w+");
+echo "iconv    ", shape(stream_filter_append($h, "convert.iconv.utf-8/utf-8", STREAM_FILTER_WRITE)), "\n";
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "deflate  true stream filter\n",
+            "remove   true false -\n",
+            "inflate  true stream filter\n",
+            "closed   false -\n",
+            "bzip2    true stream filter\n",
+            "iconv    true stream filter\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_filter_remove()` refuses a resource that is not a live filter, in php's words.
+///
+/// Passing an ordinary stream reported SUCCESS: the chain lookup rejected the handle, the legacy
+/// per-descriptor path cleared four already-empty table slots and answered `true`. php throws
+/// there, and again for a filter that was already removed. Its wording is not a variation on the
+/// generic one either — `supplied resource is not a valid stream filter resource`, with no
+/// argument name, for every resource it will not accept. Measured on `php -n` 8.5.6.
+///
+/// The legacy path stays reachable for the handles that DO own a per-descriptor filter, which is
+/// what `zlib.*` and `bzip2.*` still use; the guard only refuses a descriptor whose four slots are
+/// all empty.
+///
+/// A value that is not a resource AT ALL is not exercised here: php raises its `Argument #1
+/// ($stream_filter) must be of type resource` at run time, and elephc's checker refuses the same
+/// call at compile time, so no program reaches that run-time branch.
+#[test]
+fn test_stream_filter_remove_refuses_a_resource_that_is_not_a_filter() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("php://memory", "w+");
+try {
+    stream_filter_remove($h);
+} catch (Throwable $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+$f = stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+var_dump(get_resource_type($f), stream_filter_remove($f), is_resource($f));
+// Removing it a second time is the same refusal: the resource is no longer a live filter.
+try {
+    stream_filter_remove($f);
+} catch (Throwable $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource\n",
+            "string(13) \"stream filter\"\nbool(true)\nbool(false)\n",
+            "TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a `$params` the filter cannot read is REFUSED, and only by the filters that read it.
+///
+/// php's four `convert.*` filters parse `$params` as an array and reject anything else with two
+/// warnings and a `false`; `string.*`, `dechunk`, `zlib.*` and `bzip2.*` accept a null, an int or a
+/// string without complaint, because they never look at it. elephc attached a working filter in
+/// every case and said nothing.
+///
+/// OMITTING the argument is the case that pins the rule: php tests the zval POINTER, which is NULL
+/// only when nothing was supplied, so a three-argument call SUCCEEDS on the very filters that
+/// refuse an explicit `null`.
+#[test]
+fn test_builtin_filter_refuses_a_params_it_cannot_read() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$names = ["string.toupper", "dechunk", "convert.base64-encode", "convert.base64-decode",
+          "convert.quoted-printable-encode", "convert.quoted-printable-decode"];
+foreach ($names as $n) {
+    $h = fopen("php://memory", "w+");
+    printf("%s null=%s int=%s none=%s arr=%s\n", $n,
+        var_export(is_resource(@stream_filter_append($h, $n, STREAM_FILTER_WRITE, null)), true),
+        var_export(is_resource(@stream_filter_append($h, $n, STREAM_FILTER_WRITE, 7)), true),
+        var_export(is_resource(stream_filter_append($h, $n, STREAM_FILTER_WRITE)), true),
+        var_export(is_resource(stream_filter_append($h, $n, STREAM_FILTER_WRITE, [])), true));
+    fclose($h);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string.toupper null=true int=true none=true arr=true\n",
+            "dechunk null=true int=true none=true arr=true\n",
+            "convert.base64-encode null=false int=false none=true arr=true\n",
+            "convert.base64-decode null=false int=false none=true arr=true\n",
+            "convert.quoted-printable-encode null=false int=false none=true arr=true\n",
+            "convert.quoted-printable-decode null=false int=false none=true arr=true\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies php's built-in encoders read `$params`: `line-length`, `line-break-chars`, `binary`.
+///
+/// elephc retained `$params` only for a USER filter, where `filter()` reads it off the instance, and
+/// passed 0 for a built-in — so `["line-length" => 8]` produced one unbroken line where php
+/// produces wrapped ones, and `["binary" => true]` left SPACE and TAB literal where php escapes
+/// them. The array is now parsed once at attach, into plain words on the filter node.
+///
+/// The default is NO wrapping for both encoders, which is why the unparameterized cases are here:
+/// they are the common path and must stay byte-identical. The default break is CRLF, not a lone
+/// newline — measured on `php -n` 8.5.6, `["line-length" => 8]` over "hello world" answers 18
+/// bytes, not 17.
+#[test]
+fn test_builtin_filters_read_their_params() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function through(string $filter, array $params, string $data): string {
+    $h = fopen("php://memory", "w+");
+    stream_filter_append($h, $filter, STREAM_FILTER_WRITE, $params);
+    fwrite($h, $data);
+    rewind($h);
+    $out = (string) stream_get_contents($h);
+    fclose($h);
+    return $out;
+}
+echo bin2hex(through("convert.base64-encode", ["line-length" => 8], "hello world")), "\n";
+echo through("convert.base64-encode", ["line-length" => 8, "line-break-chars" => "|"], "hello world"), "\n";
+echo through("convert.base64-encode", [], "hello world"), "\n";
+echo through("convert.quoted-printable-encode", ["binary" => true], "a b\tc"), "\n";
+echo through("convert.quoted-printable-encode", [], "a b\tc"), "\n";
+// The soft break costs a column of its own, and never falls inside an `=XX` triplet.
+echo bin2hex(through("convert.quoted-printable-encode", ["line-length" => 12], "aaaaaaaaaaaaaaaaaaaa")), "\n";
+echo bin2hex(through("convert.quoted-printable-encode", ["line-length" => 10], "aaaaaa\xE9bbbbbb")), "\n";
+echo bin2hex(through("convert.quoted-printable-encode", ["line-length" => 8], "aaaaaaaa\xE9bbbbbb")), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // "aGVsbG8g" CRLF "d29ybGQ=" — the default break is CRLF, not a lone newline
+            "61475673624738670d0a643239796247513d\n",
+            "aGVsbG8g|d29ybGQ=\n",
+            "aGVsbG8gd29ybGQ=\n",
+            "a=20b=09c\n",
+            "a b\tc\n",
+            // 11 a's, then the soft `=` taking the twelfth column, CRLF, then the remaining 9
+            "61616161616161616161613d0d0a616161616161616161\n",
+            // the `=E9` FITS at column 6 with line-length 10, so no break precedes it
+            "6161616161613d45393d0d0a626262626262\n",
+            // at line-length 8 the eighth `a` already needs a break, and the triplet stays whole
+            "616161616161613d0d0a613d45396262623d0d0a626262\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a SOCKET carries no `wrapper_type` and does carry the address it was opened on.
+///
+/// php reaches every transport through `php_stream_xport_create`, which never assigns
+/// `stream->wrapper`, and `_php_stream_get_metadata` writes `wrapper_type` only `if
+/// (stream->wrapper)`. elephc left the wrapper id at its unset value, which maps to "plainfile", so
+/// every socket claimed to have been opened by the plain-files wrapper. The `uri` moved the other
+/// way: php stores the address in `stream->orig_path` and reports it, and elephc recorded the
+/// transport but not the text, so the key php provides was missing.
+///
+/// A socket PAIR names no address, php leaves `orig_path` NULL for it, and the key stays absent —
+/// which is why the pair is checked here alongside the two openers that do name one.
+#[test]
+fn test_socket_metadata_has_no_wrapper_and_keeps_its_address() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$m = stream_get_meta_data($pair[0]);
+var_dump(array_key_exists("wrapper_type", $m), array_key_exists("uri", $m), $m["stream_type"]);
+$path = "sockmeta.sock";
+$srv = stream_socket_server("unix://" . $path);
+$m2 = stream_get_meta_data($srv);
+var_dump(array_key_exists("wrapper_type", $m2), $m2["uri"], $m2["stream_type"]);
+$cli = stream_socket_client("unix://" . $path);
+$m3 = stream_get_meta_data($cli);
+var_dump(array_key_exists("wrapper_type", $m3), $m3["uri"]);
+// An accepted connection names no address of its own either.
+$acc = stream_socket_accept($srv);
+$m4 = stream_get_meta_data($acc);
+var_dump(array_key_exists("wrapper_type", $m4), array_key_exists("uri", $m4), $m4["stream_type"]);
+fclose($acc);
+fclose($cli);
+fclose($srv);
+fclose($pair[0]);
+fclose($pair[1]);
+unlink($path);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(false)\nbool(false)\nstring(14) \"generic_socket\"\n",
+            "bool(false)\nstring(20) \"unix://sockmeta.sock\"\nstring(11) \"unix_socket\"\n",
+            "bool(false)\nstring(20) \"unix://sockmeta.sock\"\n",
+            "bool(false)\nbool(false)\nstring(11) \"unix_socket\"\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fsockopen()` takes a lone hostname, honours the transport that hostname names, and
+/// reports the address php reports.
+///
+/// php's `$port` defaults to -1, and `php_stream_xport_create` reads the transport out of the
+/// address, falling back to TCP only when there is no `://`. elephc required the port AND prepended
+/// `tcp://` unconditionally, so `fsockopen("unix:///tmp/s.sock")` did not compile at all — and once
+/// it did, the address became `tcp://unix:///tmp/s.sock`, which resolves as a HOSTNAME.
+///
+/// The `uri` is checked against the port because php records the string it composed, `host:port`,
+/// with no scheme: the `tcp://` elephc adds for a schemeless host is elephc's, and php never saw
+/// it. The `tcp://`-spelled call is here to pin the other side of that rule — a hostname that
+/// names its own transport keeps every byte of it.
+#[test]
+fn test_fsockopen_takes_a_lone_address_and_keeps_its_transport() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$path = "fsock.sock";
+$srv = stream_socket_server("unix://" . $path);
+$c = fsockopen("unix://" . $path);
+$m = stream_get_meta_data($c);
+var_dump(is_resource($c), $m["uri"], $m["stream_type"], array_key_exists("wrapper_type", $m));
+fclose($c);
+fclose($srv);
+unlink($path);
+$tcp = stream_socket_server("tcp://127.0.0.1:0");
+$name = stream_socket_get_name($tcp, false);
+$port = (int) explode(":", $name)[1];
+// A schemeless host gets `tcp://` for the connect, but php's `uri` is the bare `host:port`.
+$c2 = fsockopen("127.0.0.1", $port);
+$m2 = stream_get_meta_data($c2);
+var_dump($m2["uri"] === "127.0.0.1:" . $port, $m2["stream_type"]);
+fclose($c2);
+// A host that names the transport keeps it, whatever letter it starts with.
+$c3 = fsockopen("tcp://127.0.0.1", $port);
+$m3 = stream_get_meta_data($c3);
+var_dump($m3["uri"] === "tcp://127.0.0.1:" . $port);
+fclose($c3);
+fclose($tcp);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\nstring(17) \"unix://fsock.sock\"\nstring(11) \"unix_socket\"\nbool(false)\n",
+            "bool(true)\nstring(14) \"tcp_socket/ssl\"\n",
+            "bool(true)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a resource NESTED in a container renders, and that php's resource numbering matches.
+///
+/// `__rt_var_dump_value` sent runtime tag 9 to its NULL arm, so a resource inside an array, a
+/// hash or an object printed as `NULL` while the same resource dumped on its own printed
+/// correctly. That is one renderer, so every container shape was wrong at once — a
+/// `stream_socket_pair()` result looked like `[NULL, NULL]` even though both ends were live.
+///
+/// The NUMBER is checked alongside it because the two defects hid each other: php's
+/// `file_get_contents()` and `file_put_contents()` open a stream internally and therefore consume
+/// one resource id apiece, while elephc used raw syscalls and consumed none — so every id after
+/// such a call was one lower than php's.
+#[test]
+fn test_nested_resource_renders_and_numbers_like_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+// Each whole-file call costs one id in php, so the handle below must be numbered past them.
+file_put_contents("resnest.txt", "x");
+file_get_contents("resnest.txt");
+$f = fopen("resnest.txt", "r");
+var_dump($f);
+var_dump([$f]);
+var_dump(["h" => $f]);
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+var_dump(is_resource($pair[0]), $pair);
+fclose($pair[0]);
+fclose($pair[1]);
+fclose($f);
+unlink("resnest.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "resource(7) of type (stream)\n",
+            "array(1) {\n  [0]=>\n  resource(7) of type (stream)\n}\n",
+            "array(1) {\n  [\"h\"]=>\n  resource(7) of type (stream)\n}\n",
+            "bool(true)\n",
+            "array(2) {\n  [0]=>\n  resource(8) of type (stream)\n  [1]=>\n",
+            "  resource(9) of type (stream)\n}\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a read filter answering `PSFS_ERR_FATAL` fails the read instead of emptying it.
+///
+/// php separates "the stream is exhausted" from "a filter refused the data": `fread()` and
+/// `stream_copy_to_stream()` answer `false`, while `stream_get_contents()` answers `""` and
+/// `fgets()` `false`. elephc reported `""` and `int(0)` for the first two, which read as an empty
+/// stream rather than a failure — the whole point of the return value a filter uses to say the
+/// data is unusable.
+///
+/// The published code is reset to `PSFS_PASS_ON` before each filtered read and before a copy,
+/// because the slot lives in BSS and starts at ZERO — which IS `PSFS_ERR_FATAL`, so without the
+/// reset an ordinary EOF on the first filtered read would look like a refusal.
+#[test]
+fn test_filter_fatal_fails_the_read() {
+    let out = compile_and_run(
+        r#"<?php
+class FatalFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        stream_bucket_make_writeable($in);
+        return PSFS_ERR_FATAL;
+    }
+}
+class PassFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register('fatalf', 'FatalFilter');
+stream_filter_register('passf', 'PassFilter');
+function src(string $filter) {
+    $s = fopen('php://memory', 'rb+');
+    fwrite($s, 'Test data');
+    rewind($s);
+    stream_filter_prepend($s, $filter, STREAM_FILTER_READ);
+    return $s;
+}
+$a = src('fatalf'); echo var_export(stream_copy_to_stream($a, fopen('php://memory', 'wb')), true), "|"; fclose($a);
+$b = src('fatalf'); echo var_export(fread($b, 32), true), "|"; fclose($b);
+$c = src('fatalf'); echo var_export(stream_get_contents($c), true), "|"; fclose($c);
+$d = src('fatalf'); echo var_export(fgets($d), true), "|"; fclose($d);
+// A filter that PASSES must still report the bytes, and its EOF must still be "" — the
+// reset is what keeps the exhausted read from inheriting the previous stream's refusal.
+$e = src('passf'); echo var_export(fread($e, 32), true), "|";
+echo var_export(fread($e, 32), true), "|";
+fclose($e);
+$f = src('passf'); echo var_export(stream_copy_to_stream($f, fopen('php://memory', 'wb')), true); fclose($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        "false|false|''|false|'Test data'|''|9"
+    );
+}
+
+/// Verifies the `data:` scheme is read by every reader, with or without the `//`.
+///
+/// RFC 2397 has no `//` and php makes it optional, so the canonical spelling is `data:,abc` /
+/// `data:text/plain;base64,...`. `fopen()` tested the five-byte scheme and read it, but
+/// `file_get_contents()` tested `data://` — so the canonical form fell through to the FILE reader
+/// and answered `false` with "No such file or directory". A URL built at run time missed as well:
+/// the dynamic route knows http/https/ftp/ftps and then reads a file, so nothing decoded it.
+#[test]
+fn test_data_uri_is_read_with_or_without_the_double_slash() {
+    let out = compile_and_run(
+        r#"<?php
+echo var_export(file_get_contents("data:,abc"), true), "|";
+echo var_export(file_get_contents("data://,abc"), true), "|";
+echo var_export(file_get_contents("data:text/plain,abc"), true), "|";
+$h = fopen("data:,abc", "r");
+echo var_export(stream_get_contents($h), true), "|";
+fclose($h);
+// Built at run time, so the dynamic route decides it.
+$u = "data:," . str_repeat("A", 100);
+echo strlen((string) file_get_contents($u)), "|";
+echo var_export(file_get_contents("data://text/plain;base64,YWJj"), true);
+"#,
+    );
+    assert_eq!(out, "'abc'|'abc'|'abc'|'abc'|100|'abc'");
+}
+
+/// Verifies `stream_context_create()` enforces php's option-array shape.
+///
+/// php keeps only entries whose key is a STRING and whose value is an ARRAY, raising a catchable
+/// `ValueError` otherwise — measured: `['ssl' => "abc"]`, `['ssl' => 1]` and `[0 => ['a' => 1]]`
+/// all raise it, while `[]` and an absent argument do not. elephc stored the malformed map in
+/// silence, so a typo in a context array produced a context that simply carried nothing.
+///
+/// The empty array is its own case because `[]` is a PACKED array, not a hash: walking it as one
+/// would read a header that is not there, and a packed array with elements can only have integer
+/// keys, which php refuses.
+#[test]
+fn test_stream_context_create_enforces_the_option_shape() {
+    let out = compile_and_run(
+        r#"<?php
+function t(string $label, callable $fn): void {
+    echo $label, "=";
+    try { $fn(); echo "OK|"; }
+    catch (ValueError $e) { echo "ValueError|"; }
+}
+t("good",    fn() => stream_context_create(['http' => ['method' => 'POST']]));
+t("string",  fn() => stream_context_create(['ssl' => "abc"]));
+t("int",     fn() => stream_context_create(['ssl' => 1]));
+t("intkey",  fn() => stream_context_create([0 => ['a' => 1]]));
+t("empty",   fn() => stream_context_create([]));
+t("none",    fn() => stream_context_create());
+t("nested",  fn() => stream_context_create(['http' => [0 => 'v']]));
+echo (string) stream_context_get_options(stream_context_create(['http' => ['m' => 'v']]))["http"]["m"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "good=OK|string=ValueError|int=ValueError|intkey=ValueError|empty=OK|none=OK|nested=OK|v"
+    );
+}
+
+/// Verifies `php_user_filter::$filtername` carries the ATTACHED name and `$closing` is a bool.
+///
+/// php seeds `$filtername` before `onCreate()` with the name the filter was attached under, so
+/// one class registered under two names reports each in turn; elephc left the property null.
+/// `$closing` is documented `bool`: an untyped parameter otherwise infers Int, so `var_dump()`
+/// printed `int(0)` where php prints `bool(false)` and `$closing === true` could never hold.
+#[test]
+fn test_user_filter_inherited_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class NameProbe extends php_user_filter {
+    public function onCreate(): bool {
+        echo "create:", var_export($this->filtername, true), "|";
+        return true;
+    }
+    public function filter($in, $out, &$consumed, $closing): int {
+        echo "filter:", var_export($this->filtername, true),
+             ":", var_export($closing, true),
+             ":", var_export($closing === true, true), "|";
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("np.one", "NameProbe");
+stream_filter_register("np.two", "NameProbe");
+$h = fopen("php://memory", "r+");
+stream_filter_append($h, "np.one", STREAM_FILTER_WRITE);
+fwrite($h, "x");
+fclose($h);
+$g = fopen("php://memory", "r+");
+stream_filter_append($g, "np.two", STREAM_FILTER_WRITE);
+fwrite($g, "y");
+fclose($g);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "create:'np.one'|filter:'np.one':false:false|filter:'np.one':true:true|",
+            "create:'np.two'|filter:'np.two':false:false|filter:'np.two':true:true|"
+        )
+    );
+}
+
+/// Verifies a non-zero `$microseconds` beside a null `$seconds` raises php's `ValueError`.
+///
+/// A null `$seconds` is php's "block forever", which no microsecond count can refine, so php
+/// refuses the pair rather than ignoring one half of it — `stream_select($r, $w, $e, null, 5)`
+/// throws. A microsecond count of exactly ZERO is still allowed, because php only rejects a
+/// non-zero one. Measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_select_microseconds_require_seconds() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("select_pair.txt", "x");
+$f = fopen("select_pair.txt", "r");
+$r = [$f]; $w = null; $e = null;
+try { stream_select($r, $w, $e, null, 5); echo "no throw|"; }
+catch (ValueError $x) { echo $x->getMessage(), "|"; }
+// Zero microseconds beside a null $seconds is accepted.
+$r2 = [$f]; $w2 = null; $e2 = null;
+echo var_export(stream_select($r2, $w2, $e2, null, 0), true);
+fclose($f);
+unlink("select_pair.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "stream_select(): Argument #5 ($microseconds) must be null when argument #4 ($seconds) is null|1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_filter_register()` refuses a name that is already taken, and a filter
+/// resource names itself.
+///
+/// php answers `false` rather than replacing a registration: a name php itself owns
+/// (`string.toupper`, `zlib.deflate`) is never replaceable, and the second registration of a
+/// fresh name is false too. elephc stored into the first EMPTY slot without comparing names, so
+/// both answered `true` and a program branching on the result took the wrong path. An empty name
+/// or class is php's own catchable `ValueError`, raised before the registry is consulted — and
+/// php does NOT check that the class exists here at all.
+///
+/// The filter resource is checked in the same test because it is the same registry: php gives it
+/// its own type, `stream filter`, which `var_dump()` and `get_resource_type()` both report.
+#[test]
+fn test_stream_filter_register_refuses_a_taken_name() {
+    let out = compile_and_run(
+        r#"<?php
+class RegUpper extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = strtoupper($b->data);
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+// A name php owns EXACTLY is never replaceable; a WILDCARD family name is registrable, which
+// is why `zlib.deflate` and `convert.base64-encode` answer true and `string.toupper` does not.
+echo var_export(stream_filter_register("string.toupper", "RegUpper"), true), "|";
+echo var_export(stream_filter_register("consumed", "RegUpper"), true), "|";
+echo var_export(stream_filter_register("zlib.deflate", "RegUpper"), true), "|";
+echo var_export(stream_filter_register("convert.base64-encode", "RegUpper"), true), "|";
+// A fresh name registers once, and only once.
+echo var_export(stream_filter_register("reg.upper", "RegUpper"), true), "|";
+echo var_export(stream_filter_register("reg.upper", "RegUpper"), true), "|";
+// Empty arguments are catchable ValueErrors, not registrations.
+try { stream_filter_register("", "RegUpper"); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+try { stream_filter_register("reg.other", ""); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+// The registered filter still works, and its resource names itself.
+$m = fopen("php://memory", "r+");
+$f = stream_filter_append($m, "reg.upper", STREAM_FILTER_WRITE);
+echo get_resource_type($f), "|";
+fwrite($m, "hello");
+rewind($m);
+echo stream_get_contents($m);
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "false|false|true|true|true|false|",
+            "stream_filter_register(): Argument #1 ($filter_name) must be a non-empty string|",
+            "stream_filter_register(): Argument #2 ($class) must be a non-empty string|",
+            "stream filter|HELLO"
+        )
+    );
+}
+
+/// Verifies an `a` mode on `php://memory`/`php://temp` sends every write to the END.
+///
+/// php ignores the seek position for a write in append mode: writing `hello`, seeking to 0 and
+/// writing `world` answers `helloworld`. A real file gets that from `O_APPEND` at `open()`, but
+/// the in-memory backend is a `tmpfile()` descriptor created with no mode at all, so the second
+/// write OVERWROTE the first and the stream silently lost data. `php://temp` and `php://memory`
+/// are separate cases because they are separate sub-wrappers, and the URL is checked once as a
+/// literal and once built at run time because those are two different openers.
+#[test]
+fn test_append_mode_memory_stream_writes_at_the_end() {
+    let out = compile_and_run(
+        r#"<?php
+$fp = fopen("php://temp", "a+");
+fwrite($fp, "hello");
+fseek($fp, 0, SEEK_SET);
+fwrite($fp, "world");
+echo stream_get_contents($fp, -1, 0), "|";
+fclose($fp);
+
+$m = fopen("php://memory", "a+");
+fwrite($m, "abc");
+rewind($m);
+fwrite($m, "XY");
+echo stream_get_contents($m, -1, 0), "|";
+fclose($m);
+
+// The same URL built at run time takes the dynamic opener, which needs the flag too.
+$path = "php://" . "temp";
+$d = fopen($path, "a+");
+fwrite($d, "one");
+fseek($d, 0, SEEK_SET);
+fwrite($d, "two");
+echo stream_get_contents($d, -1, 0), "|";
+fclose($d);
+
+// A `w+` mode still overwrites, which is the case the append flag must not capture.
+$w = fopen("php://temp", "w+");
+fwrite($w, "hello");
+fseek($w, 0, SEEK_SET);
+fwrite($w, "world");
+echo stream_get_contents($w, -1, 0);
+fclose($w);
+"#,
+    );
+    assert_eq!(out, "helloworld|abcXY|onetwo|world");
+}
+
+/// Verifies `stream_get_meta_data()` omits `uri` for a pathless stream and calls a directory
+/// seekable.
+///
+/// php guards the key with `if (stream->orig_path)`, so a directory handle answers EIGHT keys;
+/// elephc inserted `["uri"] => ""` and reported nine, which made every `count()` over the result
+/// disagree. `seekable` is `stream->ops->seek != NULL` in php, not a live probe: the plain-files
+/// directory ops carry `rewinddir`, so php says `true` where `S_ISREG` on the descriptor — the
+/// question elephc asked — says `false`.
+#[test]
+fn test_stream_get_meta_data_directory_shape() {
+    let out = compile_and_run(
+        r#"<?php
+$d = opendir(sys_get_temp_dir());
+$m = stream_get_meta_data($d);
+echo count($m), "|", var_export(isset($m["uri"]), true), "|", var_export($m["seekable"], true);
+echo "|", $m["stream_type"], "|", $m["wrapper_type"];
+closedir($d);
+"#,
+    );
+    assert_eq!(out, "8|false|true|dir|plainfile");
+}
+
+/// Verifies `fwrite()`'s third argument caps the write, and that a null cap writes everything.
+///
+/// php's signature is `fwrite($stream, string $data, ?int $length = null)`: the write is capped
+/// at `max(0, min($length, strlen($data)))`, a non-positive cap writes nothing WITHOUT raising,
+/// and null means no cap. elephc accepted only two arguments. The cap is applied to the byte
+/// count the runtime write helper already takes, so an attached write filter sees exactly the
+/// bytes php gives it rather than the whole string.
+#[test]
+fn test_fwrite_length_argument_caps_the_write() {
+    let out = compile_and_run(
+        r#"<?php
+function w(string $data, $length): string {
+    $m = fopen("php://memory", "r+");
+    $n = $length === "omit" ? fwrite($m, $data) : fwrite($m, $data, $length);
+    rewind($m);
+    $got = (string) stream_get_contents($m);
+    fclose($m);
+    return $n . ":" . $got;
+}
+echo w("hello", 3), "|";       // shorter than the data
+echo w("hello", 5), "|";       // exactly the data
+echo w("hello", 9), "|";       // longer than the data clamps to it
+echo w("hello", 0), "|";       // zero writes nothing, and is not an error
+echo w("hello", -1), "|";      // neither is a negative
+echo w("hello", null), "|";    // null is "no cap"
+echo w("hello", "omit"), "|";  // as is omitting it
+// A write filter must see the CAPPED bytes, not the whole string.
+$m = fopen("php://memory", "r+");
+stream_filter_append($m, "string.toupper", STREAM_FILTER_WRITE);
+$n = fwrite($m, "abcdef", 4);
+rewind($m);
+echo $n, ":", stream_get_contents($m);
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        "3:hel|5:hello|5:hello|0:|0:|5:hello|5:hello|4:ABCD"
+    );
+}
+
+/// Verifies a `?int` argument arriving as a boxed null keeps php's "no bound" meaning.
+///
+/// `__rt_mixed_cast_int` flattens a null payload to `0` — the same answer a real `0` gives — so
+/// forwarding one through an untyped parameter turned `fgets($h, null)` into
+/// `ValueError: Argument #2 ($length) must be greater than 0` and made `fwrite($h, $d, null)`
+/// write nothing. php reads the whole line and writes every byte for both.
+#[test]
+fn test_nullable_length_through_an_untyped_parameter() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("nullable_len.txt", "hello world\n");
+function grabLine($h, $len) { return fgets($h, $len); }
+function writeAll($h, $data, $len) { return fwrite($h, $data, $len); }
+$h = fopen("nullable_len.txt", "r");
+echo var_export(grabLine($h, null), true), "|";
+fclose($h);
+$m = fopen("php://memory", "r+");
+echo writeAll($m, "abcdef", null), "|";
+rewind($m);
+echo stream_get_contents($m);
+fclose($m);
+unlink("nullable_len.txt");
+"#,
+    );
+    assert_eq!(out, "'hello world\n'|6|abcdef");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies compiled PHP output for stream filter base64 decode decompacts.
 #[test]
 fn test_stream_filter_base64_decode_decompacts() {
@@ -1230,21 +4615,329 @@ echo "'" . $s . "' len=" . strlen($s);
     assert_eq!(out, "'Café brûlé' len=13");
 }
 
-/// Verifies compiled PHP output for stream filter strip tags removes html.
+/// Verifies `string.strip_tags` is refused: php removed the filter in 8.0.
 #[test]
-fn test_stream_filter_strip_tags_removes_html() {
-    // The string.strip_tags read filter elides everything between '<' and '>'.
-    let out = compile_and_run(
+fn test_stream_filter_strip_tags_is_not_a_php_filter() {
+    // This test used to pin the opposite — `assert_eq!(out, "Hello World")` —
+    // because elephc shipped a strip-tags state machine php has not had since
+    // 8.0. php-src ext/standard/filters.c registers no `strip_tags` factory, so
+    // the name must miss like any other unknown one.
+    //
+    // php 8.5.6 on this exact program:
+    //   Warning: stream_filter_append(): Unable to locate filter "string.strip_tags" in ... on line 5
+    //   bool(false)
+    //   <p>Hello <b>World</b></p>
+    // i.e. false, nothing attached, and the read comes back untouched.
+    let out = compile_and_run_capture(
         r#"<?php
 $m = fopen("php://memory", "r+");
 fwrite($m, "<p>Hello <b>World</b></p>");
 rewind($m);
-stream_filter_append($m, "string.strip_tags", STREAM_FILTER_READ);
+var_dump(stream_filter_append($m, "string.strip_tags", STREAM_FILTER_READ));
 echo fread($m, 64);
 fclose($m);
 "#,
     );
-    assert_eq!(out, "Hello World");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n<p>Hello <b>World</b></p>");
+    assert!(
+        out.diagnostics
+            .contains("Unable to locate filter \"string.strip_tags\""),
+        "expected php's unknown-filter warning, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies `consumed` attaches and passes every byte through, like php's filter.
+#[test]
+fn test_stream_filter_consumed_passes_bytes_through() {
+    // php's `consumed` filter appends each bucket to its output brigade
+    // unchanged and only counts bytes (php-src ext/standard/filters.c:1649-1653),
+    // so a read that does not out-run the file comes back byte-for-byte. Before
+    // this landed the attach warned `Unable to locate filter "consumed"` and
+    // returned false, while `stream_get_filters()` advertised the name.
+    //
+    // php 8.5.6 on this exact program: `hel|lo |abcdef`.
+    //
+    // `ftell()` is deliberately not probed here: on a filtered stream elephc
+    // reports the descriptor's own position (11) where php subtracts what it
+    // still holds buffered (6). That gap is the chain's read-ahead, not this
+    // filter's — `string.toupper` reproduces it identically — so it belongs to
+    // its own fix.
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "cns");
+file_put_contents($f, "hello world");
+$s = fopen($f, "r");
+stream_filter_append($s, "consumed", STREAM_FILTER_READ);
+echo fread($s, 3), "|", fread($s, 3), "|";
+fclose($s);
+unlink($f);
+$o = tempnam(sys_get_temp_dir(), "cnw");
+$w = fopen($o, "w");
+stream_filter_append($w, "consumed", STREAM_FILTER_WRITE);
+fwrite($w, "abcdef");
+fclose($w);
+echo file_get_contents($o);
+unlink($o);
+"#,
+    );
+    assert_eq!(out, "hel|lo |abcdef");
+}
+
+/// Verifies php's `$mode = 0` default reads the direction off the stream itself.
+#[test]
+fn test_stream_filter_mode_zero_deduces_direction_from_the_stream() {
+    // php's default is 0, and 0 is not "no chain": php examines `stream->mode`
+    // and enables the chains the stream can use (php-src
+    // streamsfuncs.c:1202-1214). elephc passed 0 straight through, so an
+    // explicit 0 linked the node into neither chain and this program printed
+    // `abc|abc|xyz|` — the unfiltered bytes.
+    //
+    // php 8.5.6 on this exact program: `ABC|ABC|XYZ|`.
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+fwrite($m, "abc");
+rewind($m);
+stream_filter_append($m, "string.toupper", 0);
+echo fread($m, 10), "|";
+fclose($m);
+$f = tempnam(sys_get_temp_dir(), "md0");
+file_put_contents($f, "abc");
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", 0);
+echo fread($s, 10), "|";
+fclose($s);
+unlink($f);
+$o = tempnam(sys_get_temp_dir(), "md0w");
+$w = fopen($o, "w");
+stream_filter_append($w, "string.toupper", 0);
+fwrite($w, "xyz");
+fclose($w);
+echo file_get_contents($o), "|";
+unlink($o);
+"#,
+    );
+    assert_eq!(out, "ABC|ABC|XYZ|");
+}
+
+/// Verifies the deduced default follows the mode string, not the descriptor.
+#[test]
+fn test_stream_filter_default_mode_follows_the_open_mode_string() {
+    // php reads `stream->mode`, so `a` selects the WRITE chain and `rb` the READ
+    // chain even though both spellings collapse under `fcntl(F_GETFL)`.
+    //
+    // php 8.5.6 on this exact program: `APPENDED|rb-read|`.
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "dms");
+file_put_contents($f, "");
+$a = fopen($f, "a");
+stream_filter_append($a, "string.toupper");
+fwrite($a, "appended");
+fclose($a);
+echo file_get_contents($f), "|";
+file_put_contents($f, "RB-READ");
+$r = fopen($f, "rb");
+stream_filter_append($r, "string.tolower");
+echo fread($r, 32), "|";
+fclose($r);
+unlink($f);
+"#,
+    );
+    assert_eq!(out, "APPENDED|rb-read|");
+}
+
+/// Verifies every reader pulls through the read-filter chain, not past it.
+#[test]
+fn test_line_readers_apply_the_read_filter_chain() {
+    // php attaches a read filter to the STREAM, so every reader that pulls
+    // bytes out of it sees the filtered output: php-src `php_stream_read`
+    // drains `readfilters` into `readbuf`, and `php_stream_get_line`,
+    // `php_stream_getc`, `php_stream_passthru` and the CSV reader all consume
+    // that same buffer.
+    //
+    // elephc had exactly one filtered reader. `__rt_fread` went through
+    // `fread_filtered.rs`, so `fread`, `fgetc` and `stream_get_contents` were
+    // right; `__rt_fgets` and `__rt_stream_get_line` issued their own
+    // one-byte `read()` against the descriptor and `__rt_fpassthru` its own
+    // chunked `read()`, so all of them handed back the RAW bytes. `fgetcsv`
+    // and `fscanf` are built on `__rt_fgets` and inherited the same gap.
+    // Nothing warned: the bytes were simply unfiltered.
+    //
+    // `feof()` came out wrong for the same reason. `__rt_stream_eof_get`
+    // holds a filtered stream not-at-EOF until the chain has had its closing
+    // dispatch, and only `__rt_fread` ever runs that dispatch — so a stream
+    // drained purely by `fgets()` reported `false` forever.
+    //
+    // php 8.5.6 on this exact program:
+    //   AB,CD
+    //   |6|EF,GH
+    //   |12|false|true|AB;CD|6|EF;GH|AB,CD|6|EF,GH|AB,CD
+    //   EF,GH
+    //   12|12|AB,CD|6|AB|2|
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "flg");
+file_put_contents($f, "ab,cd\nef,gh\n");
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgets($s), "|", ftell($s), "|", fgets($s), "|", ftell($s), "|";
+echo var_export(fgets($s), true), "|", var_export(feof($s), true), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo implode(";", fgetcsv($s, 0, ",", "\"", "")), "|", ftell($s), "|";
+echo implode(";", fgetcsv($s, 0, ",", "\"", "")), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo stream_get_line($s, 100, "\n"), "|", ftell($s), "|", stream_get_line($s, 100, "\n"), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fpassthru($s), "|", ftell($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo implode(";", fscanf($s, "%s")), "|", ftell($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgetc($s), fgetc($s), "|", ftell($s), "|";
+fclose($s);
+unlink($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        "AB,CD\n|6|EF,GH\n|12|false|true|AB;CD|6|EF;GH|AB,CD|6|EF,GH|AB,CD\nEF,GH\n12|12|AB,CD|6|AB|2|"
+    );
+}
+
+/// Verifies a filtered line reader's position counts bytes SERVED, not consumed.
+#[test]
+fn test_filtered_line_reader_position_counts_bytes_served() {
+    // `string.toupper` emits one byte per byte, so it cannot tell the two
+    // rules apart: reading the descriptor and counting what the caller got
+    // agree. `convert.base64-encode` does not — 8 input bytes become 12 —
+    // and there php reports 12, the bytes it HANDED BACK.
+    //
+    // That is the rule `__rt_fread` already follows through
+    // `STREAM_FILTERED_POS_OFFSET`. `fgets()` and `stream_get_line()` agreed
+    // with php only by accident, because they read the descriptor directly;
+    // routing them through the chain has to move them onto the same counter
+    // or the accident becomes a divergence.
+    //
+    // The caller's `$length` bound still applies to the FILTERED bytes.
+    //
+    // php 8.5.6 on this exact program: `b25lCnR3bwo=|12|true|b25lCnR3bwo=|12|ON|2|E\n|4|`.
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "flp");
+file_put_contents($f, "one\ntwo\n");
+$s = fopen($f, "r");
+stream_filter_append($s, "convert.base64-encode", STREAM_FILTER_READ);
+echo fgets($s), "|", ftell($s), "|", var_export(feof($s), true), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "convert.base64-encode", STREAM_FILTER_READ);
+echo stream_get_line($s, 100, "\n"), "|", ftell($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgets($s, 3), "|", ftell($s), "|", fgets($s), "|", ftell($s), "|";
+fclose($s);
+unlink($f);
+"#,
+    );
+    assert_eq!(out, "b25lCnR3bwo=|12|true|b25lCnR3bwo=|12|ON|2|E\n|4|");
+}
+
+/// Verifies a filtered `fgets()` respects chain order, direction and attach time.
+#[test]
+fn test_filtered_fgets_honours_chain_order_direction_and_attach_time() {
+    // Three properties that a reader which merely "applies the filter" can
+    // still get wrong, and that the `fread` path already holds:
+    //   - the chain runs head-to-tail, so `one` uppercases to `ONE` and then
+    //     rot13s to `BAR`, never the other way round;
+    //   - a filter attached with STREAM_FILTER_WRITE is not on the read chain
+    //     and must leave reads untouched;
+    //   - a filter appended after bytes were already read applies from that
+    //     point on, so line one stays `one` while line two becomes `TWO`.
+    //
+    // php 8.5.6 on this exact program: `BAR\n|GJB\n|one\n|one\n|TWO\n|`.
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "flc");
+file_put_contents($f, "one\ntwo\n");
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+stream_filter_append($s, "string.rot13", STREAM_FILTER_READ);
+echo fgets($s), "|", fgets($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_WRITE);
+echo fgets($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+echo fgets($s), "|";
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgets($s), "|";
+fclose($s);
+unlink($f);
+"#,
+    );
+    assert_eq!(out, "BAR\n|GJB\n|one\n|one\n|TWO\n|");
+}
+
+/// Verifies a read filter on a USERSPACE-WRAPPER stream reaches the line readers too.
+#[test]
+fn test_read_filter_applies_to_a_userspace_wrapper_stream() {
+    // A filter chain belongs to the stream, not to its backend, so it has to
+    // outrank the backend when a reader picks where to pull bytes from. Each
+    // line reader had a wrapper branch that read through `stream_read` and a
+    // native branch that read the descriptor, and neither ran the chain: the
+    // filtered branch has to be chosen FIRST, and then `__rt_fread_raw`
+    // resolves descriptor-versus-wrapper underneath it.
+    //
+    // The unfiltered wrapper read is in here on purpose: routing filtered
+    // streams away from the wrapper branch must not take the plain wrapper
+    // reads with them.
+    //
+    // php 8.5.6 on this exact program: `ONE\n|TWO\n|one\n|ONE|ONE\nTWO\n8|`.
+    let out = compile_and_run(
+        r#"<?php
+class W {
+    public $context;
+    public $pos = 0;
+    public $data = "one\ntwo\n";
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) { $r = substr($this->data, $this->pos, $n); $this->pos += strlen($r); return $r; }
+    public function stream_eof() { return $this->pos >= strlen($this->data); }
+    public function stream_stat() { return []; }
+    public function stream_tell() { return $this->pos; }
+}
+stream_wrapper_register("wtst", "W");
+$s = fopen("wtst://x", "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgets($s), "|", fgets($s), "|";
+fclose($s);
+$s = fopen("wtst://x", "r");
+echo fgets($s), "|";
+fclose($s);
+$s = fopen("wtst://x", "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo stream_get_line($s, 100, "\n"), "|";
+fclose($s);
+$s = fopen("wtst://x", "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fpassthru($s), "|";
+fclose($s);
+"#,
+    );
+    assert_eq!(out, "ONE\n|TWO\n|one\n|ONE|ONE\nTWO\n8|");
 }
 
 /// Verifies compiled PHP output for stream filter dechunk parses chunked encoding.
@@ -1575,11 +5268,125 @@ fn test_fopen_php_stdout_writes_to_stdout() {
     assert_eq!(out, "via php-wrapper");
 }
 
-/// Verifies compiled PHP output for fopen php output is stdout alias.
+/// Verifies closing a `php://stdout` handle leaves the program's own stdout usable.
+///
+/// The wrapper used to hand back descriptor 1 itself, so `fclose()` closed the process's
+/// standard output: `after` was written to a closed descriptor and vanished, while the
+/// program still exited 0 — output loss with no diagnostic anywhere. php-src duplicates
+/// the descriptor in `php_fopen_wrapper.c`, and reference PHP 8.5.6 prints both lines.
+///
+/// The `before` line is asserted too: a wrapper that failed to open at all would drop
+/// only the `via-handle` write and still print `after`, passing a test that pinned the
+/// tail alone.
 #[test]
-fn test_fopen_php_output_is_stdout_alias() {
+fn test_closing_php_stdout_leaves_the_process_stdout_open() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://stdout", "w");
+echo "before\n";
+fwrite($h, "via-handle\n");
+fclose($h);
+echo "after\n";
+"#,
+    );
+    assert_eq!(out, "before\nvia-handle\nafter\n");
+}
+
+/// Verifies `php://output` reaches the terminal when no output buffer is active.
+///
+/// Renamed from `..._is_stdout_alias`: the old name asserted a relationship that php does not
+/// have. `php://output` and `php://stdout` agree ONLY while the output-buffer stack is empty,
+/// which is all this case exercises; the two tests below pin where they part company.
+#[test]
+fn test_fopen_php_output_reaches_the_terminal_unbuffered() {
     let out = compile_and_run(r#"<?php $h = fopen("php://output", "w"); fwrite($h, "aliased");"#);
     assert_eq!(out, "aliased");
+}
+
+/// Verifies `php://output` writes travel the OUTPUT-BUFFER stack, and `php://stdout` does not.
+///
+/// php-src gives `php://output` its own `php_stream_output_ops`, whose write is `php_output_write`
+/// — the sink `echo` uses — while `php://stdout` is a `dup()` of descriptor 1. elephc aliased both
+/// onto descriptor 1, so `ob_start()` never saw a `php://output` write.
+///
+/// RED before the fix (`php -n` 8.5.6 on the left, elephc on the right):
+///   A: `string(15) "CAPTURED-OUTPUT"`  vs  `CAPTURED-OUTPUT` printed, then `string(0) ""`
+///   D: `string(13) "BEFORE-HANDLE"`    vs  `BEFORE-HANDLE`   printed, then `string(0) ""`
+/// `php://stdout` (B) already matched and must keep matching, which is why it is asserted here
+/// rather than in a test of its own: the fix has to move ONE of the two.
+#[test]
+fn test_php_output_is_captured_by_ob_and_php_stdout_is_not() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start();
+$o = fopen("php://output", "w");
+fwrite($o, "CAPTURED");
+fclose($o);
+echo "[out=" . ob_get_clean() . "]";
+
+ob_start();
+$s = fopen("php://stdout", "w");
+fwrite($s, "DIRECT");
+fclose($s);
+echo "[std=" . ob_get_clean() . "]";
+"#,
+    );
+    assert_eq!(out, "[out=CAPTURED]DIRECT[std=]");
+}
+
+/// Verifies a `php://output` handle opened BEFORE `ob_start()` is still captured.
+///
+/// The sink is a property of the stream, not of the moment it was opened, so php captures a
+/// handle that predates the buffer. Measured: `string(13) "BEFORE-HANDLE"`. A fix that only
+/// consulted the buffer depth at open time would pass the test above and fail this one.
+#[test]
+fn test_php_output_handle_opened_before_ob_start_is_still_captured() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://output", "w");
+ob_start();
+fwrite($h, "BEFORE-HANDLE");
+echo "[" . ob_get_clean() . "]";
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "[BEFORE-HANDLE]");
+}
+
+/// Verifies php never gates a write on a DESCRIPTOR-backed `php://` target's mode string.
+///
+/// php-src's `_php_stream_write` refuses only when the stream's ops have no write function; the
+/// mode is never read back. So `fopen("php://stdout","r")` writes, and so does `php://fd/1`
+/// opened `"rb"`. elephc's read-only gate refused both.
+///
+/// RED before the fix: `php -n` 8.5.6 answers `2` for every line below; elephc answered
+/// `false` for the two `r`-flavoured opens and printed nothing for them.
+///
+/// The in-memory targets deliberately keep the gate — php builds `php://memory` read-only when
+/// the mode names none of `w`, `a`, `+` — and the last two lines pin that they still do.
+#[test]
+fn test_read_mode_does_not_gate_writes_to_descriptor_backed_php_targets() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["r", "rb", "w"] as $m) {
+    $h = fopen("php://stdout", $m);
+    echo "[", var_export(fwrite($h, "S"), true), "]";
+    fclose($h);
+}
+foreach (["r", "rb"] as $m) {
+    $h = fopen("php://fd/1", $m);
+    echo "[", var_export(fwrite($h, "F"), true), "]";
+    fclose($h);
+}
+$mem = fopen("php://memory", "r");
+echo "[", var_export(fwrite($mem, "M"), true), "]";
+fclose($mem);
+$t = fopen("php://temp", "rb");
+echo "[", var_export(fwrite($t, "T"), true), "]";
+fclose($t);
+"#,
+    );
+    assert_eq!(out, "[S1][S1][S1][F1][F1][false][false]");
 }
 
 /// Verifies compiled PHP output for fopen php stream yields resource.
@@ -2143,6 +5950,661 @@ echo (unlink("phar://delete.zip/missing.txt") ? "bad" : "missing");
     assert_eq!(
         out,
         "u|missing|bravo|u|tar-two|u|zip-two|missing"
+    );
+}
+
+/// Verifies the `zip://archive.zip#entry` stream wrapper against `php -n` 8.5.6.
+///
+/// php's `ext/zip` wrapper takes a URL shape nothing else uses — a single `#` separates the
+/// archive from the entry — and reads the member as a plain ZIP file with no phar semantics.
+/// Measured, in this order:
+///
+/// ```text
+/// file_get_contents("zip://a.zip#f.txt")       => string(12) "hello world\n"   (deflated)
+/// file_get_contents("zip://a.zip#sub/n.txt")   => string(20) "nested content here\n"
+/// strlen(file_get_contents("...#stored.txt"))  => int(200)                     (stored)
+/// file_get_contents("zip://a.zip#a#b.txt")     => string(9) "hashname\n"       (splits at the FIRST #)
+/// file_get_contents("zip://a.zip#nope.txt")    => Warning + bool(false)
+/// file_get_contents("zip://ghost.zip#f.txt")   => Warning + bool(false)
+/// file_get_contents("zip://a.zip")             => Warning + bool(false)
+/// file_get_contents("zip://a.zip#/f.txt")      => Warning + bool(false)   (no leading-slash stripping)
+/// file_get_contents("zip://a.zip#sub")         => Warning + bool(false)   (a directory names nothing)
+/// fopen("zip://a.zip#f.txt", "w")              => Warning + bool(false)   (the wrapper is read-only)
+/// ```
+///
+/// EVERY failure is the same line — `Failed to open stream: operation failed` — because
+/// `ext/zip` stashes no wrapper error and the generic caller has only its fallback to print.
+///
+/// Before this test the wrapper did not exist: elephc answered
+/// `Warning: fopen(): Unable to find the wrapper "zip"` followed by
+/// `Failed to open stream: No such file or directory`, and `stream_get_wrappers()` listed 11
+/// entries where php lists 12.
+#[test]
+fn test_zip_wrapper_reads_entries_and_refuses_like_php() {
+    let archive = std::env::temp_dir().join(format!("elephc_zip_w1_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+            ("a#b.txt", b"hashname\n", false),
+        ]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+var_dump(file_get_contents("zip://{p}#f.txt"));
+var_dump(file_get_contents("zip://{p}#sub/n.txt"));
+var_dump(strlen(file_get_contents("zip://{p}#stored.txt")));
+var_dump(file_get_contents("zip://{p}#a#b.txt"));
+var_dump(file_get_contents("zip://{p}#nope.txt"));
+var_dump(file_get_contents("zip://{p}.ghost#f.txt"));
+var_dump(file_get_contents("zip://{p}"));
+var_dump(file_get_contents("zip://{p}#/f.txt"));
+var_dump(file_get_contents("zip://{p}#sub"));
+var_dump(fopen("zip://{p}#f.txt", "w"));
+"#,
+        p = archive.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_file(&archive).ok();
+    let p = archive.display();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "string(12) \"hello world\n\"\n\
+         string(20) \"nested content here\n\"\n\
+         int(200)\n\
+         string(9) \"hashname\n\"\n\
+         bool(false)\n\
+         bool(false)\n\
+         bool(false)\n\
+         bool(false)\n\
+         bool(false)\n\
+         bool(false)\n"
+    );
+    // One wording for every failure, and the URL php names is the WHOLE url, `#` included.
+    for expected in [
+        format!("Warning: file_get_contents(zip://{p}#nope.txt): Failed to open stream: operation failed"),
+        format!("Warning: file_get_contents(zip://{p}.ghost#f.txt): Failed to open stream: operation failed"),
+        format!("Warning: file_get_contents(zip://{p}): Failed to open stream: operation failed"),
+        format!("Warning: file_get_contents(zip://{p}#/f.txt): Failed to open stream: operation failed"),
+        format!("Warning: file_get_contents(zip://{p}#sub): Failed to open stream: operation failed"),
+        format!("Warning: fopen(zip://{p}#f.txt): Failed to open stream: operation failed"),
+    ] {
+        assert!(
+            out.diagnostics.contains(&expected),
+            "missing php's failed-open line {expected:?}, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+    // php's zip wrapper EXISTS, so none of these may claim otherwise.
+    assert!(
+        !out.diagnostics.contains("Unable to find the wrapper"),
+        "the zip wrapper is registered now, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies a `zip://` stream opened through `fopen()` reads, ends, and names itself as php does.
+///
+/// A RUN-TIME filename is used for the reads so the dynamic route is covered too: php reads the
+/// archive when the program runs, so — unlike `phar://`, whose literal entry is extracted during
+/// lowering — a literal `zip://` URL must NOT be resolved at compile time either.
+///
+/// Measured on `php -n` 8.5.6:
+///
+/// ```text
+/// $h = fopen("zip://a.zip#f.txt", "r");
+/// fread($h, 5)   => string(5) "hello"
+/// fread($h, 100) => string(7) " world\n"
+/// feof($h)       => bool(true)
+/// stream_get_meta_data($h) => wrapper_type "zip wrapper", stream_type "zip", seekable false
+/// fread($h,3); rewind($h) => Warning: rewind(): Stream does not support seeking + bool(false)
+/// ftell($h)               => int(3)   (the refused seek moved nothing)
+/// fseek($h, 0, SEEK_SET)  => Warning: fseek(): Stream does not support seeking  + int(-1)
+/// ```
+///
+/// The metadata and the seek refusal are the same fact twice: `ext/zip`'s stream ops leave
+/// `seek` NULL. elephc serves the entry from a regular temp file, which seeks perfectly well,
+/// so both had to be keyed off the recorded wrapper identity — before that this read
+/// `plainfile` / `STDIO` / `bool(true)` and the seeks quietly succeeded.
+#[test]
+fn test_zip_wrapper_stream_reads_and_refuses_to_seek() {
+    let archive = std::env::temp_dir().join(format!("elephc_zip_w2_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[("f.txt", b"hello world\n", true)]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$url = "zip://{p}#f.txt";
+$h = fopen($url, "r");
+var_dump(fread($h, 5));
+var_dump(fread($h, 100));
+var_dump(feof($h));
+fclose($h);
+$m = stream_get_meta_data(fopen("zip://{p}#f.txt", "r"));
+var_dump($m["wrapper_type"], $m["stream_type"], $m["seekable"], $m["uri"]);
+$g = fopen($url, "r");
+var_dump(fread($g, 3));
+var_dump(rewind($g));
+var_dump(ftell($g));
+var_dump(fseek($g, 0, SEEK_SET));
+var_dump(stream_get_contents(fopen($url, "r")));
+"#,
+        p = archive.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_file(&archive).ok();
+    let uri = format!("zip://{}#f.txt", archive.display());
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        format!(
+            "string(5) \"hello\"\n\
+             string(7) \" world\n\"\n\
+             bool(true)\n\
+             string(11) \"zip wrapper\"\n\
+             string(3) \"zip\"\n\
+             bool(false)\n\
+             string({uri_len}) \"{uri}\"\n\
+             string(3) \"hel\"\n\
+             bool(false)\n\
+             int(3)\n\
+             int(-1)\n\
+             string(12) \"hello world\n\"\n",
+            uri_len = uri.len()
+        )
+    );
+    assert!(
+        out.diagnostics
+            .contains("Warning: rewind(): Stream does not support seeking"),
+        "expected php's rewind refusal, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics
+            .contains("Warning: fseek(): Stream does not support seeking"),
+        "expected php's fseek refusal, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies the `ZipArchive` read surface against `php -n` 8.5.6, method by method.
+///
+/// Measured on an archive holding `f.txt` (deflated, 12 bytes), `sub/n.txt`
+/// (deflated, 20) and `stored.txt` (stored, 200):
+///
+/// ```text
+/// $z->open("a.zip")                      => bool(true)
+/// $z->numFiles, status, statusSys        => int(3), int(0), int(0)
+/// $z->comment                            => string(0) ""
+/// getNameIndex(0) / (2)                  => "f.txt" / "stored.txt"
+/// getNameIndex(3) / (-1)                 => bool(false)   (out of range, silent)
+/// locateName("f.txt") / ("stored.txt")   => int(0) / int(2)
+/// locateName("nope") / ("F.TXT")         => bool(false)
+/// locateName("F.TXT", FL_NOCASE)         => int(0)
+/// statName("nope") / statIndex(99)       => bool(false)
+/// getFromName("f.txt")                   => string(12) "hello world\n"
+/// getFromName("nope")                    => bool(false)   (NO warning)
+/// getStream("f.txt")                     => a readable stream
+/// getStream("nope")                      => bool(false)   (NO warning)
+/// $z->close()                            => bool(true), and numFiles returns to int(0)
+/// ```
+///
+/// Every failing accessor is SILENT — only `open()` reports anything, through its
+/// return value — which is why the reads go through `@`-suppressed wrapper calls
+/// rather than bare ones.
+#[test]
+fn test_zip_archive_reads_entries_like_php() {
+    let archive = std::env::temp_dir().join(format!("elephc_zip_oop_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$z = new ZipArchive();
+var_dump($z->open("{p}"));
+var_dump($z->numFiles, $z->status, $z->statusSys, $z->comment);
+var_dump($z->getNameIndex(0), $z->getNameIndex(2), $z->getNameIndex(3), $z->getNameIndex(-1));
+var_dump($z->locateName("f.txt"), $z->locateName("stored.txt"), $z->locateName("nope"));
+var_dump($z->locateName("F.TXT"), $z->locateName("F.TXT", ZipArchive::FL_NOCASE));
+var_dump($z->statName("nope"), $z->statIndex(99));
+var_dump($z->getFromName("f.txt"), $z->getFromName("nope"));
+var_dump($z->getFromIndex(2) === str_repeat("x", 200), $z->getFromIndex(99));
+var_dump(stream_get_contents($z->getStream("f.txt")));
+var_dump($z->getStream("nope"));
+var_dump($z->count());
+var_dump($z->close());
+var_dump($z->numFiles, $z->filename);
+"#,
+        p = archive.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_file(&archive).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\n\
+         int(3)\nint(0)\nint(0)\nstring(0) \"\"\n\
+         string(5) \"f.txt\"\nstring(10) \"stored.txt\"\nbool(false)\nbool(false)\n\
+         int(0)\nint(2)\nbool(false)\n\
+         bool(false)\nint(0)\n\
+         bool(false)\nbool(false)\n\
+         string(12) \"hello world\n\"\nbool(false)\n\
+         bool(true)\nbool(false)\n\
+         string(12) \"hello world\n\"\n\
+         bool(false)\n\
+         int(3)\n\
+         bool(true)\n\
+         int(0)\nstring(0) \"\"\n"
+    );
+    // Not one accessor may report a failure: php's do not.
+    assert_eq!(out.stderr, "", "the read surface must be silent");
+}
+
+/// Verifies `ZipArchive::statIndex()` reports php's eight keys, in php's order and values.
+///
+/// Measured on `php -n` 8.5.6 — the whole array for the first entry, plus the
+/// stored entry's method:
+///
+/// ```text
+/// statIndex(0) => ["name" => "f.txt", "index" => 0, "crc" => 2936552237,
+///                  "size" => 12, "mtime" => <unix>, "comp_size" => 14,
+///                  "comp_method" => 8, "encryption_method" => 0]
+/// statIndex(1)["comp_method"] => int(0)   (stored)
+/// statName("f.txt") == statIndex(0)
+/// ```
+///
+/// `crc` reads `0` here BECAUSE the shared fixture builder writes no CRC field —
+/// measured: php reports `int(0)` for exactly these bytes too, and
+/// `$s["crc"] === crc32("hello world\n")` is `bool(false)` on php as well. A real
+/// archive's CRC is pinned in the ZipCrypto test below, whose fixture is a genuine
+/// `zip(1)` archive.
+///
+/// `mtime` is asserted structurally rather than as a fixed number: php derives it
+/// from the entry's DOS date/time in the PROCESS timezone, so any literal here
+/// would pin the machine's timezone instead of the unpacking. The unpacking itself
+/// is pinned in the bridge's own unit test, and the exact value was differenced
+/// against `php -n` under both the local zone and `TZ=UTC`.
+#[test]
+fn test_zip_archive_stat_index_reports_php_fields() {
+    let archive = std::env::temp_dir().join(format!("elephc_zip_stat_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$z = new ZipArchive();
+$z->open("{p}");
+$s = $z->statIndex(0);
+var_dump(array_keys($s));
+var_dump($s["name"], $s["index"], $s["size"], $s["comp_method"], $s["encryption_method"]);
+var_dump($s["crc"]);
+var_dump($s["comp_size"] > 0, $s["comp_size"] < 200);
+var_dump($z->statIndex(1)["comp_method"], $z->statIndex(1)["comp_size"]);
+var_dump($z->statName("f.txt") === $s);
+var_dump(is_int($s["mtime"]), $s["mtime"] === $z->statIndex(1)["mtime"]);
+$z->close();
+"#,
+        p = archive.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_file(&archive).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(8) {\n  [0]=>\n  string(4) \"name\"\n  [1]=>\n  string(5) \"index\"\n  \
+         [2]=>\n  string(3) \"crc\"\n  [3]=>\n  string(4) \"size\"\n  [4]=>\n  \
+         string(5) \"mtime\"\n  [5]=>\n  string(9) \"comp_size\"\n  [6]=>\n  \
+         string(11) \"comp_method\"\n  [7]=>\n  string(17) \"encryption_method\"\n}\n\
+         string(5) \"f.txt\"\nint(0)\nint(12)\nint(8)\nint(0)\n\
+         int(0)\n\
+         bool(true)\nbool(true)\n\
+         int(0)\nint(200)\n\
+         bool(true)\n\
+         bool(true)\nbool(true)\n"
+    );
+}
+
+/// Verifies `ZipArchive::open()`'s flag matrix and its error codes, measured one by one.
+///
+/// On `php -n` 8.5.6, with `m.zip` an existing archive of three entries:
+///
+/// ```text
+/// open("m.zip")                  => bool(true),  numFiles 3
+/// open("ghost.zip")              => int(9)   ER_NOENT
+/// open("ghost.zip", RDONLY)      => int(9)   ER_NOENT
+/// open("n1.zip", CREATE)         => bool(true),  numFiles 0 — and NO file is created
+/// open("m.zip", CREATE)          => bool(true),  numFiles 3 — opens the existing one
+/// open("m.zip", CREATE|EXCL)     => int(10)  ER_EXISTS — EXCL wins over CREATE
+/// open("notzip.txt")             => int(19)  ER_NOZIP
+/// open("")                       => ValueError: ZipArchive::open(): Argument #1
+///                                   ($filename) must not be empty
+/// open("m.zip", OVERWRITE) then close() => the archive is DELETED, because libzip
+///                                   removes an archive that would hold nothing
+/// ```
+#[test]
+fn test_zip_archive_open_flag_matrix_matches_php() {
+    let dir = std::env::temp_dir().join(format!("elephc_zip_flags_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("m.zip");
+    let plain = dir.join("notzip.txt");
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+    std::fs::write(&plain, b"not a zip\n").unwrap();
+    let src = format!(
+        r#"<?php
+function t(string $label, string $f, int $fl): void {{
+    $z = new ZipArchive();
+    $r = $z->open($f, $fl);
+    echo $label, ": ";
+    var_dump($r);
+    if ($r === true) {{ echo "  numFiles=", $z->numFiles, "\n"; var_dump($z->close()); }}
+}}
+t("existing", "{d}/m.zip", 0);
+t("missing", "{d}/ghost.zip", 0);
+t("missing RDONLY", "{d}/ghost.zip", ZipArchive::RDONLY);
+t("missing CREATE", "{d}/n1.zip", ZipArchive::CREATE);
+t("existing CREATE", "{d}/m.zip", ZipArchive::CREATE);
+t("existing EXCL", "{d}/m.zip", ZipArchive::CREATE | ZipArchive::EXCL);
+t("not a zip", "{d}/notzip.txt", 0);
+var_dump(file_exists("{d}/n1.zip"));
+try {{ $e = new ZipArchive(); $e->open(""); }} catch (ValueError $x) {{ echo $x->getMessage(), "\n"; }}
+$o = new ZipArchive();
+var_dump($o->open("{d}/m.zip", ZipArchive::OVERWRITE));
+var_dump($o->numFiles);
+var_dump($o->close());
+var_dump(file_exists("{d}/m.zip"));
+"#,
+        d = dir.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "existing: bool(true)\n  numFiles=3\nbool(true)\n\
+         missing: int(9)\n\
+         missing RDONLY: int(9)\n\
+         missing CREATE: bool(true)\n  numFiles=0\nbool(true)\n\
+         existing CREATE: bool(true)\n  numFiles=3\nbool(true)\n\
+         existing EXCL: int(10)\n\
+         not a zip: int(19)\n\
+         bool(false)\n\
+         ZipArchive::open(): Argument #1 ($filename) must not be empty\n\
+         bool(true)\n\
+         int(0)\n\
+         bool(true)\n\
+         bool(false)\n"
+    );
+}
+
+/// Verifies `ZipArchive` on a ZipCrypto archive and on directory entries.
+///
+/// The archive is the same real `zip --encrypt -P hunter2` fixture the PharData
+/// password test uses. Measured on `php -n` 8.5.6 against an equivalent archive:
+///
+/// ```text
+/// getFromName(...) before setPassword() => bool(false)   (and NO warning)
+/// setPassword("hunter2")                => bool(true)
+/// getFromName(...) after                => the plaintext
+/// statIndex(0) => ["crc" => 3275747770, "size" => 25, "comp_size" => 37,
+///                  "comp_method" => 0, "encryption_method" => 1]
+/// ```
+///
+/// That CRC is the one field the synthetic fixtures cannot pin: this archive is a
+/// genuine `zip(1)` one, so its central directory carries a real CRC-32 and
+/// `$s["crc"] === crc32("secret zipcrypto payload\n")` holds.
+///
+/// A directory member is a member like any other: `zip -r` writes `dd/` and
+/// `dd/sub/` entries, `numFiles` counts them, and reading one answers `""`.
+#[test]
+fn test_zip_archive_encrypted_and_directory_entries() {
+    let dir = std::env::temp_dir().join(format!("elephc_zip_enc_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dirs = dir.join("d.zip");
+    std::fs::write(
+        &dirs,
+        build_zip_phar_container(&[
+            ("dd/", b"", false),
+            ("dd/sub/", b"", false),
+            ("dd/sub/x.txt", b"hi\n", false),
+        ]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$bytes = base64_decode("UEsDBAoACQAAACWR1Fy68T/DJQAAABkAAAAMABwAemNfcGxhaW4udHh0VVQJAAMluzZqJbs2anV4CwABBPUBAAAEAAAAAIX9cegIcalT/zcAGsBrKLo1vP/AI2DJ71z0w4OcxvSzLXaea0tQSwcIuvE/wyUAAAAZAAAAUEsBAh4DCgAJAAAAJZHUXLrxP8MlAAAAGQAAAAwAGAAAAAAAAQAAAKSBAAAAAHpjX3BsYWluLnR4dFVUBQADJbs2anV4CwABBPUBAAAEAAAAAFBLBQYAAAAAAQABAFIAAAB7AAAAAAA=");
+file_put_contents("{d}/enc.zip", $bytes);
+$e = new ZipArchive();
+var_dump($e->open("{d}/enc.zip"));
+var_dump($e->numFiles, $e->getNameIndex(0));
+$st = $e->statIndex(0);
+var_dump($st["crc"] === crc32("secret zipcrypto payload\n"));
+var_dump($st["size"], $st["comp_size"], $st["comp_method"], $st["encryption_method"]);
+var_dump($e->getFromName("zc_plain.txt"));
+var_dump($e->setPassword("hunter2"));
+var_dump($e->getFromName("zc_plain.txt"));
+$e->close();
+
+$d = new ZipArchive();
+var_dump($d->open("{d}/d.zip"));
+var_dump($d->numFiles);
+var_dump($d->getNameIndex(0), $d->getNameIndex(1), $d->getNameIndex(2));
+var_dump($d->statIndex(0)["size"]);
+var_dump($d->getFromName("dd/"), $d->getFromName("dd/sub/x.txt"));
+var_dump($d->locateName("DD/SUB/X.TXT"), $d->locateName("DD/SUB/X.TXT", ZipArchive::FL_NOCASE));
+$d->close();
+"#,
+        d = dir.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\n\
+         int(1)\nstring(12) \"zc_plain.txt\"\n\
+         bool(true)\n\
+         int(25)\nint(37)\nint(0)\nint(1)\n\
+         bool(false)\n\
+         bool(true)\n\
+         string(25) \"secret zipcrypto payload\n\"\n\
+         bool(true)\n\
+         int(3)\n\
+         string(3) \"dd/\"\nstring(7) \"dd/sub/\"\nstring(12) \"dd/sub/x.txt\"\n\
+         int(0)\n\
+         string(0) \"\"\nstring(3) \"hi\n\"\n\
+         bool(false)\nint(2)\n"
+    );
+    // A locked entry answers `false`, it does not complain.
+    assert_eq!(out.stderr, "", "the read surface must be silent");
+}
+
+/// Verifies `ZipArchive::extractTo()` against `php -n` 8.5.6, selection and all.
+///
+/// ```text
+/// extractTo("ex1")                        => bool(true), the whole archive
+/// extractTo("ex2", "f.txt")               => bool(true), that one entry
+/// extractTo("ex3", ["f.txt","sub/n.txt"]) => bool(true), those two
+/// extractTo("a.zip/x")                    => bool(false)  and NO warning
+/// extractTo("ex4", "nope.txt")            => bool(false)
+/// extractTo("ex4", [])                    => bool(false)
+/// extractTo("")                           => bool(false)
+/// ```
+///
+/// An existing file is overwritten, the extracted file carries the ENTRY's mtime
+/// rather than the extraction time, and a directory member (`dd/`) becomes a
+/// directory instead of an empty file.
+///
+/// THE UNCREATABLE DESTINATION IS A PATH THROUGH A FILE, not an unwritable root.
+/// `/no/such/root/x` is only uncreatable for an unprivileged user: CI's linux shards run
+/// inside a container as root, where `mkdir -p /no/such/root/x` SUCCEEDS and the case flips
+/// to `true`. A component that is a regular file is `ENOTDIR` for every user, root included,
+/// and `php -n` 8.5.6 answers `false` for it just the same.
+#[test]
+fn test_zip_archive_extract_to_matches_php() {
+    let dir = std::env::temp_dir().join(format!("elephc_zip_extract_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.zip"),
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("d.zip"),
+        build_zip_phar_container(&[("dd/", b"", false), ("dd/sub/x.txt", b"hi\n", false)]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$z = new ZipArchive();
+$z->open("{d}/a.zip");
+var_dump($z->extractTo("{d}/ex1"));
+var_dump($z->extractTo("{d}/ex2", "f.txt"));
+var_dump($z->extractTo("{d}/ex3", ["f.txt", "sub/n.txt"]));
+var_dump($z->extractTo("{d}/a.zip/x"));
+var_dump($z->extractTo("{d}/ex4", "nope.txt"));
+var_dump($z->extractTo("{d}/ex4", []));
+var_dump($z->extractTo(""));
+var_dump(file_get_contents("{d}/ex1/f.txt"));
+var_dump(strlen(file_get_contents("{d}/ex1/stored.txt")));
+var_dump(file_get_contents("{d}/ex1/sub/n.txt"));
+var_dump(file_exists("{d}/ex2/sub/n.txt"), file_exists("{d}/ex3/stored.txt"));
+var_dump(filemtime("{d}/ex1/f.txt") === $z->statName("f.txt")["mtime"]);
+$z->close();
+$dd = new ZipArchive();
+$dd->open("{d}/d.zip");
+var_dump($dd->extractTo("{d}/ex5"));
+var_dump(is_dir("{d}/ex5/dd"), is_dir("{d}/ex5/dd/sub"), file_get_contents("{d}/ex5/dd/sub/x.txt"));
+$dd->close();
+"#,
+        d = dir.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(true)\nbool(true)\n\
+         bool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         string(12) \"hello world\n\"\n\
+         int(200)\n\
+         string(20) \"nested content here\n\"\n\
+         bool(false)\nbool(false)\n\
+         bool(true)\n\
+         bool(true)\n\
+         bool(true)\nbool(true)\nstring(3) \"hi\n\"\n"
+    );
+    assert_eq!(out.stderr, "", "a failed extractTo is silent in php too");
+}
+
+/// Verifies an entry name cannot write outside the destination `extractTo()` was given.
+///
+/// php does not REJECT such a name, it NORMALIZES it, and the normalization is a
+/// plain path walk. Every case below was measured by extracting a real archive
+/// with `php -n` 8.5.6 and listing what appeared:
+///
+/// ```text
+/// "../up.txt"          => "up.txt"       "a/../b.txt"         => "b.txt"
+/// "a/b/../c.txt"       => "a/c.txt"      "a/b/../../../d.txt" => "d.txt"
+/// "./dot.txt"          => "dot.txt"      "/abs.txt"           => "abs.txt"
+/// "..//e.txt"          => "e.txt"        "x/./y.txt"          => "x/y.txt"
+/// "f..g.txt"           => "f..g.txt"     "a/..b/h.txt"        => "a/..b/h.txt"
+/// "..\\win.txt"        => "..\\win.txt"
+/// ```
+///
+/// `a/b/../c.txt` is the case that fixes the rule: `..` pops ONE segment, it does
+/// not reset the whole path. `a/b/../../../d.txt` is the case that fixes the other
+/// half: popping an empty stack is a no-op, never an escape. Only a WHOLE `..`
+/// segment counts, and a backslash is not a separator.
+#[test]
+fn test_zip_archive_extract_to_cannot_escape_the_destination() {
+    let dir = std::env::temp_dir().join(format!("elephc_zip_travers_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let names: &[&str] = &[
+        "../up.txt",
+        "a/../b.txt",
+        "a/b/../c.txt",
+        "a/b/../../../d.txt",
+        "./dot.txt",
+        "/abs.txt",
+        "..//e.txt",
+        "x/./y.txt",
+        "f..g.txt",
+        "a/..b/h.txt",
+        "..\\win.txt",
+    ];
+    let entries: Vec<(&str, &[u8], bool)> =
+        names.iter().map(|name| (*name, &b"x\n"[..], false)).collect();
+    std::fs::write(dir.join("t.zip"), build_zip_phar_container(&entries)).unwrap();
+    let src = format!(
+        r#"<?php
+$z = new ZipArchive();
+$z->open("{d}/t.zip");
+var_dump($z->extractTo("{d}/out"));
+$found = [];
+$it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("{d}/out", FilesystemIterator::SKIP_DOTS));
+foreach ($it as $file) {{ $found[] = substr($file->getPathname(), strlen("{d}/out/")); }}
+sort($found);
+foreach ($found as $one) {{ echo $one, "\n"; }}
+$z->close();
+"#,
+        d = dir.display()
+    );
+    let out = compile_and_run_capture(&src);
+    let escaped = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "t.zip" && name != "out")
+        .collect::<Vec<_>>();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        escaped.is_empty(),
+        "an entry name wrote outside the destination: {escaped:?}"
+    );
+    assert_eq!(
+        out.stdout,
+        "bool(true)\n\
+         ..\\win.txt\n\
+         a/..b/h.txt\n\
+         a/c.txt\n\
+         abs.txt\n\
+         b.txt\n\
+         d.txt\n\
+         dot.txt\n\
+         e.txt\n\
+         f..g.txt\n\
+         up.txt\n\
+         x/y.txt\n"
     );
 }
 
@@ -2940,9 +7402,11 @@ fn test_stream_socket_client_so_broadcast_does_not_crash() {
     // socket.so_broadcast = 1 triggers __rt_apply_socket_client_opts, which sets
     // SO_BROADCAST on the UDP socket via setsockopt. Not observable from PHP
     // (best-effort) but the option must be accepted without breaking the socket.
+    // STREAM_SERVER_BIND is required for any datagram server; see
+    // test_datagram_server_refuses_the_default_listen_flags.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://127.0.0.1:0");
+$srv = stream_socket_server("udp://127.0.0.1:0", $e, $m, STREAM_SERVER_BIND);
 $addr = stream_socket_get_name($srv, false);
 stream_context_set_option(stream_context_get_default(), "socket", "so_broadcast", 1);
 $client = stream_socket_client("udp://" . $addr);
@@ -3113,6 +7577,106 @@ echo ($bad === false) ? ":closed" : ":open";
     assert_eq!(out, "ping:ok:closed");
 }
 
+/// Verifies the socket error out-parameters carry the real failure, not a fixed guess.
+///
+/// The two outputs used to be a hardcoded `ECONNREFUSED` / `"Connection refused"` pair on
+/// `fsockopen()` and nothing at all on `stream_socket_client()`. A `unix://` path that does not
+/// exist pins the distinction: the answer must be `ENOENT`, which is 2 on both supported
+/// platforms, rather than the connection-refused text a fixed guess would produce.
+#[test]
+fn test_socket_error_outputs_report_the_real_failure() {
+    let out = compile_and_run(
+        r#"<?php
+$c = @stream_socket_client("unix:///nonexistent/elephc-probe.sock", $errno, $errstr, 1);
+echo var_export($c === false, true), "|", $errno, "|", $errstr;
+"#,
+    );
+    assert_eq!(out, "true|2|No such file or directory");
+}
+
+/// Verifies a successful call leaves the out-parameters at PHP's "nothing went wrong" values.
+#[test]
+fn test_socket_error_outputs_are_empty_after_a_successful_connect() {
+    let out = compile_and_run(
+        r#"<?php
+$srv = stream_socket_server("tcp://127.0.0.1:0", $se, $ss);
+$cli = stream_socket_client("tcp://" . stream_socket_get_name($srv, false), $ce, $cs, 5);
+echo var_export($cli !== false, true), "|", $se, "|", var_export($ss, true);
+echo "|", $ce, "|", var_export($cs, true);
+fclose($cli);
+fclose($srv);
+"#,
+    );
+    assert_eq!(out, "true|0|''|0|''");
+}
+
+/// Verifies a server can rebind a port its own previous run has left in TIME_WAIT.
+///
+/// php-src sets `SO_REUSEADDR` on every socket it binds; elephc set it on the IPv6 path
+/// only, so an IPv4 server that restarted answered `false` for roughly a minute. That is
+/// the ordinary lifecycle of any server — stop it, change something, start it again — and
+/// it is also why `test_stream_set_timeout_on_socket` failed four runs out of five when
+/// run back to back, which is what surfaced this.
+///
+/// Binding, connecting and closing inside one program leaves the port in TIME_WAIT for the
+/// second bind, which is the state SO_REUSEADDR exists for. A LIVE listener is a different
+/// case and must still be refused — `test_stream_socket_server_reports_a_bind_failure_...`
+/// above pins that, and the two together say SO_REUSEADDR without saying SO_REUSEPORT.
+#[test]
+fn test_stream_socket_server_rebinds_a_port_left_in_time_wait() {
+    let out = compile_and_run(
+        r#"<?php
+$srv = stream_socket_server("tcp://127.0.0.1:0", $e1, $s1);
+$addr = stream_socket_get_name($srv, false);
+$cli = stream_socket_client("tcp://" . $addr);
+$conn = stream_socket_accept($srv);
+fclose($conn);
+fclose($cli);
+fclose($srv);
+$again = @stream_socket_server("tcp://" . $addr, $e2, $s2);
+echo var_export($again !== false, true), "|", $s2;
+"#,
+    );
+    assert_eq!(out, "true|");
+}
+
+/// Verifies `stream_socket_server()` describes a bind failure the way php-src does.
+///
+/// php-src is measurably the odd one out here: it leaves `&$error_code` at `0` for every bind
+/// and listen failure and puts the reason in `&$error_message` alone. Reporting the real `errno`
+/// would be more informative and would not be PHP.
+#[test]
+fn test_stream_socket_server_reports_a_bind_failure_through_the_message_only() {
+    let out = compile_and_run(
+        r#"<?php
+$first = stream_socket_server("tcp://127.0.0.1:0", $e1, $s1);
+$taken = stream_socket_get_name($first, false);
+$second = @stream_socket_server("tcp://" . $taken, $e2, $s2);
+echo var_export($second === false, true), "|", $e2, "|", $s2;
+fclose($first);
+"#,
+    );
+    assert_eq!(out, "true|0|Address already in use");
+}
+
+/// Verifies an error number does not survive into the NEXT socket call.
+///
+/// The failure reason lives in one process-global, so a helper that never records one — the
+/// `unix://` and IPv6 paths are reached by a tail call — would otherwise hand back whatever the
+/// previous failure left there. The entry of each socket helper clears it for that reason.
+#[test]
+fn test_socket_error_outputs_do_not_leak_between_calls() {
+    let out = compile_and_run(
+        r#"<?php
+$a = @stream_socket_client("tcp://127.0.0.1:1", $e1, $s1, 1);
+$srv = stream_socket_server("tcp://127.0.0.1:0", $e2, $s2);
+echo var_export($e1 !== 0, true), "|", $e2, "|", var_export($s2, true);
+fclose($srv);
+"#,
+    );
+    assert_eq!(out, "true|0|''");
+}
+
 /// Verifies compiled PHP output for stream socket client rejects closed port.
 #[test]
 fn test_stream_socket_client_rejects_closed_port() {
@@ -3229,6 +7793,10 @@ unlink("sgl_cap.txt");
 }
 
 /// Verifies compiled PHP output for stream get line loop terminates at eof.
+///
+/// The trailing newline leaves the stream positioned before EOF, so the loop runs a
+/// third time and that read returns `false`. `false !== ""` holds, so reference PHP
+/// counts three — the count is 3, not 2, and `php -n` agrees.
 #[test]
 fn test_stream_get_line_loop_terminates_at_eof() {
     let (out, dir) = compile_and_run_in_dir(
@@ -3245,7 +7813,73 @@ fclose($f);
 unlink("sgl_eof.txt");
 "#,
     );
-    assert_eq!(out, "2");
+    assert_eq!(out, "3");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_get_line()` tells an empty segment apart from an exhausted stream.
+///
+/// A delimiter sitting at the read position strips the segment to nothing, which PHP
+/// still reports as a string; only a stream with no byte left is false. Testing this
+/// with `var_dump` rather than `.` concatenation is deliberate — string coercion turns
+/// both answers into "" and the divergence disappears.
+#[test]
+fn test_stream_get_line_returns_false_only_once_nothing_remains() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sgl_empty.txt", "a||||b");
+$f = fopen("sgl_empty.txt", "r");
+var_dump(stream_get_line($f, 100, "||"));
+var_dump(stream_get_line($f, 100, "||"));
+var_dump(stream_get_line($f, 100, "||"));
+var_dump(stream_get_line($f, 100, "||"));
+fclose($f);
+unlink("sgl_empty.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"a\"\nstring(0) \"\"\nstring(1) \"b\"\nbool(false)\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a zero `$length` reads php-src's default chunk instead of nothing.
+#[test]
+fn test_stream_get_line_treats_zero_length_as_the_default_chunk() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sgl_zero.txt", str_repeat("z", 9000));
+$f = fopen("sgl_zero.txt", "r");
+echo strlen(stream_get_line($f, 0)), "|", ftell($f);
+fclose($f);
+unlink("sgl_zero.txt");
+"#,
+    );
+    assert_eq!(out, "8192|8192");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a negative `$length` raises php-src's verbatim `ValueError`.
+#[test]
+fn test_stream_get_line_rejects_a_negative_length() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sgl_neg.txt", "data");
+$f = fopen("sgl_neg.txt", "r");
+try {
+    stream_get_line($f, -1);
+} catch (ValueError $e) {
+    echo $e->getMessage();
+}
+fclose($f);
+unlink("sgl_neg.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "stream_get_line(): Argument #2 ($length) must be greater than or equal to 0"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -3307,7 +7941,9 @@ fwrite($pair[1], "ready\n");
 echo stream_get_line($pair[0], 8, "\n");
 "#,
     );
-    assert_eq!(out, "empty|open|ready");
+    // A nonblocking miss consumed no byte, so it reads as false rather than "" — the
+    // point of the test is the middle field: the miss must NOT latch EOF.
+    assert_eq!(out, "data|open|ready");
 }
 
 /// Verifies compiled PHP output for stream socket shutdown on connection.
@@ -3561,9 +8197,12 @@ echo $a . "/" . $b;
 #[test]
 fn test_stream_socket_recvfrom_address_out_param() {
     // The optional 4th argument receives the sender address by reference.
+    //
+    // STREAM_SERVER_BIND is not decoration: PHP's default flags also ask for listen(), which no
+    // datagram transport accepts, so a udp:// server opened without it is `false` in PHP too.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://127.0.0.1:54745");
+$srv = stream_socket_server("udp://127.0.0.1:54745", $e, $m, STREAM_SERVER_BIND);
 $cli = stream_socket_client("udp://127.0.0.1:54745");
 fwrite($cli, "hello");
 $addr = "";
@@ -3599,9 +8238,10 @@ echo $data . "|" . $addr . "|" . strlen($addr);
 /// Verifies compiled PHP output for udp socket round trip.
 #[test]
 fn test_udp_socket_round_trip() {
+    // See test_stream_socket_recvfrom_address_out_param on STREAM_SERVER_BIND.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://127.0.0.1:54740");
+$srv = stream_socket_server("udp://127.0.0.1:54740", $e, $m, STREAM_SERVER_BIND);
 $cli = stream_socket_client("udp://127.0.0.1:54740");
 fwrite($cli, "udp datagram");
 echo fread($srv, 32);
@@ -3615,14 +8255,51 @@ echo fread($srv, 32);
 fn test_stream_socket_sendto_to_udp_address() {
     let out = compile_and_run(
         r#"<?php
-$a = stream_socket_server("udp://127.0.0.1:54741");
-$b = stream_socket_server("udp://127.0.0.1:54742");
+$a = stream_socket_server("udp://127.0.0.1:54741", $e1, $m1, STREAM_SERVER_BIND);
+$b = stream_socket_server("udp://127.0.0.1:54742", $e2, $m2, STREAM_SERVER_BIND);
 echo stream_socket_sendto($b, "abc", 0, "udp://127.0.0.1:54741");
 echo "|";
 echo fread($a, 16);
 "#,
     );
     assert_eq!(out, "3|abc");
+}
+
+/// A datagram transport cannot listen, so PHP fails the server its default flags ask for.
+///
+/// `$flags` defaults to `STREAM_SERVER_BIND|STREAM_SERVER_LISTEN`, and `listen()` is meaningless on
+/// a datagram socket, so `stream_socket_server("udp://…")` is `false` in PHP unless the caller
+/// passes `STREAM_SERVER_BIND` alone. elephc skipped `listen()` for udp and handed back a working
+/// socket, so a script written against PHP took a branch PHP never takes.
+///
+/// Both datagram transports are checked, because the refusal has to sit ahead of the dispatch that
+/// separates them; and the bind-only server is checked in the same program, because a refusal that
+/// also broke the legitimate call would look just as green in the first assertion.
+#[test]
+fn test_datagram_server_refuses_the_default_listen_flags() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$e = 12345;
+$m = "untouched";
+$s = stream_socket_server("udp://127.0.0.1:54906", $e, $m);
+echo ($s === false ? "false" : "resource"), "|", $e, "|[", $m, "]";
+$ok = stream_socket_server("udp://127.0.0.1:54907", $e2, $m2, STREAM_SERVER_BIND);
+echo "|", (is_resource($ok) ? "bind-only-open" : "bind-only-failed");
+$g = stream_socket_server("udg://" . sys_get_temp_dir() . "/elephc_dgram_listen.sock");
+echo "|", ($g === false ? "udg-false" : "udg-open");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|0|[]|bind-only-open|udg-false");
+    // PHP words a failure nothing described as "Unknown error", not as an empty pair of
+    // parentheses, and still leaves `&$error_message` empty — the two come from different places.
+    assert!(
+        out.diagnostics.contains(
+            "Warning: stream_socket_server(): Unable to connect to udp://127.0.0.1:54906 (Unknown error)"
+        ),
+        "expected PHP's wording for a failure with no reason, got diagnostics={}",
+        out.diagnostics
+    );
 }
 
 /// Verifies compiled PHP output for unix socket round trip.
@@ -3649,11 +8326,13 @@ fn test_udg_socket_round_trip() {
     // udg:// is the Unix-domain datagram transport: the server binds (no
     // listen/accept, since datagrams are connectionless), and the client's
     // connect() sets the default destination so fwrite can send a datagram.
+    // Being connectionless is also why STREAM_SERVER_BIND is required — PHP's
+    // default flags ask for a listen() the transport cannot perform.
     let out = compile_and_run(
         r#"<?php
 $path = "/tmp/elephc_udg_codegen_test.sock";
 unlink($path);
-$srv = stream_socket_server("udg://" . $path);
+$srv = stream_socket_server("udg://" . $path, $e, $m, STREAM_SERVER_BIND);
 $cli = stream_socket_client("udg://" . $path);
 fwrite($cli, "udg datagram");
 echo fread($srv, 32);
@@ -3675,8 +8354,8 @@ $srv_path = "/tmp/elephc_udg_sendto_srv.sock";
 $cli_path = "/tmp/elephc_udg_sendto_cli.sock";
 unlink($srv_path);
 unlink($cli_path);
-$srv = stream_socket_server("udg://" . $srv_path);
-$cli = stream_socket_server("udg://" . $cli_path);
+$srv = stream_socket_server("udg://" . $srv_path, $e1, $m1, STREAM_SERVER_BIND);
+$cli = stream_socket_server("udg://" . $cli_path, $e2, $m2, STREAM_SERVER_BIND);
 $n = stream_socket_sendto($cli, "udg-via-sendto", 0, "udg://" . $srv_path);
 echo $n . "|" . fread($srv, 32);
 unlink($srv_path);
@@ -4300,6 +8979,53 @@ fclose($f);
     assert_eq!(out, "body delivered over http");
 }
 
+/// Verifies `stream_get_meta_data()` on an `http://` stream carries `wrapper_data`.
+///
+/// php-src's `php_stream_url_wrap_http` stores the response header lines in
+/// `stream->wrapperdata` and `_php_stream_get_metadata` copies them out under `wrapper_data` —
+/// the SAME array it publishes as `$http_response_header`, status line first, in the order the
+/// server sent them, written after the three fallback flags and before `wrapper_type`. Measured
+/// on `php -n` 8.5.6 against a local server:
+///
+/// ```text
+/// [timed_out] =>            [wrapper_data] => Array
+/// [blocked] => 1                ( [0] => HTTP/1.1 200 OK
+/// [eof] =>                        [1] => Host: 127.0.0.1:8933
+///                                 [2] => Date: …
+///                                 [5] => Content-Length: 11 )
+/// [wrapper_type] => http    [stream_type] => tcp_socket/ssl    [mode] => r
+/// ```
+///
+/// RED before the fix: elephc published the global and left the metadata key out entirely, and
+/// the global itself carried a SEVENTH, empty entry — the blank line that closes the header
+/// block sits inside the scanned region and was being pushed as a header of its own.
+#[test]
+fn test_http_meta_data_carries_the_response_headers() {
+    let (_server, port) = spawn_http_server(b"metabody");
+    let out = compile_and_run(&format!(
+        r#"<?php
+$f = fopen("http://127.0.0.1:{port}/page.txt", "r");
+$m = stream_get_meta_data($f);
+echo implode(",", array_keys($m)) . "\n";
+echo count($m["wrapper_data"]) . "\n";
+echo $m["wrapper_data"][0] . "\n";
+echo $m["wrapper_data"][2] . "\n";
+echo count($http_response_header) . "\n";
+$plain = stream_get_meta_data(fopen("php://memory", "r+"));
+echo array_key_exists("wrapper_data", $plain) ? "leaked" : "absent";
+"#
+    ));
+    assert_eq!(
+        out,
+        "timed_out,blocked,eof,wrapper_data,wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n\
+         3\n\
+         HTTP/1.0 200 OK\n\
+         Content-Length: 8\n\
+         3\n\
+         absent"
+    );
+}
+
 /// `file_get_contents("http://...")` opens the `http://` wrapper, slurps the
 /// whole response body (headers stripped) into an owned string, and returns it
 /// — equivalent to `fopen()` + `stream_get_contents()` + `fclose()` on the URL.
@@ -4313,6 +9039,150 @@ echo "[" . file_get_contents("http://127.0.0.1:{port}/page.txt") . "]";
 "#
     ));
     assert_eq!(out, "[fgc over http body]");
+}
+
+/// Verifies php 8.4's `http_get_last_response_headers()` / `http_clear_last_response_headers()`.
+///
+/// MEASURED on `php -n` 8.5.6 against a local server: the getter answers `NULL`
+/// before any request, the response's header lines (status line first) after one,
+/// and `NULL` again after a clear. The `NULL` is the point — it is a different
+/// answer from the empty array the shared header builder produces, which is why
+/// the getter is a wrapper and not the builder itself.
+#[test]
+fn test_http_get_last_response_headers_is_null_around_the_request() {
+    let (_server, port) = spawn_http_server(b"lastheaders");
+    let out = compile_and_run(&format!(
+        r#"<?php
+var_dump(http_get_last_response_headers());
+$f = fopen("http://127.0.0.1:{port}/page.txt", "r");
+$h = http_get_last_response_headers();
+echo is_array($h) ? "array" : "not-array", "\n";
+echo count($h), "\n";
+echo $h[0], "\n";
+http_clear_last_response_headers();
+var_dump(http_get_last_response_headers());
+fclose($f);
+"#
+    ));
+    assert_eq!(
+        out,
+        "NULL\n\
+         array\n\
+         3\n\
+         HTTP/1.0 200 OK\n\
+         NULL\n"
+    );
+}
+
+/// Verifies the `$http_response_header` deprecation NAMES ITS LINE, as every php diagnostic does.
+///
+/// MEASURED on `php -n` 8.5.6, on this exact program:
+///
+/// ```text
+/// Deprecated: The predefined locally scoped $http_response_header variable is deprecated, call
+/// http_get_last_response_headers() instead in /path/test.php on line 3
+/// x
+///
+/// Warning: Undefined variable $http_response_header in /path/test.php on line 3
+/// y
+/// ```
+///
+/// elephc printed the deprecation with NO location at all. The suffix is published per
+/// instruction by the lowering, and this notice is emitted from the main prologue, where there is
+/// no instruction to read a span from — so the channel had nothing to append.
+///
+/// KNOWN GAP, deliberately not asserted: php also raises `Warning: Undefined variable
+/// $http_response_header` at the read itself, which elephc does not emit at all — a separate
+/// hole, in the undefined-variable path rather than in the location one this test pins. Asserting
+/// the deprecation line alone keeps the test honest about what was fixed; when the missing
+/// warning lands, the expectation below grows a second line.
+#[test]
+fn test_http_response_header_deprecation_names_the_mention_line() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo "x\n";
+$v = $http_response_header;
+echo "y\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x\ny\n");
+    assert_eq!(
+        out.located_diagnostics,
+        concat!(
+            "Deprecated: The predefined locally scoped $http_response_header variable is ",
+            "deprecated, call http_get_last_response_headers() instead in test.php on line 3\n",
+        )
+    );
+}
+
+/// Verifies php 8.5's `$http_response_header` deprecation is version-gated.
+///
+/// php raises it while COMPILING a file that names the variable, so it fires once
+/// per file and before any script output — MEASURED on `php -n` 8.5.6, including
+/// for a mention inside `if (false)`. elephc emits it from the main prologue for
+/// the same reason, and only when the program actually names the variable, so a
+/// program that uses `http_get_last_response_headers()` instead stays quiet.
+#[test]
+fn test_http_response_header_deprecation_is_gated_on_php_85() {
+    use std::fs;
+    for (version, expected) in [("8.4", false), ("8.5", true)] {
+        let dir = make_cli_test_dir("elephc_http_response_header_dep");
+        let php_path = dir.join("main.php");
+        fs::write(
+            &php_path,
+            r#"<?php
+$f = fopen("http://127.0.0.1:9/page.txt", "r");
+if ($f !== false) { echo count($http_response_header); }
+echo "done";
+"#,
+        )
+        .unwrap();
+        let output = elephc_cli_command(&dir)
+            .arg("--php-version")
+            .arg(version)
+            .arg("--emit-asm")
+            .arg(&php_path)
+            .output()
+            .expect("failed to emit assembly for the deprecation gate");
+        assert!(
+            output.status.success(),
+            "{version}: --emit-asm failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(dir.join("main.s")).expect("emitted assembly");
+        let present = asm.contains("locally scoped $http_response_header variable is deprecated");
+        assert_eq!(
+            present, expected,
+            "{version}: the $http_response_header deprecation must be emitted only from 8.5"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // A program that never names the variable must not carry the notice at all.
+    let dir = make_cli_test_dir("elephc_http_response_header_quiet");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+var_dump(http_get_last_response_headers());
+"#,
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--php-version")
+        .arg("8.5")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit assembly for the quiet case");
+    assert!(output.status.success());
+    let asm = fs::read_to_string(dir.join("main.s")).expect("emitted assembly");
+    assert!(
+        !asm.contains("locally scoped $http_response_header variable is deprecated"),
+        "the replacement function must not drag the deprecation in"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// `file_get_contents($url)` routes a runtime string beginning with `http://`
@@ -4341,6 +9211,86 @@ echo "[" . file_get_contents("https://127.0.0.1:{port}/page.txt") . "]";
 "#
     ));
     assert_eq!(out, "[fgc over local https]");
+}
+
+/// Returns the SHA-1 of the test server's leaf certificate DER, lowercase hex.
+///
+/// This is the value a program would write as a bare `ssl.peer_fingerprint`
+/// string: php-src infers the digest from the string's LENGTH, and 40 hex
+/// characters means SHA-1.
+fn test_https_cert_sha1_hex() -> String {
+    let mut reader = TEST_HTTPS_CERT_PEM.as_bytes();
+    let der = rustls_pemfile::certs(&mut reader)
+        .next()
+        .expect("fingerprint test: a certificate in the fixture")
+        .expect("fingerprint test: parse the fixture certificate");
+    let mut hasher = <sha1::Sha1 as sha1::Digest>::new();
+    sha1::Digest::update(&mut hasher, der.as_ref());
+    let digest = sha1::Digest::finalize(hasher);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Verifies `ssl.peer_fingerprint` pins the peer's leaf certificate.
+///
+/// MEASURED on `php -n` 8.5.6: a matching pin lets the request through, and a
+/// mismatch prints `peer_fingerprint match failure` and then fails the open.
+/// A BARE string is matched by length — 32 hex is MD5 and 40 is SHA-1 — so the
+/// 40-character SHA-1 below is the spelling php recognizes without an array.
+///
+/// The pin is checked after the handshake, against the certificate the peer
+/// actually presented, which is why it composes with `verify_peer => "0"`:
+/// relaxing chain verification must not relax the pin.
+#[test]
+fn test_https_peer_fingerprint_pins_the_peer_certificate() {
+    let sha1 = test_https_cert_sha1_hex();
+    assert_eq!(sha1.len(), 40, "a SHA-1 hex digest is 40 characters");
+    let (_server, port) = spawn_https_server(b"pinned body");
+    let out = compile_and_run(&format!(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "peer_fingerprint", "{sha1}");
+echo "[" . file_get_contents("https://127.0.0.1:{port}/page.txt") . "]";
+"#
+    ));
+    assert_eq!(out, "[pinned body]");
+}
+
+/// Verifies a WRONG `ssl.peer_fingerprint` refuses the connection.
+///
+/// Without this the option was accepted and never checked, which is the worst
+/// shape a security control can take: the program reads as pinned and is not.
+#[test]
+fn test_https_peer_fingerprint_mismatch_fails_the_open() {
+    let (_server, port) = spawn_https_server(b"never delivered");
+    let wrong = "0".repeat(40);
+    let out = compile_and_run(&format!(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "peer_fingerprint", "{wrong}");
+echo (@file_get_contents("https://127.0.0.1:{port}/page.txt") === false) ? "refused" : "served";
+"#
+    ));
+    assert_eq!(out, "refused");
+}
+
+/// Verifies a bare 64-character SHA-256 pin is refused, as it is in php.
+///
+/// php-src recognizes only two BARE lengths (32 = MD5, 40 = SHA-1); a 64-hex
+/// string has no inferred algorithm and fails the match even when it is the
+/// correct SHA-256 of the peer certificate — MEASURED on `php -n` 8.5.6 against
+/// a public endpoint whose SHA-256 had been captured through `capture_peer_cert`.
+#[test]
+fn test_https_peer_fingerprint_bare_sha256_is_refused_like_php() {
+    let (_server, port) = spawn_https_server(b"never delivered");
+    let sha256_shaped = "a".repeat(64);
+    let out = compile_and_run(&format!(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "peer_fingerprint", "{sha256_shaped}");
+echo (@file_get_contents("https://127.0.0.1:{port}/page.txt") === false) ? "refused" : "served";
+"#
+    ));
+    assert_eq!(out, "refused");
 }
 
 /// `file_get_contents($url)` also succeeds when the runtime string uses
@@ -5014,15 +9964,45 @@ echo stream_wrapper_register("foo", "W") ? "true" : "false";
     assert_eq!(out, "true|false|true");
 }
 
-/// Verifies compiled PHP output for stream wrapper restore always true.
+/// Verifies `stream_wrapper_restore()` answers PHP's three cases, diagnostics included.
+///
+/// php 8.5.6 distinguishes them: a built-in that `stream_wrapper_unregister()` disabled is
+/// restored silently and reports `true`; a built-in that was never disabled reports `true`
+/// with a Notice; a scheme that never existed reports `false` with a Warning. The return
+/// values already matched — the two diagnostics were missing.
+///
+/// Both travel on the diagnostic stream, in the order the calls run: PHP CLI writes every
+/// severity to stdout through the output buffer, and elephc now does the same. The three return
+/// values print on their own.
 #[test]
-fn test_stream_wrapper_restore_always_true() {
-    // v1 cannot unregister built-in wrappers, so stream_wrapper_restore()
-    // is effectively a no-op that reports success.
-    let out = compile_and_run(
-        r#"<?php echo stream_wrapper_restore("file") ? "true" : "false";"#,
+fn test_stream_wrapper_restore_reports_phps_three_cases() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(stream_wrapper_restore("file"));
+var_dump(stream_wrapper_restore("nosuch"));
+stream_wrapper_unregister("file");
+var_dump(stream_wrapper_restore("file"));
+"#,
     );
-    assert_eq!(out, "true");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(true)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Notice: stream_wrapper_restore(): file:// was never changed, nothing to restore\n\
+         Warning: stream_wrapper_restore(): nosuch:// never existed, nothing to restore\n"
+    );
+}
+
+/// Verifies `@` suppresses the unknown-scheme Warning, as it does every runtime warning.
+#[test]
+fn test_stream_wrapper_restore_warning_is_suppressible() {
+    let out = compile_and_run_capture(
+        r#"<?php var_dump(@stream_wrapper_restore("nosuch"));"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies compiled PHP output for stream socket enable crypto reads peer name from context.
@@ -5134,9 +10114,8 @@ fclose($m);
 /// Verifies compiled PHP output for stream context create returns resource.
 #[test]
 fn test_stream_context_create_returns_resource() {
-    // v1 stub: stream_context_create/get_default return a resource so PHP
-    // code that constructs or consults stream contexts compiles. The options
-    // are not yet persisted on the resource.
+    // Context creation and the lazy default each return a registry resource
+    // whose ContextState owns its independently persisted options and notifier.
     let out = compile_and_run(
         r#"<?php
 $c = stream_context_create(["http" => ["method" => "POST"]]);
@@ -5154,9 +10133,8 @@ echo stream_context_set_option($c, "http", "method", "GET") ? "set-ok" : "FAIL";
 /// Verifies compiled PHP output for stream context get options returns array.
 #[test]
 fn test_stream_context_get_options_returns_array() {
-    // stream_context_get_options now returns the hash that was passed to
-    // stream_context_create (Phase 11 B2 — single global context slot in v1).
-    // stream_context_get_params is still an empty-array stub.
+    // get_options returns the addressed ContextState's live COW snapshot, while
+    // get_params reconstructs the exact notification/options parameter map.
     let out = compile_and_run(
         r#"<?php
 $c = stream_context_create(["http" => ["method" => "POST"]]);
@@ -5284,13 +10262,11 @@ echo ($a && $b ? "ok" : "FAIL") . "|" . $count;
     assert_eq!(out, "ok|2");
 }
 
-/// Verifies compiled PHP output for stream context set option two arg replaces options.
+/// Verifies the two-argument stream context option form merges wrapper maps.
 #[test]
-fn test_stream_context_set_option_two_arg_replaces_options() {
-    // Phase 11 B2: the 2-arg form
-    // stream_context_set_option(ctx, options_array) overwrites the
-    // global persisted options hash, so a subsequent get_options sees
-    // the new wrapper set.
+fn test_stream_context_set_option_two_arg_merges_options() {
+    // The two-argument form merges incoming wrappers and each wrapper's option
+    // map into the addressed ContextState, preserving entries absent from the patch.
     let out = compile_and_run(
         r#"<?php
 $ctx = stream_context_create(["http" => ["method" => "POST"]]);
@@ -5316,12 +10292,14 @@ echo count(stream_context_get_options($d));
     assert_eq!(out, "0");
 }
 
-/// Verifies compiled PHP output for stream set buffer stubs.
+/// Verifies compiled PHP output for the stream buffer setters on a non-wrapper stream.
 #[test]
 fn test_stream_set_buffer_stubs() {
     // stream_set_chunk_size returns the previous chunk size (8192 default on the
-    // first call); the read/write buffer setters return 0 ("success" — elephc
-    // streams are unbuffered, so the size has no effect).
+    // first call). The buffer setters do NOT both answer 0: measured on php 8.5.6,
+    // `php://memory` answers 0 for the read buffer and -1 for the write buffer, the
+    // same split a real file gives. This assertion used to read "8192|0|0", which was
+    // the no-op lowering writing down its own return value.
     let out = compile_and_run(
         r#"<?php
 $m = fopen("php://memory", "r+");
@@ -5333,7 +10311,7 @@ echo stream_set_write_buffer($m, 0);
 fclose($m);
 "#,
     );
-    assert_eq!(out, "8192|0|0");
+    assert_eq!(out, "8192|0|-1");
 }
 
 /// `stream_set_chunk_size` returns the PREVIOUS per-fd chunk size (PHP's
@@ -5353,6 +10331,1311 @@ fclose($m);
 "#,
     );
     assert_eq!(out, "8192|4096|2048");
+}
+
+/// Pins PHP's own out-parameter idiom: `&$errno` / `&$errstr` passed undeclared.
+///
+/// PHP auto-vivifies a variable bound to a by-reference parameter, which is why every manual
+/// example writes the call this way and never declares the two error variables. The parameters
+/// are declared `ref(Int)` / `ref(Str)` in the registry, so the checker treats those argument
+/// positions as definition sites and gives each variable the type the builtin writes.
+#[test]
+fn test_socket_out_parameters_may_be_undeclared() {
+    let out = compile_and_run(
+        r#"<?php
+$s = @stream_socket_client("tcp://127.0.0.1:1", $errno, $errstr, 1);
+echo var_export($s === false, true), "|", gettype($errno), "|", gettype($errstr);
+"#,
+    );
+    assert_eq!(out, "true|integer|string");
+}
+
+/// Pins that a NAMED out-parameter binds the parameter it names, not the one sharing its index.
+///
+/// `error_message:` is the third parameter but the second argument here, so resolving by position
+/// would type `$why` as `int` and the runtime would then write a string pointer into an integer
+/// slot. It also pins that omitting `$error_code` is allowed: normalization materialises the
+/// parameter's `null` default at that position, which a by-reference argument check must accept.
+#[test]
+fn test_named_out_parameter_binds_the_parameter_it_names() {
+    let out = compile_and_run(
+        r#"<?php
+$c = @stream_socket_client("unix:///nonexistent/elephc-probe.sock", error_message: $why);
+echo gettype($why), "=", $why;
+"#,
+    );
+    assert_eq!(out, "string=No such file or directory");
+}
+
+/// Pins that a by-ref output still refuses an argument with nowhere to write back into.
+#[test]
+fn test_out_parameter_rejects_an_argument_without_storage() {
+    let error = compile_expect_type_error(
+        r#"<?php
+$c = @stream_socket_client("tcp://127.0.0.1:1", 0, $errstr, 1);
+"#,
+    );
+    assert!(
+        error.contains("parameter $error_code must be passed a variable"),
+        "expected the by-reference storage diagnostic, got: {error}"
+    );
+}
+
+/// Pins that the undeclared out-parameter also works in statement position, where the call's
+/// result is discarded — `flock()` is the non-socket member of the same family.
+#[test]
+fn test_flock_would_block_out_parameter_may_be_undeclared() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+flock($h, LOCK_SH, $would);
+echo gettype($would), "=", var_export($would, true);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "integer=0");
+}
+
+/// Pins that a by-ref out-parameter whose variable already holds an incompatible type reports
+/// elephc's ordinary reassignment error.
+///
+/// The write used to go straight into the caller's slot without consulting its representation:
+/// an `int` landing in a `string` slot overwrote the pointer half with a small integer, and the
+/// program segfaulted on the next read. Binding the out-parameter through the normal assignment
+/// merge is what turns that silent corruption into a diagnostic.
+#[test]
+fn test_by_ref_out_parameter_rejects_an_incompatible_variable() {
+    let error = compile_expect_type_error(
+        r#"<?php
+$would = "untouched";
+$h = fopen("php://memory", "r+");
+flock($h, LOCK_SH, $would);
+"#,
+    );
+    assert!(
+        error.contains("cannot reassign $would from string to int"),
+        "expected a reassignment diagnostic, got: {error}"
+    );
+}
+
+/// Verifies `fopen()` honours a `php://` scheme in a path built at RUN TIME, not only in a
+/// literal.
+///
+/// The wrapper dispatch is a compile-time chain over the constant-folded filename, and the
+/// dynamic path used to recognise `http://` alone — so every other scheme opened as a plain file
+/// name, failed to find it, and answered `false`. That is the shape real code takes: a function
+/// receives its path as a parameter, so the literal-only dispatch was invisible until a caller
+/// passed one in. `__rt_php_wrapper_open` now makes the same choices from the run-time bytes.
+///
+/// Measured against php 8.5.6, which opens all of these.
+#[test]
+fn test_fopen_honours_a_php_scheme_built_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(string $label, string $path, string $mode): void {
+    $h = @fopen($path, $mode);
+    echo $label, "=", var_export($h !== false, true), " ";
+    if ($h !== false) { fclose($h); }
+}
+$p = "php://";
+probe("memory", $p . "memory", "r+");
+probe("temp", $p . "temp", "r+");
+probe("stdout", $p . "stdout", "w");
+probe("stderr", $p . "stderr", "w");
+probe("input", $p . "input", "r");
+probe("output", $p . "output", "w");
+probe("fd1", $p . "fd/1", "w");
+probe("maxmemory", $p . "temp/maxmemory:16", "r+");
+echo "|";
+$m = fopen($p . "memory", "r+");
+fwrite($m, "round trip");
+rewind($m);
+echo stream_get_contents($m);
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        "memory=true temp=true stdout=true stderr=true input=true output=true fd1=true \
+         maxmemory=true |round trip"
+    );
+}
+
+/// Pins that a run-time `php://` URL naming no stream answers `false` rather than opening
+/// something.
+///
+/// The dispatcher walks a table and reports `-1` for anything it does not recognise, which boxes
+/// as PHP's `false`. Without this the unknown case would be indistinguishable from the schemes
+/// that work.
+#[test]
+fn test_fopen_rejects_an_unknown_php_scheme_built_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
+$p = "php://";
+echo var_export(@fopen($p . "nosuchstream", "r"), true), "|";
+echo var_export(@fopen($p . "fd/notanumber", "r"), true), "|";
+echo var_export(@fopen($p, "r"), true);
+"#,
+    );
+    assert_eq!(out, "false|false|false");
+}
+
+/// Verifies a run-time `php://` handle behaves like a literal one in the ways most likely to
+/// break: descriptor ownership, filters, and independence.
+///
+/// A descriptor-backed scheme must hand out a `dup()` — closing a `php://stdout` handle that WAS
+/// descriptor 1 would take the program's own output with it. A run-time handle must also accept a
+/// filter and honour the filtered-read buffer, and two handles to `php://temp` must not share a
+/// buffer.
+#[test]
+fn test_a_run_time_php_handle_behaves_like_a_literal_one() {
+    let out = compile_and_run(
+        r#"<?php
+$p = "php://";
+$o = fopen($p . "stdout", "w");
+fwrite($o, "via-handle ");
+fclose($o);
+echo "still-alive|";
+
+$f = fopen($p . "memory", "r+");
+fwrite($f, "abcdef");
+rewind($f);
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+$parts = [];
+while (!feof($f)) {
+    $c = fread($f, 2);
+    if ($c === "") { break; }
+    $parts[] = $c;
+}
+echo implode(",", $parts), "|";
+fclose($f);
+
+$a = fopen($p . "temp", "r+");
+$b = fopen($p . "temp", "r+");
+fwrite($a, "AAA");
+fwrite($b, "BBB");
+rewind($a);
+rewind($b);
+echo fread($a, 3), fread($b, 3);
+fclose($a);
+fclose($b);
+"#,
+    );
+    assert_eq!(out, "via-handle still-alive|AB,CD,EF|AAABBB");
+}
+
+/// Verifies a `php://filter` URL built at RUN TIME opens and filters.
+///
+/// A filter URL is "open this, then filter it", so the parse hands the open path the RESOURCE and
+/// the named filter is attached once the stream exists. That keeps the resource on whatever open
+/// path it deserves — this covers both a plain file and a nested `php://temp`, and checks that a
+/// plain open afterwards does not inherit the filter.
+#[test]
+fn test_php_filter_url_built_at_run_time_opens() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("pf.txt", "hello");
+$url = "php://filter/read=string.toupper/resource=" . "pf.txt";
+$f = fopen($url, "r");
+echo "file=", stream_get_contents($f), "|";
+fclose($f);
+
+$nested = "php://filter/read=string.toupper/resource=php://" . "temp";
+$g = fopen($nested, "r+");
+fwrite($g, "abc");
+rewind($g);
+echo "nested=", stream_get_contents($g), "|";
+fclose($g);
+
+$h = fopen("pf" . ".txt", "r");
+echo "plain=", stream_get_contents($h);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "file=HELLO|nested=ABC|plain=hello");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a run-time filter URL that names nothing usable opens the resource unfiltered,
+/// throws, or fails — each the way php does it.
+///
+/// An unknown filter name is what php-src tolerates by opening the resource plain. A URL with
+/// no `/resource=` at all is answered with `Error: No URL resource specified` — a THROW, not a
+/// warning, and `@` does not soften it; the same Error covers the literal spelling, where the
+/// decision is made at compile time. The NESTED case still pins a KNOWN DIVERGENCE: php
+/// recurses into a `resource=php://filter/...` and applies both levels, elephc refuses the
+/// open — loudly, as `false` — until the parses learn to recurse.
+#[test]
+fn test_run_time_filter_url_edge_cases() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("pf.txt", "hello");
+$unknown = "php://filter/read=no.such.filter/resource=" . "pf.txt";
+$a = @fopen($unknown, "r");
+echo "unknown=", var_export($a !== false, true);
+if ($a !== false) { echo ":", stream_get_contents($a); fclose($a); }
+$nores = "php://filter/read=string." . "toupper";
+try {
+    @fopen($nores, "r");
+    echo " noresource=unreached";
+} catch (Error $e) {
+    echo " noresource=", $e->getMessage();
+}
+$nested = "php://filter/read=string.toupper/resource=php://filter/read=string." . "tolower";
+echo " nested=", var_export(@fopen($nested, "r"), true);
+"#,
+    );
+    assert_eq!(
+        out,
+        "unknown=true:hello noresource=No URL resource specified nested=false"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a RUN-TIME `php://filter` chain runs every filter, in order.
+///
+/// The literal path resolved the whole `|` chain; the run-time parse stopped at the first name and
+/// said nothing, so `read=a|b` answered `a`'s output. That is the worst shape a wrong answer takes
+/// — plausible bytes, no diagnostic — and it only reached this path when the URL was assembled
+/// rather than written out, which is why the literal test above stayed green throughout.
+///
+/// `convert.base64-encode` and `string.toupper` do not commute, so swapping them proves the ORDER
+/// is right rather than just the count. The third case pins that an unrecognised name is SKIPPED
+/// and its neighbours still apply — the same reading the literal path was measured against.
+#[test]
+fn test_run_time_filter_chain_applies_every_filter_in_order() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rtchain.txt", "Hello World");
+$res = "rtchain" . ".txt";
+$a = fopen("php://filter/read=convert.base64-encode|string.toupper/resource=" . $res, "r");
+echo stream_get_contents($a), "|";
+fclose($a);
+$b = fopen("php://filter/read=string.toupper|convert.base64-encode/resource=" . $res, "r");
+echo stream_get_contents($b), "|";
+fclose($b);
+$c = fopen("php://filter/read=string.toupper|no.such.filter/resource=" . $res, "r");
+echo stream_get_contents($c), "|";
+fclose($c);
+$d = fopen("php://filter/read=string.tolower|string.rot13|string.toupper/resource=" . $res, "r");
+echo stream_get_contents($d);
+fclose($d);
+unlink("rtchain.txt");
+"#,
+    );
+    // The same four expectations `php -n` 8.5.6 produces for these URLs. The fourth runs THREE
+    // names, because a two-slot hand-off would pass a two-filter test and still drop the tail.
+    assert_eq!(
+        out,
+        "SGVSBG8GV29YBGQ=|SEVMTE8gV09STEQ=|HELLO WORLD|URYYB JBEYQ"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `file_get_contents()` reads a RUN-TIME `php://filter` URL through the chain.
+///
+/// The literal spelling worked and `fopen()` on the same dynamic URL worked; the byte reader
+/// was the one consumer left out, because it never creates a stream and a filter chain has
+/// nowhere to attach. The route opens the RESOURCE through the same runtime openers `fopen()`
+/// dispatches to — a plain file and a data:// URI are both covered here — attaches the parked
+/// chain, and reads through it.
+///
+/// The failure wording is part of the assertion: php names `file_get_contents` and the WHOLE
+/// URL with the wrapper's generic `operation failed`, not the inner opener and the bare
+/// resource path — the inner warning is suppressed through the same depth counter `@` uses,
+/// so the `@`-suppressed probe must print nothing at all.
+///
+/// The `no.such|missing.too` read once expected NO output at all, which was this test reading
+/// the implementation back to itself: the run-time parse dropped a name it could not resolve
+/// without a word. `php -n` 8.5.6 on this exact script prints four lines for it — two per name,
+/// `Unable to locate filter` then `Unable to create filter`, in chain order — and still returns
+/// the file's bytes, so the expectation below is php's, not elephc's.
+#[test]
+fn test_file_get_contents_reads_a_run_time_filter_url() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("fgcrt.txt", "Hello World");
+$res = "fgcrt" . ".txt";
+echo file_get_contents("php://filter/read=string.toupper|string.rot13/resource=" . $res), "|";
+echo file_get_contents("php://filter/read=string.toupper/resource=data://text/plain," . "abc"), "|";
+var_dump(@file_get_contents("php://filter/read=string.toupper/resource=" . "absent.txt"));
+echo file_get_contents("php://filter/read=no.such|missing.too/resource=" . $res), "|";
+var_dump(file_get_contents("php://filter/read=string.toupper/resource=" . "absent.txt"));
+unlink("fgcrt.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "URYYB JBEYQ|ABC|bool(false)\nHello World|bool(false)\n"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: file_get_contents(): Unable to locate filter \"no.such\"\n\
+         Warning: file_get_contents(): Unable to create filter (no.such)\n\
+         Warning: file_get_contents(): Unable to locate filter \"missing.too\"\n\
+         Warning: file_get_contents(): Unable to create filter (missing.too)\n\
+         Warning: file_get_contents(php://filter/read=string.toupper/resource=absent.txt): \
+         Failed to open stream: operation failed\n",
+        "php's wording throughout: two lines per unresolvable name, then the unsuppressed failure"
+    );
+}
+
+/// Verifies `file_put_contents()` writes THROUGH a `php://filter/write=...` chain.
+///
+/// The one-shot writer has nowhere to attach a chain, so a filter URL used to reach it as a
+/// FILENAME — and before the writer checked its open result, the payload went out through a
+/// garbage descriptor. The route opens the resource, attaches the parked write chain, writes
+/// through it and closes; php answers the INPUT byte count, which is what the filtered write
+/// helper returns. One spelling serves both forms (the URL is probed at run time), so the
+/// literal and the assembled URL are asserted against the same expectations:
+/// `rot13|toupper` proves order, FILE_APPEND proves the mode bit, and the unopenable resource
+/// proves the failure warns in php's words — naming `file_put_contents` and the WHOLE URL —
+/// and answers false.
+#[test]
+fn test_file_put_contents_writes_through_a_filter_chain() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(file_put_contents("php://filter/write=string.rot13|string.toupper/resource=wf1.txt", "hello"));
+echo file_get_contents("wf1.txt"), "|";
+unlink("wf1.txt");
+file_put_contents("wf2.txt", "AB");
+var_dump(file_put_contents("php://filter/write=string.rot13/resource=" . "wf2" . ".txt", "cd", FILE_APPEND));
+echo file_get_contents("wf2.txt"), "|";
+unlink("wf2.txt");
+var_dump(file_put_contents("php://filter/write=string.rot13/resource=/no/such/wf.txt", "data"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "int(5)\nURYYB|int(2)\nABpq|bool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: file_put_contents(php://filter/write=string.rot13/resource=/no/such/wf.txt): \
+         Failed to open stream: operation failed\n",
+        "php's wording, the whole URL, and no inner-opener leak"
+    );
+}
+
+/// Verifies `readfile()` and `file()` read through a `php://filter` chain, both spellings.
+///
+/// Every path-taking reader now consults the same run-time filter route: `readfile()` streams
+/// the filtered bytes to the output sink and answers the byte count; `file()` splits the
+/// filtered bytes through `__rt_file`'s second entry — the ordinary entry performs its own
+/// read and cannot be handed bytes that were already read through a chain.
+#[test]
+fn test_readfile_and_file_read_through_a_filter_chain() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rfl.txt", "Hello World\n");
+$res = "rfl" . ".txt";
+var_dump(readfile("php://filter/read=string.toupper/resource=rfl.txt"));
+var_dump(readfile("php://filter/read=string.toupper/resource=" . $res));
+var_dump(file("php://filter/read=string.toupper/resource=rfl.txt"));
+var_dump(file("php://filter/read=string.rot13/resource=" . $res, FILE_IGNORE_NEW_LINES));
+unlink("rfl.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "HELLO WORLD\nint(12)\nHELLO WORLD\nint(12)\narray(1) {\n  [0]=>\n  \
+         string(12) \"HELLO WORLD\n\"\n}\narray(1) {\n  [0]=>\n  string(11) \"Uryyb Jbeyq\"\n}\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a NESTED literal filter URL recurses, as php does.
+///
+/// The inner level sits closest to the bytes, so its chain applies FIRST and the outer chain
+/// sees what the inner produced: toupper-then-rot13 for the double, and the triple proves the
+/// order is depth-driven rather than a two-level accident. The ASSEMBLED spelling still pins
+/// the loud refusal in `test_run_time_filter_url_edge_cases` — the run-time parse does not
+/// recurse yet, and that divergence stays recorded there.
+#[test]
+fn test_a_nested_literal_filter_url_recurses_like_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("nf.txt", "Hello World");
+echo file_get_contents("php://filter/read=string.rot13/resource=php://filter/read=string.toupper/resource=nf.txt"), "|";
+$h = fopen("php://filter/read=string.rot13/resource=php://filter/read=string.toupper/resource=nf.txt", "r");
+echo stream_get_contents($h), "|";
+fclose($h);
+echo file_get_contents("php://filter/read=string.tolower/resource=php://filter/read=string.rot13/resource=php://filter/read=string.toupper/resource=nf.txt");
+unlink("nf.txt");
+"#,
+    );
+    assert_eq!(out, "URYYB JBEYQ|URYYB JBEYQ|uryyb jbeyq");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a run-time filter chain whose names are ALL unrecognised opens the resource plain.
+///
+/// The direction is published from the resolved count, so this is the case that distinguishes
+/// "no filter matched" from "the URL named no filters at all" — both must open unfiltered rather
+/// than fail, which is what `php -n` does.
+#[test]
+fn test_run_time_filter_chain_of_unknown_names_opens_unfiltered() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rtunk.txt", "Hello");
+$res = "rtunk" . ".txt";
+$a = @fopen("php://filter/read=no.such|also.missing/resource=" . $res, "r");
+echo var_export($a !== false, true), ":", stream_get_contents($a);
+fclose($a);
+unlink("rtunk.txt");
+"#,
+    );
+    assert_eq!(out, "true:Hello");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a `data://` URI built at RUN TIME decodes and opens.
+///
+/// A literal URI is decoded during lowering and its bytes embedded, which left a run-time one
+/// with no path at all. Decoding needed nothing new in the runtime: `__rt_base64_decode` and
+/// `__rt_urldecode` already exist, and the latter's `+`-as-space rule is what the compile-time
+/// decoder applies to these URIs too.
+#[test]
+fn test_fopen_honours_a_data_url_built_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(string $label, string $uri): void {
+    $h = @fopen($uri, "r");
+    echo $label, "=", var_export($h !== false, true);
+    if ($h !== false) { echo ":", stream_get_contents($h); fclose($h); }
+    echo " ";
+}
+$d = "data://";
+probe("plain", $d . "text/plain,hi");
+probe("pct", $d . "text/plain,a%20b%21");
+probe("b64", $d . "text/plain;base64,aGVsbG8=");
+probe("empty", $d . "text/plain,");
+probe("nocomma", $d . "text/plain");
+"#,
+    );
+    assert_eq!(out, "plain=true:hi pct=true:a b! b64=true:hello empty=true: nocomma=false ");
+}
+
+/// Verifies PHP's optional `fgets($handle, $length)`, which bounds the line.
+///
+/// php 8.5.6 reads at most `$length - 1` bytes, leaves the remainder for the next read, answers
+/// `false` when the bound leaves room for nothing, and rejects a non-positive bound with a
+/// `ValueError`. The builtin used to take a single parameter, so `fgets($conn, 1024)` — the
+/// ordinary way to read a request line — did not compile at all.
+#[test]
+fn test_fgets_accepts_phps_length_bound() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+fwrite($h, "abcdefghij\nsecond\n");
+rewind($h);
+echo var_export(fgets($h, 5), true), "|", var_export(fgets($h), true), "|";
+rewind($h);
+echo var_export(fgets($h, 2), true), "|", var_export(fgets($h, 1), true), "|";
+rewind($h);
+echo var_export(fgets($h, 100), true);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "'abcd'|'efghij\n'|'a'|false|'abcdefghij\n'");
+}
+
+/// Verifies a non-positive `$length` raises php-src's `ValueError` rather than reading unbounded.
+///
+/// Zero is what an omitted argument means to the runtime helper, so a caller-supplied zero has to
+/// be rejected before it reaches it — otherwise `fgets($h, 0)` would quietly read a whole line.
+#[test]
+fn test_fgets_rejects_a_non_positive_length() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+fwrite($h, "abcdefghij\n");
+rewind($h);
+foreach ([0, -1] as $len) {
+    try {
+        fgets($h, $len);
+        echo "no-throw|";
+    } catch (ValueError $e) {
+        echo $e->getMessage(), "|";
+    }
+}
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        "fgets(): Argument #2 ($length) must be greater than 0|\
+         fgets(): Argument #2 ($length) must be greater than 0|"
+    );
+}
+
+/// Verifies a string that arrives as a boxed `Mixed` can still be indexed.
+///
+/// `fgets()` and `fread()` report `string|false`, which is carried as a boxed Mixed, and the
+/// boxed reader knew arrays, hashes, stdClass and null — but not strings, so `$s[0]` fell
+/// through to NULL. Nothing announced it: `ord(null)` is 0 and `null` prints as nothing, so
+/// `$s = fgets($h); echo $s[0];` simply produced empty output.
+///
+/// The out-of-range rows matter as much as the in-range ones: php answers `""` there, not
+/// null, and it counts a negative offset back from the end.
+#[test]
+fn test_indexing_a_boxed_mixed_string_reads_the_byte() {
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+fwrite($m, "Hello");
+rewind($m);
+$s = fgets($m);              // string|false, so the value is boxed
+foreach ([0, 4, -1, -5] as $i) {
+    echo var_export($s[$i], true), ",";
+}
+foreach ([5, -6] as $i) {    // out of range in both directions
+    echo var_export(@$s[$i], true), ",";
+}
+var_dump($s[0] === "H");
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "'H','o','o','H','','',bool(true)\n");
+}
+
+/// Verifies a stream opened read-only refuses a write, and that every writable mode still
+/// writes.
+///
+/// `php://memory` and `php://temp` are backed by a temporary FILE that elephc opens
+/// read-write whatever the caller asked, so `fopen("php://memory", "r")` accepted writes and
+/// the bytes were really there to read back. A file opened `'r'` was already refused, but by
+/// the OS rather than by elephc.
+///
+/// The mode elephc records on the stream is the authority — the same string
+/// `stream_get_meta_data()['mode']` reports — so the two cannot disagree about what a stream
+/// allows. The second half of the test is the one that matters: a guard that refuses too much
+/// would break every ordinary write, and `a`/`c`/`x` do not start with `r` while `r+` does.
+#[test]
+fn test_a_read_only_stream_refuses_writes() {
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r");
+echo var_export(@fwrite($m, "X"), true), ",";
+rewind($m);
+echo var_export(fread($m, 10), true), "|";
+fclose($m);
+
+$t = fopen("php://temp", "r");
+echo var_export(@fwrite($t, "X"), true), "|";
+fclose($t);
+
+$p = tempnam(sys_get_temp_dir(), "wr");
+foreach (["w", "a", "r+", "w+", "a+", "c"] as $mode) {
+    @unlink($p);
+    file_put_contents($p, "seed");
+    $h = fopen($p, $mode);
+    echo var_export(fwrite($h, "Z"), true), ",";
+    fclose($h);
+}
+$mm = fopen("php://memory", "w+");
+echo var_export(fwrite($mm, "ok"), true);
+fclose($mm);
+@unlink($p);
+"#,
+    );
+    assert_eq!(out, "false,''|false|1,1,1,1,1,1,2");
+}
+
+/// Verifies `data://` reports itself as neither local nor lockable, and that the wrappers
+/// around it keep their own answers.
+///
+/// `data://` carries its payload inside the URI, and php answers false to both questions for
+/// it. elephc answered true to both: the URL-identity test covered the remote wrappers
+/// (HTTP/HTTPS/FTP/FTPS) and `data://` is not one of them, while the lock test only knew the
+/// `php://` family.
+///
+/// The other four rows are the point of the test as much as the `data://` one — `php://temp`
+/// is local but not lockable, `php://stdout` is both, and a plain file is both, so this
+/// cannot pass by answering false more often.
+#[test]
+fn test_data_wrapper_is_neither_local_nor_lockable() {
+    let out = compile_and_run(
+        r#"<?php
+$p = tempnam(sys_get_temp_dir(), "wl");
+file_put_contents($p, "x");
+$file = fopen($p, "r");
+$mem  = fopen("php://memory", "r+");
+$tmp  = fopen("php://temp", "r+");
+$out  = fopen("php://stdout", "w");
+$data = fopen("data://text/plain,abc", "r");
+foreach (["file" => $file, "mem" => $mem, "tmp" => $tmp, "out" => $out, "data" => $data] as $k => $h) {
+    echo $k, ":", stream_supports_lock($h) ? "L" : "-", stream_is_local($h) ? "l" : "-", " ";
+}
+fclose($file); fclose($mem); fclose($tmp); fclose($out); fclose($data);
+unlink($p);
+"#,
+    );
+    assert_eq!(out, "file:Ll mem:-l tmp:-l out:Ll data:-- ");
+}
+
+/// Verifies `stream_select()` accepts `null` for the sets a caller does not watch.
+///
+/// This is the call shape php.net documents — `stream_select($read, $write, $except, 0)` with
+/// the unused sets passed as null — and it killed the process with SIGSEGV. Passing empty
+/// arrays worked, which is why no existing test caught it.
+///
+/// A null set is not a null POINTER: elephc's tagged null is an in-band sentinel, so the
+/// guards have to go through `emit_branch_if_null_container` rather than test for zero. Three
+/// places dereferenced it per set — the length read, the header read, and the compacted
+/// length written BACK after the loop, which a guard branching to the loop's own exit label
+/// still ran into.
+#[test]
+fn test_stream_select_accepts_null_for_the_unwatched_sets() {
+    let out = compile_and_run(
+        r#"<?php
+$srv = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($srv, false);
+$cli = stream_socket_client("tcp://" . $addr);
+$conn = stream_socket_accept($srv, 5);
+
+$r = [$conn];
+$w = null;
+$x = null;
+echo "ready=", var_export(stream_select($r, $w, $x, 0, 1000), true), "|";
+
+fwrite($cli, "hi");
+$r2 = [$conn];
+$w2 = null;
+$x2 = null;
+echo "after write=", var_export(stream_select($r2, $w2, $x2, 1, 0), true), "|";
+echo "kept=", count($r2);
+
+fclose($conn);
+fclose($cli);
+fclose($srv);
+"#,
+    );
+    assert_eq!(out, "ready=0|after write=1|kept=1");
+}
+
+/// Verifies an out-of-range offset on a boxed string warns, and that the silent readers stay
+/// silent AND still see the offset as absent.
+///
+/// These two halves have to be pinned together. php answers `""` for an ordinary read of a
+/// missing offset but reports it as ABSENT to `isset()` and `??` — so returning `""` on every
+/// path makes `isset($s[9])` true and `$s[9] ?? "d"` answer `""`, which is how the first
+/// version of this fix was wrong. The warning flag the reader already receives is what
+/// separates the two callers.
+///
+/// The offset is named as the caller WROTE it: `$s[-9]` reports `-9`, not the resolved index.
+#[test]
+fn test_out_of_range_offset_on_a_boxed_string_warns_and_reads_as_absent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+fwrite($m, "Hello");
+rewind($m);
+$s = fgets($m);
+echo "[", $s[9], "]";
+echo "[", $s[-9], "]";
+echo "at:", @$s[9], ":";
+echo "isset:", isset($s[9]) ? "y" : "n", ":";
+echo "coalesce:", $s[9] ?? "dflt";
+fclose($m);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[][]at::isset:n:coalesce:dflt");
+    assert!(
+        out.diagnostics
+            .contains("Warning: Uninitialized string offset 9"),
+        "expected the offset warning, got diagnostics={}",
+        out.diagnostics
+    );
+    assert!(
+        out.diagnostics
+            .contains("Warning: Uninitialized string offset -9"),
+        "expected the negative offset reported as written, got diagnostics={}",
+        out.diagnostics
+    );
+    // Exactly two: `@`, isset() and `??` must not add a third.
+    assert_eq!(
+        out.diagnostics.matches("Uninitialized string offset").count(),
+        2,
+        "silent readers must not warn, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies a FAILED `fread()` answers `false` while an empty one still answers `""`.
+///
+/// Reading a handle opened `'w'` fails at the OS, and php-src reports that as `false`;
+/// elephc answered `""`, so `fread(...) !== false` read the failure as an empty read. The
+/// hard part is that an exhausted stream answers `""` too and both carry zero bytes, so
+/// the cases have to be separated by more than emptiness.
+///
+/// The `php://memory` line is the other half of the rule and is what stops this being
+/// "anything empty is false": a memory stream has no OS read to fail, so php answers `""`
+/// there even though the handle is write-only.
+#[test]
+fn test_fread_returns_false_only_when_the_read_actually_fails() {
+    let out = compile_and_run(
+        r#"<?php
+// Two files on purpose: opening the first "w" TRUNCATES it, so reusing it would leave the
+// short-read case reading an empty file and quietly stop testing anything.
+$a = tempnam(sys_get_temp_dir(), "fra");
+$b = tempnam(sys_get_temp_dir(), "frb");
+file_put_contents($b, "hello");
+
+$w = fopen($a, "w");
+echo var_export(@fread($w, 5), true), "|";   // the read fails at the OS
+fclose($w);
+
+$r = fopen($b, "r");
+echo var_export(fread($r, 100), true), "|";  // a short read is not a failure
+echo var_export(fread($r, 5), true), "|";    // exhausted: "" and not false
+fclose($r);
+
+$m = fopen("php://memory", "w");
+echo var_export(@fread($m, 5), true);        // no OS read to fail
+fclose($m);
+unlink($a);
+unlink($b);
+"#,
+    );
+    assert_eq!(out, "false|'hello'|''|''");
+}
+
+/// Verifies `fread()` rejects a non-positive length the way php-src does.
+///
+/// elephc answered `""` for both, which is what a legitimate empty read looks like, so a
+/// caller could not tell a rejected argument from an exhausted stream. php-src refuses
+/// before it reads anything.
+#[test]
+fn test_fread_rejects_a_non_positive_length() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+fwrite($h, "abcdefghij");
+rewind($h);
+foreach ([0, -1] as $len) {
+    try {
+        fread($h, $len);
+        echo "no-throw|";
+    } catch (ValueError $e) {
+        echo $e->getMessage(), "|";
+    }
+}
+echo fread($h, 3);
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        "fread(): Argument #2 ($length) must be greater than 0|\
+         fread(): Argument #2 ($length) must be greater than 0|abc"
+    );
+}
+
+/// Verifies `data://` refuses a media type php-src does not accept, and reads `;base64` the way
+/// php-src reads it.
+///
+/// elephc used to accept ANY media type and look for a `;base64` suffix case-insensitively, so it
+/// opened URIs php-src refuses and base64-decoded a `;BASE64` php-src would not. Measuring the
+/// real rule was the point of this fixture, and it is narrower than "charset is special":
+///
+/// - the type is empty, or it must carry a `/` — `text` alone is refused;
+/// - every parameter must be `name=value`, whatever the name — `;bogus=1` is ACCEPTED, `;bogus`
+///   and a trailing empty `;` are not;
+/// - `base64` counts only as the LAST parameter and only in lower case, so
+///   `;charset=utf-8;base64` decodes while `;base64;charset=utf-8` is refused outright.
+///
+/// The rule lives twice — in `data_uri_media_type_shape` for a literal URI resolved at compile
+/// time, and in `__rt_data_uri_meta_ok` for one built at run time. Neither can serve both, so both
+/// forms are exercised here and a divergence fails this test.
+#[test]
+fn test_data_url_rejects_a_media_type_php_refuses() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(string $label, string $uri): void {
+    $h = @fopen($uri, "r");
+    echo $label, "=", var_export($h !== false, true);
+    if ($h !== false) { echo ":", stream_get_contents($h); fclose($h); }
+    echo " ";
+}
+// Run-time URIs go through the runtime validator.
+$d = "data://";
+probe("noslash", $d . "text,aGVsbG8=");
+probe("emptyparam", $d . "text/plain;,aGVsbG8=");
+probe("b64notlast", $d . "text/plain;base64;charset=utf-8,aGVsbG8=");
+probe("upper", $d . "text/plain;BASE64,aGVsbG8=");
+probe("namedparam", $d . "text/plain;bogus=1,aGVsbG8=");
+probe("b64last", $d . "text/plain;charset=utf-8;base64,aGVsbG8=");
+echo "|";
+// The same shapes as literals, which the compile-time decoder resolves instead.
+probe("lit-noslash", "data://text,aGVsbG8=");
+probe("lit-b64notlast", "data://text/plain;base64;charset=utf-8,aGVsbG8=");
+probe("lit-namedparam", "data://text/plain;bogus=1,aGVsbG8=");
+probe("lit-b64last", "data://text/plain;charset=utf-8;base64,aGVsbG8=");
+"#,
+    );
+    assert_eq!(
+        out,
+        "noslash=false emptyparam=false b64notlast=false upper=false \
+         namedparam=true:aGVsbG8= b64last=true:hello \
+         |lit-noslash=false lit-b64notlast=false \
+         lit-namedparam=true:aGVsbG8= lit-b64last=true:hello "
+    );
+}
+
+/// Pins that `fread($f, $n)` never hands back more than `$n` bytes through a filter.
+///
+/// IGNORED because elephc has no filtered-read buffer: a read filter that expands its input
+/// has its whole output returned in one go, so `fread($f, 2)` over a filter tripling `"ab"`
+/// answers the 6-byte `"ababab"` where php 8.5.6 answers `ab`, `ab`, `ab` — it caps the
+/// result at `$n` and keeps the remainder on the stream for the next read.
+///
+/// This is INDEPENDENT of [`test_user_filter_psfs_feed_me_buffers_across_dispatches`]: the
+/// filter here answers `PSFS_PASS_ON` on every dispatch, so no FEED_ME handling is involved.
+/// It is also that fixture's prerequisite — without somewhere to park the remainder, a
+/// FEED_ME fix cannot hand back the right chunk sizes either.
+///
+/// Returning more bytes than requested is a contract break in its own right: a caller that
+/// sized a buffer from `$n` gets more than it asked for.
+#[test]
+fn test_fread_caps_a_filtered_read_at_the_requested_length() {
+    let out = compile_and_run(
+        r#"<?php
+class ExpandThrice extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $ob = stream_bucket_new($this->stream, str_repeat($b->data, 3));
+            stream_bucket_append($out, $ob);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("expand.thrice", "ExpandThrice");
+$f = fopen("php://memory", "r+");
+fwrite($f, "ab");
+rewind($f);
+stream_filter_append($f, "expand.thrice", STREAM_FILTER_READ);
+$parts = [];
+while (!feof($f)) {
+    $c = fread($f, 2);
+    if ($c === "" || $c === false) { break; }
+    $parts[] = $c;
+}
+echo implode("|", $parts);
+"#,
+    );
+    assert_eq!(out, "ab|ab|ab");
+}
+
+/// Pins PHP's `PSFS_FEED_ME` contract for a filter that buffers across dispatches.
+///
+/// IGNORED because elephc does not implement it yet, and the current behaviour is a
+/// SILENT one: `PSFS_FEED_ME` passes the RAW input through, so this filter leaks
+/// unfiltered bytes to the caller — `<abc><ABCDEF><ghi>` where php 8.5.6 answers
+/// `<ABC><DEF><GHI>`. A filter that returns PSFS_PASS_ON on every dispatch is
+/// unaffected, which is why the rest of the filter suite stays green.
+///
+/// Fixing it takes THREE changes that must land together:
+///   1. `PSFS_FEED_ME` must return nothing rather than the original input;
+///   2. `__rt_fread` must then fetch more input and dispatch again instead of
+///      reporting a short read — with (1) alone, `fread()` returns "" and every
+///      caller written as `if ($chunk === "") break;` stops early, turning a data
+///      LEAK into data LOSS;
+///   3. the StreamState needs a filtered-read buffer plus a closing flush at EOF.
+///      Measured against php 8.5.6: a filter that triples `"ab"` answers three
+///      `fread($f, 2)` calls with `ab|ab|ab`, so PHP caps the filtered result at
+///      `$length` and keeps the remainder; and a filter still holding bytes when the
+///      stream ends gets a `$closing` dispatch whose output reaches the reader. With
+///      only (1)+(2) this fixture prints `<ABCDEF>` — the leak becomes a loss.
+#[test]
+fn test_user_filter_psfs_feed_me_buffers_across_dispatches() {
+    let out = compile_and_run(
+        r#"<?php
+class FeedMeCollect extends php_user_filter {
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $this->buf .= $b->data;
+        }
+        if (strlen($this->buf) < 6) {
+            return PSFS_FEED_ME;
+        }
+        $ob = stream_bucket_new($this->stream, strtoupper($this->buf));
+        stream_bucket_append($out, $ob);
+        $this->buf = "";
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("feedme.collect", "FeedMeCollect");
+$f = fopen("php://memory", "r+");
+fwrite($f, "abcdefghi");
+rewind($f);
+stream_filter_append($f, "feedme.collect", STREAM_FILTER_READ);
+$out = "";
+while (!feof($f)) {
+    $chunk = fread($f, 3);
+    if ($chunk === "" || $chunk === false) { break; }
+    $out .= "<" . $chunk . ">";
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "<ABC><DEF><GHI>");
+}
+
+/// Pins the third measured property of PHP's filtered reads: end of input triggers a `$closing`
+/// dispatch whose output reaches the reader.
+///
+/// IGNORED because nothing flushes a read filter at EOF. A filter holding every byte until
+/// `$closing` therefore never emits its result — and because `PSFS_FEED_ME` currently passes its
+/// input through, the reader gets the RAW `xyz` instead of the filter's `[xyz]`. Measured against
+/// php 8.5.6.
+///
+/// Kept separate from [`test_user_filter_psfs_feed_me_buffers_across_dispatches`] so the three
+/// properties can be fixed and verified one at a time: FEED_ME returning nothing, `fread()`
+/// capping and parking the remainder, and this closing flush. Landing the first two without this
+/// one turns the leak into silent data loss, so all three ship together.
+#[test]
+fn test_read_filter_is_flushed_when_the_stream_ends() {
+    let out = compile_and_run(
+        r#"<?php
+class HoldUntilClose extends php_user_filter {
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $this->buf .= $b->data;
+        }
+        if (!$closing) {
+            return PSFS_FEED_ME;
+        }
+        stream_bucket_append($out, stream_bucket_new($this->stream, "[" . $this->buf . "]"));
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("hold.until.close", "HoldUntilClose");
+$f = fopen("php://memory", "r+");
+fwrite($f, "xyz");
+rewind($f);
+stream_filter_append($f, "hold.until.close", STREAM_FILTER_READ);
+echo stream_get_contents($f);
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "[xyz]");
+}
+
+/// Regression: `ftell()` on a filtered read stream reported the READ-AHEAD position.
+///
+/// php advances `stream->position` by the bytes each read RETURNED TO THE CALLER, never by the
+/// bytes it pulled from the descriptor. elephc's filtered `fread()` reads whole 8192-byte chunks
+/// so the filter has something to work on, caps the result at what was asked for, and parks the
+/// rest — and `ftell()` probed `lseek(SEEK_CUR)`, which reports where that read-ahead stopped.
+/// Measured with `php -n` (8.5.6) on a 26-byte file through `string.toupper`: three reads of 3, 3
+/// and 5 answer `3`, `6`, `11`; elephc answered `26`, `26`, `26` — the whole file, every time.
+/// An unfiltered control and a `fgets()` read are in the same program: neither engages the
+/// buffered path, and both must keep the descriptor probe.
+#[test]
+fn test_ftell_on_a_filtered_read_counts_the_bytes_handed_to_the_caller() {
+    let base = std::env::temp_dir().join(format!("elephc_ftellf_{}", std::process::id()));
+    let base = base.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+$p = "{base}_a";
+@unlink($p);
+file_put_contents($p, "abcdefghijklmnopqrstuvwxyz");
+$f = fopen($p, "r");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+echo "start:", ftell($f), "\n";
+echo "r1:", fread($f, 3), ":", ftell($f), "\n";
+echo "r2:", fread($f, 3), ":", ftell($f), "\n";
+echo "r3:", fread($f, 5), ":", ftell($f), "\n";
+while (!feof($f)) {{ fread($f, 4); }}
+echo "drained:", ftell($f), "\n";
+fclose($f);
+$f = fopen($p, "r");
+fread($f, 3);
+echo "plain:", ftell($f), "\n";
+fclose($f);
+$q = "{base}_b";
+@unlink($q);
+file_put_contents($q, "one\ntwo\n");
+$f = fopen($q, "r");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+fgets($f);
+echo "fgets1:", ftell($f), "\n";
+fgets($f);
+echo "fgets2:", ftell($f), "\n";
+fclose($f);
+@unlink($p);
+@unlink($q);
+"#
+    ));
+    assert_eq!(
+        out,
+        "start:0\nr1:ABC:3\nr2:DEF:6\nr3:GHIJK:11\ndrained:26\nplain:3\nfgets1:4\nfgets2:8\n"
+    );
+}
+
+/// Pins what the filtered position COUNTS, and where it restarts.
+///
+/// An expanding filter settles the first question: through `convert.base64-encode`, two
+/// `fread($f, 4)` answer `4` and `8` — the FILTERED bytes handed out, not the source bytes
+/// consumed to make them, so the number cannot be derived from the descriptor at all. `fseek()`
+/// and `rewind()` settle the second: php's position restarts from wherever the seek landed and
+/// advances from there, so `fread(3)`, `fseek(10)`, `fread(4)` answers `3`, `10`, `14`. Two
+/// filtered streams open at once pin that the count lives on the stream, not in a global.
+/// Measured with `php -n` (8.5.6).
+#[test]
+fn test_filtered_ftell_counts_filtered_bytes_and_restarts_at_a_seek() {
+    let path = std::env::temp_dir().join(format!("elephc_ftellf2_{}.txt", std::process::id()));
+    let path = path.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+$p = "{path}";
+@unlink($p);
+file_put_contents($p, "abcdefghijklmnopqrstuvwxyz");
+$f = fopen($p, "r");
+stream_filter_append($f, "convert.base64-encode", STREAM_FILTER_READ);
+echo "b64:", fread($f, 4), ":", ftell($f), "\n";
+echo "b64:", fread($f, 4), ":", ftell($f), "\n";
+fclose($f);
+$f = fopen($p, "r");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+echo "r:", fread($f, 3), ":", ftell($f), "\n";
+fseek($f, 10);
+echo "seek:", ftell($f), "\n";
+echo "r:", fread($f, 4), ":", ftell($f), "\n";
+rewind($f);
+echo "rewind:", ftell($f), "\n";
+echo "r:", fread($f, 2), ":", ftell($f), "\n";
+fclose($f);
+$f = fopen($p, "r");
+$g = fopen($p, "r");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+stream_filter_append($g, "string.rot13", STREAM_FILTER_READ);
+fread($f, 3);
+fread($g, 7);
+echo "two:", ftell($f), ":", ftell($g), "\n";
+fread($f, 2);
+echo "two:", ftell($f), ":", ftell($g), "\n";
+fclose($f);
+fclose($g);
+@unlink($p);
+"#
+    ));
+    assert_eq!(
+        out,
+        "b64:YWJj:4\nb64:ZGVm:8\n\
+         r:ABC:3\nseek:10\nr:KLMN:14\nrewind:0\nr:AB:2\n\
+         two:3:7\ntwo:5:7\n"
+    );
+}
+
+/// Regression: `fclose()` ran no closing flush, so a buffering WRITE filter's bytes were lost.
+///
+/// php gives every attached filter one last `filter($in, $out, &$consumed, $closing = true)` call
+/// before the stream goes away. A filter that answered `PSFS_FEED_ME` until then has been
+/// ACCUMULATING, and that dispatch is the only chance its payload has to reach the file.
+/// `_user_filter_closing` was raised on the read path and by `stream_filter_remove()`, never on
+/// close. Measured with `php -n` (8.5.6): the file is EMPTY before `fclose()` and holds
+/// `[hello world]` after it; elephc left it empty in both places.
+#[test]
+fn test_write_filter_is_flushed_when_the_stream_is_closed() {
+    let path = std::env::temp_dir().join(format!("elephc_wclose_{}.txt", std::process::id()));
+    let path = path.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+class HoldUntilCloseW extends php_user_filter {{
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {{
+        while ($b = stream_bucket_make_writeable($in)) {{
+            $consumed += $b->datalen;
+            $this->buf .= $b->data;
+        }}
+        if (!$closing) {{
+            return PSFS_FEED_ME;
+        }}
+        stream_bucket_append($out, stream_bucket_new($this->stream, "[" . $this->buf . "]"));
+        return PSFS_PASS_ON;
+    }}
+}}
+stream_filter_register("hold.until.close.w", "HoldUntilCloseW");
+$p = "{path}";
+@unlink($p);
+$h = fopen($p, "w");
+stream_filter_append($h, "hold.until.close.w", STREAM_FILTER_WRITE);
+fwrite($h, "hello ");
+fwrite($h, "world");
+echo "before:[", (file_exists($p) ? file_get_contents($p) : "?"), "]\n";
+fclose($h);
+echo "after:[", file_get_contents($p), "]\n";
+@unlink($p);
+"#
+    ));
+    assert_eq!(out, "before:[]\nafter:[[hello world]]\n");
+}
+
+/// Guard: the closing flush must not add bytes where php adds none, on any other filter shape.
+///
+/// An unfiltered stream, a pass-through write filter that already emitted on every dispatch, a
+/// READ-only filter on a stream that is also written, a built-in write filter, a two-node chain
+/// and a `STREAM_FILTER_ALL` node all keep exactly the bytes php writes. `STREAM_FILTER_ALL`
+/// matters most: the node sits in BOTH chains, and flushing per chain would emit its payload
+/// twice. Measured with `php -n` (8.5.6).
+#[test]
+fn test_close_flush_leaves_other_filter_shapes_byte_identical() {
+    let base = std::env::temp_dir().join(format!("elephc_wcf_{}", std::process::id()));
+    let base = base.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+class PassThroughW extends php_user_filter {{
+    public function filter($in, $out, &$consumed, $closing): int {{
+        while ($b = stream_bucket_make_writeable($in)) {{
+            $b->data = strtoupper($b->data);
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }}
+        return PSFS_PASS_ON;
+    }}
+}}
+class BufferingW extends php_user_filter {{
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {{
+        while ($b = stream_bucket_make_writeable($in)) {{
+            $this->buf .= $b->data;
+            $consumed += $b->datalen;
+        }}
+        if ($closing) {{
+            stream_bucket_append($out, stream_bucket_new($this->stream, "<" . $this->buf . ">"));
+            return PSFS_PASS_ON;
+        }}
+        return PSFS_FEED_ME;
+    }}
+}}
+stream_filter_register("pt.w", "PassThroughW");
+stream_filter_register("buf.w", "BufferingW");
+
+$p = "{base}_1"; @unlink($p);
+$h = fopen($p, "w"); fwrite($h, "plain"); fclose($h);
+echo "nofilter:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_2"; @unlink($p);
+$h = fopen($p, "w");
+stream_filter_append($h, "pt.w", STREAM_FILTER_WRITE);
+fwrite($h, "abc"); fwrite($h, "def"); fclose($h);
+echo "passthru:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_3"; @unlink($p);
+file_put_contents($p, "seed");
+$h = fopen($p, "a");
+stream_filter_append($h, "buf.w", STREAM_FILTER_READ);
+fwrite($h, "+tail"); fclose($h);
+echo "readonly:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_4"; @unlink($p);
+$h = fopen($p, "w");
+stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+fwrite($h, "mixed Case"); fclose($h);
+echo "builtin:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_5"; @unlink($p);
+$h = fopen($p, "w");
+stream_filter_append($h, "buf.w", STREAM_FILTER_WRITE);
+stream_filter_append($h, "pt.w", STREAM_FILTER_WRITE);
+fwrite($h, "one"); fclose($h);
+echo "chained:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_6"; @unlink($p);
+$h = fopen($p, "w+");
+stream_filter_append($h, "buf.w", STREAM_FILTER_ALL);
+fwrite($h, "both"); fclose($h);
+echo "all:[", file_get_contents($p), "]\n"; @unlink($p);
+"#
+    ));
+    assert_eq!(
+        out,
+        "nofilter:[plain]\n\
+         passthru:[ABCDEF]\n\
+         readonly:[seed+tail]\n\
+         builtin:[MIXED CASE]\n\
+         chained:[<ONE>]\n\
+         all:[<both>]\n"
+    );
+}
+
+/// Regression: `stream_filter_remove()` ran the closing flush but THREW ITS BYTES AWAY.
+///
+/// `__rt_filter_node_closing_flush` observed only the PSFS code the filter answered with and
+/// dropped the pair `__rt_user_filter_brigade_invoke` returned, so a filter that accumulated until
+/// `$closing` lost its whole payload at removal — and `fclose()` afterwards could not recover it,
+/// because the node was already off the chain. php's `php_stream_filter_remove(…, call_dtor)`
+/// hands the flushed buckets to the stream. Measured with `php -n` (8.5.6): `<xy>`, written once.
+#[test]
+fn test_stream_filter_remove_writes_the_bytes_its_flush_produced() {
+    let path = std::env::temp_dir().join(format!("elephc_wrm_{}.txt", std::process::id()));
+    let path = path.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+class BufferingRm extends php_user_filter {{
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {{
+        while ($b = stream_bucket_make_writeable($in)) {{
+            $this->buf .= $b->data;
+            $consumed += $b->datalen;
+        }}
+        if ($closing) {{
+            stream_bucket_append($out, stream_bucket_new($this->stream, "<" . $this->buf . ">"));
+            return PSFS_PASS_ON;
+        }}
+        return PSFS_FEED_ME;
+    }}
+}}
+stream_filter_register("buf.rm", "BufferingRm");
+$p = "{path}";
+@unlink($p);
+$h = fopen($p, "w");
+$f = stream_filter_append($h, "buf.rm", STREAM_FILTER_WRITE);
+fwrite($h, "xy");
+var_dump(stream_filter_remove($f));
+fclose($h);
+echo "after:[", file_get_contents($p), "]\n";
+@unlink($p);
+"#
+    ));
+    assert_eq!(out, "bool(true)\nafter:[<xy>]\n");
+}
+
+/// Verifies `php_user_filter` declares the properties PHP declares.
+///
+/// Only `$params` existed, so the manual's own filter idiom — building an output bucket
+/// with `stream_bucket_new($this->stream, ...)` — did not compile at all.
+#[test]
+fn test_user_filter_base_class_declares_filtername_and_stream() {
+    let out = compile_and_run(
+        r#"<?php
+class PropProbeFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $ob = stream_bucket_new($this->stream, strtoupper($b->data));
+            stream_bucket_append($out, $ob);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("prop.probe", "PropProbeFilter");
+$f = fopen("php://memory", "r+");
+fwrite($f, "hello");
+rewind($f);
+stream_filter_append($f, "prop.probe", STREAM_FILTER_READ);
+echo stream_get_contents($f);
+echo "|", var_export(property_exists("PropProbeFilter", "filtername"), true);
+"#,
+    );
+    assert_eq!(out, "HELLO|true");
 }
 
 /// Verifies compiled PHP output for user stream filter write transforms payload.
@@ -5724,9 +12007,9 @@ echo $f === false ? "false" : "open";
     );
     assert_eq!(out.stdout, "false");
     assert!(
-        !out.stderr.contains("Failed to open"),
-        "registered user wrapper should not produce the failed-to-open warning, got stderr: {:?}",
-        out.stderr,
+        !out.diagnostics.contains("Failed to open"),
+        "registered user wrapper should not produce the failed-to-open warning, got diagnostics: {:?}",
+        out.diagnostics,
     );
 }
 
@@ -5798,6 +12081,31 @@ echo fclose($f) ? "1" : "0";
 "#,
     );
     assert_eq!(out, "hello|3|0|1");
+}
+
+/// Verifies the final owner of an abandoned wrapper stream closes it on unset.
+#[test]
+fn test_fopen_user_wrapper_closes_on_final_owner_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class ScopeCloseWrapper {
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_close(): void {
+        echo "closed|";
+    }
+}
+
+stream_wrapper_register("scopecl", "ScopeCloseWrapper");
+$stream = fopen("scopecl://resource", "r");
+echo is_resource($stream) ? "open|" : "failed|";
+unset($stream);
+echo "after";
+"#,
+    );
+    assert_eq!(out, "open|closed|after");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fputcsv routes through stream write.
@@ -6032,10 +12340,12 @@ echo "|st=" . gettype($src);
 
 /// Verifies compiled PHP output for fopen user wrapper ftell dispatches to stream tell.
 #[test]
-fn test_fopen_user_wrapper_ftell_dispatches_to_stream_tell() {
-    // Phase 10 follow-up: ftell() dispatches into the wrapper's stream_tell
-    // and returns the int it reports. Without stream_tell, the helper falls
-    // through to -1 (PHP's ftell failure sentinel).
+fn test_fopen_user_wrapper_ftell_does_not_dispatch_to_stream_tell() {
+    // The old name and expectation were both fiction: `42|-1`, on the belief that ftell()
+    // dispatches into the wrapper. `php -n` answers `0|0` for this exact program. php-src has no
+    // tell op for userspace wrappers — `main/streams/userspace.c` calls `stream_tell` only from
+    // inside `php_userstreamop_seek` — so a freshly opened stream is at 0 whatever the method
+    // says, and a wrapper without the method is at 0 too rather than at a failure sentinel.
     let out = compile_and_run(
         r#"<?php
 class TellW {
@@ -6054,7 +12364,7 @@ $g = fopen("notell://x", "r");
 echo ftell($g);
 "#,
     );
-    assert_eq!(out, "42|-1");
+    assert_eq!(out, "0|0");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fstat dispatches to stream stat.
@@ -6132,6 +12442,51 @@ echo file_exists("no_such_elephc_probe.txt") ? "Y" : "N";
     assert_eq!(out, "YNYN");
 }
 
+/// Pins how many times the stat family reaches a userspace wrapper's `url_stat()`.
+///
+/// php keeps a ONE-entry stat cache keyed by the exact path string, so consecutive stat-family
+/// calls on the same path cost a single `url_stat()`. elephc has no such cache and re-asks every
+/// time. MEASURED on `php -n` 8.5.6, against what elephc answers today:
+///
+/// ```text
+///                                                       php   elephc
+/// file_exists($p); file_exists($p);                      1      2
+/// file_exists($p); filesize($p); is_file($p);            1      3
+/// file_exists($p); clearstatcache(); file_exists($p);    2      2
+/// is_file($p);                                           1      1
+/// file_exists($e); file_exists($f); file_exists($e);     3      3
+/// ```
+///
+/// Only the first two rows diverge, and only because php's cache HITS there. The last three
+/// agree by construction: with no cache, elephc always pays N calls, which is what php also pays
+/// whenever its single entry misses — after `clearstatcache()`, for a lone call, and for any
+/// alternation that keeps evicting the one slot.
+///
+/// This is a DELIBERATE gap, pinned so it stays visible. php's cache is invalidated by very
+/// nearly everything: MEASURED, a stat of ANY other path evicts it, and `touch`, `unlink`,
+/// `rename`, `chmod`, `mkdir`, `rmdir`, `file_put_contents`, `file_get_contents`, a bare
+/// `fopen()`/`fclose()` pair and even `shell_exec()` all clear it outright, while only pure
+/// computation and `opendir()`/`closedir()` leave it standing. `clearstatcache()` clears it in
+/// ALL FOUR argument shapes — `clearstatcache(true, '/other/path')` included, because php-src
+/// drops `CurrentStatFile`/`CurrentLStatFile` whatever filename it was handed.
+///
+/// Reproducing that by enumerating invalidation points is the wrong shape of risk: missing ONE
+/// of them returns a stale stat silently, which is strictly worse than the extra syscall it
+/// saves, and the win is observable only through a wrapper that counts its own `url_stat()`
+/// calls. The safe shape is the opposite default — an intra-block reuse that treats every call
+/// it cannot prove pure as an invalidation, so a miss costs a lost optimisation rather than a
+/// wrong answer. Until that exists, `clearstatcache()` correctly stays the ordered no-op it is
+/// today (`lower_clearstatcache`), because there is nothing to clear; it has to grow teeth in
+/// the same change that grows the cache.
+#[test]
+fn test_stat_family_url_stat_call_counts() {
+    let out = compile_and_run(
+        r#"<?php
+class W {
+    public $context;
+    public static int $n = 0;
+    public function url_stat(string $path, int $flags) {
+        W::$n = W::$n + 1;
 /// Verifies `stat()` and `lstat()` reach a registered wrapper's `url_stat()`, with the flags
 /// PHP hands them, and still fall back to the filesystem for an ordinary path.
 ///
@@ -6191,6 +12546,34 @@ class FlagW {
                 'blksize'=>4096,'blocks'=>1];
     }
 }
+stream_wrapper_register("cnt", "W");
+
+W::$n = 0;
+file_exists("cnt://a");
+file_exists("cnt://a");
+echo "same=", W::$n, "\n";
+
+W::$n = 0;
+file_exists("cnt://b");
+filesize("cnt://b");
+is_file("cnt://b");
+echo "three=", W::$n, "\n";
+
+W::$n = 0;
+file_exists("cnt://c");
+clearstatcache();
+file_exists("cnt://c");
+echo "cleared=", W::$n, "\n";
+
+W::$n = 0;
+is_file("cnt://d");
+echo "single=", W::$n, "\n";
+
+W::$n = 0;
+file_exists("cnt://e");
+file_exists("cnt://f");
+file_exists("cnt://e");
+echo "alternating=", W::$n, "\n";
 stream_wrapper_register("flagw", "FlagW");
 stat("flagw://stat");
 lstat("flagw://lstat");
@@ -6204,6 +12587,11 @@ is_executable("flagw://executable");
     );
     assert_eq!(
         out,
+        "same=2\nthree=3\ncleared=2\nsingle=1\nalternating=3\n",
+        "elephc re-asks where php's one-entry cache would have answered; php gives 1/1/2/1/3"
+    );
+}
+
         "stat=4 lstat=5 exists=6 size=4 isfile=6 readable=6 writable=6 executable=6 "
     );
 }
@@ -6375,9 +12763,10 @@ fclose($h);
 /// Verifies compiled PHP output for fopen user wrapper fflush dispatches to stream flush.
 #[test]
 fn test_fopen_user_wrapper_fflush_dispatches_to_stream_flush() {
-    // Phase 10 follow-up: fflush() dispatches into the wrapper's stream_flush
-    // and returns its bool result. Without stream_flush, the helper reports
-    // success — "nothing to flush" is a benign default.
+    // fflush() dispatches into the wrapper's stream_flush and returns its bool
+    // result. Without stream_flush php answers FALSE, measured on 8.5.6 — the
+    // "nothing to flush is a benign success" default this used to assert was the
+    // helper's own convention, not php's.
     let out = compile_and_run(
         r#"<?php
 class FlushW {
@@ -6396,7 +12785,7 @@ $g = fopen("noflush://x", "r");
 echo fflush($g) ? "1" : "0";
 "#,
     );
-    assert_eq!(out, "1|1");
+    assert_eq!(out, "1|0");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fseek dispatches to stream seek.
@@ -6719,9 +13108,9 @@ echo $f === false ? "false" : "open";
     );
     assert_eq!(out.stdout, "false");
     assert!(
-        !out.stderr.contains("Failed to open"),
-        "wrapper stream_open returning false should not emit the failed-to-open warning, got stderr: {:?}",
-        out.stderr,
+        !out.diagnostics.contains("Failed to open"),
+        "wrapper stream_open returning false should not emit the failed-to-open warning, got diagnostics: {:?}",
+        out.diagnostics,
     );
 }
 
@@ -6823,17 +13212,275 @@ fn test_udp_ipv6_round_trip() {
     // (no listen), stream_socket_client connects (sets default target),
     // fwrite/fread carry one datagram each way. This exercises the
     // udp:// scheme detection in both v6 dispatchers.
+    //
+    // STREAM_SERVER_BIND is required: PHP's default flags ask for listen() too, and a datagram
+    // transport refuses it. The port is left to the kernel because the fixed one this test used to
+    // name is owned by a macOS system service on some machines, which failed the bind outright.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://[::1]:54939");
+$srv = stream_socket_server("udp://[::1]:0", $e, $m, STREAM_SERVER_BIND);
 echo is_resource($srv) ? "srv|" : "srv_fail|";
-$cli = stream_socket_client("udp://[::1]:54939");
+$cli = stream_socket_client("udp://" . stream_socket_get_name($srv, false));
 echo is_resource($cli) ? "cli|" : "cli_fail|";
 fwrite($cli, "v6-udp");
 echo fread($srv, 16);
 "#,
     );
     assert_eq!(out, "srv|cli|v6-udp");
+}
+
+/// A wrapper's untyped contract parameters carry the types PHP documents for them.
+///
+/// `stream_write($data) { return strlen($data); }` is the signature the manual shows, and it
+/// failed to compile: a wrapper's methods are reached through a runtime vtable with raw
+/// fixed-ABI arguments, so they are deliberately excluded from the pass that widens untyped
+/// parameters to boxed Mixed — and they kept the `Int` an untyped parameter is seeded with.
+///
+/// Every contract method here uses its parameter AS its documented type, so a wrong seeding
+/// fails the build rather than the assertion. The plain class at the end is the control: a
+/// method named `stream_write` on something that is not a wrapper must keep its own inference,
+/// because a method name is not a contract.
+///
+/// The second `fread()` is what pins `stream_read($count)`'s parameter: the wrapper slices with
+/// `substr(self::$data, $this->pos, $count)`, so a count seeded as anything but an integer would
+/// hand back the wrong window rather than fail the build. `ftell()` is deliberately absent — it
+/// answers garbage on a wrapper stream today, which this test discovered and which is tracked
+/// separately; asserting it here would tie an unrelated defect to this one.
+#[test]
+fn test_wrapper_contract_params_carry_their_documented_types() {
+    let out = compile_and_run(
+        r#"<?php
+class Mem {
+    public $pos = 0;
+    public static string $data = "wrapped payload";
+    public function stream_open($path, $mode, $opts, &$opened) {
+        $this->pos = 0;
+        return strlen($path) > 0 && strlen($mode) > 0;
+    }
+    public function stream_read($count) {
+        $r = substr(self::$data, $this->pos, $count);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_write($d) { return strlen($d); }
+    public function stream_eof() { return $this->pos >= strlen(self::$data); }
+    public function stream_seek($offset, $whence) { $this->pos = $offset; return true; }
+    public function stream_tell() { return $this->pos; }
+    public function stream_close() {}
+}
+stream_wrapper_register("memc", "Mem");
+$h = fopen("memc://x", "r");
+echo fread($h, 7), "|";
+echo fread($h, 8), "|";
+fclose($h);
+
+class NotAWrapper {
+    public function stream_write($d) { return $d + 1; }
+}
+$n = new NotAWrapper();
+echo $n->stream_write(41);
+"#,
+    );
+    assert_eq!(out, "wrapped| payload|42");
+}
+
+/// `ftell()` on a wrapper stream reports PHP's position, not whatever `stream_tell()` says.
+///
+/// php-src has no tell op for userspace wrappers: `main/streams/userspace.c` calls `stream_tell`
+/// only from inside `php_userstreamop_seek`, to reconcile after a seek. The position is PHP's
+/// own, advanced by whatever each read moved. elephc asked the method on every `ftell()`, and
+/// since an undeclared return hands back a boxed cell, it printed a pointer — a different number
+/// each run.
+///
+/// Fixing only the boxing would have been worse than the crash-shaped answer: it would have
+/// reported what the wrapper CLAIMS. The sequence here separates the two — after seven bytes the
+/// answer must be 7, and after `fseek(3)` it must follow the seek.
+#[test]
+fn test_wrapper_ftell_reports_phps_position_not_stream_tell() {
+    let out = compile_and_run(
+        r#"<?php
+class Pos {
+    public $pos = 0;
+    public static string $data = "wrapped payload";
+    public function stream_open($p, $m, $o, &$op) { $this->pos = 0; return true; }
+    public function stream_read($count) {
+        $r = substr(self::$data, $this->pos, $count);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= strlen(self::$data); }
+    public function stream_seek($offset, $whence) { $this->pos = $offset; return true; }
+    public function stream_tell() { return $this->pos; }
+    public function stream_close() {}
+}
+stream_wrapper_register("memp", "Pos");
+$h = fopen("memp://x", "r");
+echo ftell($h), "|";
+echo fread($h, 7), "|";
+echo ftell($h), "|";
+fseek($h, 3);
+echo ftell($h), "|";
+echo fread($h, 4), "|";
+echo ftell($h);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "0|wrapped|7|3|pped|7");
+}
+
+/// `rewind()` reconciles the wrapper position the same way `fseek()` does.
+///
+/// `rewind($h)` IS `fseek($h, 0)`, and it needed the same reconciliation — which NEITHER
+/// architecture had. The wrapper's own `$this->pos` went back to zero, so the read after the
+/// rewind returned the right bytes and only the number `ftell()` reported was wrong: `php -n`
+/// answers `wrapped|7|0|wrap|4`, elephc answered `wrapped|7|7|wrap|11`. Reading the correct
+/// bytes while reporting the wrong offset is what let this sit behind the `fseek()` test.
+///
+/// The read after the rewind is part of the assertion on purpose: a fix that reset the tracked
+/// position without leaving the stream usable would satisfy the `0` and fail here.
+#[test]
+fn test_rewind_resets_the_position_ftell_reports_for_a_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+class Rew {
+    public $pos = 0;
+    public static string $data = "wrapped payload";
+    public function stream_open($p, $m, $o, &$op) { $this->pos = 0; return true; }
+    public function stream_read($count) {
+        $r = substr(self::$data, $this->pos, $count);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= strlen(self::$data); }
+    public function stream_seek($offset, $whence) { $this->pos = $offset; return true; }
+    public function stream_tell() { return $this->pos; }
+    public function stream_close() {}
+}
+stream_wrapper_register("memrw", "Rew");
+$h = fopen("memrw://x", "r");
+echo fread($h, 7), "|";
+echo ftell($h), "|";
+rewind($h);
+echo ftell($h), "|";
+echo fread($h, 4), "|";
+echo ftell($h);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "wrapped|7|0|wrap|4");
+}
+
+/// `file_get_contents()` reads through a registered wrapper, as `fopen()` already did.
+///
+/// php-src has no separate reader here — `file_get_contents` is `php_stream_open_wrapper`
+/// followed by `_php_stream_copy_to_mem` — so every scheme the opener knows is readable by
+/// definition. elephc had a hand-rolled scheme ladder that knew `http`, `https` and `ftp` and
+/// then fell back to a filename, so a registered wrapper answered `Failed to open stream` from
+/// `file_get_contents()` while `fopen()` on the very same URI worked.
+///
+/// The unknown scheme at the end is the other half: delegating to the opener has to keep
+/// reporting a scheme nobody registered, rather than turn it into a silent empty read.
+#[test]
+fn test_file_get_contents_reads_through_a_registered_wrapper() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Src {
+    public $pos = 0;
+    public static string $data = "wrapped payload";
+    public function stream_open($p, $m, $o, &$op) { $this->pos = 0; return true; }
+    public function stream_read($count) {
+        $r = substr(self::$data, $this->pos, $count);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= strlen(self::$data); }
+    public function stream_close() {}
+}
+stream_wrapper_register("memg", "Src");
+echo var_export(file_get_contents("memg://y"), true), "|";
+echo var_export(@file_get_contents("nosuchscheme://y"), true);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "'wrapped payload'|false");
+}
+
+/// A wrapper that declares no `$context` gets PHP 8.2's dynamic-property deprecation.
+///
+/// PHP assigns the stream context onto the wrapper object whether or not the class declared a
+/// property for it, and since 8.2 the invented assignment is deprecated. elephc simply skipped
+/// the injection and said nothing, so a program that would be told to declare its property under
+/// PHP heard nothing here.
+///
+/// The declaring class is the control: naming a `$context` property must stay silent, which is
+/// what separates this from a notice fired on every wrapper open.
+#[test]
+fn test_wrapper_without_declared_context_gets_phps_deprecation() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class NoCtx {
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($count) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+}
+class HasCtx {
+    public mixed $context;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($count) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+}
+stream_wrapper_register("noctx", "NoCtx");
+stream_wrapper_register("hasctx", "HasCtx");
+$a = fopen("noctx://x", "r");
+fclose($a);
+$b = fopen("hasctx://x", "r");
+fclose($b);
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.diagnostics
+            .contains("Deprecated: Creation of dynamic property NoCtx::$context is deprecated"),
+        "expected php's wording, got diagnostics={}",
+        out.diagnostics
+    );
+    // The declaring class is the control, and it declares `mixed $context` rather than a bare
+    // `$context` on purpose. An UNTYPED property is not typed `Mixed` here, and the vtable slot
+    // that carries the context offset only records a property it can see as Mixed — so
+    // `public $context;`, the spelling the manual shows, still reads as undeclared, never
+    // receives its context, and collects this deprecation. That is tracked on its own; pinning
+    // it here would tie an unrelated typing defect to this notice.
+    assert!(
+        !out.diagnostics.contains("HasCtx::$context"),
+        "a declared property must not be deprecated, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// A failing IPv6 server has to say why, like its IPv4 sibling.
+///
+/// The IPv6 helper is tail-called from the dispatcher, which clears the error stash before jumping;
+/// the helper then failed its `bind()` without recording anything, so `&$error_message` came back
+/// empty and the warning read `()`. PHP reports `Address already in use` for exactly this, and it
+/// is the difference between a script that logs why it could not start and one that logs nothing.
+#[test]
+fn test_ipv6_server_reports_why_the_bind_failed() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$held = stream_socket_server("tcp://[::1]:54897");
+echo is_resource($held) ? "held|" : "hold_failed|";
+$e = 0;
+$m = "";
+$dup = @stream_socket_server("tcp://[::1]:54897", $e, $m);
+echo ($dup === false ? "false" : "resource"), "|", $m;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "held|false|Address already in use");
 }
 
 /// Verifies compiled PHP output for stream socket get name ipv6.
@@ -6932,6 +13579,25 @@ echo fread($pair[0], 16);
     assert_eq!(out, "2|ping|pong");
 }
 
+/// Verifies socket-pair elements own opaque registry handles after the result array is released.
+#[test]
+fn test_stream_socket_pair_handles_survive_result_array_release() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$left = $pair[0];
+$right = $pair[1];
+$distinct = get_resource_id($left) !== get_resource_id($right);
+unset($pair);
+echo get_resource_type($left) . "|" . get_resource_type($right) . "|";
+echo $distinct ? "distinct|" : "same|";
+fwrite($left, "owned");
+echo fread($right, 5);
+"#,
+    );
+    assert_eq!(out, "stream|stream|distinct|owned");
+}
+
 /// Verifies compiled PHP output for stream socket get name udp.
 #[test]
 fn test_stream_socket_get_name_udp() {
@@ -6940,7 +13606,7 @@ fn test_stream_socket_get_name_udp() {
     // (server) and peer (client) sides should report the bound port.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://127.0.0.1:54928");
+$srv = stream_socket_server("udp://127.0.0.1:54928", $e, $m, STREAM_SERVER_BIND);
 echo stream_socket_get_name($srv, false);
 echo "|";
 $cli = stream_socket_client("udp://127.0.0.1:54928");
@@ -7053,7 +13719,7 @@ echo ($again === $first ? "1" : "0");
     assert_eq!(out, "11");
 }
 
-/// Verifies compiled PHP output for closedir allows directory handle reuse.
+/// Verifies `closedir` invalidates the old PHP resource while a new handle remains usable.
 #[test]
 fn test_closedir_allows_directory_handle_reuse() {
     let out = compile_and_run(
@@ -7068,7 +13734,7 @@ echo (is_resource($d2) ? "r" : "?");
 echo (is_string($e) ? "ok" : "no");
 "#,
     );
-    assert_eq!(out, "rok");
+    assert_eq!(out, "?ok");
 }
 
 /// Verifies compiled PHP output for array literal of resources round trips.
@@ -7117,6 +13783,22 @@ fclose($f);
         out,
         "mode=w seekable=1 eof=0 type=STDIO wrap=plainfile blocked=1 unread=0 timed_out=0"
     );
+}
+
+/// Verifies the `data:` wrapper reports PHP's name for it, `RFC2397`.
+///
+/// elephc answered `data` — the scheme, not the wrapper. Reference PHP 8.5.6 names it
+/// after the RFC that defines `data:` URLs, and a program branching on `wrapper_type`
+/// (as PSR-7 and Flysystem adapters do) saw a name that exists nowhere in PHP.
+#[test]
+fn test_stream_get_meta_data_names_the_data_wrapper_rfc2397() {
+    let out = compile_and_run(
+        r#"<?php
+$d = fopen("data://text/plain,hi", "r");
+echo stream_get_meta_data($d)["wrapper_type"];
+"#,
+    );
+    assert_eq!(out, "RFC2397");
 }
 
 /// Verifies compiled PHP output for stream get meta data reports eof consistently with feof.
@@ -7323,6 +14005,80 @@ echo fread($w, 64);
 "#,
     );
     assert_eq!(out, "HELLO BRIGADE");
+}
+
+/// Verifies a user filter returning PSFS_ERR_FATAL yields an empty read result.
+#[test]
+fn test_user_filter_psfs_err_fatal() {
+    let out = compile_and_run(
+        r#"<?php
+class FatalFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        return PSFS_ERR_FATAL;
+    }
+}
+stream_filter_register("fatal", "FatalFilter");
+$f = fopen("php://memory", "r+");
+fwrite($f, "hello\n");
+rewind($f);
+stream_filter_append($f, "fatal");
+$r = fread($f, 100);
+echo "len=" . strlen($r) . "|";
+"#,
+    );
+    assert_eq!(out, "len=0|");
+}
+
+/// Verifies a user filter that only ever answers `PSFS_FEED_ME` yields NOTHING.
+///
+/// This fixture used to assert `"hello\n"` — it pinned the defect. `PSFS_FEED_ME` means the
+/// filter took the input and has no output yet, so passing the input through handed the caller
+/// raw, unfiltered bytes. Measured against php 8.5.6, which answers the empty string here (plus
+/// a "Unprocessed filter buckets remaining on input brigade" warning elephc does not emit).
+#[test]
+fn test_user_filter_psfs_feed_me() {
+    let out = compile_and_run(
+        r#"<?php
+class FeedMeFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        return PSFS_FEED_ME;
+    }
+}
+stream_filter_register("feedme", "FeedMeFilter");
+$f = fopen("php://memory", "r+");
+fwrite($f, "hello\n");
+rewind($f);
+stream_filter_append($f, "feedme");
+$r = fread($f, 100);
+echo "len=", strlen($r);
+"#,
+    );
+    assert_eq!(out, "len=0");
+}
+
+/// Verifies a user filter returning PSFS_PASS_ON transforms the output (control).
+#[test]
+fn test_user_filter_psfs_pass_on_control() {
+    let out = compile_and_run(
+        r#"<?php
+class UpperFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = strtoupper($b->data);
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("upper", "UpperFilter");
+$f = fopen("php://memory", "r+");
+fwrite($f, "hello\n");
+rewind($f);
+stream_filter_append($f, "upper");
+echo fread($f, 100);
+"#,
+    );
+    assert_eq!(out, "HELLO\n");
 }
 
 /// Verifies compiled PHP output for mixed object is truthy.
@@ -7642,6 +14398,368 @@ echo ($r ? "ok" : "no") . "\n";
     assert_eq!(out, "opt=1 n=2 m=100 a=200\nok\n");
 }
 
+/// stream_metadata() declared the way the MANUAL shows it — with no type hints —
+/// must still receive its arguments intact.
+///
+/// The contract-seeding table covered every hook that takes parameters except
+/// this one, so an untyped `$path` kept the `Int` an untyped parameter is seeded
+/// with. `Int` occupies ONE register, but the caller hands a string as a
+/// (ptr,len) PAIR, so `$path` swallowed the pointer alone and every later
+/// argument slid down one slot — `$option` read the length, `$value` read the
+/// option. Measured against php 8.5.6, which prints the values below.
+#[test]
+fn test_untyped_stream_metadata_receives_its_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedMetaW {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) { $opened = $path; return true; }
+    public function stream_metadata($path, $option, $value) {
+        echo "p=" . $path . " o=" . $option . " t=" . gettype($value) . "\n";
+        return true;
+    }
+}
+stream_wrapper_register("umw", "UntypedMetaW");
+echo chmod("umw://f", 0644) ? "1" : "0";
+echo "\n";
+$r = touch("umw://g", 100, 200);
+echo ($r ? "ok" : "no") . "\n";
+"#,
+    );
+    assert_eq!(out, "p=umw://f o=6 t=integer\n1\np=umw://g o=1 t=array\nok\n");
+}
+
+/// A wrapper that serves ONLY path operations still gets the wrapper ABI.
+///
+/// Both gates that ask "is this a wrapper?" — the checker's contract seeding and
+/// the EIR normalizer — used `stream_open` as the marker. A wrapper reached only
+/// through `chmod()`/`touch()` never declares `stream_open`, so it failed both:
+/// the body was normalized to boxed Mixed while the runtime dispatcher kept
+/// handing it a raw (ptr,len) pair, and the program SEGFAULTED. Same php output
+/// as the typed form.
+#[test]
+fn test_path_only_wrapper_without_stream_open_seeds_its_contract() {
+    let out = compile_and_run(
+        r#"<?php
+class PathOnlyW {
+    public $context;
+    public function stream_metadata($path, $option, $value) {
+        echo "p=" . $path . " o=" . $option . " t=" . gettype($value) . "\n";
+        return true;
+    }
+}
+stream_wrapper_register("pow", "PathOnlyW");
+echo chmod("pow://f", 0644) ? "1" : "0";
+echo "\n";
+$r = touch("pow://g", 100, 200);
+echo ($r ? "ok" : "no") . "\n";
+"#,
+    );
+    assert_eq!(out, "p=pow://f o=6 t=integer\n1\np=pow://g o=1 t=array\nok\n");
+}
+
+/// `stream_set_write_buffer()`/`stream_set_read_buffer()` reach the wrapper's `stream_set_option()`.
+///
+/// Both were lowered as a no-op that always returned 0, so a userspace wrapper never learned the
+/// buffer changed and every stream claimed success. Measured on php 8.5.6: `$option` is 3 for write
+/// and 2 for read, `$arg1` is `PHP_STREAM_BUFFER_NONE` (0) for size 0 and `_FULL` (2) otherwise,
+/// and `$arg2` is the size — except for size 0, where php substitutes the default chunk size 1024.
+/// The call answers 0 when the hook returns true and -1 otherwise. A stream that is not a wrapper
+/// never reaches the hook at all: `php://memory` answers -1 for write and 0 for read.
+#[test]
+fn test_stream_set_buffer_dispatches_to_the_wrapper_option_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class BufW {
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+    public function stream_set_option($option, $arg1, $arg2) {
+        echo "opt=" . $option . " mode=" . $arg1 . " size=" . $arg2 . "\n";
+        return $option === 3;
+    }
+}
+stream_wrapper_register("buf", "BufW");
+$f = fopen("buf://x", "r");
+var_dump(stream_set_write_buffer($f, 0));
+var_dump(stream_set_write_buffer($f, 512));
+var_dump(stream_set_read_buffer($f, 0));
+var_dump(stream_set_read_buffer($f, 256));
+fclose($f);
+$m = fopen("php://memory", "r+");
+var_dump(stream_set_write_buffer($m, 0));
+var_dump(stream_set_read_buffer($m, 0));
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        "opt=3 mode=0 size=1024\nint(0)\nopt=3 mode=2 size=512\nint(0)\n\
+         opt=2 mode=0 size=1024\nint(-1)\nopt=2 mode=2 size=256\nint(-1)\nint(-1)\nint(0)\n"
+    );
+}
+
+/// `fwrite()` on a user-filtered write stream answers with the filter's `&$consumed`.
+///
+/// Two bugs met here. The dispatcher handed `&$consumed` a Mixed CELL, but an untyped by-ref
+/// parameter is an Int by-ref, so the method read the cell's tag word as its starting value —
+/// which is 0 for an int, so it looked right — and then wrote its count straight over that tag.
+/// And the filtered-write helper ignored the parameter regardless, always reporting the payload
+/// length. Measured on php 8.5.6: a filter maintaining `$consumed` answers 10, one that assigns 7
+/// answers 7, and one that never touches the parameter answers 0 even though the bytes were
+/// written. Built-in filters are unaffected — they publish nothing, and php reports the payload
+/// length for them, which is what the sentinel preserves.
+#[test]
+fn test_fwrite_reports_the_user_filters_consumed_count() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class Maintains extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            $bucket->data = strtoupper($bucket->data);
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+class Assigns extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) { stream_bucket_append($out, $bucket); }
+        $consumed = 7;
+        return PSFS_PASS_ON;
+    }
+}
+class Ignores extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $bucket->data = strtoupper($bucket->data);
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("maintains", "Maintains");
+stream_filter_register("assigns", "Assigns");
+stream_filter_register("ignores", "Ignores");
+foreach (["maintains", "assigns", "ignores"] as $name) {
+    $f = fopen("out_$name", "w");
+    stream_filter_append($f, $name, STREAM_FILTER_WRITE);
+    var_dump(fwrite($f, "abcdefghij"));
+    fclose($f);
+    echo file_get_contents("out_$name"), "\n";
+}
+$b = fopen("out_builtin", "w");
+stream_filter_append($b, "string.toupper", STREAM_FILTER_WRITE);
+var_dump(fwrite($b, "abcdefghij"));
+fclose($b);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(10)\nABCDEFGHIJ\nint(7)\nabcdefghij\nint(0)\nABCDEFGHIJ\nint(10)\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// php warns, by name, for every `streamWrapper` hook the registered class does not implement.
+///
+/// elephc answered silently, and two of the answers were wrong as well: `fwrite()` reported 0
+/// bytes where php reports false, and `fflush()` reported success where php reports false.
+/// Every wording below was measured against php 8.5.6 on a wrapper declaring only `stream_open`;
+/// note that `feof()` alone also says what php assumed instead. `@` still silences all of them.
+///
+/// `stream_read` is deliberately absent from this list: php 8.5.6 emits NO warning for a missing
+/// `stream_read`, measured with `stream_eof` present so the read is genuinely attempted.
+#[test]
+fn test_missing_wrapper_hooks_warn_by_class_and_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+stream_wrapper_register("bare", "Bare");
+$f = fopen("bare://x", "r+");
+var_dump(fwrite($f, "abc"));
+var_dump(feof($f));
+var_dump(fstat($f));
+var_dump(flock($f, LOCK_EX));
+var_dump(fflush($f));
+echo "--- suppressed ---\n";
+var_dump(@fwrite($f, "abc"));
+var_dump(@feof($f));
+var_dump(@fstat($f));
+var_dump(@flock($f, LOCK_EX));
+fclose($f);
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\n\
+         --- suppressed ---\nbool(false)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fwrite(): Bare::stream_write is not implemented!\n\
+         Warning: feof(): Bare::stream_eof is not implemented! Assuming EOF\n\
+         Warning: fstat(): Bare::stream_stat is not implemented!\n\
+         Warning: flock(): Bare::stream_lock is not implemented!\n",
+        "one line per missing hook, naming the class, and nothing from the suppressed calls"
+    );
+}
+
+/// A wrapper missing `stream_read`/`url_stat` answers FALSE, not an empty string or -1.
+///
+/// Both were silent wrong values rather than missing diagnostics. `fread()` handed back `""`,
+/// which reads as a successful empty read; php answers false. `filesize()` handed back the -1 the
+/// field lookup uses as its sentinel, because a matched SCHEME was being treated as a successful
+/// stat — a wrapper with no `url_stat()` matches the scheme and produces nothing. Measured on
+/// php 8.5.6, including the two controls: a wrapper that does implement `url_stat()` keeps its
+/// size, and an absent ordinary file keeps its own false.
+#[test]
+fn test_missing_read_and_stat_hooks_answer_false_not_a_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+class HasStat {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+    function url_stat($path, $flags) { return ["size" => 42]; }
+}
+stream_wrapper_register("bare", "Bare");
+stream_wrapper_register("hs", "HasStat");
+var_dump(@filesize("bare://y"));
+var_dump(@filesize("hs://y"));
+var_dump(@filesize("/definitely/not/here"));
+$f = fopen("bare://x", "r");
+var_dump(fread($f, 5));
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nint(42)\nbool(false)\nbool(false)\n");
+}
+
+/// The path operations warn by class and method too, naming the BUILTIN that called them.
+///
+/// These share one runtime helper across unlink/rename/mkdir/rmdir and the whole
+/// `stream_metadata` family, so the helper cannot know which builtin reached it — php names the
+/// caller, and `chmod`/`touch`/`chown` all name `stream_metadata` rather than a method of their
+/// own. Each wording measured against php 8.5.6.
+#[test]
+fn test_missing_wrapper_path_hooks_warn_naming_their_caller() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+stream_wrapper_register("bare", "Bare");
+var_dump(unlink("bare://a"));
+var_dump(rename("bare://a", "bare://b"));
+var_dump(mkdir("bare://d"));
+var_dump(rmdir("bare://d"));
+var_dump(chmod("bare://a", 0644));
+var_dump(touch("bare://a"));
+var_dump(chown("bare://a", 501));
+var_dump(@unlink("bare://a"));
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         bool(false)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: unlink(): Bare::unlink is not implemented!\n\
+         Warning: rename(): Bare::rename is not implemented!\n\
+         Warning: mkdir(): Bare::mkdir is not implemented!\n\
+         Warning: rmdir(): Bare::rmdir is not implemented!\n\
+         Warning: chmod(): Bare::stream_metadata is not implemented!\n\
+         Warning: touch(): Bare::stream_metadata is not implemented!\n\
+         Warning: chown(): Bare::stream_metadata is not implemented!\n",
+        "the caller's own name on every line, and nothing from the suppressed call"
+    );
+}
+
+/// The stat builtins warn when a wrapper has no `url_stat()`, and `filesize()` adds php's second line.
+///
+/// Measured on php 8.5.6: each caller names itself and the missing `url_stat`, and `filesize()`
+/// alone follows with "stat failed for <path>" — which php prints for ANY failed stat, so an
+/// absent ordinary file gets that line too while `is_file()`/`file_exists()` stay silent. A
+/// wrapper that does implement `url_stat()` warns about nothing and keeps its answers.
+#[test]
+fn test_missing_url_stat_warns_and_filesize_adds_its_second_line() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+class HasStat {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+    function url_stat($path, $flags) { return ["size" => 42, "mode" => 0100644]; }
+}
+stream_wrapper_register("bare", "Bare");
+stream_wrapper_register("hs", "HasStat");
+var_dump(file_exists("bare://a"));
+var_dump(filesize("bare://a"));
+var_dump(is_file("bare://a"));
+var_dump(@file_exists("bare://a"));
+var_dump(file_exists("hs://a"));
+var_dump(filesize("hs://a"));
+var_dump(is_file("hs://a"));
+var_dump(filesize("/definitely/not/here"));
+var_dump(is_file("/definitely/not/here"));
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         bool(true)\nint(42)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: file_exists(): Bare::url_stat is not implemented!\n\
+         Warning: filesize(): Bare::url_stat is not implemented!\n\
+         Warning: filesize(): stat failed for bare://a\n\
+         Warning: is_file(): Bare::url_stat is not implemented!\n\
+         Warning: filesize(): stat failed for /definitely/not/here\n",
+        "the wrapper that implements url_stat warns about nothing, the suppressed call is silent, \
+         and only filesize() reports the failed stat"
+    );
+}
+
+/// The wrapper marker must NOT fire on a class that merely owns generic names.
+///
+/// `mkdir`/`rmdir`/`unlink`/`rename` are ordinary method names on ordinary
+/// classes — Symfony's `Filesystem::mkdir($path, $mode)` is not a stream
+/// wrapper. Seeding those on name alone would force the raw (ptr,len) ABI onto a
+/// plain method call, so they take the wrapper contract only when the class also
+/// declares one of the protocol's RESERVED names.
+#[test]
+fn test_generic_method_names_alone_do_not_make_a_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+class Filesystem {
+    public function mkdir($path, $mode) { return $path . "/" . $mode; }
+    public function unlink($path) { return strtoupper($path); }
+}
+$fs = new Filesystem();
+echo $fs->mkdir("a", 5), "\n";
+echo $fs->unlink("b"), "\n";
+"#,
+    );
+    assert_eq!(out, "a/5\nB\n");
+}
+
 /// Regression: two `stream_context_create` calls in one program must
 /// assemble. The no-options clear path previously used a fixed
 /// `scc_store_zero` label that was defined twice (once per call), so any
@@ -7658,27 +14776,23 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
-/// A stream-context `notification` closure must fire STREAM_NOTIFY_FAILURE
-/// (code 9) when an `http://` connection is refused. Connecting to
-/// 127.0.0.1:1 (a closed port) is refused immediately, so `__rt_http_open`
-/// reaches its failure path and invokes the captured callback through its
-/// descriptor invoker (the offset-56 invoker contract). This is the
-/// deterministic, network-free end-to-end test for the whole capture →
-/// global → fire-shim → invoker → closure-body path. CONNECT (2) and
-/// COMPLETED (8) are validated against a live server during development; they
-/// share the same shim and differ only by the milestone code immediate.
+/// An explicitly supplied stream-context notifier fires STREAM_NOTIFY_CONNECT
+/// (code 2) while opening a successful loopback HTTP stream.
 #[test]
-fn test_stream_notification_callback_fires_failure_on_refused_connection() {
+fn test_stream_notification_callback_fires_connect_for_explicit_context() {
+    let (_server, port) = spawn_http_server(b"ok");
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 $ctx = stream_context_create([], ['notification' => function($code, $sev, $msg, $mc, $bt, $bm) {
-    echo "N" . $code . ";";
+    if ($code === 2) echo "N" . $code . ";";
 }]);
-$f = fopen('http://127.0.0.1:1/', 'r');
+$f = fopen('http://127.0.0.1:PHP_TEST_PORT/', 'r', false, $ctx);
 echo $f === false ? "closed" : "open";
-"#,
+fclose($f);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
-    assert_eq!(out, "N9;closed");
+    assert_eq!(out, "N2;open");
 }
 
 /// v1 captures only a literal closure / first-class-callable `notification`
@@ -7691,43 +14805,50 @@ fn test_stream_notification_string_callback_not_fired_in_v1() {
         r#"<?php
 function my_notify($code) { echo "S" . $code; }
 $ctx = stream_context_create([], ['notification' => 'my_notify']);
-$f = fopen('http://127.0.0.1:1/', 'r');
+$f = fopen('http://127.0.0.1:1/', 'r', false, $ctx);
 echo $f === false ? "ok" : "bad";
 "#,
     );
     assert_eq!(out, "ok");
 }
 
-/// A later `stream_context_create` whose params array lacks `notification`
-/// clears the global callback, so a subsequent failed `http://` open fires
-/// nothing (single-global context model). Verifies the clear-on-no-callback
-/// path in `capture_notification_callback`.
+/// An explicit empty context masks the request-default notification callback.
 #[test]
-fn test_stream_notification_callback_cleared_by_later_context() {
+fn test_stream_notification_empty_explicit_context_masks_default() {
+    let (_server, port) = spawn_http_server(b"ok");
     let out = compile_and_run(
-        r#"<?php
-$a = stream_context_create([], ['notification' => function($code) { echo "A" . $code; }]);
-$b = stream_context_create([], ['other' => 1]);
-$f = fopen('http://127.0.0.1:1/', 'r');
-echo $f === false ? "ok" : "bad";
-"#,
+        &r#"<?php
+$default = stream_context_get_default();
+stream_context_set_params($default, ['notification' => function($code) {
+    if ($code === 2) echo "default-fired";
+}]);
+$empty = stream_context_create([], ['other' => 1]);
+$f = fopen('http://127.0.0.1:PHP_TEST_PORT/', 'r', false, $empty);
+echo $f === false ? "bad" : "ok";
+fclose($f);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "ok");
 }
 
-/// `stream_context_set_params` must also capture a `notification` closure into
-/// the global so a later refused `http://` open fires STREAM_NOTIFY_FAILURE.
+/// `stream_context_set_params` updates the explicitly addressed context notifier.
 #[test]
 fn test_stream_notification_callback_via_set_params() {
+    let (_server, port) = spawn_http_server(b"ok");
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 $ctx = stream_context_create([]);
-stream_context_set_params($ctx, ['notification' => function($code) { echo "P" . $code . ";"; }]);
-$f = fopen('http://127.0.0.1:1/', 'r');
+stream_context_set_params($ctx, ['notification' => function($code) {
+    if ($code === 2) echo "P" . $code . ";";
+}]);
+$f = fopen('http://127.0.0.1:PHP_TEST_PORT/', 'r', false, $ctx);
 echo $f === false ? "closed" : "open";
-"#,
+fclose($f);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
-    assert_eq!(out, "P9;closed");
+    assert_eq!(out, "P2;open");
 }
 
 /// A userspace wrapper whose `stream_cast()` (vtable slot 10) returns a real
@@ -7763,9 +14884,63 @@ echo "n=" . $n . " kept=" . count($r);
     assert_eq!(out, "n=1 kept=1");
 }
 
-/// A userspace wrapper that does not implement `stream_cast` cannot be
-/// represented as a select()-able descriptor, so `stream_select` excludes its
-/// synthetic fd (matching PHP) and drops it from the ready set without crashing.
+/// A resource keeps its PHP kind name when it travels through an untyped parameter.
+///
+/// `stream_context_create()` is statically `Resource`, so passing it to `mixed $r` boxes it
+/// through the generic value boxer — which writes ownership marker 0. The registry lookup
+/// only ran for markers 1/3/4/9, so a context answered `"stream"` while a filter (boxed by
+/// the legacy fd path, marker 3) answered correctly. Same emitted code for both, so the
+/// divergence was purely the marker. Oracle: php 8.5.6.
+#[test]
+fn test_resource_kind_name_survives_an_untyped_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function kind($r) { return get_resource_type($r); }
+function open_p($r) { return var_export(is_resource($r), true); }
+$ctx = stream_context_create([]);
+$f   = fopen("php://memory", "r+");
+$fl  = stream_filter_append($f, "string.toupper", STREAM_FILTER_WRITE);
+echo kind($ctx), "|", kind($fl), "|", kind($f), "|", open_p($ctx);
+fclose($f);
+echo "|", kind($f), "|", open_p($f);
+"#,
+    );
+    assert_eq!(out, "stream-context|stream filter|stream|true|Unknown|false");
+}
+
+/// `stream_select()` must actually wait for its timeout.
+///
+/// The timeout arrives in caller-saved registers (x3/x4, rcx/r8) and the pollfd build
+/// calls `__rt_stream_fd` for every entry, so the computed timeout was whatever those
+/// registers happened to hold afterwards. On macOS that garbage rounded to zero and the
+/// call returned instantly; on Linux it hit the "negative seconds means infinite" arm and
+/// `poll(-1)` blocked forever, which is what timed this suite's wrapper test out at 60s.
+/// The lower bound is deliberately loose — the bug produced 0 ms, not 190 ms.
+#[test]
+fn test_stream_select_waits_for_its_timeout() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$r = [$pair[0]]; $w = []; $e = [];
+$t0 = microtime(true);
+$n = stream_select($r, $w, $e, 0, 200000);
+$ms = (int) round((microtime(true) - $t0) * 1000);
+echo "n=", var_export($n, true), " waited=", var_export($ms >= 150, true);
+"#,
+    );
+    assert_eq!(out, "n=0 waited=true");
+}
+
+/// A userspace wrapper that does not implement `stream_cast` cannot be represented as a
+/// select()-able descriptor, so it contributes nothing to the descriptor set.
+///
+/// This test used to assert `n=0 kept=0`, which is not php's answer: php counts the streams it
+/// could cast and raises `ValueError: No stream arrays were passed` when that count is zero, so
+/// the only entry here leaves it at zero and the call THROWS. Measured on `php -n` 8.5.6, which
+/// also prints `NoCast::stream_cast is not implemented!` and `Cannot represent a stream of type
+/// user-space as a select()able descriptor` first; both are asserted by
+/// `test_stream_select_explains_an_uncastable_stream`, which reads the diagnostic channel this
+/// test does not.
 #[test]
 fn test_stream_select_wrapper_without_stream_cast_excluded() {
     let out = compile_and_run(
@@ -7779,11 +14954,11 @@ class NoCast {
 stream_wrapper_register("nocast", "NoCast");
 $w = fopen("nocast://x", "r");
 $r = [$w]; $wr = []; $e = [];
-$n = stream_select($r, $wr, $e, 0, 0);
-echo "n=" . $n . " kept=" . count($r);
+try { $n = stream_select($r, $wr, $e, 0, 0); echo "n=" . $n . " kept=" . count($r); }
+catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(); }
 "#,
     );
-    assert_eq!(out, "n=0 kept=0");
+    assert_eq!(out, "ValueError: No stream arrays were passed");
 }
 
 /// Verifies `fread()` of a payload larger than the 64 KiB concat scratch buffer returns the whole
@@ -7892,6 +15067,2004 @@ echo strlen($a), "|", substr($a, 0, 3), "|", $b;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `stream_get_meta_data()` reports the mode string the caller passed, not one derived
+/// from the descriptor's access bits.
+///
+/// The derivation could only ever answer `r`, `w` or `r+`: it read `F_GETFL`, which knows nothing
+/// of `a` (reported `w`), of `+` past a `b` flag, or of the `b` flag itself. A library that
+/// branches on `$meta['mode'][0] === 'a'` to decide whether a handle appends saw `w` and rewound.
+#[test]
+fn test_stream_get_meta_data_reports_the_mode_the_caller_passed() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("modes.txt", "seed");
+foreach (["r", "rb", "r+", "r+b", "w", "w+", "a", "a+", "c"] as $mode) {
+    $h = fopen("modes.txt", $mode);
+    echo stream_get_meta_data($h)["mode"], " ";
+    fclose($h);
+}
+"#,
+    );
+    assert_eq!(out, "r rb r+ r+b w w+ a a+ c ");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the memory wrappers report the mode of the stream PHP built for them.
+///
+/// `php://memory` and `php://temp` do not echo the caller's mode: a read-only mode answers `rb`,
+/// an append mode `a+b`, and anything asking for write access `w+b`. Reference PHP 8.5.6 was the
+/// oracle for each of these.
+#[test]
+fn test_stream_get_meta_data_maps_the_memory_wrapper_modes() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["r", "rb", "r+", "w", "w+", "a", "c"] as $mode) {
+    $h = fopen("php://memory", $mode);
+    echo stream_get_meta_data($h)["mode"], " ";
+    fclose($h);
+}
+$t = fopen("php://temp", "r");
+echo stream_get_meta_data($t)["mode"], " ";
+fclose($t);
+$o = fopen("php://output", "w");
+echo stream_get_meta_data($o)["mode"];
+"#,
+    );
+    assert_eq!(out, "rb rb w+b w+b w+b a+b rb rb wb");
+}
+
+/// Verifies repeated `stream_get_meta_data()` calls keep reporting the same URI.
+///
+/// The array releases its string values, so handing it the StreamState's own URI allocation freed
+/// the state's copy. The first two calls still read the right bytes; by the third, the hash keys
+/// of the arrays built in between had reused the block, and `uri` came back as a fragment of
+/// `seekable` or `blocked`. The state's pointer was also left dangling for its own teardown.
+#[test]
+fn test_stream_get_meta_data_uri_survives_repeated_reads() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("uri_meta.txt", "seed");
+$h = fopen("uri_meta.txt", "r");
+echo stream_get_meta_data($h)["uri"], "|";
+echo stream_get_meta_data($h)["uri"], "|";
+echo stream_get_meta_data($h)["uri"], "|";
+echo stream_get_meta_data($h)["uri"];
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "uri_meta.txt|uri_meta.txt|uri_meta.txt|uri_meta.txt");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `c` opens a file for writing without truncating it, and creates it when absent.
+///
+/// The mode parser accepted only `r`, `w` and `a`, so `c` — which PHP added precisely to let a
+/// caller take an advisory lock before deciding to truncate — returned `false` with a warning.
+#[test]
+fn test_fopen_c_mode_creates_without_truncating() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("c_mode.txt", "abcdef");
+$h = fopen("c_mode.txt", "c");
+fwrite($h, "XY");
+fclose($h);
+echo file_get_contents("c_mode.txt"), "|";
+$fresh = fopen("c_mode_new.txt", "c");
+echo ($fresh === false ? "false" : "resource");
+fclose($fresh);
+"#,
+    );
+    assert_eq!(out, "XYcdef|resource");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `x` creates a file exclusively and refuses one that already exists.
+#[test]
+fn test_fopen_x_mode_refuses_an_existing_file() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$fresh = fopen("x_mode.txt", "x");
+echo ($fresh === false ? "false" : "resource"), "|";
+fwrite($fresh, "new");
+fclose($fresh);
+$again = @fopen("x_mode.txt", "x");
+echo ($again === false ? "false" : "resource"), "|";
+echo file_get_contents("x_mode.txt");
+"#,
+    );
+    assert_eq!(out, "resource|false|new");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a `+` after the `b` flag still opens the file for both reading and writing.
+///
+/// The parser only inspected the second mode byte, so `rb+` — an idiom PHP accepts and the manual
+/// spells out — stayed read-only and its writes failed silently.
+#[test]
+fn test_fopen_plus_is_honoured_after_the_b_flag() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("plus_after_b.txt", "abcdef");
+$h = fopen("plus_after_b.txt", "rb+");
+fwrite($h, "ZZ");
+fclose($h);
+echo file_get_contents("plus_after_b.txt");
+"#,
+    );
+    assert_eq!(out, "ZZcdef");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_socket_client()` warns when the connection is refused.
+///
+/// PHP raises this Warning whether or not the caller passed `&$errno`/`&$errstr`; elephc filled
+/// the out-parameters and printed nothing, so a script that watched the warning to notice a dead
+/// endpoint saw a silent `false`. Port 9 (discard) is not served on a CI host.
+#[test]
+fn test_stream_socket_client_warns_when_the_connection_is_refused() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = stream_socket_client("tcp://127.0.0.1:9");
+echo ($c === false ? "false" : "resource");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert!(
+        out.diagnostics
+            .contains("Warning: stream_socket_client(): Unable to connect to tcp://127.0.0.1:9 ("),
+        "expected PHP's connect warning, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies `@` suppresses the connect-failure warning, as it does every other PHP diagnostic.
+#[test]
+fn test_error_control_suppresses_the_connect_failure_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = @stream_socket_client("tcp://127.0.0.1:9");
+echo ($c === false ? "false" : "resource");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
+}
+
+/// Verifies `stream_get_meta_data()['stream_type']` names the wrapper, not the descriptor.
+///
+/// It was derived from whether `lseek` worked, which is not what php-src reports: a memory stream
+/// came back as STDIO, `php://output` as a socket, and a `popen()` pipe as a socket too. The name
+/// is a wrapper and backend identity, so it comes from the recorded identity now.
+#[test]
+fn test_stream_get_meta_data_names_the_wrapper_not_the_descriptor() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("stype.txt", "seed");
+$names = [];
+$h = fopen("stype.txt", "r");
+$names[] = stream_get_meta_data($h)["stream_type"];
+fclose($h);
+$h = fopen("php://memory", "r+");
+$names[] = stream_get_meta_data($h)["stream_type"];
+fclose($h);
+$h = fopen("php://temp", "r+");
+$names[] = stream_get_meta_data($h)["stream_type"];
+fclose($h);
+$h = fopen("php://output", "w");
+$names[] = stream_get_meta_data($h)["stream_type"];
+$h = fopen("php://input", "r");
+$names[] = stream_get_meta_data($h)["stream_type"];
+$h = fopen("data://text/plain,hi", "r");
+$names[] = stream_get_meta_data($h)["stream_type"];
+fclose($h);
+$p = popen("printf hi", "r");
+$names[] = stream_get_meta_data($p)["stream_type"];
+pclose($p);
+$d = opendir(".");
+$names[] = stream_get_meta_data($d)["stream_type"];
+closedir($d);
+echo implode("|", $names);
+"#,
+    );
+    assert_eq!(out, "STDIO|MEMORY|TEMP|Output|Input|RFC2397|STDIO|dir");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies each socket transport is named the way php-src names it.
+///
+/// A TCP, UDP, Unix-domain and paired socket are all non-seekable descriptors, so nothing about
+/// them distinguishes the four names php-src gives them. The transport is recorded from the
+/// address the caller wrote, and an accepted connection takes its listener's.
+#[test]
+fn test_stream_get_meta_data_names_each_socket_transport() {
+    let out = compile_and_run(
+        r#"<?php
+$names = [];
+$s = stream_socket_server("tcp://127.0.0.1:0");
+$names[] = stream_get_meta_data($s)["stream_type"];
+$c = stream_socket_client("tcp://" . stream_socket_get_name($s, false));
+$names[] = stream_get_meta_data($c)["stream_type"];
+$a = stream_socket_accept($s);
+$names[] = stream_get_meta_data($a)["stream_type"];
+fclose($a);
+fclose($c);
+fclose($s);
+$u = stream_socket_server("udp://127.0.0.1:0", $e, $m, STREAM_SERVER_BIND);
+$names[] = stream_get_meta_data($u)["stream_type"];
+fclose($u);
+$path = "/tmp/elephc_stype_transport.sock";
+@unlink($path);
+$x = stream_socket_server("unix://" . $path);
+$names[] = stream_get_meta_data($x)["stream_type"];
+fclose($x);
+@unlink($path);
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+$names[] = stream_get_meta_data($pair[0])["stream_type"];
+fclose($pair[0]);
+fclose($pair[1]);
+echo implode("|", $names);
+"#,
+    );
+    assert_eq!(
+        out,
+        "tcp_socket/ssl|tcp_socket/ssl|tcp_socket/ssl|udp_socket|unix_socket|generic_socket"
+    );
+}
+
+/// Verifies an unresolvable host produces the message php-src composes for it.
+///
+/// This failure has no `errno` — php-src builds the text itself, which is why `&$error_code` stays
+/// `0` — so elephc, which only ever described an `errno`, left `&$error_message` empty and the
+/// caller had nothing but `false` to go on. `.invalid` is reserved by RFC 2606 and never resolves.
+#[test]
+fn test_socket_error_outputs_describe_an_unresolvable_host() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = @stream_socket_client("tcp://no-such-host.invalid:80", $errno, $errstr);
+echo ($c === false ? "false" : "resource"), "|", $errno, "|", $errstr;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        out.stdout.starts_with(
+            "false|0|php_network_getaddresses: getaddrinfo for no-such-host.invalid failed: "
+        ),
+        "expected php-src's composed resolver message, got stdout={}",
+        out.stdout
+    );
+}
+
+/// Verifies an unresolvable host raises the two Warnings PHP raises, in PHP's order.
+///
+/// php-src reports the resolver's own message first, then the connect line that repeats it as the
+/// reason.
+#[test]
+fn test_unresolvable_host_warns_twice_like_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = stream_socket_client("tcp://no-such-host.invalid:80");
+echo ($c === false ? "false" : "resource");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    let lines: Vec<&str> = out.diagnostics.lines().collect();
+    assert_eq!(lines.len(), 2, "expected two warnings, got diagnostics={}", out.diagnostics);
+    assert!(
+        lines[0].starts_with(
+            "Warning: stream_socket_client(): php_network_getaddresses: getaddrinfo for \
+             no-such-host.invalid failed: "
+        ),
+        "unexpected first warning: {}",
+        lines[0]
+    );
+    assert!(
+        lines[1].starts_with(
+            "Warning: stream_socket_client(): Unable to connect to tcp://no-such-host.invalid:80 \
+             (php_network_getaddresses: getaddrinfo for no-such-host.invalid failed: "
+        ),
+        "unexpected second warning: {}",
+        lines[1]
+    );
+}
+
+/// Verifies `fsockopen()` spells its refused endpoint the way PHP does, as `host:port`.
+#[test]
+fn test_fsockopen_warns_with_the_host_and_port() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = fsockopen("127.0.0.1", 9);
+echo ($c === false ? "false" : "resource");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert!(
+        out.diagnostics
+            .contains("Warning: fsockopen(): Unable to connect to 127.0.0.1:9 ("),
+        "expected PHP's connect warning, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies a FAILED open of a RUN-TIME `php://filter` URL names the URL, not the resource.
+///
+/// The literal spelling was fixed first; a URL assembled at run time still named the swapped
+/// RESOURCE with the inner opener's errno, because the swap replaces the filename before any
+/// opener runs and nothing downstream remembered what the program had written:
+/// `Warning: fopen(absent_dyn.txt): Failed to open stream: No such file or directory`.
+/// `php -n` 8.5.6 prints, for the same call, `Warning:
+/// fopen(php://filter/read=string.toupper/resource=absent_dyn.txt): Failed to open stream:
+/// operation failed` — php-src's `php_stream_url_wrap_php` returns NULL the moment the inner
+/// open fails, BEFORE a single filter is created, and the generic caller composes one fixed
+/// line from the URL it was handed.
+///
+/// `_php_filter_pending_mode` cannot gate this: it reads 0 exactly when the URL IS a filter URL
+/// whose every name failed to resolve, which is the second probe here. The parse publishes the
+/// URL itself and that pointer is the flag. The third probe pins that a PLAIN dynamic open still
+/// names itself with its own errno — the suppression the filter path opens must not leak.
+#[test]
+fn test_failed_run_time_filter_open_names_the_url_not_the_wrapped_resource() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$u = "php://filter/read=string.toupper/resource=" . "absent_dyn.txt";
+var_dump(fopen($u, "r"));
+$v = "php://filter/read=no.such/resource=" . "absent_dyn2.txt";
+var_dump(fopen($v, "r"));
+$p = "no_such_plain" . ".txt";
+var_dump(fopen($p, "r"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(php://filter/read=string.toupper/resource=absent_dyn.txt): \
+         Failed to open stream: operation failed\n\
+         Warning: fopen(php://filter/read=no.such/resource=absent_dyn2.txt): \
+         Failed to open stream: operation failed\n\
+         Warning: fopen(no_such_plain.txt): Failed to open stream: No such file or directory\n",
+        "the URL for both filter URLs; the plain path keeps its own name and errno"
+    );
+}
+
+/// Verifies an unknown name in a RUN-TIME `php://filter` URL warns TWICE and keeps the stream.
+///
+/// The run-time parse published only the ids it HAD resolved, so a name it could not resolve was
+/// dropped in complete silence and nothing downstream could report it — a typo in a filter name
+/// became a silently unfiltered read. `php -n` 8.5.6 prints two lines per failed creation, one
+/// from `php_stream_filter_create` (main/streams/filter.c) and one from
+/// `php_stream_apply_filter_list`, and neither cancels the open:
+///
+/// ```text
+/// Warning: fopen(): Unable to locate filter "no.such.filter"
+/// Warning: fopen(): Unable to create filter (no.such.filter)
+/// bool(true)
+/// hello
+/// ```
+///
+/// The chain CONTINUES past a failure, which the second probe pins: it still uppercases while
+/// warning for both unknown names, in chain order.
+#[test]
+fn test_run_time_filter_unknown_name_warns_twice_and_keeps_the_stream() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rtu.txt", "hello");
+$res = "rtu" . ".txt";
+$u = "php://filter/read=no.such.filter/resource=" . $res;
+$h = fopen($u, "r");
+var_dump(is_resource($h));
+echo fread($h, 100), "|";
+$c = "php://filter/read=one.bad|string.toupper|two.bad/resource=" . $res;
+$g = fopen($c, "r");
+echo fread($g, 100), "\n";
+unlink("rtu.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nhello|HELLO\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(): Unable to locate filter \"no.such.filter\"\n\
+         Warning: fopen(): Unable to create filter (no.such.filter)\n\
+         Warning: fopen(): Unable to locate filter \"one.bad\"\n\
+         Warning: fopen(): Unable to create filter (one.bad)\n\
+         Warning: fopen(): Unable to locate filter \"two.bad\"\n\
+         Warning: fopen(): Unable to create filter (two.bad)\n",
+        "two lines per unresolvable name, in chain order, with the known filter still applied"
+    );
+}
+
+/// Verifies the run-time report counts the DIRECTIONS php applies, not the names.
+///
+/// php-src walks the filter list once per direction it applies and reaches
+/// `php_stream_filter_create` again on the second walk, so the count is not one pair per name.
+/// Measured on `php -n` 8.5.6 with a prefix-less chain: `"r"` warns once per name, `"r+"` twice,
+/// and `"x"` — a mode naming neither direction — not at all, while the open still succeeds. An
+/// explicit `read=` list is applied exactly once whatever the mode, so the same name opened
+/// `"r+"` behind a `read=` prefix warns once. Six pairs in total.
+///
+/// The mode is read at RUN TIME, which the `$m = "r" . "+"` probe is here to force: `fopen($url,
+/// $mode)` reaches the dynamic path with BOTH assembled at run time, so a rule that only ever
+/// looked at a compile-time-literal mode would answer that line with half the warnings php
+/// prints and no test would notice.
+#[test]
+fn test_run_time_filter_warning_count_follows_the_open_mode_directions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rtd.txt", "x");
+$res = "rtd" . ".txt";
+$plain = "php://filter/no.such/resource=" . $res;
+fclose(fopen($plain, "r"));
+echo "-r\n";
+fclose(fopen($plain, "r+"));
+echo "-rplus\n";
+$fresh = "php://filter/no.such/resource=" . "rtdx.txt";
+fclose(fopen($fresh, "x"));
+echo "-x\n";
+$m = "r" . "+";
+fclose(fopen($plain, $m));
+echo "-dynmode\n";
+$explicit = "php://filter/read=no.such/resource=" . $res;
+fclose(fopen($explicit, "r+"));
+echo "-explicit\n";
+unlink("rtd.txt");
+unlink("rtdx.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "-r\n-rplus\n-x\n-dynmode\n-explicit\n");
+    let pair = "Warning: fopen(): Unable to locate filter \"no.such\"\n\
+                Warning: fopen(): Unable to create filter (no.such)\n";
+    assert_eq!(
+        out.diagnostics,
+        pair.repeat(6),
+        "one pair for `r`, two for `r+`, NONE for `x`, two for the run-time `r+`, one for `read=`"
+    );
+}
+
+/// Verifies a failed run-time filtered open prints its line ALONE, and `@` silences everything.
+///
+/// php never reaches the filters when the inner open fails — `php_stream_url_wrap_php` returns
+/// before creating any — so `php -n` 8.5.6 answers a URL that is BOTH unopenable and names an
+/// unresolvable filter with the failed-open line and nothing else. An empty segment names
+/// nothing and is skipped in silence on the success path, as `php_strtok_r` does, and `@`
+/// suppresses every one of these through the shared depth counter rather than a rule of its own.
+#[test]
+fn test_run_time_filter_failed_open_warns_alone_and_at_suppresses_everything() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rta.txt", "ok");
+$res = "rta" . ".txt";
+$bad = "php://filter/read=no.such/resource=" . "absent_rta.txt";
+var_dump(fopen($bad, "r"));
+var_dump(@fopen($bad, "r"));
+$u = "php://filter/read=no.such/resource=" . $res;
+var_dump(is_resource(@fopen($u, "r")));
+$empty = "php://filter/read=/resource=" . $res;
+$h = fopen($empty, "r");
+echo fread($h, 10), "\n";
+unlink("rta.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(true)\nok\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(php://filter/read=no.such/resource=absent_rta.txt): \
+         Failed to open stream: operation failed\n",
+        "the failed open speaks alone; `@` and an empty segment say nothing at all"
+    );
+}
+
+/// Verifies the path readers NAME THEMSELVES in the unresolvable-filter warnings.
+///
+/// php words these with the CALLING function — `file_get_contents(): Unable to locate filter`,
+/// `readfile(): Unable to create filter` — and every one of these routes said nothing at all.
+/// The literal `file_get_contents` route wrapped the shared emitter in diagnostic suppression,
+/// which silenced the unresolvable-name warnings along with the inner opener's it was aimed at;
+/// the run-time routes had no channel for the names the parse dropped. All five verdicts
+/// measured on `php -n` 8.5.6, and the first two lines pin that the LITERAL and the assembled
+/// spelling of the same URL now answer alike.
+#[test]
+fn test_path_readers_name_themselves_in_unresolvable_filter_warnings() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rtc.txt", "hi\n");
+$res = "rtc" . ".txt";
+echo file_get_contents("php://filter/read=no.such/resource=rtc.txt");
+echo file_get_contents("php://filter/read=no.such/resource=" . $res);
+readfile("php://filter/read=no.such/resource=" . $res);
+var_dump(count(file("php://filter/read=no.such/resource=" . $res)));
+var_dump(file_put_contents("php://filter/write=no.such/resource=" . "rtw.txt", "abc"));
+unlink("rtc.txt");
+unlink("rtw.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "hi\nhi\nhi\nint(1)\nint(3)\n");
+    let lines = |callee: &str| {
+        format!(
+            "Warning: {callee}(): Unable to locate filter \"no.such\"\n\
+             Warning: {callee}(): Unable to create filter (no.such)\n"
+        )
+    };
+    assert_eq!(
+        out.diagnostics,
+        format!(
+            "{}{}{}{}{}",
+            lines("file_get_contents"),
+            lines("file_get_contents"),
+            lines("readfile"),
+            lines("file"),
+            lines("file_put_contents"),
+        ),
+        "each route names itself, for the literal URL and the assembled one alike"
+    );
+}
+
+/// Verifies a filtered open NESTED inside another open does not swallow later warnings.
+///
+/// Silencing the inner opener needs a suppression scope, and gating that scope on "did the parse
+/// see a filter URL" makes the pop depend on a global the resource's own open can republish: a
+/// user wrapper's `stream_open` is PHP and may `fopen()` something itself, and a non-literal
+/// inner path runs the parse, which clears that flag. The outer open then never popped what it
+/// had pushed, and EVERY later warning in the program vanished — the two below among them. Each
+/// open now saves what it needs on the way in and reads its own frame on the way out, so the pop
+/// can never disagree with the push.
+///
+/// Both remaining lines are `php -n` 8.5.6's, and the empty filter segment is deliberate: the
+/// outer chain has nothing to lose to the inner open's parse, which keeps this test about the
+/// suppression pairing rather than the single-slot hand-off it shares with the pending ids.
+#[test]
+fn test_a_nested_open_does_not_leak_the_filter_suppression_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $p = "definitely_absent" . "_inner8.txt";
+        $inner = @fopen($p, "r");
+        return true;
+    }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w8", "W");
+$u = "php://filter/read=/resource=w8://x";
+var_dump(is_resource(fopen($u, "r")));
+$q = "absent_after" . "_t8.txt";
+var_dump(fopen($q, "r"));
+$b = "php://filter/read=string.toupper/resource=" . "absent_t8.txt";
+var_dump(fopen($b, "r"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(absent_after_t8.txt): Failed to open stream: No such file or directory\n\
+         Warning: fopen(php://filter/read=string.toupper/resource=absent_t8.txt): \
+         Failed to open stream: operation failed\n",
+        "the nested open must leave the suppression depth exactly as it found it"
+    );
+}
+
+/// Verifies a filtered open NESTED inside another open does not STEAL the outer chain.
+///
+/// The parse hands its results to the attach through fixed globals, and the open that sits
+/// between them can run PHP: a user wrapper's `stream_open` is a PHP method, and a method that
+/// `fopen()`s anything re-enters the parse, which publishes over every one of those globals. The
+/// outer open then attached whatever the INNER URL left behind — nothing, because the inner
+/// open's own attach had already consumed and cleared it — and the outer chain vanished.
+///
+/// Both chains below are real and DIFFERENT, so the answer names which one ran: `php -n` 8.5.6
+/// prints `string(3) "NOP"` — the wrapper serves `abc` uppercased by the chain its own
+/// `stream_open` opened, and the outer chain then rot13s `ABC`. This branch's parent answered
+/// `ABC`: the inner filter applied, the outer one silently did not.
+#[test]
+fn test_a_nested_open_does_not_steal_the_outer_filter_chain() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W1 {
+    public $context;
+    public $fh;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=string.toupper/resource=data://text/plain,abc";
+        $this->fh = fopen($u, "r");
+        return true;
+    }
+    public function stream_read($n) { return fread($this->fh, $n); }
+    public function stream_eof() { return feof($this->fh); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w1", "W1");
+$u = "php://filter/read=string.rot13/resource=w1://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"NOP\"\n");
+    assert_eq!(out.stderr, "", "both chains resolve, so neither warns");
+}
+
+/// Verifies the names the OUTER URL could not resolve survive a nested open too.
+///
+/// The unresolved-name spans travel in the same hand-off as the filter ids, so the inner parse
+/// took those with it: the outer URL's typo went unreported, which is the silence the whole
+/// channel exists to end. The inner open is `@`-silenced deliberately — php reports the inner
+/// names in the inner open's own words, and elephc's filter suppression still swallows them,
+/// which is a separate defect this test must not pin either way.
+///
+/// `php -n` 8.5.6 on this script prints exactly the two lines below and `string(3) "abc"`: a
+/// chain whose every name is unknown attaches nothing and the open still succeeds.
+#[test]
+fn test_a_nested_open_does_not_steal_the_outer_unresolved_names() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W6 {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=inner.absent/resource=data://text/plain,zzz";
+        $inner = @fopen($u, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w6", "W6");
+$u = "php://filter/read=outer.absent/resource=w6://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"abc\"\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(): Unable to locate filter \"outer.absent\"\n\
+         Warning: fopen(): Unable to create filter (outer.absent)\n",
+        "the outer URL's own skipped name must survive the inner open's parse"
+    );
+}
+
+/// Verifies the PATH readers keep their filter chain across a nested open as well.
+///
+/// `file_get_contents()` and `file_put_contents()` reach the same parse and the same attach
+/// through their own routes, so the hand-off has to be parked on all three or the defect simply
+/// moves. Measured on `php -n` 8.5.6: the read answers `string(3) "ABC"` and the write hands the
+/// wrapper `ABC`, then answers the INPUT byte count.
+#[test]
+fn test_the_path_readers_keep_their_filter_chain_across_a_nested_open() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class WR {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=string.toupper/resource=data://text/plain,zzz";
+        $inner = fopen($u, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_write($data) { echo "wrote:[", $data, "]\n"; return strlen($data); }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("wr", "WR");
+stream_wrapper_register("ww", "WR");
+$r = "php://filter/read=string.toupper/resource=wr://x";
+var_dump(file_get_contents($r));
+$w = "php://filter/write=string.toupper/resource=ww://x";
+var_dump(file_put_contents($w, "abc"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "string(3) \"ABC\"\nwrote:[ABC]\nint(3)\n",
+        "both path routes must attach their OWN chain, not the nested open's"
+    );
+    assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
+}
+
+/// Verifies nesting PAST the parked-frame bound stays quiet instead of corrupting the outer open.
+///
+/// php-src imposes no limit on how many filtered opens can be in flight; elephc parks each one's
+/// hand-off in a fixed BSS frame and keeps 8. The twelve below therefore overflow it by four, and
+/// what must hold is that the frames INSIDE the bound are untouched: the outermost open sits at
+/// depth 0 and its chain is the one the answer names. `php -n` 8.5.6 prints the twelve levels and
+/// `string(3) "ABC"`; this branch's parent printed `string(3) "abc"`, having lost the outermost
+/// chain to the very first nested open — the bound is not what this ever depended on.
+#[test]
+fn test_filtered_opens_nested_past_the_parked_frame_bound_keep_the_outer_chain() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class D {
+    public $context;
+    public $fh;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $scheme = substr($path, 0, strpos($path, "://"));
+        $n = (int) substr($scheme, 1);
+        if ($n > 0) {
+            $u = "php://filter/read=/resource=d" . ($n - 1) . "://x";
+            $this->fh = fopen($u, "r");
+            $this->buf = stream_get_contents($this->fh);
+        } else {
+            $this->buf = "abc";
+        }
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+for ($i = 0; $i < 12; $i++) { stream_wrapper_register("d" . $i, "D"); }
+$u = "php://filter/read=string.toupper/resource=d11://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"ABC\"\n");
+    assert_eq!(
+        out.stderr,
+        "",
+        "an empty filter segment is skipped in silence, at every depth"
+    );
+}
+
+/// Verifies a literal `file_get_contents()` filter URL resolving NO filter still returns bytes.
+///
+/// `emit_open_read_close_tail` called `__rt_stream_get_contents` without staging its second
+/// argument, the read-loop chunk size, so the loop ran with whatever the preceding code happened
+/// to leave in that register. A URL naming a KNOWN filter left the stamp sequence's value there
+/// and read correctly; a URL whose chain resolved to nothing left a rodata address, and the read
+/// died with `Fatal error: Possible integer overflow in memory allocation`. Both spellings below
+/// reached that, so a single typo in a filter name was a fatal. `php -n` 8.5.6 returns the
+/// file's bytes for both, and says nothing about an empty segment.
+#[test]
+fn test_literal_filter_read_with_no_resolvable_filter_still_returns_the_bytes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rtn.txt", "bytes");
+var_dump(file_get_contents("php://filter/read=/resource=rtn.txt"));
+var_dump(file_get_contents("php://filter/read=string.toupper/resource=rtn.txt"));
+unlink("rtn.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(5) \"bytes\"\nstring(5) \"BYTES\"\n");
+    assert_eq!(out.stderr, "", "an empty segment is skipped in silence");
+}
+
+/// Verifies a user wrapper's OWN unresolvable-filter warnings survive the outer filter scope.
+///
+/// A filtered open silences its inner opener, because php-src returns NULL from
+/// `php_stream_url_wrap_php` the moment the resource fails and composes one line from the whole
+/// URL instead. elephc opened that silence with `__rt_diag_push_suppression` — the counter `@`
+/// uses — around the WHOLE inner opener, and a user wrapper's `stream_open` is PHP running inside
+/// it. Every warning that PHP raised therefore vanished with the inner opener's.
+///
+/// Written RED first. `php -n` 8.5.6 prints FOUR unresolvable-name lines here, the inner open's
+/// pair before the outer's, and `string(3) "abc"`; at base elephc printed only the outer pair:
+///
+///     stdout: string(3) "abc"                                     # matched
+///     stderr: Warning: fopen(): Unable to locate filter "outer.absent"
+///             Warning: fopen(): Unable to create filter (outer.absent)
+///             # the two `inner.absent` lines php prints FIRST were missing
+#[test]
+fn test_a_nested_open_reports_the_wrapper_s_own_unresolved_names() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W6 {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=inner.absent/resource=data://text/plain,zzz";
+        $inner = fopen($u, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w6", "W6");
+$u = "php://filter/read=outer.absent/resource=w6://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"abc\"\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(): Unable to locate filter \"inner.absent\"\n\
+         Warning: fopen(): Unable to create filter (inner.absent)\n\
+         Warning: fopen(): Unable to locate filter \"outer.absent\"\n\
+         Warning: fopen(): Unable to create filter (outer.absent)\n",
+        "the wrapper's own PHP warns inside the outer open, and the outer names follow it"
+    );
+}
+
+/// Verifies a FAILED open inside a user wrapper's `stream_open` still names itself.
+///
+/// The same swallow as [`test_a_nested_open_reports_the_wrapper_s_own_unresolved_names`], reached
+/// by the other route: what the wrapper's PHP loses here is an ordinary failed-open line, not a
+/// filter name, which pins that the scope silenced every warning raised under it rather than one
+/// family. The outer chain resolves and applies, so the answer also says the swallow was never
+/// the price of the chain.
+///
+/// Written RED first. `php -n` 8.5.6 prints the wrapper's own failed-open line and `string(3)
+/// "ABC"`; at base elephc printed the same stdout and an EMPTY stderr:
+///
+///     stdout: string(3) "ABC"                                     # matched
+///     stderr: <empty>                                             # php prints one Warning here
+#[test]
+fn test_a_failed_open_inside_stream_open_still_warns_under_a_filter_url() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W7 {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $p = "definitely_absent" . "_inner7.txt";
+        $inner = fopen($p, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w7", "W7");
+$u = "php://filter/read=string.toupper/resource=w7://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"ABC\"\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(definitely_absent_inner7.txt): \
+         Failed to open stream: No such file or directory\n",
+        "the wrapper's own failed open speaks, and the outer chain still applies"
+    );
+}
+
+/// The CONTROL for the two above: `@` on a filtered open still silences EVERYTHING under it.
+///
+/// Splitting the filter scope off the `@` counter is only correct if `@` keeps reaching the same
+/// distance it always did — into the wrapper's PHP, into the inner open's filter names, and into
+/// the outer URL's own. This script raises all three under one `@` and then warns OUTSIDE it, so
+/// a scope left standing would be visible on the following line rather than merely suspected.
+///
+/// `php -n` 8.5.6 prints `string(3) "abc"`, `after` and `bool(false)` with a single Warning, for
+/// the LAST open only. This one was GREEN at base and must stay so: it is what the split may not
+/// cost.
+#[test]
+fn test_at_silences_a_filtered_open_including_the_wrapper_s_own_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W9 {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=inner.absent/resource=data://text/plain,zzz";
+        $inner = fopen($u, "r");
+        $p = "definitely_absent" . "_inner9.txt";
+        $miss = fopen($p, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w9", "W9");
+$u = "php://filter/read=outer.absent/resource=w9://x";
+var_dump(stream_get_contents(@fopen($u, "r")));
+echo "after\n";
+$q = "absent_after" . "_c9.txt";
+var_dump(fopen($q, "r"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"abc\"\nafter\nbool(false)\n");
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(absent_after_c9.txt): Failed to open stream: No such file or directory\n",
+        "`@` still covers the whole open, and gives the depth back when it ends"
+    );
+}
+
+/// Verifies a throw out of `stream_open` UNWINDS the filter depths instead of spending them.
+///
+/// A filtered open counts itself in `_php_filter_open_depth` on the way in — which is also what
+/// records that it opened a suppression scope for its inner opener — and in
+/// `_php_filter_pending_depth` when it parks its hand-off. Both are given back by helpers that
+/// run after the opener RETURNS, and an exception thrown out of a user wrapper's `stream_open`
+/// reaches neither: the depth stays up, and the eight parked frames are spent one throw at a
+/// time. The try handler already saves and restores `_rt_diag_suppression` for exactly this
+/// reason, and the filter depths now travel in the same set.
+///
+/// The witness is the LAST open's wording. Past the bound `__rt_php_filter_suppress_begin` parks
+/// nothing and so opens no scope, which stops silencing the inner opener — and php-src never
+/// lets that opener speak, because `php_stream_url_wrap_php` returns NULL and the caller composes
+/// one line naming the WHOLE URL. So a leaked depth turns php's line into the inner opener's,
+/// naming `absent_x7.txt`: a path the program never wrote. That is a plain failed open with no
+/// nesting, so it says the same thing on both arches; an earlier draft of this test ended on a
+/// nested rot13 chain instead, which is x86-red at BASE for an unrelated reason and would have
+/// pinned that defect here by accident.
+///
+/// Written RED first. `php -n` 8.5.6 prints twelve `caught` lines, `bool(false)`, and exactly one
+/// Warning. At base elephc printed the same stdout and the WRONG warning — measured identically
+/// on aarch64 natively and on x86_64 under qemu:
+///
+///     stderr: Warning: fopen(absent_x7.txt): Failed to open stream: No such file or directory
+#[test]
+fn test_a_throw_out_of_stream_open_gives_the_filter_depths_back() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class TH {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) {
+        throw new Exception("boom");
+    }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("th", "TH");
+$t = "php://filter/read=string.toupper/resource=th://x";
+for ($i = 0; $i < 12; $i++) {
+    try { $h = fopen($t, "r"); } catch (Exception $e) { echo "caught\n"; }
+}
+$bad = "php://filter/read=no.such/resource=" . "absent_x7.txt";
+var_dump(fopen($bad, "r"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "caught\ncaught\ncaught\ncaught\ncaught\ncaught\n\
+         caught\ncaught\ncaught\ncaught\ncaught\ncaught\n\
+         bool(false)\n"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Warning: fopen(php://filter/read=no.such/resource=absent_x7.txt): \
+         Failed to open stream: operation failed\n",
+        "twelve throws must cost no filter frame, so the last open still names the whole URL"
+    );
+}
+
+/// The WHOLE stat family reaches a wrapper's `url_stat()`, with the flags php passes each caller.
+///
+/// Only `file_exists()`/`filesize()`/`is_file()` ever dispatched; every other stat builtin ran the
+/// real filesystem against a `scheme://` path that is not a file, so on the wrapper below elephc
+/// measured `is_dir`, `is_link`, `filemtime`, `fileatime`, `filectime`, `filetype`, `fileperms`,
+/// `fileowner`, `filegroup`, `fileinode`, `stat` and `lstat` ALL as `bool(false)` — twelve silent
+/// wrong answers.
+///
+/// The `[n]` markers are the `$flags` argument, which php varies per caller and elephc hard-coded
+/// to 0. Measured one call at a time on php 8.5.6 with `clearstatcache(true)` between them — php
+/// keeps a ONE-entry stat cache, so without that the second read of a path never reaches the
+/// wrapper at all and the flags never show. `PHP_STREAM_URL_STAT_NOCACHE`(4) alone for the value
+/// readers, `|LINK`(5) for the two that do not follow a symlink, `|QUIET`(6) for the silent
+/// predicates, and all three (7) for `is_link()`.
+///
+/// `stat()` rebuilds php's canonical 26 entries rather than handing back the wrapper's own array,
+/// which is why the numeric keys read as well as the string ones.
+#[test]
+fn test_whole_stat_family_dispatches_to_wrapper_url_stat_with_php_flags() {
+    let out = compile_and_run(
+        r#"<?php
+class SW {
+    public $context;
+    function url_stat($path, $flags) {
+        echo "[", $flags, "]";
+        if (strpos($path, "dir") !== false) {
+            return ["dev"=>7,"ino"=>11,"mode"=>040755,"nlink"=>2,"uid"=>501,"gid"=>20,
+                    "rdev"=>0,"size"=>96,"atime"=>1000000001,"mtime"=>1000000002,
+                    "ctime"=>1000000003,"blksize"=>4096,"blocks"=>0];
+        }
+        return ["dev"=>7,"ino"=>11,"mode"=>0100644,"nlink"=>1,"uid"=>501,"gid"=>20,
+                "rdev"=>0,"size"=>1234,"atime"=>1000000001,"mtime"=>1000000002,
+                "ctime"=>1000000003,"blksize"=>4096,"blocks"=>8];
+    }
+}
+stream_wrapper_register("sw", "SW");
+$f = "sw://a.txt";
+$d = "sw://x/dir";
+echo "is_dir "; echo is_dir($f) ? "Y" : "N"; clearstatcache(true);
+echo is_dir($d) ? "Y" : "N"; echo "\n"; clearstatcache(true);
+echo "is_link "; echo is_link($f) ? "Y" : "N"; echo "\n"; clearstatcache(true);
+echo "filemtime ", filemtime($f), "\n"; clearstatcache(true);
+echo "fileatime ", fileatime($f), "\n"; clearstatcache(true);
+echo "filectime ", filectime($f), "\n"; clearstatcache(true);
+echo "fileperms ", fileperms($f), "\n"; clearstatcache(true);
+echo "fileowner ", fileowner($f), "\n"; clearstatcache(true);
+echo "filegroup ", filegroup($f), "\n"; clearstatcache(true);
+echo "fileinode ", fileinode($f), "\n"; clearstatcache(true);
+echo "filetype ", filetype($f); clearstatcache(true);
+echo " ", filetype($d), "\n"; clearstatcache(true);
+$s = stat($f);
+echo "stat ", $s["mode"], " ", $s[2], " ", $s["size"], " ", $s[7], " ", $s["blocks"], " ", $s[0], "\n";
+clearstatcache(true);
+$s = lstat($d);
+echo "lstat ", $s["mode"], " ", $s["nlink"], " ", $s[12], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "is_dir [6]N[6]Y\n\
+         is_link [7]N\n\
+         filemtime [4]1000000002\n\
+         fileatime [4]1000000001\n\
+         filectime [4]1000000003\n\
+         fileperms [4]33188\n\
+         fileowner [4]501\n\
+         filegroup [4]20\n\
+         fileinode [4]11\n\
+         filetype [5]file [5]dir\n\
+         [4]stat 33188 33188 1234 1234 8 7\n\
+         [5]lstat 16877 2 0\n",
+        "every stat builtin must reach url_stat with php's own flags and read php's own field"
+    );
+}
+
+/// A wrapper array that does not NAME a field answers zero, not false.
+///
+/// php builds a `php_stream_statbuf` from the array and `statbuf_from_array` zeroes it first, so
+/// only `url_stat()` answering `false` is a failed stat. Measured on php 8.5.6: a wrapper returning
+/// just `['mode' => 0100644]` gives `filesize()` `int(0)` and `filemtime()` `int(0)`, while
+/// `stat()` still measures as a full 26-entry array whose unnamed fields are all `0`. Conflating
+/// "absent field" with "failed stat" would turn each of those into `bool(false)`.
+///
+/// A mode of zero matches no `S_IFMT`, so the type predicates read false and `filetype()` reads
+/// `"unknown"` — after php's notice, which names the mode MASKED to its file-type bits.
+#[test]
+fn test_wrapper_url_stat_absent_field_reads_zero_not_false() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Sparse {
+    public $context;
+    function url_stat($path, $flags) { return ["mode" => 0100644]; }
+}
+class Bald {
+    public $context;
+    function url_stat($path, $flags) { return []; }
+}
+stream_wrapper_register("sp", "Sparse");
+stream_wrapper_register("bd", "Bald");
+var_dump(filesize("sp://x"));
+clearstatcache(true);
+var_dump(filemtime("sp://x"));
+clearstatcache(true);
+var_dump(fileowner("sp://x"));
+clearstatcache(true);
+var_dump(is_file("sp://x"));
+clearstatcache(true);
+var_dump(filetype("sp://x"));
+clearstatcache(true);
+$s = stat("sp://x");
+echo $s["mode"], ",", $s["size"], ",", $s[8], ",", $s[12], "\n";
+clearstatcache(true);
+var_dump(filetype("bd://x"));
+clearstatcache(true);
+var_dump(is_file("bd://x"));
+clearstatcache(true);
+var_dump(is_dir("bd://x"));
+clearstatcache(true);
+var_dump(filesize("bd://x"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "int(0)\nint(0)\nint(0)\nbool(true)\nstring(4) \"file\"\n\
+         33188,0,0,0\n\
+         string(7) \"unknown\"\nbool(false)\nbool(false)\nint(0)\n",
+        "an unnamed stat field is php's zero; only url_stat() answering false is a failed stat"
+    );
+    assert_eq!(
+        out.diagnostics,
+        "Notice: filetype(): Unknown file type (0)\n",
+        "a successful stat that names few fields warns about nothing, but a mode php cannot \
+         classify still gets its notice"
+    );
+}
+
+/// The access checks SELECT a permission triad out of the wrapper's mode; they do not `access(2)`.
+///
+/// php never asks the kernel about a `scheme://` path — it compares the array's `uid`/`gid` against
+/// the process and then tests ONE bit of the mode, so the answer can contradict the filesystem
+/// entirely. elephc ran `access(2)` on the URL as a literal path, which cannot exist, so
+/// `is_readable()`/`is_writable()`/`is_writeable()`/`is_executable()` measured false for every
+/// wrapper.
+///
+/// Measured on php 8.5.6, with `$mode` decimal because the wrapper reads it back out of the path:
+/// owner-matched `0400`(256) reads readable and `0040`(32) does not; unmatched, `0040` does not and
+/// `0004`(4) does. The GROUP triad — `st_gid == getgid()` or `st_gid` among `getgroups()` — is the
+/// third branch and measures the same way (`--- --- --- r-- -w- --x --- --- ---` for a file owned
+/// by another user in the process's primary group); it is not asserted here because a compiled test
+/// has no portable way to name the runner's gid.
+#[test]
+fn test_wrapper_access_checks_select_phps_permission_triad() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("triad_probe.txt", "x");
+$me = fileowner("triad_probe.txt");
+class TW {
+    public $context;
+    public static $owner = 0;
+    function url_stat($path, $flags) {
+        $mode = (int) substr($path, strrpos($path, "/") + 1);
+        if (strpos($path, "/mine/") !== false) {
+            return ["mode" => $mode, "uid" => TW::$owner, "gid" => 4242];
+        }
+        return ["mode" => $mode, "uid" => 4242, "gid" => 4242];
+    }
+}
+TW::$owner = $me;
+stream_wrapper_register("tw", "TW");
+function probe($p) {
+    clearstatcache(true);
+    echo is_readable($p) ? "r" : "-";
+    clearstatcache(true);
+    echo is_writable($p) ? "w" : "-";
+    clearstatcache(true);
+    echo is_writeable($p) ? "W" : "-";
+    clearstatcache(true);
+    echo is_executable($p) ? "x" : "-";
+    echo " ";
+}
+foreach ([256, 128, 64, 32, 16, 8, 4, 2, 1, 511] as $mode) { probe("tw:///mine/" . $mode); }
+echo "|";
+foreach ([256, 128, 64, 32, 16, 8, 4, 2, 1, 511] as $mode) { probe("tw:///other/" . $mode); }
+echo "\n";
+unlink("triad_probe.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "r--- -wW- ---x ---- ---- ---- ---- ---- ---- rwWx \
+         |---- ---- ---- ---- ---- ---- r--- -wW- ---x rwWx \n",
+        "the owner triad wins on a uid match and the world triad answers when nothing matches"
+    );
+}
+
+/// Every stat caller names ITSELF in the missing-hook warning, and the value readers add php's
+/// second line.
+///
+/// One runtime dispatcher serves them all, so it cannot know which builtin reached it; the lowering
+/// publishes the caller's name. `is_writeable()` names the ALIAS the program called, not
+/// `is_writable`. Measured on php 8.5.6: the value readers follow with `stat failed for`, the two
+/// link-free ones with php's capitalized `Lstat failed for`, and the six PREDICATES print nothing
+/// beyond the missing-hook line.
+#[test]
+fn test_every_stat_caller_names_itself_when_url_stat_is_missing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+stream_wrapper_register("bare", "Bare");
+var_dump(is_dir("bare://a"));
+var_dump(is_link("bare://a"));
+var_dump(is_readable("bare://a"));
+var_dump(is_writable("bare://a"));
+var_dump(is_writeable("bare://a"));
+var_dump(is_executable("bare://a"));
+var_dump(filemtime("bare://a"));
+var_dump(fileatime("bare://a"));
+var_dump(filectime("bare://a"));
+var_dump(filetype("bare://a"));
+var_dump(fileperms("bare://a"));
+var_dump(fileowner("bare://a"));
+var_dump(filegroup("bare://a"));
+var_dump(fileinode("bare://a"));
+var_dump(stat("bare://a"));
+var_dump(lstat("bare://a"));
+var_dump(@is_dir("bare://a"));
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(out.stdout, "bool(false)\n".repeat(17));
+    assert_eq!(
+        out.diagnostics,
+        "Warning: is_dir(): Bare::url_stat is not implemented!\n\
+         Warning: is_link(): Bare::url_stat is not implemented!\n\
+         Warning: is_readable(): Bare::url_stat is not implemented!\n\
+         Warning: is_writable(): Bare::url_stat is not implemented!\n\
+         Warning: is_writeable(): Bare::url_stat is not implemented!\n\
+         Warning: is_executable(): Bare::url_stat is not implemented!\n\
+         Warning: filemtime(): Bare::url_stat is not implemented!\n\
+         Warning: filemtime(): stat failed for bare://a\n\
+         Warning: fileatime(): Bare::url_stat is not implemented!\n\
+         Warning: fileatime(): stat failed for bare://a\n\
+         Warning: filectime(): Bare::url_stat is not implemented!\n\
+         Warning: filectime(): stat failed for bare://a\n\
+         Warning: filetype(): Bare::url_stat is not implemented!\n\
+         Warning: filetype(): Lstat failed for bare://a\n\
+         Warning: fileperms(): Bare::url_stat is not implemented!\n\
+         Warning: fileperms(): stat failed for bare://a\n\
+         Warning: fileowner(): Bare::url_stat is not implemented!\n\
+         Warning: fileowner(): stat failed for bare://a\n\
+         Warning: filegroup(): Bare::url_stat is not implemented!\n\
+         Warning: filegroup(): stat failed for bare://a\n\
+         Warning: fileinode(): Bare::url_stat is not implemented!\n\
+         Warning: fileinode(): stat failed for bare://a\n\
+         Warning: stat(): Bare::url_stat is not implemented!\n\
+         Warning: stat(): stat failed for bare://a\n\
+         Warning: lstat(): Bare::url_stat is not implemented!\n\
+         Warning: lstat(): Lstat failed for bare://a\n",
+        "each caller's own name, php's second line only for the value readers, \
+         and nothing at all from the suppressed call"
+    );
+}
+
+/// The value readers report a FAILED stat on an ordinary path too, not just through a wrapper.
+///
+/// Only `filesize()` printed php's `stat failed for` line; the other ten failed in silence.
+/// Measured on php 8.5.6 against an absent path — note that `filetype()` and `lstat()` capitalize
+/// it as `Lstat failed for`, and that the predicates print nothing at all.
+#[test]
+fn test_stat_value_readers_report_a_failed_stat_on_an_ordinary_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$p = "/definitely/not/here";
+var_dump(filesize($p));
+var_dump(filemtime($p));
+var_dump(fileatime($p));
+var_dump(filectime($p));
+var_dump(fileperms($p));
+var_dump(fileowner($p));
+var_dump(filegroup($p));
+var_dump(fileinode($p));
+var_dump(filetype($p));
+var_dump(stat($p));
+var_dump(lstat($p));
+var_dump(is_dir($p));
+var_dump(is_link($p));
+var_dump(is_readable($p));
+var_dump(file_exists($p));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\n".repeat(15));
+    assert_eq!(
+        out.diagnostics,
+        "Warning: filesize(): stat failed for /definitely/not/here\n\
+         Warning: filemtime(): stat failed for /definitely/not/here\n\
+         Warning: fileatime(): stat failed for /definitely/not/here\n\
+         Warning: filectime(): stat failed for /definitely/not/here\n\
+         Warning: fileperms(): stat failed for /definitely/not/here\n\
+         Warning: fileowner(): stat failed for /definitely/not/here\n\
+         Warning: filegroup(): stat failed for /definitely/not/here\n\
+         Warning: fileinode(): stat failed for /definitely/not/here\n\
+         Warning: filetype(): Lstat failed for /definitely/not/here\n\
+         Warning: stat(): stat failed for /definitely/not/here\n\
+         Warning: lstat(): Lstat failed for /definitely/not/here\n",
+        "eleven readers report the failure and the four predicates stay silent"
+    );
+}
+
+/// Verifies the argument-range `ValueError`s php-src raises across the `stream_*` surface.
+///
+/// Each wording below was MEASURED against `php -n` 8.5.6 before this test was written:
+///
+/// ```text
+/// stream_get_contents($f, -5)     ValueError: stream_get_contents(): Argument #2 ($length) must be greater than or equal to -1
+/// stream_get_contents($f, -1)     reads to EOF — -1 is the documented "read all" sentinel, NOT an error
+/// stream_set_chunk_size($f, 0)    ValueError: stream_set_chunk_size(): Argument #2 ($size) must be greater than 0
+/// stream_socket_shutdown($f, 9)   ValueError: stream_socket_shutdown(): Argument #2 ($mode) must be one of STREAM_SHUT_RD, STREAM_SHUT_WR, or STREAM_SHUT_RDWR
+/// ```
+///
+/// All three are catchable `ValueError`s, so a `try`/`catch` observes the message instead
+/// of the process dying; each used to answer a VALUE (`""`, `int(8192)`, `false`).
+#[test]
+fn test_stream_builtins_raise_php_argument_range_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(callable $c): string {
+    try { $v = $c(); return "no-throw:" . var_export($v, true); }
+    catch (ValueError $e) { return $e->getMessage(); }
+}
+$m = fopen("php://memory", "r+");
+fwrite($m, "payload");
+rewind($m);
+echo probe(fn() => stream_get_contents($m, -5)), "\n";
+echo probe(fn() => stream_set_chunk_size($m, 0)), "\n";
+echo probe(fn() => stream_set_chunk_size($m, -3)), "\n";
+echo probe(fn() => stream_socket_shutdown($m, 9)), "\n";
+echo probe(fn() => stream_socket_shutdown($m, -1)), "\n";
+rewind($m);
+echo stream_get_contents($m, -1), "\n";
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "stream_get_contents(): Argument #2 ($length) must be greater than or equal to -1\n",
+            "stream_set_chunk_size(): Argument #2 ($size) must be greater than 0\n",
+            "stream_set_chunk_size(): Argument #2 ($size) must be greater than 0\n",
+            "stream_socket_shutdown(): Argument #2 ($mode) must be one of STREAM_SHUT_RD, \
+             STREAM_SHUT_WR, or STREAM_SHUT_RDWR\n",
+            "stream_socket_shutdown(): Argument #2 ($mode) must be one of STREAM_SHUT_RD, \
+             STREAM_SHUT_WR, or STREAM_SHUT_RDWR\n",
+            "payload\n",
+        )
+    );
+}
+
+/// Verifies `stream_socket_shutdown()` still accepts every mode php-src enumerates.
+///
+/// The `ValueError` guard sits between the argument and the runtime helper, so the three
+/// legal modes must keep reaching it. MEASURED: php answers `true` for all three on a
+/// connected socket pair.
+#[test]
+fn test_stream_socket_shutdown_accepts_the_three_php_modes() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([STREAM_SHUT_RD, STREAM_SHUT_WR, STREAM_SHUT_RDWR] as $mode) {
+    $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+    echo stream_socket_shutdown($pair[0], $mode) ? "y" : "n";
+    fclose($pair[0]);
+    fclose($pair[1]);
+}
+"#,
+    );
+    assert_eq!(out, "yyy");
+}
+
+/// Verifies `stream_context_get_options()` names php-src's own parameter in its `TypeError`,
+/// and that the error is CATCHABLE rather than an immediate fatal.
+///
+/// MEASURED on `php -n` 8.5.6 — the parameter is `$stream_or_context`, not `$stream`:
+///
+/// ```text
+/// stream_context_get_options("nope") TypeError: stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, string given
+/// stream_context_get_options(1)      TypeError: stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, int given
+/// ```
+#[test]
+fn test_stream_context_get_options_type_error_is_catchable_and_names_its_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["nope", 1, 1.5, null, []];
+foreach ($values as $value) {
+    try { stream_context_get_options($value); echo "no-throw\n"; }
+    catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, string given\n",
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, int given\n",
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, float given\n",
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, null given\n",
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, array given\n",
+        )
+    );
+}
+
+/// Verifies `stream_copy_to_stream()` only seeks for a STRICTLY POSITIVE `$offset`.
+///
+/// php-src's `streamsfuncs.c` guards the seek with `pos > 0`, so its documented default
+/// (`$offset = 0`) copies from the source's CURRENT position — it does not rewind.
+/// MEASURED on `php -n` 8.5.6 with the source parked at byte 4 of `"0123456789"`:
+///
+/// ```text
+/// stream_copy_to_stream($src, $dst)          6 bytes, "456789"
+/// stream_copy_to_stream($src, $dst, null,  0) 6 bytes, "456789"   <- 0 does NOT rewind
+/// stream_copy_to_stream($src, $dst, null, -1) 6 bytes, "456789"
+/// stream_copy_to_stream($src, $dst, null,  2) 8 bytes, "23456789"
+/// ```
+#[test]
+fn test_stream_copy_to_stream_zero_offset_keeps_the_source_position() {
+    let out = compile_and_run(
+        r#"<?php
+function run(int $offset): string {
+    $src = fopen("php://memory", "r+");
+    fwrite($src, "0123456789");
+    fseek($src, 4);
+    $dst = fopen("php://memory", "r+");
+    $n = stream_copy_to_stream($src, $dst, null, $offset);
+    rewind($dst);
+    $payload = stream_get_contents($dst);
+    fclose($src);
+    fclose($dst);
+    return $n . ":" . $payload;
+}
+function run_default(): string {
+    $src = fopen("php://memory", "r+");
+    fwrite($src, "0123456789");
+    fseek($src, 4);
+    $dst = fopen("php://memory", "r+");
+    $n = stream_copy_to_stream($src, $dst);
+    rewind($dst);
+    $payload = stream_get_contents($dst);
+    fclose($src);
+    fclose($dst);
+    return $n . ":" . $payload;
+}
+echo run_default(), "\n";
+echo run(0), "\n";
+echo run(-1), "\n";
+echo run(2), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "6:456789\n6:456789\n6:456789\n8:23456789\n",
+        "only a strictly positive offset seeks, exactly like php-src's `pos > 0`"
+    );
+}
+
+/// Verifies every shape of `stream_context_set_option()` php refuses, plus its 8.3 notice.
+///
+/// The stub's fourth parameter carries NO default — it is `UNKNOWN`, not `null` — and the
+/// second is `array|string`, so the arity alone does not decide: what php accepts depends on
+/// whether `$wrapper_or_options` is an array or a string. MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// ($c, ['http' => [...]])          E_DEPRECATED, then bool(true)
+/// ($c, ['http' => [...]], null)    bool(true), and NO deprecation — the notice counts arguments
+/// ($c, ['http' => [...]], 'x')     ValueError: Argument #3 ($option_name) must be null when argument #2 ($wrapper_or_options) is an array
+/// ($c, 'http')                     E_DEPRECATED, then ValueError: Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) is a string
+/// ($c, 'http', 'header')           ValueError: Argument #4 ($value) must be provided when argument #2 ($wrapper_or_options) is a string
+/// ($c, 'http', null)               ValueError: Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) is a string
+/// ($c, 'http', 'header', 'X: 1')   bool(true)
+/// ```
+///
+/// The three-argument form used to answer a silent `bool(true)` and store nothing, so a caller
+/// who forgot the value read the refusal as a successful write.
+#[test]
+fn test_stream_context_set_option_refuses_phps_invalid_shapes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c1 = stream_context_create();
+try { echo stream_context_set_option($c1, ['http' => ['a' => 1]]) === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c2 = stream_context_create();
+try { echo stream_context_set_option($c2, ['http' => ['a' => 1]], null) === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c3 = stream_context_create();
+try { echo stream_context_set_option($c3, ['http' => ['a' => 1]], 'x') === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c4 = stream_context_create();
+try { echo stream_context_set_option($c4, 'http') === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c5 = stream_context_create();
+try { echo stream_context_set_option($c5, 'http', 'header') === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c6 = stream_context_create();
+try { echo stream_context_set_option($c6, 'http', null) === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c7 = stream_context_create();
+try { echo stream_context_set_option($c7, 'http', 'header', 'X: 1') === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+echo json_encode(stream_context_get_options($c7)), "\n";
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "true\n",
+            "true\n",
+            "stream_context_set_option(): Argument #3 ($option_name) must be null when \
+             argument #2 ($wrapper_or_options) is an array\n",
+            "stream_context_set_option(): Argument #3 ($option_name) cannot be null when \
+             argument #2 ($wrapper_or_options) is a string\n",
+            "stream_context_set_option(): Argument #4 ($value) must be provided when \
+             argument #2 ($wrapper_or_options) is a string\n",
+            "stream_context_set_option(): Argument #3 ($option_name) cannot be null when \
+             argument #2 ($wrapper_or_options) is a string\n",
+            "true\n",
+            "{\"http\":{\"header\":\"X: 1\"}}\n",
+        )
+    );
+    assert_eq!(
+        out.diagnostics,
+        concat!(
+            "Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, \
+             use stream_context_set_options() instead\n",
+            "Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, \
+             use stream_context_set_options() instead\n",
+        ),
+        "the notice fires on the ARITY, so the three-argument array form stays quiet"
+    );
+}
+
+/// Verifies `stream_select()` rejects php-src's two negative timeout components.
+///
+/// MEASURED on `php -n` 8.5.6 against a live `stream_socket_pair()`:
+///
+/// ```text
+/// stream_select($r, $w, $e, -1)     ValueError: stream_select(): Argument #4 ($seconds) must be greater than or equal to 0
+/// stream_select($r, $w, $e, 0, -1)  ValueError: stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0
+/// ```
+#[test]
+fn test_stream_select_rejects_negative_timeout_components() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+fwrite($pair[1], "hi");
+$w = null;
+$x = null;
+$r = [$pair[0]];
+try { stream_select($r, $w, $x, -1); echo "no-throw\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$r = [$pair[0]];
+try { stream_select($r, $w, $x, 0, -1); echo "no-throw\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$r = [$pair[0]];
+echo stream_select($r, $w, $x, 0), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "stream_select(): Argument #4 ($seconds) must be greater than or equal to 0\n",
+            "stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0\n",
+            "1\n",
+        )
+    );
+}
+
+/// Verifies the CSV reader KEEPS the escape byte, which php never removes.
+///
+/// `"a\"b"` reads back as `a\"b` on `php -n` 8.5.6 — four bytes, exactly what `fputcsv()` wrote.
+/// All the escape character does is stop the next byte from closing the field; both bytes land in
+/// the value. The parser dropped it when it preceded the ENCLOSURE and kept it everywhere else,
+/// so every round trip through a quoted field containing one silently lost a byte. The three
+/// other rows pin the cases that already worked, so the fix cannot be a swap of which byte is
+/// lost. `str_getcsv()` shares the state machine and is checked alongside.
+#[test]
+fn test_fgetcsv_keeps_the_escape_byte_it_reads() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = ["\"a\\\"b\"\n", "\"x\\\"\",y\n", "\"a\\\\b\"\n", "\"a\\,b\"\n"];
+foreach ($cases as $text) {
+    $h = fopen("php://memory", "r+");
+    fwrite($h, $text);
+    rewind($h);
+    echo json_encode(fgetcsv($h, 0, ",", "\"", "\\")), "|";
+    fclose($h);
+    echo json_encode(str_getcsv(rtrim($text, "\n"), ",", "\"", "\\")), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[\"a\\\\\\\"b\"]|[\"a\\\\\\\"b\"]\n",
+            "[\"x\\\\\\\"\",\"y\"]|[\"x\\\\\\\"\",\"y\"]\n",
+            "[\"a\\\\\\\\b\"]|[\"a\\\\\\\\b\"]\n",
+            "[\"a\\\\,b\"]|[\"a\\\\,b\"]\n",
+        )
+    );
+}
+
+/// Verifies the enclosure that CLOSES a field is consumed, even when data follows it.
+///
+/// php reads `"ab"cd` as `abcd`: the closing quote is gone and everything after it is ordinary
+/// data, quotes included — `"ab"c"d"` reads back as `abc"d"`. The parser wrote the quote back
+/// before resuming, which added a byte php never keeps. The doubled-quote row is here because it
+/// runs through the same state and must NOT change: `"ab""cd"` is still `ab"cd`.
+#[test]
+fn test_fgetcsv_drops_the_closing_enclosure_when_data_follows_it() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = ["\"ab\"cd\n", "\"ab\"cd,e\n", "\"ab\"c\"d\"\n", "\"ab\" cd\n", "\"ab\"\"cd\"\n"];
+foreach ($cases as $text) {
+    $h = fopen("php://memory", "r+");
+    fwrite($h, $text);
+    rewind($h);
+    echo json_encode(fgetcsv($h, 0, ",", "\"", "\\")), "\n";
+    fclose($h);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[\"abcd\"]\n",
+            "[\"abcd\",\"e\"]\n",
+            "[\"abc\\\"d\\\"\"]\n",
+            "[\"ab cd\"]\n",
+            "[\"ab\\\"cd\"]\n",
+        )
+    );
+}
+
+/// Verifies whitespace in FRONT of an opening enclosure is skipped, and only then.
+///
+/// php looks ahead from the start of a field: if the first byte that is neither the separator nor
+/// whitespace is the enclosure, the field starts there and the whitespace is dropped. So
+/// `" \"a\",b"` reads as `a`, while `" a,b"` — no enclosure ahead — keeps the space and reads as
+/// `" a"`. The reader had no lookahead at all and kept the space in both.
+///
+/// The last row is the reason the lookahead is bounded by the BUFFER rather than by a newline
+/// test: `str_getcsv()` holds the whole subject, so it CAN reach a quote past a newline and php
+/// answers `["a"]`, while `fgetcsv()` holds one line and cannot. One bound gives both.
+#[test]
+fn test_fgetcsv_skips_whitespace_before_an_opening_enclosure() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [" \"a\",b\n", "\t\"a\",b\n", " a,b\n", "a, \"b\"\n", " x\"a\",b\n", " \"a\" ,b\n"];
+foreach ($cases as $text) {
+    $h = fopen("php://memory", "r+");
+    fwrite($h, $text);
+    rewind($h);
+    echo json_encode(fgetcsv($h, 0, ",", "\"", "\\")), "\n";
+    fclose($h);
+}
+echo json_encode(str_getcsv(" \n\"a\"", ",", "\"", "\\")), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[\"a\",\"b\"]\n",
+            "[\"a\",\"b\"]\n",
+            "[\" a\",\"b\"]\n",
+            "[\"a\",\"b\"]\n",
+            "[\" x\\\"a\\\"\",\"b\"]\n",
+            "[\"a \",\"b\"]\n",
+            "[\"a\"]\n",
+        )
+    );
+}
+
+/// Verifies the `$escape` deprecation comes AFTER the control characters are validated.
+///
+/// php checks the separator, enclosure and escape for being a single character before it reaches
+/// the notice, so a call that throws `ValueError` never prints one. elephc emitted the notice
+/// first, which made every rejected call two lines where php prints one — and on the CSV family
+/// that is the whole diagnostic. The successful call at the end is what proves the notice was
+/// moved rather than lost.
+#[test]
+fn test_csv_escape_deprecation_comes_after_the_control_validation() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+fwrite($h, "a,b\n");
+rewind($h);
+try { fgetcsv($h, 0, ";;"); } catch (ValueError $e) { echo "1:", $e->getMessage(), "\n"; }
+try { fputcsv($h, ["a"], ";;"); } catch (ValueError $e) { echo "2:", $e->getMessage(), "\n"; }
+try { str_getcsv("a,b", ";;"); } catch (ValueError $e) { echo "3:", $e->getMessage(), "\n"; }
+rewind($h);
+echo "4:", json_encode(fgetcsv($h)), "\n";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "1:fgetcsv(): Argument #3 ($separator) must be a single character\n",
+            "2:fputcsv(): Argument #3 ($separator) must be a single character\n",
+            "3:str_getcsv(): Argument #2 ($separator) must be a single character\n",
+            "4:[\"a\",\"b\"]\n",
+        )
+    );
+    let notices = out
+        .diagnostics
+        .matches("the $escape parameter must be provided")
+        .count();
+    assert_eq!(
+        notices, 1,
+        "only the call that survived validation may warn, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies a filter name held in a VARIABLE reaches the same filters a literal one does.
+///
+/// `$name = "zlib.deflate"; stream_filter_append($h, $name);` attached NOTHING and answered
+/// `false`, while the identical call with the literal compresses. php makes no such distinction,
+/// and a name in a variable is ordinary PHP — a config value, a loop over a list, exactly what
+/// this test does. The five are unreachable through the run-time name table on purpose: that
+/// table lists what a chain node can apply, and each of these installs a per-fd handle and a
+/// program-local helper thunk instead, so the lowering now emits the attach SEQUENCES at the
+/// call site and picks between them by comparing the name.
+///
+/// The refusals matter as much as the attaches. `convert.iconv.` and `convert.iconv.UTF-8` carry
+/// no separator, so php has no filter for them and answers `false`; `convert.iconv.nope/alsonope`
+/// names a conversion `iconv_open()` cannot open, and php finds that out when it CREATES the
+/// filter, so that is `false` too. An EMPTY half is none of those — iconv reads it as the current
+/// locale's charset, and php attaches. All measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_filter_append_resolves_a_run_time_filter_name() {
+    let out = compile_and_run(
+        r#"<?php
+$names = ["zlib.deflate", "zlib.inflate", "bzip2.compress", "bzip2.decompress", "convert.iconv.UTF-8/ISO-8859-1"];
+foreach ($names as $n) {
+    $h = fopen("php://memory", "w+");
+    echo $n, "=", var_export(@stream_filter_append($h, $n, STREAM_FILTER_WRITE) !== false, true), "\n";
+    fclose($h);
+}
+$h = fopen("php://memory", "w+");
+echo "literal=", var_export(@stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE) !== false, true), "\n";
+fclose($h);
+$bad = ["convert.iconv.", "convert.iconv.UTF-8", "convert.iconv.nope/alsonope", "nosuchfilter"];
+foreach ($bad as $n) {
+    $h = fopen("php://memory", "w+");
+    echo $n, "=", var_export(@stream_filter_append($h, $n, STREAM_FILTER_WRITE), true), "\n";
+    fclose($h);
+}
+$h = fopen("php://memory", "w+");
+echo "empty-half=", var_export(@stream_filter_append($h, "convert.iconv.UTF-8/", STREAM_FILTER_WRITE) !== false, true), "\n";
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "zlib.deflate=true\n",
+            "zlib.inflate=true\n",
+            "bzip2.compress=true\n",
+            "bzip2.decompress=true\n",
+            "convert.iconv.UTF-8/ISO-8859-1=true\n",
+            "literal=true\n",
+            "convert.iconv.=false\n",
+            "convert.iconv.UTF-8=false\n",
+            "convert.iconv.nope/alsonope=false\n",
+            "nosuchfilter=false\n",
+            "empty-half=true\n",
+        )
+    );
+}
+
+/// Verifies php's "create or locate" wording reaches the `convert.iconv.*` refusals.
+///
+/// php has two verbs and picks by WHY the attach failed: a name no factory claims gets
+/// `Unable to locate filter "nosuchfilter"`, while one a factory claims and then refuses gets
+/// `Unable to create or locate filter "convert.iconv."`. Every `convert.iconv.` name reaches the
+/// second, the prefix being what selects the factory. elephc reported success for both of these
+/// and warned about neither.
+#[test]
+fn test_iconv_filter_refusal_uses_the_create_or_locate_wording() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_append($h, "convert.iconv.", STREAM_FILTER_WRITE));
+var_dump(stream_filter_append($h, "convert.iconv.nope/alsonope", STREAM_FILTER_WRITE));
+var_dump(stream_filter_append($h, "nosuchfilter", STREAM_FILTER_WRITE));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    for expected in [
+        "Unable to create or locate filter \"convert.iconv.\"",
+        "Unable to create or locate filter \"convert.iconv.nope/alsonope\"",
+        "Unable to locate filter \"nosuchfilter\"",
+    ] {
+        assert!(
+            out.diagnostics.contains(expected),
+            "missing {expected}, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+}
+
+/// Verifies `stream_select()` answers the READY COUNT when `$write`/`$except` are null.
+///
+/// `stream_select($r, $w, $e, 0)` with null write and except sets is the shape every read loop
+/// in PHP is written in, and it answered 15 where php answers 1 — a constant, because the null
+/// sets reached the runtime as boxed Mixed cells whose header it read as an array length, so
+/// `poll()` was handed fourteen uninitialized entries and counted every one of them.
+///
+/// The empty-array row is the contrast that isolates it: passing `[]` instead of `null` was
+/// correct throughout, which is why no existing test caught the null form. The last row keeps a
+/// non-null `$write` in the mix so the two shapes cannot be conflated, and every row also checks
+/// the arrays are compacted to the ready subset, which is the other half of the contract.
+#[test]
+fn test_stream_select_counts_ready_streams_with_null_sets() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sel.txt", "hello");
+$a = fopen("sel.txt", "r");
+$b = fopen("sel.txt", "r");
+
+$r = [$a];
+$w = null;
+$e = null;
+echo stream_select($r, $w, $e, 0), "|", count($r), "\n";
+
+$r = [$a, $b];
+$w = null;
+$e = null;
+echo stream_select($r, $w, $e, 0), "|", count($r), "\n";
+
+$r = [$a];
+$w = [];
+$e = [];
+echo stream_select($r, $w, $e, 0), "|", count($r), "\n";
+
+$r = [$a];
+$w = [$b];
+$e = null;
+echo stream_select($r, $w, $e, 0), "|", count($r), "|", count($w), "\n";
+
+fclose($a);
+fclose($b);
+"#,
+    );
+    assert_eq!(out, "1|1\n2|2\n1|1\n2|1|1\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_select()` refuses a `php://memory` stream, as php does.
+///
+/// A MEMORY stream is bytes in the heap: there is no operating-system descriptor to poll. php
+/// names the type and drops the entry — `Cannot represent a stream of type MEMORY as a
+/// select()able descriptor` — and raises `ValueError: No stream arrays were passed` when that
+/// leaves nothing selectable. elephc polled the stream's backing descriptor and reported it
+/// READY, so a select loop that blocks forever on php returned immediately here.
+///
+/// Only MEMORY is refused, and the other rows are what pin that: `php://temp` selects fine, being
+/// backed by a real file, and so do `data:` and a plain file. The mixed row is the one that shows
+/// the entry is DROPPED rather than fatal — a memory stream beside a real one leaves the real one
+/// selectable, and the answer counts only it.
+#[test]
+fn test_stream_select_refuses_a_memory_stream() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("selmem.txt", "hello");
+// Each label is built and printed only once the call has resolved, so where the warnings go
+// cannot interleave with stdout — the diagnostic stream is asserted separately below.
+function probe(string $label, $s): string {
+    $r = [$s];
+    $w = null;
+    $e = null;
+    try {
+        return $label . "=" . var_export(stream_select($r, $w, $e, 0), true);
+    } catch (ValueError $ex) {
+        return $label . "=VE:" . $ex->getMessage();
+    }
+}
+$out = [];
+$out[] = probe("file", fopen("selmem.txt", "r"));
+$out[] = probe("memory", fopen("php://memory", "w+"));
+$out[] = probe("temp", fopen("php://temp", "w+"));
+$out[] = probe("data", fopen("data://text/plain,hi", "r"));
+$f = fopen("selmem.txt", "r");
+$m = fopen("php://memory", "w+");
+$r = [$f, $m];
+$w = null;
+$e = null;
+$n = stream_select($r, $w, $e, 0);
+$out[] = "mixed=" . $n . "|" . count($r);
+fclose($f);
+fclose($m);
+echo implode("\n", $out), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "file=1\n",
+            "memory=VE:No stream arrays were passed\n",
+            "temp=1\n",
+            "data=1\n",
+            "mixed=1|1\n",
+        )
+    );
+    let notices = out
+        .diagnostics
+        .matches("Cannot represent a stream of type MEMORY as a select()able descriptor")
+        .count();
+    // Three, not two: php walks the arrays TWICE — once to build the descriptor sets and once to
+    // translate the result back — and names the stream on both passes, so the mixed call warns
+    // twice while the memory-only one warns once, its ValueError landing before the second pass.
+    assert_eq!(
+        notices, 3,
+        "one per pass that reached the memory stream, got diagnostics={}",
+        out.diagnostics
+    );
+}
+
+/// Verifies a `compress.zlib://` URL assembled at RUN time opens like the literal spelling.
+///
+/// `$name = "compress.zlib://out.gz"; fopen($name, "w");` answered `false` where the identical
+/// call with the literal compresses — in both directions. The wrapper was reachable only from a
+/// compile-time literal, because that is what the split into "wrapper" and "underlying path"
+/// needed, and a URL built with `sys_get_temp_dir()` or read from config is ordinary PHP.
+///
+/// The literal rows are kept beside the computed ones so a fix that merely moves which spelling
+/// works still fails this test, and the round trip is checked through the OTHER spelling each
+/// time — a literal write read back by a computed open, and the reverse — which is what proves
+/// the two produce the same bytes rather than two self-consistent formats.
+#[test]
+fn test_compress_zlib_wrapper_accepts_a_run_time_url() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$literal = "compress.zlib://a.gz";
+$computed = "compress.zlib://b.gz";
+
+$w = fopen("compress.zlib://a.gz", "w");
+var_dump(fwrite($w, "payload payload payload"));
+fclose($w);
+
+$r = fopen($literal, "r");
+echo "computed read of literal write: ";
+var_dump(stream_get_contents($r));
+fclose($r);
+
+$w2 = fopen($computed, "w");
+var_dump(fwrite($w2, "second second second"));
+fclose($w2);
+
+$r2 = fopen("compress.zlib://b.gz", "r");
+echo "literal read of computed write: ";
+var_dump(stream_get_contents($r2));
+fclose($r2);
+
+// The raw file must NOT be the payload: a wrapper that merely passed bytes through
+// would round-trip just as happily.
+echo "compressed: ";
+var_dump(file_get_contents("a.gz") !== "payload payload payload");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(23)\n",
+            "computed read of literal write: string(23) \"payload payload payload\"\n",
+            "int(20)\n",
+            "literal read of computed write: string(20) \"second second second\"\n",
+            "compressed: bool(true)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
 /// Verifies a wrapper declaring the PHP manual's `stream_read(): string|false` returns its
 /// actual bytes.
 ///

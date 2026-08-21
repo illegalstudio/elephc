@@ -71,14 +71,24 @@ pub(in crate::interpreter) fn eval_count_result(
         Some(mode) => eval_int_value(mode, values)?,
         None => EVAL_COUNT_NORMAL,
     };
+    // php names the two accepted constants rather than the offending value, and raises
+    // this BEFORE the `Countable|array` check: `count(false, 99)` reports the MODE,
+    // measured. An uncatchable fatal was the wrong answer twice over.
     if !matches!(mode, EVAL_COUNT_NORMAL | EVAL_COUNT_RECURSIVE) {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_builtin_value_error(
+            "count(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE",
+            context,
+            values,
+        );
     }
     if values.type_tag(value)? == EVAL_TAG_OBJECT
         && eval_countable_object_matches(value, context, values)?
     {
         return eval_method_call_result(value, "count", Vec::new(), context, values);
     }
+    // Countable already had its chance above, so anything left that is not an array is
+    // php's `Countable|array` TypeError — a plain object still names its own class.
+    super::array_arg_check::eval_expect_countable_arg(value, context, values)?;
     let len = match mode {
         EVAL_COUNT_NORMAL => values.array_len(value)?,
         EVAL_COUNT_RECURSIVE => eval_count_recursive_len(value, values, &mut Vec::new())?,

@@ -315,6 +315,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_resource(value: i64) -> *mut RuntimeCell;
     /// Boxes an eval hash-context table key as an inert (id-less, destructor-less) resource.
     pub(super) fn __elephc_eval_value_hash_context(value: i64) -> *mut RuntimeCell;
+    /// Reports whether a HOST resource payload has been closed, per the resource registry.
+    pub(super) fn __elephc_eval_resource_is_closed(payload: u64) -> u64;
     pub(super) fn __elephc_eval_value_float(value: f64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string(ptr: *const u8, len: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_cast_int(value: *mut RuntimeCell) -> *mut RuntimeCell;

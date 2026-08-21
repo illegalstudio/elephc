@@ -488,7 +488,7 @@ def resolve_non_registry_lowering(
         lowering.codegen_file = str(prelude.relative_to(repo))
         lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1 if match else 1
         lowering.codegen_function = canonical
-        lowering.notes.append("Implemented by the compiler-injected hash prelude.")
+        lowering.notes.append("Implemented by a compiler-injected PHP prelude.")
     elif kind == "language-construct":
         lowering.notes.append("Lowered through the compiler's dedicated language-construct path.")
     elif kind == "dedicated-syntax":

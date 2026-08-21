@@ -112,8 +112,11 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
 /// x86_64 Linux variant of `emit_str_persist`.
 /// Allocates heap storage, stamps the header with the owned-string heap kind, and copies
 /// the source bytes into the owned allocation.
-/// Input:  rdi=ptr, rdx=len
+/// Input:  rax=ptr, rdx=len
 /// Output: rax=heap_ptr (owned), rdx=len (unchanged)
+///
+/// NOTE: the source pointer is consumed from `rax`, not `rdi` — this mirrors the
+/// x86_64 string result-pair convention used by the helpers that feed it.
 fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_persist ---");

@@ -28,7 +28,7 @@ use crate::codegen::{
     emit_box_runtime_payload_as_mixed,
 };
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SAVED_DEPTHS, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
@@ -288,12 +288,10 @@ fn emit_invoker_exception_boundary_push(
             abi::store_at_offset(emitter, "x10", handler_base);
             abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
             abi::store_at_offset(emitter, "x10", handler_base - 8);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-            abi::store_at_offset(
-                emitter,
-                "x10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-            );
+            for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+                abi::emit_load_symbol_to_reg(emitter, "x10", symbol, 0);
+                abi::store_at_offset(emitter, "x10", handler_base - offset);
+            }                                                                   // save every depth a throw would otherwise strand
             emitter.instruction(&format!("sub x10, x29, #{}", handler_base));   // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!(
@@ -309,14 +307,14 @@ fn emit_invoker_exception_boundary_push(
                 &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
             );                                                                  // save the previous native exception-handler head
             abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-            emitter.instruction(
-                &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-            );                                                                  // preserve the caller activation frame across callable unwinding
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!(
-                "mov QWORD PTR [rbp - {}], r10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            ));                                                                 // save diagnostic suppression depth for restoration
+            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); // preserve the caller activation frame across callable unwinding
+            for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+                abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
+                emitter.instruction(&format!(
+                    "mov QWORD PTR [rbp - {}], r10",
+                    handler_base - offset
+                ));
+            } // save every depth a throw would otherwise strand
             emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base)); // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!(
@@ -337,23 +335,23 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
         Arch::AArch64 => {
             abi::load_at_offset(emitter, "x10", handler_base);
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-            abi::load_at_offset(
-                emitter,
-                "x10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-            );
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+            for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+                abi::load_at_offset(emitter, "x10", handler_base - offset);
+                abi::emit_store_reg_to_symbol(emitter, "x10", symbol, 0);
+            }                                                                   // republish every depth saved on the way in
         }
         Arch::X86_64 => {
             emitter.instruction(
                 &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
             );                                                                  // reload the previous native exception-handler head
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(
-                "mov r10, QWORD PTR [rbp - {}]",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            ));                                                                 // reload the saved diagnostic suppression depth
-            abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+            for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+                emitter.instruction(&format!(
+                    "mov r10, QWORD PTR [rbp - {}]",
+                    handler_base - offset
+                ));
+                abi::emit_store_reg_to_symbol(emitter, "r10", symbol, 0);
+            } // republish every depth saved on the way in
         }
     }
 }
@@ -2586,6 +2584,7 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+    use crate::codegen_support::try_handlers::TRY_HANDLER_DIAG_DEPTH_OFFSET;
 
     /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
     #[test]
@@ -2607,6 +2606,16 @@ mod tests {
             INVOKER_BOUNDARY_BASE_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET,
         ] {
             assert!(output.contains(&format!("    sub x9, x29, #{}\n", offset)));
+        }
+        // The counters ABOVE the jmp_buf sit closer to the frame pointer and legitimately reach
+        // it through the near form, so the addressing mode is not what pins them — the symbol is.
+        // What must hold is that the boundary walks the WHOLE table the compiled `try` walks: a
+        // member saved at three of the four sites is exactly the leak the table exists to close.
+        for (symbol, _) in TRY_HANDLER_SAVED_DEPTHS {
+            assert!(
+                output.matches(symbol).count() >= 2,
+                "{symbol} must be both saved and republished by the invoker boundary"
+            );
         }
         assert!(output.contains("    str x10, [x9]\n"));
         assert!(output.contains("    ldr x10, [x9]\n"));

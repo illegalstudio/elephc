@@ -46,7 +46,15 @@ pub(super) fn signature_has_dynamic_untyped_param(signature: &FunctionSig) -> bo
 }
 
 /// Widens inferred container return elements that may be built from dynamic params.
+///
+/// MUST STAY IN STEP with the callee-side copy in `crate::ir_lower::function`: this one
+/// types the call site and that one types the body. When they disagree the caller reads
+/// the callee's return in the wrong representation, with nothing to flag it.
 pub(super) fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
+    // A resource can only leave such a function BOXED — see the callee-side copy.
+    if matches!(return_type, PhpType::Resource(_)) {
+        return PhpType::Mixed;
+    }
     match return_type.codegen_repr() {
         PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
         PhpType::AssocArray { key, .. } => PhpType::AssocArray {

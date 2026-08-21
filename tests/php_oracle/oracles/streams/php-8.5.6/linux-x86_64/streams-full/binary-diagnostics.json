@@ -1,0 +1,213 @@
+{
+  "case": {
+    "dependencies": [],
+    "description": "Captures simultaneous binary stdout/stderr, an ordered warning, return data, and a filesystem write.",
+    "id": "binary-diagnostics",
+    "normalization": [],
+    "source": "tests/php_oracle/cases/streams/gate0/binary-diagnostics",
+    "source_sha256": "0b156bcd002f8f5b23fc32848ddd3c662fd0ee7af7261e3e40aa147d67e75c2d"
+  },
+  "environment": {
+    "base": {
+      "LANG": "C",
+      "LC_ALL": "C",
+      "TZ": "UTC"
+    },
+    "case": {},
+    "ini": {
+      "date.timezone": "UTC",
+      "display_errors": "stderr",
+      "display_startup_errors": "1",
+      "error_reporting": "-1",
+      "html_errors": "0",
+      "log_errors": "0"
+    },
+    "stdin": {
+      "data": "aW4A/w==",
+      "encoding": "base64"
+    }
+  },
+  "filesystem_diff": {
+    "created": {
+      "result.bin": {
+        "bytes": {
+          "base64": "aW4A/wBkb25l",
+          "length": 9,
+          "sha256": "e88ad795f95ef2573d8fe599959b93ab7efa293058d975cff397cf40d863d438"
+        },
+        "kind": "file",
+        "mode": "0644"
+      },
+      "result.link": {
+        "kind": "symlink",
+        "mode": "0777",
+        "target": "result.bin"
+      }
+    },
+    "deleted": {},
+    "modified": {}
+  },
+  "instrumented": {
+    "argv": [
+      "php",
+      "-n",
+      "-d",
+      "date.timezone=UTC",
+      "-d",
+      "display_errors=stderr",
+      "-d",
+      "display_startup_errors=1",
+      "-d",
+      "error_reporting=-1",
+      "-d",
+      "html_errors=0",
+      "-d",
+      "log_errors=0",
+      "tools/php_oracle/bootstrap.php",
+      "main.php"
+    ],
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "timeout": false
+    },
+    "stderr": {
+      "base64": "ZXJyAP5XYXJuaW5nOiBvcmFjbGUgd2FybmluZyBpbiAvdG1wL2VsZXBoYy1waHAtb3JhY2xlL3N0cmVhbXMvcGhwLTguNS42L2xpbnV4LXg4Nl82NC9zdHJlYW1zLWZ1bGwvYmluYXJ5LWRpYWdub3N0aWNzL21haW4ucGhwIG9uIGxpbmUgNgpEZXByZWNhdGVkOiBvcmFjbGUgZGVwcmVjYXRpb24gaW4gL3RtcC9lbGVwaGMtcGhwLW9yYWNsZS9zdHJlYW1zL3BocC04LjUuNi9saW51eC14ODZfNjQvc3RyZWFtcy1mdWxsL2JpbmFyeS1kaWFnbm9zdGljcy9tYWluLnBocCBvbiBsaW5lIDcK",
+      "length": 276,
+      "sha256": "b93b5cd768acb00da8ae5a86e2f023846b9b461d6738ba555da4bdff362580c2"
+    },
+    "stdout": {
+      "base64": "b3V0AP8=",
+      "length": 5,
+      "sha256": "1ccd99baf650ee0227c577faa00bfaa48fea26aaaac8adc23bf18f9e787c3f1c"
+    },
+    "telemetry": {
+      "events": [
+        {
+          "file": "/tmp/elephc-php-oracle/streams/php-8.5.6/linux-x86_64/streams-full/binary-diagnostics/main.php",
+          "line": 6,
+          "message": "oracle warning",
+          "sequence": 0,
+          "severity": 512,
+          "severity_name": "E_USER_WARNING"
+        },
+        {
+          "file": "/tmp/elephc-php-oracle/streams/php-8.5.6/linux-x86_64/streams-full/binary-diagnostics/main.php",
+          "line": 7,
+          "message": "oracle deprecation",
+          "sequence": 1,
+          "severity": 16384,
+          "severity_name": "E_USER_DEPRECATED"
+        }
+      ],
+      "exception": null,
+      "observations": {
+        "entries": [
+          {
+            "key": {
+              "base64": "cmVmZXJlbmNlX291dHB1dHM=",
+              "length": 17,
+              "sha256": "e0cd6baa92661ed303a136c7e01a0a4ebf33022fc518033bd0f1e1d5afd2ef18",
+              "type": "string"
+            },
+            "value": {
+              "entries": [
+                {
+                  "key": {
+                    "base64": "aW5wdXQ=",
+                    "length": 5,
+                    "sha256": "c96c6d5be8d08a12e7b5cdc1b207fa6b2430974c86803d8891675e76fd992c20",
+                    "type": "string"
+                  },
+                  "value": {
+                    "base64": "aW4A/w==",
+                    "length": 4,
+                    "sha256": "aeb9dee86a2a920f4f1319653770673bd96ba5a05bb60f55be33e3252a410d5d",
+                    "type": "string"
+                  }
+                }
+              ],
+              "type": "array"
+            }
+          },
+          {
+            "key": {
+              "base64": "bWV0YWRhdGE=",
+              "length": 8,
+              "sha256": "45447b7afbd5e544f7d0f1df0fccd26014d9850130abd3f020b89ff96b82079f",
+              "type": "string"
+            },
+            "value": {
+              "entries": [
+                {
+                  "key": {
+                    "base64": "c3RkaW5fbGVuZ3Ro",
+                    "length": 12,
+                    "sha256": "717da8a4d76e698a4e8bb009bb9719c85159c0be17fe41419bd3df5d12ba4f92",
+                    "type": "string"
+                  },
+                  "value": {
+                    "decimal": "4",
+                    "type": "int"
+                  }
+                }
+              ],
+              "type": "array"
+            }
+          }
+        ],
+        "type": "array"
+      },
+      "return": {
+        "type": "bool",
+        "value": false
+      },
+      "schema_version": 1
+    }
+  },
+  "kind": "php-src-stream-oracle-artifact",
+  "profile": {
+    "name": "streams-full",
+    "path": "tests/php_oracle/manifests/streams/php-8.5.6/linux-x86_64/streams-full.json",
+    "php_binary_sha256": "d3063339c8253c75a653b1f5484ea62fa473eaff1916e465a7f99fd024f3476b",
+    "php_release": "8.5.6",
+    "php_src_commit": "fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633",
+    "sha256": "199180ddccb8a55a6dadfb6e34fc5ddf7595eac5c4ee766e8dfc307e75a24c8c",
+    "target": "linux-x86_64"
+  },
+  "raw": {
+    "argv": [
+      "php",
+      "-n",
+      "-d",
+      "date.timezone=UTC",
+      "-d",
+      "display_errors=stderr",
+      "-d",
+      "display_startup_errors=1",
+      "-d",
+      "error_reporting=-1",
+      "-d",
+      "html_errors=0",
+      "-d",
+      "log_errors=0",
+      "main.php"
+    ],
+    "exit": {
+      "code": 0,
+      "signal": null,
+      "timeout": false
+    },
+    "stderr": {
+      "base64": "ZXJyAP5XYXJuaW5nOiBvcmFjbGUgd2FybmluZyBpbiAvdG1wL2VsZXBoYy1waHAtb3JhY2xlL3N0cmVhbXMvcGhwLTguNS42L2xpbnV4LXg4Nl82NC9zdHJlYW1zLWZ1bGwvYmluYXJ5LWRpYWdub3N0aWNzL21haW4ucGhwIG9uIGxpbmUgNgpEZXByZWNhdGVkOiBvcmFjbGUgZGVwcmVjYXRpb24gaW4gL3RtcC9lbGVwaGMtcGhwLW9yYWNsZS9zdHJlYW1zL3BocC04LjUuNi9saW51eC14ODZfNjQvc3RyZWFtcy1mdWxsL2JpbmFyeS1kaWFnbm9zdGljcy9tYWluLnBocCBvbiBsaW5lIDcK",
+      "length": 276,
+      "sha256": "b93b5cd768acb00da8ae5a86e2f023846b9b461d6738ba555da4bdff362580c2"
+    },
+    "stdout": {
+      "base64": "b3V0AP8=",
+      "length": 5,
+      "sha256": "1ccd99baf650ee0227c577faa00bfaa48fea26aaaac8adc23bf18f9e787c3f1c"
+    }
+  },
+  "schema_version": 1
+}

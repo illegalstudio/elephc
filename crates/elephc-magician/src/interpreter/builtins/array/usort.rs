@@ -34,9 +34,7 @@ pub(in crate::interpreter) fn eval_user_sort_value_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    super::array_arg_check::eval_expect_sort_array_arg(array, name, context, values)?;
     let replacement = eval_user_sort_replacement(name, array, callback, context, values)?;
     values.release(replacement)?;
     values.bool_value(true)
@@ -170,7 +168,9 @@ pub(in crate::interpreter) fn eval_user_sort_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array, target, callback) = eval_user_sort_direct_args(args, context, scope, values)?;
+    // `usort`, `uasort` and `uksort` word argument #1 exactly like the comparator-free
+    // ordering family; the shared lvalue binding throws before anything is written back.
+    let (array, target, callback) = eval_user_sort_direct_args(name, args, context, scope, values)?;
 
     let replacement = eval_user_sort_replacement_from_scope(
         name,
@@ -187,6 +187,7 @@ pub(in crate::interpreter) fn eval_user_sort_declared_call(
 
 /// Evaluates and binds direct user-sort arguments while preserving source order.
 pub(in crate::interpreter) fn eval_user_sort_direct_args(
+    name: &str,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -223,7 +224,7 @@ pub(in crate::interpreter) fn eval_user_sort_direct_args(
                     return Err(EvalStatus::RuntimeFatal);
                 }
                 array = Some(super::mutation::eval_array_mutation_lvalue_arg(
-                    arg, context, scope, values,
+                    name, arg, context, scope, values,
                 )?);
             }
             "callback" => {

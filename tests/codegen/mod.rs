@@ -19,6 +19,7 @@ mod strict_php;
 mod lfc;
 mod benchmarks;
 mod echo_vars;
+mod php_tags;
 mod eval;
 mod eval_builtin_parity;
 mod eval_callable_ref_errors;

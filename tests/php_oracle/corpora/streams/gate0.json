@@ -1,0 +1,69 @@
+{
+  "capture_contract": {
+    "binary_encoding": [
+      "base64",
+      "length",
+      "sha256"
+    ],
+    "channels": [
+      "stdout-bytes",
+      "stderr-bytes",
+      "exit-code",
+      "signal",
+      "timeout",
+      "ordered-diagnostics",
+      "exception",
+      "return-value",
+      "reference-observations",
+      "filesystem-diff"
+    ],
+    "runs": [
+      "raw-unchanged",
+      "instrumented-fresh-sandbox"
+    ]
+  },
+  "cases": [
+    {
+      "dependencies": [],
+      "description": "Captures simultaneous binary stdout/stderr, an ordered warning, return data, and a filesystem write.",
+      "id": "binary-diagnostics",
+      "normalization": [],
+      "source": "tests/php_oracle/cases/streams/gate0/binary-diagnostics",
+      "source_sha256": "0b156bcd002f8f5b23fc32848ddd3c662fd0ee7af7261e3e40aa147d67e75c2d"
+    },
+    {
+      "dependencies": [],
+      "description": "Captures an uncaught exception in raw mode and structured exception telemetry.",
+      "id": "exception",
+      "normalization": [],
+      "source": "tests/php_oracle/cases/streams/gate0/exception",
+      "source_sha256": "e9f97bedb1b922e1788b3c47f24bd4b5eabeb3cf0c1e288dad8add9739104828"
+    },
+    {
+      "dependencies": [],
+      "description": "Captures a non-zero exit without assuming telemetry survives exit().",
+      "id": "nonzero-exit",
+      "normalization": [],
+      "source": "tests/php_oracle/cases/streams/gate0/nonzero-exit",
+      "source_sha256": "3ebafe48fe07b3d8ec6b74d218520461cae21847492ec102679cd97e0661b882"
+    },
+    {
+      "dependencies": [],
+      "description": "Captures process-group termination after a deterministic timeout.",
+      "id": "timeout",
+      "normalization": [],
+      "source": "tests/php_oracle/cases/streams/gate0/timeout",
+      "source_sha256": "e227125acf81a6602b31edb3b5a5818ecccadca44aab403a41184952e7543728"
+    }
+  ],
+  "gate": {
+    "number": 0,
+    "status": "candidate"
+  },
+  "generator": {
+    "script": "tools/php_oracle/index_corpus.py",
+    "script_sha256": "67c1860346584853ef62223df4040ce79c631af974a5a0bda3722e1e6d7b900a"
+  },
+  "kind": "php-src-stream-oracle-corpus-index",
+  "schema_version": 1
+}

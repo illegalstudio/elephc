@@ -106,6 +106,9 @@ pub(super) fn lower(
         RuntimeFnId::ElephcPharListEntries => Some({
             crate::codegen::lower_inst::builtins::io::lower_elephc_phar_list_entries(ctx, inst)
         }),
+        RuntimeFnId::ElephcZipStatEntries => Some({
+            crate::codegen::lower_inst::builtins::io::lower_elephc_zip_stat_entries(ctx, inst)
+        }),
         RuntimeFnId::ElephcPharSetCompression => Some({
             crate::codegen::lower_inst::builtins::io::lower_elephc_phar_set_compression(ctx, inst)
         }),

@@ -4450,6 +4450,36 @@ echo $n, "\n";
     );
 }
 
+/// Regression: `implode()` over a `Mixed` operand holding HASH storage flattens the values into a
+/// temporary indexed array of boxed cells, and that temporary is this lowering's to release.
+///
+/// The storage kind is only known at runtime, so the free is guarded by a materialization flag:
+/// a leak here means the flag never reached the free, and a crash or a double-free means the flag
+/// was set for the indexed case too and destroyed the caller's own array. Both storage kinds are
+/// joined in the same loop so one run covers both arms. Measured with `php -n` (8.5.6): the
+/// per-iteration join lengths are 8 (`xx,2,1.5`) for the hash and 11 (`1.5,2.5,3.5`) for the
+/// indexed array, so 20 iterations print `380`.
+#[test]
+fn test_implode_mixed_hash_temp_is_released_but_indexed_operand_is_not() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    $n += strlen(implode(",", eval('return ["a" => "xx", "b" => 2, "c" => 1.5];')));
+    $n += strlen(implode(",", eval('return [1.5, 2.5, 3.5];')));
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "380\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the materialized hash values temporary to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for #601 (control): a homogeneous string array is a typed indexed
 /// array whose elements are borrowed slots, not boxed mixed cells. implode must copy
 /// those borrowed strings without releasing them (they are owned by the array). This

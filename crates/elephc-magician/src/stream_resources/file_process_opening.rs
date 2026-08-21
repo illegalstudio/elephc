@@ -9,9 +9,45 @@
 
 use super::*;
 
+/// PHP's wording when nothing described the failure, which is also what a non-filesystem
+/// wrapper failure reports: those never reach a libc `open` and so leave no errno behind.
+pub(crate) const EVAL_OPEN_DEFAULT_REASON: &str = "No such file or directory";
+
+/// Renders an open failure the way PHP quotes it.
+///
+/// `to_string()` on a raw-OS error is the platform's `strerror` text plus an " (os error N)"
+/// suffix that PHP does not print, so the suffix is trimmed off. Everything else — a path that
+/// no wrapper claims, a mode that will not parse — has no errno behind it and falls back to the
+/// wording PHP uses when nothing described the failure.
+pub(crate) fn eval_open_failure_reason(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    match text.find(" (os error ") {
+        Some(cut) => text[..cut].to_string(),
+        None => text,
+    }
+}
+
 impl EvalStreamResources {
+    /// Forgets the previous open's reason so a later warning cannot quote a stale one.
+    fn clear_last_open_error(&mut self) {
+        self.last_open_error = None;
+    }
+
+    /// Records why a local open failed, in the platform's own words.
+    fn record_open_error(&mut self, error: &std::io::Error) {
+        self.last_open_error = Some(eval_open_failure_reason(error));
+    }
+
+    /// Returns PHP's reason for the most recent failed open.
+    pub(crate) fn last_open_reason(&self) -> String {
+        self.last_open_error
+            .clone()
+            .unwrap_or_else(|| EVAL_OPEN_DEFAULT_REASON.to_string())
+    }
+
     /// Opens a local path using PHP's common `fopen()` mode strings.
     pub(crate) fn open_path(&mut self, path: &str, mode: &str) -> Option<i64> {
+        self.clear_last_open_error();
         let mode = EvalOpenMode::parse(mode)?;
         if stream_wrappers::is_php_memory_stream(path) {
             return self.open_ephemeral_stream(path, &mode, &[], None, false);
@@ -28,7 +64,13 @@ impl EvalStreamResources {
             return self.open_ephemeral_stream(path, &mode, &bytes, None, false);
         }
         let path = stream_wrappers::local_filesystem_path(path)?;
-        let file = mode.open(&path).ok()?;
+        let file = match mode.open(&path) {
+            Ok(file) => file,
+            Err(error) => {
+                self.record_open_error(&error);
+                return None;
+            }
+        };
         Some(self.insert(EvalFileStream::new(file, path, mode.label)))
     }
 

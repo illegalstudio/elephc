@@ -15,7 +15,16 @@
 //!   `fclose($r); var_dump($r);` prints `resource(5) of type (Unknown)` and
 //!   `get_resource_type($r)` answers `"Unknown"` — measured for `fclose`, `pclose`
 //!   and `closedir` alike, all three of which collapse to the same name.
-//! - THE CLOSED PREDICATE IS THE SIGN BIT, and it is already load-bearing.
+//! - THE CLOSED PREDICATE IS THE REGISTRY, with the sign bit kept as the legacy
+//!   fallback. Since the generation-safe registry migration, a migrated resource's
+//!   payload is an OPAQUE HANDLE, not a descriptor, and close publishes the Closed
+//!   state on the registry slot instead of stamping a sentinel — so the sign test
+//!   alone reported `stream` forever on a closed handle. The body now resolves the
+//!   payload with `__rt_resource_lookup_any`: a slot whose status is not Live is
+//!   closed, and NO slot at all means the payload is still a raw descriptor from an
+//!   unmigrated path, which is therefore open. Dropping the raw-descriptor fallback
+//!   would report `Unknown` for resources that are genuinely open.
+//! - THE LEGACY SIGN BIT still short-circuits first, and it is load-bearing.
 //!   `apply_resource_release_sentinel` (`crate::codegen::lower_inst::builtins::io`)
 //!   stamps `-id` into the Mixed box's low payload word on close, and
 //!   `__rt_resource_id_of` (`crate::codegen_support::runtime::resource_ids`) already
@@ -29,8 +38,11 @@
 //!   freed here, so the `release` the EIR already emits against a `get_resource_type`
 //!   result stays the no-op it is today against a `.data` pointer. Returning a
 //!   runtime-allocated string instead would turn that release into a double free.
-//! - IT IS A LEAF. The body is a sign test and two symbol loads with no `bl`/`call`, so
-//!   `ret` is correct and the AArch64 LR-clobber rule does not apply.
+//! - IT IS NO LONGER A LEAF. Consulting the registry costs one `bl`/`call`, so the
+//!   AArch64 LR-clobber rule now applies: the body saves `x30` before the lookup and
+//!   restores it on both post-lookup arms. The sentinel path branches out BEFORE the
+//!   frame is reserved, which is why the closed literal has two entry labels — one
+//!   that releases the frame and one that never took it.
 //! - ONE PLACE, NOT TWO. PHP has further resource type names this compiler does not yet
 //!   distinguish (`stream-context` from `stream_context_create()`, `stream filter` from
 //!   `stream_filter_append()`). Concentrating the payload-to-name mapping here keeps
@@ -39,9 +51,20 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::resources::layout::{
+    RESOURCE_KIND_FILTER, RESOURCE_STATUS_LIVE, SLOT_KIND_OFFSET, SLOT_STATUS_OFFSET,
+};
 
 /// Byte length of the open-resource type name `"stream"`.
 const RESOURCE_TYPE_STREAM_LEN: i64 = 6;
+
+/// Byte length of the filter-resource type name `"stream filter"`.
+///
+/// php gives a filter its own resource type: `var_dump(stream_filter_append(...))` prints
+/// `resource(6) of type (stream filter)`, and `get_resource_type()` agrees. Reporting `stream`
+/// for it made the two kinds indistinguishable from PHP even though the registry has told them
+/// apart since filters became resources.
+const RESOURCE_TYPE_STREAM_FILTER_LEN: i64 = 13;
 
 /// Byte length of the closed-resource type name `"Unknown"`.
 const RESOURCE_TYPE_UNKNOWN_LEN: i64 = 7;
@@ -49,15 +72,20 @@ const RESOURCE_TYPE_UNKNOWN_LEN: i64 = 7;
 /// Resolves a native resource payload to its PHP resource type name.
 ///
 /// # Inputs
-/// - `x0` / `rax`: native resource payload, or the `-id` sentinel of a closed handle.
+/// - `x0` / `rax`: opaque registry handle, a raw descriptor from an unmigrated path,
+///   or the legacy `-id` sentinel of a closed handle.
 ///
 /// # Outputs
 /// - `x1` / `rax`: pointer to the type-name bytes (the target's string-result pointer register)
 /// - `x2` / `rdx`: type-name byte length (the target's string-result length register)
 ///
 /// # ABI details
-/// - Leaf helper: no nested `bl`/`call`, so it ends with `ret` on both targets.
-/// - Clobbers only the string-result register pair; every other register is untouched.
+/// - Calls `__rt_resource_lookup_any`, so it saves and restores `x30` around the lookup
+///   and still ends with `ret` on both targets.
+/// - Clobbers the string-result register pair plus whatever the lookup clobbers. The
+///   single call site (`emit_var_dump_resource`) keeps nothing else live across it: the
+///   payload is popped into the result register immediately before, and the emitted
+///   `write_stdout` immediately after consumes only the returned pair.
 pub fn emit_resource_type_name(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_resource_type_name_x86_64(emitter);
@@ -68,11 +96,38 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     emitter.comment("--- runtime: resource_type_name (PHP type label for a resource payload) ---");
     emitter.label_global("__rt_resource_type_name");
 
-    emitter.instruction("tbnz x0, #63, __rt_resource_type_name_closed");        // a negative payload is the -id sentinel an explicit close stamped
+    emitter.instruction("tbnz x0, #63, __rt_resource_type_name_closed");        // a negative payload is the legacy -id sentinel an explicit close stamped
+    emitter.instruction("sub sp, sp, #16");                                     // reserve a frame for the registry lookup
+    emitter.instruction("str x30, [sp, #8]");                                   // save the caller link register across the call
+    emitter.instruction("bl __rt_resource_lookup_any");                         // resolve the payload as an opaque registry handle
+    emitter.instruction("cbz x0, __rt_resource_type_name_open_pop");            // no slot: a legacy raw descriptor, still open
+    emitter.instruction(&format!(
+        "ldr x9, [x0, #{}]", SLOT_STATUS_OFFSET
+    ));                                                                         // load the lifecycle status of the resolved slot
+    emitter.instruction(&format!(
+        "cmp x9, #{}", RESOURCE_STATUS_LIVE
+    ));                                                                         // only a Live slot still reports its original type
+    emitter.instruction("b.ne __rt_resource_type_name_closed_pop");             // Closing and Closed both render as Unknown
+    emitter.instruction(&format!("ldr x9, [x0, #{}]", SLOT_KIND_OFFSET));       // which kind of resource is in this slot?
+    emitter.instruction(&format!("cmp x9, #{}", RESOURCE_KIND_FILTER));
+    emitter.instruction("b.eq __rt_resource_type_name_filter_pop");             // a filter names itself
+    emitter.label("__rt_resource_type_name_open_pop");
+    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
+    emitter.instruction("add sp, sp, #16");                                     // release the lookup frame
     abi::emit_symbol_address(emitter, "x1", "_resource_type_stream");
     abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_STREAM_LEN);      // an open resource reports the type it was created with
-    emitter.instruction("ret");                                                 // return the open type name without touching any other register
+    emitter.instruction("ret");                                                 // return the open type name
 
+    emitter.label("__rt_resource_type_name_filter_pop");
+    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
+    emitter.instruction("add sp, sp, #16");                                     // release the lookup frame
+    abi::emit_symbol_address(emitter, "x1", "_resource_type_stream_filter");
+    abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_STREAM_FILTER_LEN); // php's own name for a filter
+    emitter.instruction("ret");                                                 // return the filter type name
+
+    emitter.label("__rt_resource_type_name_closed_pop");
+    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
+    emitter.instruction("add sp, sp, #16");                                     // release the lookup frame
     emitter.label("__rt_resource_type_name_closed");
     abi::emit_symbol_address(emitter, "x1", "_resource_type_unknown");
     abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_UNKNOWN_LEN);     // PHP renames every closed resource to Unknown, whatever it was
@@ -89,11 +144,34 @@ fn emit_resource_type_name_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_resource_type_name");
 
     emitter.instruction("test rax, rax");                                       // inspect the payload sign before rax is reused as the result pointer
-    emitter.instruction("js __rt_resource_type_name_closed_x86");               // a negative payload is the -id sentinel an explicit close stamped
+    emitter.instruction("js __rt_resource_type_name_closed_x86");               // a negative payload is the legacy -id sentinel an explicit close stamped
+    emitter.instruction("sub rsp, 8");                                          // realign the stack for the registry lookup
+    emitter.instruction("mov rdi, rax");                                        // pass the payload as an opaque registry handle
+    emitter.instruction("call __rt_resource_lookup_any");                       // resolve the handle to its registry slot
+    emitter.instruction("test rax, rax");                                       // did the payload resolve to a slot at all?
+    emitter.instruction("jz __rt_resource_type_name_open_x86");                 // no slot: a legacy raw descriptor, still open
+    emitter.instruction(&format!(
+        "cmp QWORD PTR [rax + {}], {}", SLOT_STATUS_OFFSET, RESOURCE_STATUS_LIVE
+    ));                                                                         // only a Live slot still reports its original type
+    emitter.instruction("jne __rt_resource_type_name_closed_pop_x86");          // Closing and Closed both render as Unknown
+    emitter.instruction(&format!(
+        "cmp QWORD PTR [rax + {}], {}", SLOT_KIND_OFFSET, RESOURCE_KIND_FILTER
+    ));                                                                         // which kind of resource is in this slot?
+    emitter.instruction("je __rt_resource_type_name_filter_pop_x86");           // a filter names itself
+    emitter.label("__rt_resource_type_name_open_x86");
+    emitter.instruction("add rsp, 8");                                          // release the alignment padding
     abi::emit_symbol_address(emitter, "rax", "_resource_type_stream");
     abi::emit_load_int_immediate(emitter, "rdx", RESOURCE_TYPE_STREAM_LEN);     // an open resource reports the type it was created with
     emitter.instruction("ret");                                                 // return the open type name without touching any other register
 
+    emitter.label("__rt_resource_type_name_filter_pop_x86");
+    emitter.instruction("add rsp, 8");                                          // release the alignment padding
+    abi::emit_symbol_address(emitter, "rax", "_resource_type_stream_filter");
+    abi::emit_load_int_immediate(emitter, "rdx", RESOURCE_TYPE_STREAM_FILTER_LEN); // php's own name for a filter
+    emitter.instruction("ret");                                                 // return the filter type name
+
+    emitter.label("__rt_resource_type_name_closed_pop_x86");
+    emitter.instruction("add rsp, 8");                                          // release the alignment padding
     emitter.label("__rt_resource_type_name_closed_x86");
     abi::emit_symbol_address(emitter, "rax", "_resource_type_unknown");
     abi::emit_load_int_immediate(emitter, "rdx", RESOURCE_TYPE_UNKNOWN_LEN);    // PHP renames every closed resource to Unknown, whatever it was
@@ -125,10 +203,33 @@ mod tests {
         let expected = concat!(
             "__rt_resource_type_name:\n",
             "    tbnz x0, #63, __rt_resource_type_name_closed\n",
+            "    sub sp, sp, #16\n",
+            "    str x30, [sp, #8]\n",
+            "    bl __rt_resource_lookup_any\n",
+            "    cbz x0, __rt_resource_type_name_open_pop\n",
+            "    ldr x9, [x0, #16]\n",
+            "    cmp x9, #1\n",
+            "    b.ne __rt_resource_type_name_closed_pop\n",
+            "    ldr x9, [x0, #8]\n",
+            "    cmp x9, #3\n",
+            "    b.eq __rt_resource_type_name_filter_pop\n",
+            "__rt_resource_type_name_open_pop:\n",
+            "    ldr x30, [sp, #8]\n",
+            "    add sp, sp, #16\n",
             "    adrp x1, _resource_type_stream@PAGE\n",
             "    add x1, x1, _resource_type_stream@PAGEOFF\n",
             "    mov x2, #6\n",
             "    ret\n",
+            "__rt_resource_type_name_filter_pop:\n",
+            "    ldr x30, [sp, #8]\n",
+            "    add sp, sp, #16\n",
+            "    adrp x1, _resource_type_stream_filter@PAGE\n",
+            "    add x1, x1, _resource_type_stream_filter@PAGEOFF\n",
+            "    mov x2, #13\n",
+            "    ret\n",
+            "__rt_resource_type_name_closed_pop:\n",
+            "    ldr x30, [sp, #8]\n",
+            "    add sp, sp, #16\n",
             "__rt_resource_type_name_closed:\n",
             "    adrp x1, _resource_type_unknown@PAGE\n",
             "    add x1, x1, _resource_type_unknown@PAGEOFF\n",
@@ -149,9 +250,27 @@ mod tests {
             "__rt_resource_type_name:\n",
             "    test rax, rax\n",
             "    js __rt_resource_type_name_closed_x86\n",
+            "    sub rsp, 8\n",
+            "    mov rdi, rax\n",
+            "    call __rt_resource_lookup_any\n",
+            "    test rax, rax\n",
+            "    jz __rt_resource_type_name_open_x86\n",
+            "    cmp QWORD PTR [rax + 16], 1\n",
+            "    jne __rt_resource_type_name_closed_pop_x86\n",
+            "    cmp QWORD PTR [rax + 8], 3\n",
+            "    je __rt_resource_type_name_filter_pop_x86\n",
+            "__rt_resource_type_name_open_x86:\n",
+            "    add rsp, 8\n",
             "    lea rax, [rip + _resource_type_stream]\n",
             "    mov rdx, 6\n",
             "    ret\n",
+            "__rt_resource_type_name_filter_pop_x86:\n",
+            "    add rsp, 8\n",
+            "    lea rax, [rip + _resource_type_stream_filter]\n",
+            "    mov rdx, 13\n",
+            "    ret\n",
+            "__rt_resource_type_name_closed_pop_x86:\n",
+            "    add rsp, 8\n",
             "__rt_resource_type_name_closed_x86:\n",
             "    lea rax, [rip + _resource_type_unknown]\n",
             "    mov rdx, 7\n",
@@ -200,15 +319,44 @@ mod tests {
         }
     }
 
-    /// The helper must stay a leaf on AArch64: a body containing `bl` would have to end
-    /// `b __rt_next` instead of `ret`, and both call sites invoke it mid-render with a
-    /// live `x30`.
+    /// The helper is NO LONGER a leaf, so every path that calls the registry must save
+    /// and restore `x30` — the single call site in `emit_var_dump_resource` invokes it
+    /// mid-render with a live link register, and a clobbered `x30` would return into the
+    /// middle of the caller's output sequence.
+    ///
+    /// The sentinel path is deliberately exempt: it branches to the closed arm BEFORE the
+    /// frame is reserved, which is why the closed literal has two entries — one that pops
+    /// the frame and one that does not.
     #[test]
-    fn aarch64_stays_a_leaf_helper() {
+    fn every_calling_path_saves_and_restores_the_link_register() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
         emit_resource_type_name(&mut emitter);
         let asm = emitter.output();
-        assert!(!asm.contains("    bl "), "must contain no nested call:\n{asm}");
+        assert_eq!(
+            asm.matches("    bl ").count(),
+            1,
+            "exactly one registry lookup is expected:\n{asm}"
+        );
+        assert_eq!(
+            asm.matches("    str x30, [sp, #8]\n").count(),
+            1,
+            "the link register must be saved once, before the lookup:\n{asm}"
+        );
+        assert_eq!(
+            asm.matches("    ldr x30, [sp, #8]\n").count(),
+            3,
+            "all three post-lookup arms must restore the link register:\n{asm}"
+        );
+        assert_eq!(
+            asm.matches("    sub sp, sp, #16\n").count(),
+            1,
+            "the frame is reserved once:\n{asm}"
+        );
+        assert_eq!(
+            asm.matches("    add sp, sp, #16\n").count(),
+            3,
+            "all three post-lookup arms must release the frame:\n{asm}"
+        );
         assert!(asm.contains("    ret\n"), "must return with ret:\n{asm}");
     }
 

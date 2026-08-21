@@ -2322,11 +2322,13 @@ fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) ->
 /// 21 dir_closedir, 22 dir_rewinddir. Slots whose dispatch is not yet wired are
 /// still emitted (zero when the class does not declare the method); the runtime
 /// only reaches a slot when the corresponding builtin routes to it.
-/// Each slot is either a method-symbol pointer (when the class declares the
-/// method publicly) or zero. The stat methods must be declared WITHOUT a
-/// return type (or `: mixed`) so their associative stat array round-trips as a
-/// boxed Mixed cell — a `: array` return is integer-keyed and rejects the
-/// string keys (`size`, `mode`, ...) PHP stat arrays use.
+/// Each method slot is either a method-symbol pointer (when the class declares
+/// the method publicly) or zero. Slot 23 stores the byte offset of a `mixed`
+/// `context` property for PHP's user-wrapper context injection. The stat
+/// methods must be declared WITHOUT a return type (or `: mixed`) so their
+/// associative stat array round-trips as a boxed Mixed cell — a `: array`
+/// return is integer-keyed and rejects the string keys (`size`, `mode`, ...)
+/// PHP stat arrays use.
 pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
 
 /// Byte offset of the boxed-result mask that follows the method pointers in every
@@ -2344,7 +2346,7 @@ pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTA
 /// The flag is read by the runtime dispatcher to choose which code path
 /// to invoke. Adding the flag inline in the vtable lets the dispatcher
 /// branch with a single load + cmp.
-pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 5;
+pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 7;
 
 /// Returns true when a method key belongs to the fixed-ABI stream-wrapper
 /// vtable surface dispatched by the runtime with raw arguments.
@@ -2357,6 +2359,43 @@ pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
 pub(crate) fn is_user_filter_contract_method(method_key: &str) -> bool {
     USER_FILTER_METHOD_NAMES.contains(&method_key)
 }
+
+/// Returns true when declaring `method_key` is by itself enough to identify a class as a wrapper.
+///
+/// This is the marker deciding whether the fixed raw-argument ABI applies to a class at all, and
+/// every gate asking "is this a wrapper?" must ask it here — the checker's contract seeding and the
+/// EIR normalizer have to agree, or one hands the body a boxed Mixed while the other hands the
+/// dispatcher a (ptr,len) pair.
+///
+/// The split follows how php-src can REACH each hook:
+///
+/// - PATH hooks (below) are dispatched straight off a `scheme://` URL — `chmod()`/`touch()` reach
+///   `stream_metadata()`, `stat()` reaches `url_stat()`, `opendir()` reaches `dir_opendir()` — with
+///   no stream ever opened. A class declaring one is a wrapper on that evidence alone, and must be,
+///   because nothing else about it says so.
+/// - STREAM-INSTANCE hooks (`stream_read`, `stream_write`, `stream_eof`, …) are reachable only
+///   through an OPEN stream, and `php_stream_open_wrapper` refuses a wrapper without `stream_open`
+///   (measured: `fopen()` on such a class returns false without calling anything). So they mark a
+///   wrapper only alongside `stream_open` — otherwise an unrelated `Codec::stream_write($d)` would
+///   be forced onto an ABI PHP could never invoke.
+/// - GENERIC names (`unlink`/`rename`/`mkdir`/`rmdir`) are ordinary method names on ordinary
+///   classes (`Filesystem::mkdir($path, $mode)`), so they never mark; they take the wrapper
+///   contract only when the class also declares `stream_open` or a path hook.
+pub(crate) fn is_user_wrapper_marker_method(method_key: &str) -> bool {
+    method_key == "stream_open" || USER_WRAPPER_PATH_METHOD_NAMES.contains(&method_key)
+}
+
+/// The wrapper hooks php-src dispatches from a URL alone, with no stream opened.
+///
+/// Their names are reserved by the protocol, so declaring one identifies a wrapper by itself.
+const USER_WRAPPER_PATH_METHOD_NAMES: [&str; 6] = [
+    "stream_metadata",
+    "url_stat",
+    "dir_opendir",
+    "dir_readdir",
+    "dir_closedir",
+    "dir_rewinddir",
+];
 
 const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "filter",
@@ -2515,6 +2554,27 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
         .copied()
         .unwrap_or(0);
     out.push_str(&format!("    .quad {}\n", params_offset));
+    // -- slot 5: the `filtername` property's byte offset.
+    // php seeds `$this->filtername` with the name the filter was ATTACHED under, before
+    // `onCreate()` runs — the same class registered twice reports each name in turn. Without the
+    // offset here the property stayed null, so a filter that branches on its own name could not.
+    let filtername_offset = class_info
+        .property_offsets
+        .get("filtername")
+        .copied()
+        .unwrap_or(0);
+    out.push_str(&format!("    .quad {}\n", filtername_offset));
+    // -- slot 6: the `stream` property's byte offset.
+    // php publishes `$this->stream` for the DURATION of each `filter()` call and nowhere else:
+    // measured on `php -n` 8.5.6 it is UNSET inside `onCreate()`, a live resource inside
+    // `filter()`, and NULL again inside `onClose()`. Without the offset here it stayed null
+    // throughout, so a filter could not reach the stream it was filtering.
+    let stream_offset = class_info
+        .property_offsets
+        .get("stream")
+        .copied()
+        .unwrap_or(0);
+    out.push_str(&format!("    .quad {}\n", stream_offset));
 }
 
 /// Emits runtime metadata for user wrapper vtable.

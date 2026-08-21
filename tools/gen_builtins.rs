@@ -23,6 +23,37 @@ use serde_json::{json, Value};
 /// Prints the complete dual-backend builtin catalog as formatted JSON.
 fn main() {
     let include_internal = std::env::args().any(|argument| argument == "--include-internal");
+    if std::env::args().any(|argument| argument == "--streams-compliance") {
+        let Some(target_name) = std::env::args()
+            .find_map(|argument| argument.strip_prefix("--target=").map(str::to_string))
+        else {
+            eprintln!("--streams-compliance requires --target=<supported-target>");
+            std::process::exit(2);
+        };
+        let target = match target_name.as_str() {
+            "macos-aarch64" => elephc::codegen::platform::Target::new(
+                elephc::codegen::platform::Platform::MacOS,
+                elephc::codegen::platform::Arch::AArch64,
+            ),
+            "linux-aarch64" => elephc::codegen::platform::Target::new(
+                elephc::codegen::platform::Platform::Linux,
+                elephc::codegen::platform::Arch::AArch64,
+            ),
+            "linux-x86_64" => elephc::codegen::platform::Target::new(
+                elephc::codegen::platform::Platform::Linux,
+                elephc::codegen::platform::Arch::X86_64,
+            ),
+            _ => {
+                eprintln!("unsupported compliance target: {target_name}");
+                std::process::exit(2);
+            }
+        };
+        let value = elephc::stream_compliance::export_json(target);
+        let json = serde_json::to_string_pretty(&value)
+            .expect("serialize stream compliance JSON");
+        println!("{}", json);
+        return;
+    }
     let value = if include_internal {
         elephc::builtins::docs::export_builtins_json_all()
     } else {

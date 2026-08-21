@@ -66,6 +66,7 @@ pub mod openssl_decrypt;
 pub mod openssl_encrypt;
 pub mod openssl_get_cipher_methods;
 pub mod parse_url;
+pub mod str_getcsv;
 pub mod printf;
 pub mod quoted_printable_encode;
 pub mod quotemeta;

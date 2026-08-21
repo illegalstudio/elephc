@@ -76,6 +76,111 @@ pub fn emit_array_reverse(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with x0 = new reversed array
 }
 
+/// Emits `__rt_array_reverse_str`: reverse a STRING array into a new one.
+///
+/// String slots are 16-byte `(ptr, len)` descriptors, which the 8-byte generic copier reads as
+/// two unrelated words — `array_reverse(["a","b"])` refused at the gate for exactly that
+/// reason. Each element is re-persisted through `__rt_array_push_str` rather than having its
+/// descriptor copied, so the new array owns its bytes and no aliasing question arises with the
+/// source's lifetime.
+pub fn emit_array_reverse_str(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_reverse_str_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: array_reverse_str ---");
+    emitter.label_global("__rt_array_reverse_str");
+
+    // Frame: [0]=source [8]=length [16]=destination [24]=index, linkage at [32].
+    emitter.instruction("sub sp, sp, #48");
+    emitter.instruction("stp x29, x30, [sp, #32]");
+    emitter.instruction("add x29, sp, #32");
+    emitter.instruction("str x0, [sp, #0]");                                    // the source array
+    emitter.instruction("ldr x9, [x0]");                                        // its length
+    emitter.instruction("str x9, [sp, #8]");
+
+    emitter.instruction("mov x0, x9");                                          // capacity = source length
+    emitter.instruction("mov x1, #16");                                         // 16-byte (ptr, len) slots
+    emitter.instruction("bl __rt_array_new");
+    emitter.instruction("str x0, [sp, #16]");                                   // the destination array
+
+    emitter.instruction("ldr x9, [sp, #8]");
+    emitter.instruction("sub x9, x9, #1");                                      // walk the source from its last slot
+    emitter.instruction("str x9, [sp, #24]");
+
+    emitter.label("__rt_ars_loop");
+    emitter.instruction("ldr x9, [sp, #24]");
+    emitter.instruction("cmp x9, #0");
+    emitter.instruction("b.lt __rt_ars_done");                                  // every slot is copied
+    emitter.instruction("ldr x10, [sp, #0]");
+    emitter.instruction("add x10, x10, #24");                                   // the source data base
+    emitter.instruction("add x10, x10, x9, lsl #4");                            // this slot's address
+    emitter.instruction("ldr x1, [x10]");                                       // the string pointer
+    emitter.instruction("ldr x2, [x10, #8]");                                   // and its length
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("bl __rt_array_push_str");                              // persist into the destination
+    emitter.instruction("str x0, [sp, #16]");                                   // the append may have grown it
+    emitter.instruction("ldr x9, [sp, #24]");
+    emitter.instruction("sub x9, x9, #1");
+    emitter.instruction("str x9, [sp, #24]");
+    emitter.instruction("b __rt_ars_loop");
+
+    emitter.label("__rt_ars_done");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the reversed array
+    emitter.instruction("ldp x29, x30, [sp, #32]");
+    emitter.instruction("add sp, sp, #48");
+    emitter.instruction("ret");
+}
+
+/// Emits the x86_64 form of [`emit_array_reverse_str`].
+fn emit_array_reverse_str_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_reverse_str ---");
+    emitter.label_global("__rt_array_reverse_str");
+
+    // Frame: [rbp-8]=source [rbp-16]=length [rbp-24]=destination [rbp-32]=index.
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 32");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // the source array
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // its length
+    emitter.instruction("mov QWORD PTR [rbp - 16], r9");
+
+    emitter.instruction("mov rdi, r9");                                         // capacity = source length
+    emitter.instruction("mov rsi, 16");                                         // 16-byte (ptr, len) slots
+    emitter.instruction("call __rt_array_new");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the destination array
+
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");
+    emitter.instruction("sub r9, 1");                                           // walk the source from its last slot
+    emitter.instruction("mov QWORD PTR [rbp - 32], r9");
+
+    emitter.label("__rt_ars_loop_x");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");
+    emitter.instruction("test r9, r9");
+    emitter.instruction("js __rt_ars_done_x");                                  // every slot is copied
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
+    emitter.instruction("shl r9, 4");                                           // this slot's byte offset
+    emitter.instruction("lea r10, [r10 + r9 + 24]");                            // its address past the header
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // the string pointer
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // and its length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");
+    emitter.instruction("call __rt_array_push_str");                            // persist into the destination
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the append may have grown it
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");
+    emitter.instruction("sub r9, 1");
+    emitter.instruction("mov QWORD PTR [rbp - 32], r9");
+    emitter.instruction("jmp __rt_ars_loop_x");
+
+    emitter.label("__rt_ars_done_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the reversed array
+    emitter.instruction("add rsp, 32");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+}
+
 /// Emits the x86_64 Linux variant of the `__rt_array_reverse` runtime helper.
 ///
 /// Allocates a new indexed array via `__rt_array_new`, then copies source elements

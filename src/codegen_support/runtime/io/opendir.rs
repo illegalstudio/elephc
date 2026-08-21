@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits the `__rt_opendir` runtime helper, which opens a directory stream
-//! through libc `opendir` and exposes its underlying descriptor.
+//! through libc `opendir` and returns its descriptor plus owning `DIR*`.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
@@ -8,15 +8,15 @@
 //! Key details:
 //! - libc `opendir` yields a `DIR*`; `dirfd` recovers the raw descriptor that
 //!   becomes the PHP directory stream resource value.
-//! - The `DIR*` is recorded in the `_dir_handles` table keyed by descriptor so
-//!   `readdir()`, `rewinddir()`, and `closedir()` can hand it back to libc.
+//! - The caller adopts the returned `DIR*` into `StreamState.backend_aux`.
+//! - Native, glob, and userspace directory backends return distinct kinds.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// opendir: open a directory stream and return its descriptor.
 /// Input:  AArch64 x1/x2 = directory path string
 ///         x86_64  rax/rdx = directory path string
-/// Output: the directory descriptor, or -1 on failure
+/// Output: descriptor, backend aux, and backend kind; or -1 on failure.
 pub fn emit_opendir(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_opendir_linux_x86_64(emitter);
@@ -34,6 +34,8 @@ pub fn emit_opendir(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_user_wrapper_opendir");                        // path in x1/x2 → fd | -1 | -2
     emitter.instruction("cmn x0, #2");                                          // is the result the "not a wrapper" sentinel (-2)?
     emitter.instruction("b.eq __rt_opendir_uw_fall");                           // no registered scheme matched → fall through to libc
+    emitter.instruction("mov x1, #0");                                          // userspace directory ownership stays in its wrapper registry
+    emitter.instruction("mov x2, #6");                                          // backend kind 6 dispatches userspace directory callbacks
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the probe frame
     emitter.instruction("ret");                                                 // return the synthetic fd or false sentinel
@@ -85,16 +87,16 @@ pub fn emit_opendir(emitter: &mut Emitter) {
     // -- recover the underlying descriptor with dirfd --
     emitter.bl_c("dirfd");
 
-    // -- record the DIR* in the fd->DIR* table for readdir/closedir --
-    abi::emit_symbol_address(emitter, "x9", "_dir_handles");
-    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the DIR* handle
-    emitter.instruction("str x10, [x9, x0, lsl #3]");                           // _dir_handles[fd] = DIR*
+    emitter.instruction("ldr x1, [sp, #16]");                                   // return the owning DIR* as backend auxiliary state
+    emitter.instruction("mov x2, #4");                                          // backend kind 4 identifies native directory iteration
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the frame
     emitter.instruction("ret");                                                 // return the directory descriptor
 
     emitter.label("__rt_opendir_fail");
     emitter.instruction("mov x0, #-1");                                         // -1 reports an opendir failure
+    emitter.instruction("mov x1, #0");                                          // failed opens have no backend auxiliary owner
+    emitter.instruction("mov x2, #4");                                          // retain a deterministic native backend discriminator
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the frame
     emitter.instruction("ret");                                                 // return the failure result
@@ -115,6 +117,8 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_user_wrapper_opendir");                      // path in rax/rdx → fd | -1 | -2
     emitter.instruction("cmp rax, -2");                                         // is the result the "not a wrapper" sentinel (-2)?
     emitter.instruction("je __rt_opendir_uw_fall_x86");                         // no registered scheme matched → fall through to libc
+    emitter.instruction("xor edx, edx");                                        // userspace directory ownership stays in its wrapper registry
+    emitter.instruction("mov ecx, 6");                                          // backend kind 6 dispatches userspace directory callbacks
     emitter.instruction("add rsp, 16");                                         // release the probe frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the synthetic fd or false sentinel
@@ -169,16 +173,16 @@ fn emit_opendir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // DIR* argument for dirfd
     emitter.bl_c("dirfd");
 
-    // -- record the DIR* in the fd->DIR* table for readdir/closedir --
-    abi::emit_symbol_address(emitter, "r10", "_dir_handles");                   // base of the fd->DIR* table
-    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the DIR* handle
-    emitter.instruction("mov QWORD PTR [r10 + rax * 8], r9");                   // _dir_handles[fd] = DIR*
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                        // return the owning DIR* as backend auxiliary state
+    emitter.instruction("mov ecx, 4");                                          // backend kind 4 identifies native directory iteration
     emitter.instruction("add rsp, 16");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the directory descriptor
 
     emitter.label("__rt_opendir_fail_x86");
     emitter.instruction("mov rax, -1");                                         // -1 reports an opendir failure
+    emitter.instruction("xor edx, edx");                                        // failed opens have no backend auxiliary owner
+    emitter.instruction("mov ecx, 4");                                          // retain a deterministic native backend discriminator
     emitter.instruction("add rsp, 16");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result

@@ -34,40 +34,59 @@ pub(in crate::interpreter) fn eval_scandir_declared_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [directory] => eval_scandir_result(*directory, values),
+        [directory] => eval_scandir_result(*directory, 0, values),
+        [directory, order] => {
+            let order = eval_int_value(*order, values)?;
+            eval_scandir_result(*directory, order, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Evaluates PHP `scandir($directory)` over one eval expression.
+/// Evaluates PHP `scandir($directory, $sorting_order = 0)` over eval expressions.
 pub(in crate::interpreter) fn eval_builtin_scandir(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [directory] = args else {
-        return Err(EvalStatus::RuntimeFatal);
+    // `scandir()`'s third parameter is php's `$context`, accepted and ignored (see `opendir`).
+    let (directory, order) = match args {
+        [directory] => (directory, 0),
+        [directory, order] | [directory, order, _] => {
+            let order = eval_expr(order, context, scope, values)?;
+            (directory, eval_int_value(order, values)?)
+        }
+        _ => return Err(EvalStatus::RuntimeFatal),
     };
     let directory = eval_expr(directory, context, scope, values)?;
-    eval_scandir_result(directory, values)
+    eval_scandir_result(directory, order, values)
 }
 
-/// Lists one local directory into an indexed string array, or an empty array on failure.
+/// Lists one local directory into an indexed string array, or PHP `false` on failure.
 pub(in crate::interpreter) fn eval_scandir_result(
     directory: RuntimeCellHandle,
+    sorting_order: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(directory, values)?;
     let Ok(entries) = std::fs::read_dir(path) else {
-        return values.array_new(0);
+        // php answers false for a directory it cannot open, and the compiled runtime agrees.
+        return values.bool_value(false);
     };
     let mut names = vec![".".to_string(), "..".to_string()];
     for entry in entries {
         let entry = entry.map_err(|_| EvalStatus::RuntimeFatal)?;
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
-    names.sort();
+    // php sorts ascending by default; SCANDIR_SORT_DESCENDING (1) flips it and
+    // SCANDIR_SORT_NONE (2) keeps readdir order — which `read_dir` does not promise, so the
+    // unsorted case is genuinely filesystem-ordered here too.
+    match sorting_order {
+        1 => names.sort_by(|a, b| b.cmp(a)),
+        2 => {}
+        _ => names.sort(),
+    }
     let mut result = values.array_new(names.len())?;
     for (index, name) in names.iter().enumerate() {
         result = eval_array_set_indexed_bytes(result, index, name.as_bytes(), values)?;

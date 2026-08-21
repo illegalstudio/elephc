@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use crate::codegen::abi;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SAVED_DEPTHS, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -443,11 +443,10 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
     emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset));       // save the previous native exception-handler head
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across constructor unwinding
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
-        "str x10, [x29, #{}]",
-        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        abi::emit_load_symbol_to_reg(emitter, "x10", symbol, 0);
+        emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + offset));
+    }                                                                           // save every depth a throw would otherwise strand
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
@@ -464,11 +463,10 @@ fn emit_aarch64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     emitter.comment("pop eval constructor exception boundary");
     emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
-        "ldr x10, [x29, #{}]",
-        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset + offset));
+        abi::emit_store_reg_to_symbol(emitter, "x10", symbol, 0);
+    }                                                                           // republish every depth saved on the way in
 }
 
 /// Emits an x86_64 boundary handler so native constructor throws return to magician.
@@ -480,14 +478,14 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
     );                                                                          //save the previous native exception-handler head
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(
-        &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-    );                                                                          //preserve the caller activation frame across constructor unwinding
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
-        "mov QWORD PTR [rbp - {}], r10",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); //preserve the caller activation frame across constructor unwinding
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
+        emitter.instruction(&format!(
+            "mov QWORD PTR [rbp - {}], r10",
+            handler_base - offset
+        ));
+    }                                                                            // save every depth a throw would otherwise strand
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
@@ -507,11 +505,13 @@ fn emit_x86_64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
         &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
     );                                                                          //reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
-        "mov r10, QWORD PTR [rbp - {}]",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        emitter.instruction(&format!(
+            "mov r10, QWORD PTR [rbp - {}]",
+            handler_base - offset
+        ));
+        abi::emit_store_reg_to_symbol(emitter, "r10", symbol, 0);
+    }                                                                            // republish every depth saved on the way in
 }
 
 /// Emits a C helper that transfers `_exc_value` ownership to magician.

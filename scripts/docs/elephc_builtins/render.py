@@ -288,7 +288,7 @@ def _availability_section(b: dict) -> str:
             route_text = {
             "language-construct": "a dedicated compiler language-construct path",
             "dedicated-syntax": "a dedicated AST/EIR syntax path",
-            "prelude": "the compiler-injected hash prelude",
+            "prelude": "a compiler-injected PHP prelude",
             }.get(route, "the Elephc compiler")
             lines.append(f"- **Compiled (AOT)**: supported through {route_text}.")
         if aot.get("signature_override_reason"):

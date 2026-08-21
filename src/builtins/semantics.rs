@@ -14,7 +14,7 @@ use std::fmt;
 
 use crate::errors::CompileError;
 use crate::ir::{
-    Effects, Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, ValueId,
+    DataId, Effects, Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, ValueId,
 };
 use crate::parser::ast::Expr;
 use crate::span::Span;
@@ -288,6 +288,13 @@ pub trait BuiltinLoweringContext {
         effects: Effects,
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
+
+    /// Interns a PHP function name so a lowering can emit `Op::Call` against it.
+    ///
+    /// Needed by builtins whose implementation is an injected elephc-PHP prelude function
+    /// rather than a runtime helper — `sscanf()`/`fscanf()` call `__elephc_scanf` this way, so
+    /// one engine serves every target instead of two hand-written assembly bodies.
+    fn intern_function_name(&mut self, name: &str) -> DataId;
 }
 
 /// Normalized builtin call consumed by backend-neutral EIR lowering.

@@ -323,6 +323,25 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap runtime matches the shared heap_free contract
     emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own heap storage and therefore need no release work
+
+    // -- validate the pointer RANGE before any header is read, as the AArch64 path does --
+    // Callers are invited by contract to hand this helper a pointer that is not a heap block:
+    // `__rt_fputcsv` passes whatever `__rt_mixed_cast_string` returned, which for an int, float
+    // or bool is an address inside the shared concat arena, and for null is nothing at all. The
+    // marker check further down is what implements that contract — but it reads `[rax - 8]` to
+    // do it, so a foreign pointer was dereferenced OUTSIDE the heap to decide it was foreign,
+    // and it only takes those eight neighbouring bytes carrying the marker for the arena to be
+    // threaded onto the free list. AArch64 bounds the pointer first and so never reads them.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    emitter.instruction("lea r9, [r8 + 16]");                                   // the first address a payload can occupy
+    emitter.instruction("cmp rax, r9");                                         // is the candidate below the first heap payload?
+    emitter.instruction("jb __rt_heap_free_done");                              // yes — a non-heap or interior pointer owns nothing here
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // the current bump offset
+    emitter.instruction("lea r9, [r8 + r9]");                                   // the live heap end
+    emitter.instruction("cmp rax, r9");                                         // is the candidate at or beyond it?
+    emitter.instruction("jae __rt_heap_free_done");                             // yes — outside the live heap, so not ours to free
+
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
     emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
@@ -562,4 +581,50 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_free");                                  // delegate in-range candidates to the normal free path
     emitter.label("__rt_heap_free_safe_skip");
     emitter.instruction("ret");                                                 // return without touching foreign/static storage
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// `__rt_heap_free` must bound the pointer BEFORE it reads any header from it.
+    ///
+    /// The contract callers rely on is "hand me anything; I ignore what is not mine", and
+    /// `__rt_fputcsv` uses it on every non-string field: `__rt_mixed_cast_string` renders an int,
+    /// a float or a bool into the shared concat arena and returns a pointer into THAT, not into
+    /// the heap. Implementing the contract by reading the candidate's kind word first inverts it
+    /// — the foreign pointer is dereferenced outside the heap in order to decide it is foreign,
+    /// and if those bytes happen to carry the marker the arena is threaded onto the free list.
+    ///
+    /// This is pinned on the emitted assembly because this host runs one architecture, and the
+    /// two halves disagreed: AArch64 bounded first, x86_64 did not.
+    /// The check is scoped against the DEBUG-MODE flag rather than against the header load, and
+    /// that scoping is the whole test. Both halves range-check inside the heap-debug block, so
+    /// "does a range check appear before the first header read" was already true of the broken
+    /// x86_64 form and would have passed with the defect present. What distinguishes them is
+    /// whether the bound is taken UNCONDITIONALLY — before `_heap_debug_enabled` is even read —
+    /// or only when heap-debug happens to be on, which is off in every ordinary run.
+    #[test]
+    fn test_heap_free_bounds_the_pointer_before_reading_its_header() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_heap_free(&mut emitter);
+            let asm = emitter.output();
+            let at = asm
+                .find("__rt_heap_free:")
+                .unwrap_or_else(|| panic!("{arch:?}: the helper must be labelled"));
+            let bounded = asm[at..]
+                .find("_heap_buf")
+                .unwrap_or_else(|| panic!("{arch:?}: the helper must name the heap base"));
+            let debug_gate = asm[at..]
+                .find("_heap_debug_enabled")
+                .unwrap_or_else(|| panic!("{arch:?}: the helper must consult the debug flag"));
+            assert!(
+                bounded < debug_gate,
+                "{arch:?}: the pointer must be bounded before the debug gate, or an ordinary \
+                 run reads the header of a pointer that was never ours"
+            );
+        }
+    }
 }

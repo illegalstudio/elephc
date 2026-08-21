@@ -23,14 +23,11 @@
 //! - Each fd-backed kind skips handles >= 0x40000000: synthetic wrapper handles and
 //!   the -1 sentinel written into the low payload word by an explicit close (see #4)
 //!   so an already-released descriptor is never closed twice.
-//! - The kind 3 and kind 4 arms are PAY-FOR-USE. Each is emitted only when the lowered
-//!   program calls the one builtin that can produce that kind, which
-//!   `RuntimeFnId::resource_cleanup_kind` names. They were the sole reference to
-//!   `__rt_pclose` and `__rt_closedir`, so every binary imported `pclose`, `closedir`,
-//!   `globfree` and `close` to release handles it had no way to open. Kinds 1 and 2 are
-//!   NOT gated: kind 1 closes with a raw syscall on AArch64 and imports nothing, and
-//!   kind 2 is stamped by the runtime helper `__rt_hash_init` rather than by a lowering,
-//!   so no EIR call names it.
+//! - SINCE THE REGISTRY LANDED: tag 9 releases registry-owned kinds 1, 3, 4 and 9
+//!   through `__rt_resource_release`, which owns the backend-specific destructor and
+//!   rejects stale opaque handles. Kind 2 remains the legacy raw HashContext and still
+//!   releases directly through `__rt_hash_ctx_free`. The kind-5 reservation below still
+//!   holds: it must never gain an arm here.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -108,41 +105,35 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.instruction("cbz x9, __rt_mixed_free_deep_box");                    // kind 0 = generic/unknown resource, no destructor
 
-    emitter.instruction("cmp x9, #1");                                          // is the resource a native stream fd?
+    emitter.instruction("cmp x9, #1");                                          // is this a registry-owned native stream handle?
 
-    emitter.instruction("b.eq __rt_mixed_free_deep_resource_stream");           // native streams need a close() syscall
+    emitter.instruction("b.eq __rt_mixed_free_deep_resource_registry");         // release native streams through the authoritative registry
 
     emitter.instruction("cmp x9, #2");                                          // is the resource a HashContext handle?
 
     emitter.instruction("b.eq __rt_mixed_free_deep_resource_hash");             // HashContext needs crypto_free
 
-    if features.popen_resource {
-        emitter.instruction("cmp x9, #3");                                      // is the resource a popen pipe?
+    emitter.instruction("cmp x9, #3");                                          // is this a registry-owned popen stream handle?
 
-        emitter.instruction("b.eq __rt_mixed_free_deep_resource_popen");        // popen pipes close + reap the child via __rt_pclose
-    }
+    emitter.instruction("b.eq __rt_mixed_free_deep_resource_registry");         // release popen streams through the authoritative registry
 
-    if features.directory_resource {
-        emitter.instruction("cmp x9, #4");                                      // is the resource an opendir directory stream?
+    emitter.instruction("cmp x9, #4");                                          // is this a registry-owned directory stream handle?
 
-        emitter.instruction("b.eq __rt_mixed_free_deep_resource_dir");          // directory streams release their DIR* via __rt_closedir
-    }
+    emitter.instruction("b.eq __rt_mixed_free_deep_resource_registry");         // release directory streams through the authoritative registry
+
+    emitter.instruction("cmp x9, #9");                                          // is this a registry-owned stream-context handle?
+
+    emitter.instruction("b.eq __rt_mixed_free_deep_resource_registry");         // release contexts through the authoritative registry
 
     emitter.instruction("b __rt_mixed_free_deep_box");                          // unknown resource kind, free the box without destructor
 
 
-    emitter.label("__rt_mixed_free_deep_resource_stream");
-    emitter.instruction("ldr x0, [x0, #8]");                                    // load the native fd from the low payload word
+    emitter.label("__rt_mixed_free_deep_resource_registry");
+    emitter.instruction("ldr x0, [x0, #8]");                                    // load the opaque resource handle from the low payload word
 
-    emitter.instruction("mov x9, #0x40000000");                                 // load the synthetic/sentinel handle threshold into a scratch register
+    emitter.instruction("bl __rt_resource_release");                            // release the Mixed owner's registry reference and close at refcount zero
 
-    emitter.instruction("cmp x0, x9");                                          // skip synthetic handles and the -1 sentinel left by an explicit close
-
-    emitter.instruction("b.hs __rt_mixed_free_deep_box");                       // skip close for synthetic/already-closed handles
-
-    emitter.syscall(6);                                                         // close(fd) — AArch64 macOS x16=6/svc #0x80, Linux remapped to x8=57/svc #0
-    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after closing the native fd
-
+    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after releasing its registry ownership
 
     emitter.label("__rt_mixed_free_deep_resource_hash");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the HashContext handle from the low payload word
@@ -150,38 +141,6 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("bl __rt_hash_ctx_free");                               // free a HashContext through the indirect crypto slot
 
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after releasing the context
-
-
-    if features.popen_resource {
-        emitter.label("__rt_mixed_free_deep_resource_popen");
-        emitter.instruction("ldr x0, [x0, #8]");                                // load the pipe fd from the low payload word
-
-        emitter.instruction("mov x9, #0x40000000");                             // load the synthetic/sentinel handle threshold into a scratch register
-
-        emitter.instruction("cmp x0, x9");                                      // skip the -1 sentinel left by an explicit pclose
-
-        emitter.instruction("b.hs __rt_mixed_free_deep_box");                   // skip release for already-closed pipe handles
-
-        emitter.instruction("bl __rt_pclose");                                  // pclose the pipe FILE* and reap the child process
-
-        emitter.instruction("b __rt_mixed_free_deep_box");                      // free the mixed box after releasing the pipe
-    }
-
-
-    if features.directory_resource {
-        emitter.label("__rt_mixed_free_deep_resource_dir");
-        emitter.instruction("ldr x0, [x0, #8]");                                // load the directory fd from the low payload word
-
-        emitter.instruction("mov x9, #0x40000000");                             // load the synthetic/sentinel handle threshold into a scratch register
-
-        emitter.instruction("cmp x0, x9");                                      // skip synthetic and the -1 sentinel left by an explicit closedir
-
-        emitter.instruction("b.hs __rt_mixed_free_deep_box");                   // skip release for synthetic/already-closed directory handles
-
-        emitter.instruction("bl __rt_closedir");                                // closedir the DIR* recorded for this directory descriptor
-
-        emitter.instruction("b __rt_mixed_free_deep_box");                      // free the mixed box after releasing the directory
-    }
 
 
     emitter.label("__rt_mixed_free_deep_string");
@@ -209,7 +168,11 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 /// Input: rax = mixed cell pointer
 /// Output: none
 /// ABI: preserves rbp, uses rax for input/output, calls `__rt_decref_any` and `__rt_heap_free` as needed.
-fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
+// `features` gated the per-kind destructor arms upstream. It is inert since the resource
+// REGISTRY landed: kinds 1, 3, 4 and 9 all release through `__rt_resource_release`, so there is
+// no per-kind arm left to leave out. Kept in the signature because the dispatcher and the tests
+// pass it, and because the two implementations are still to be reconciled.
+fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, _features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_free_deep ---");
     emitter.label_global("__rt_mixed_free_deep");
@@ -277,40 +240,35 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.instruction("jz __rt_mixed_free_deep_box");                         // no destructor for generic resources
 
-    emitter.instruction("cmp r9, 1");                                           // is the resource a native stream fd?
+    emitter.instruction("cmp r9, 1");                                           // is this a registry-owned native stream handle?
 
-    emitter.instruction("je __rt_mixed_free_deep_resource_stream");             // native streams need close()
+    emitter.instruction("je __rt_mixed_free_deep_resource_registry");           // release native streams through the authoritative registry
 
     emitter.instruction("cmp r9, 2");                                           // is the resource a HashContext handle?
 
     emitter.instruction("je __rt_mixed_free_deep_resource_hash");               // HashContext needs crypto_free
 
-    if features.popen_resource {
-        emitter.instruction("cmp r9, 3");                                       // is the resource a popen pipe?
+    emitter.instruction("cmp r9, 3");                                           // is this a registry-owned popen stream handle?
 
-        emitter.instruction("je __rt_mixed_free_deep_resource_popen");          // popen pipes close + reap the child via __rt_pclose
-    }
+    emitter.instruction("je __rt_mixed_free_deep_resource_registry");           // release popen streams through the authoritative registry
 
-    if features.directory_resource {
-        emitter.instruction("cmp r9, 4");                                       // is the resource an opendir directory stream?
+    emitter.instruction("cmp r9, 4");                                           // is this a registry-owned directory stream handle?
 
-        emitter.instruction("je __rt_mixed_free_deep_resource_dir");            // directory streams release their DIR* via __rt_closedir
-    }
+    emitter.instruction("je __rt_mixed_free_deep_resource_registry");           // release directory streams through the authoritative registry
+
+    emitter.instruction("cmp r9, 9");                                           // is this a registry-owned stream-context handle?
+
+    emitter.instruction("je __rt_mixed_free_deep_resource_registry");           // release contexts through the authoritative registry
 
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // unknown resource kind, free the box without destructor
 
 
-    emitter.label("__rt_mixed_free_deep_resource_stream");
-    emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the native fd from the low payload word into the close argument
+    emitter.label("__rt_mixed_free_deep_resource_registry");
+    emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the opaque resource handle from the low payload word
 
-    emitter.instruction("cmp rdi, 0x40000000");                                 // synthetic/sentinel handle threshold (-1 marks an explicit close)
+    emitter.instruction("call __rt_resource_release");                          // release the Mixed owner's registry reference and close at refcount zero
 
-    emitter.instruction("jae __rt_mixed_free_deep_box");                        // skip synthetic/already-closed handles
-
-    emitter.instruction("call close");                                          // close(fd) via the C library on x86_64 Linux
-
-    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after closing the native fd
-
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing its registry ownership
 
     emitter.label("__rt_mixed_free_deep_resource_hash");
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the HashContext handle from the low payload word
@@ -318,34 +276,6 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.instruction("call __rt_hash_ctx_free");                             // free a HashContext through the indirect crypto slot
 
     emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after releasing the context
-
-
-    if features.popen_resource {
-        emitter.label("__rt_mixed_free_deep_resource_popen");
-        emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                    // load the pipe fd from the low payload word
-
-        emitter.instruction("cmp rdi, 0x40000000");                             // sentinel(-1)/synthetic handle threshold
-
-        emitter.instruction("jae __rt_mixed_free_deep_box");                    // skip release for already-closed pipe handles
-
-        emitter.instruction("call __rt_pclose");                                // pclose the pipe FILE* and reap the child process
-
-        emitter.instruction("jmp __rt_mixed_free_deep_box");                    // free the mixed box after releasing the pipe
-    }
-
-
-    if features.directory_resource {
-        emitter.label("__rt_mixed_free_deep_resource_dir");
-        emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                    // load the directory fd from the low payload word
-
-        emitter.instruction("cmp rdi, 0x40000000");                             // sentinel(-1)/synthetic handle threshold
-
-        emitter.instruction("jae __rt_mixed_free_deep_box");                    // skip release for synthetic/already-closed directory handles
-
-        emitter.instruction("call __rt_closedir");                              // closedir the DIR* recorded for this directory descriptor
-
-        emitter.instruction("jmp __rt_mixed_free_deep_box");                    // free the mixed box after releasing the directory
-    }
 
 
     emitter.label("__rt_mixed_free_deep_string");

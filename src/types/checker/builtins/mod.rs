@@ -13,6 +13,7 @@ mod callables;
 pub(crate) mod catalog;
 pub(crate) mod io;
 mod language_constructs;
+pub(crate) mod out_params;
 pub(crate) mod spl;
 
 use crate::errors::CompileError;
@@ -115,6 +116,9 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // A by-reference output needs storage to write back into. Derived from the `ref(T)`
+            // declaration so the rule holds for every such builtin without being restated.
+            out_params::check_write_only_args(name, args)?;
             // One authority for every builtin that declares a by-reference parameter. Several
             // builtins used to hand-roll this check, which is a catalogue: the ones nobody
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
@@ -167,8 +171,16 @@ impl Checker {
                 def.spec.semantics.validation,
                 crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
             ) {
+                // A write-only by-ref argument is a definition, not a use, so it is not read
+                // here; its type comes from the parameter's declaration. `Mixed` stands in for
+                // the argument type the shared validators see, matching PHP's pre-call `null`.
+                let write_only = out_params::write_only_variable_args(name, args);
                 let mut arg_types = Vec::with_capacity(args.len());
-                for arg in args {
+                for (idx, arg) in args.iter().enumerate() {
+                    if write_only.iter().any(|out| out.index == idx) {
+                        arg_types.push(PhpType::Mixed);
+                        continue;
+                    }
                     arg_types.push(self.infer_type(arg, env)?);
                 }
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
@@ -221,8 +233,11 @@ impl Checker {
                 // before checking its body. Pre-inferring it here would check that body
                 // once against the unhinted parameter fallback and reject valid PHP.
                 let contextual = contextual_callback_arg_positions(name);
+                // Likewise for a write-only by-ref position: reading it would reject the
+                // undeclared variable PHP's own out-parameter idiom passes there.
+                let write_only = out_params::write_only_variable_args(name, args);
                 for (idx, arg) in args.iter().enumerate() {
-                    if contextual.contains(&idx) {
+                    if contextual.contains(&idx) || write_only.iter().any(|out| out.index == idx) {
                         continue;
                     }
                     self.infer_type(arg, env)?;

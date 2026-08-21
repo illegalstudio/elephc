@@ -63,7 +63,9 @@ pub(in crate::interpreter) fn eval_file_stat_scalar_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+    if let Some(stat) =
+        eval_user_wrapper_url_stat_result(&path, eval_url_stat_flags(name), context, values)?
+    {
         return eval_user_wrapper_file_stat_scalar_from_stat(name, stat, values);
     }
     // Every name this function serves returns `false` on failure, `filemtime` included. It used
@@ -113,8 +115,10 @@ pub(in crate::interpreter) fn eval_stat_array_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
-        return Ok(stat);
+    if let Some(stat) =
+        eval_user_wrapper_url_stat_result(&path, eval_url_stat_flags(name), context, values)?
+    {
+        return eval_user_wrapper_stat_array_from_stat(stat, values);
     }
     let Some(path) = stream_wrappers::local_filesystem_path(&path) else {
         return values.bool_value(false);

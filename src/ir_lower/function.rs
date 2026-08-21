@@ -1660,7 +1660,18 @@ fn magic_method_param_keeps_eir_contract(
 }
 
 /// Widens inferred container return elements that may be built from dynamic params.
+///
+/// MUST STAY IN STEP with the call-site copy in `crate::ir_lower::expr::call_return_types`:
+/// this one types the body and that one types the caller. When they disagree the caller
+/// reads the callee's return in the wrong representation, with nothing to flag it.
 fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
+    // A resource can only leave such a function BOXED. `codegen_repr()` collapses
+    // Resource to Int, so the body ended up casting its now-Mixed parameter down to a
+    // plain integer: `function f($c) { return $c; }` handed back the resource's display
+    // id, and `is_resource()` on the result answered false.
+    if matches!(return_type, PhpType::Resource(_)) {
+        return PhpType::Mixed;
+    }
     match return_type.codegen_repr() {
         PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
         PhpType::AssocArray { key, .. } => PhpType::AssocArray {

@@ -104,6 +104,8 @@ impl Checker {
         for (name, _value) in STREAM_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        // STREAM_PF_INET6 is target-divergent (AF_INET6 = 30 on macOS, 10 on Linux).
+        constants.insert("STREAM_PF_INET6".to_string(), PhpType::Int);
         for (name, _value) in STRING_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
@@ -143,6 +145,8 @@ impl Checker {
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            by_ref_widened_params: HashSet::new(),
+            resolving_by_ref_widening: HashSet::new(),
             resolving_functions: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),

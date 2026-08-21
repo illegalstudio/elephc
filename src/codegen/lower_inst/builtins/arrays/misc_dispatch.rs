@@ -211,14 +211,36 @@ pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     lower_array_key_sort(ctx, inst, "krsort", KeySortOrder::Descending)
 }
 
-/// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
+/// Lowers `natsort()`, routing string-valued hash receivers to the key-preserving sorter.
+///
+/// php sorts naturally with `zend_array_sort(..., php_array_natural_compare, 0)`: the
+/// trailing `0` is `renumber`, which `sort()` passes as `1` and `asort()`/`natsort()` pass
+/// as `0`. A hash-backed receiver can honour that exactly, because `__rt_hash_natsort`
+/// relinks the table's iteration chain and leaves every key attached to its own value.
+/// An indexed array stores its keys implicitly as slot positions `0..n-1`, so it has no
+/// storage able to hold the permuted keys php produces; those receivers keep using the
+/// slot permuter and stay reindexed — the sort family's tracked divergence.
 pub(crate) fn lower_natsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort", None)
+    super::super::ensure_arg_count(inst, "natsort", 1)?;
+    if natural_sort_receiver_is_string_hash(ctx, inst)? {
+        return lower_hash_link_sort(ctx, inst, "__rt_hash_natsort");
+    }
+    lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort", Some("__rt_natsort_str"))
 }
 
-/// Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper.
+/// Lowers `natcasesort()`, routing string-valued hash receivers to the key-preserving sorter.
 pub(crate) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "natcasesort", "__rt_natcasesort", None)
+    super::super::ensure_arg_count(inst, "natcasesort", 1)?;
+    if natural_sort_receiver_is_string_hash(ctx, inst)? {
+        return lower_hash_link_sort(ctx, inst, "__rt_hash_natcasesort");
+    }
+    lower_indexed_array_sort(
+        ctx,
+        inst,
+        "natcasesort",
+        "__rt_natcasesort",
+        Some("__rt_natcasesort_str"),
+    )
 }
 
 /// Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.

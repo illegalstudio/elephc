@@ -66,6 +66,7 @@ use zip_write::*;
 pub use archive_api::{
     delete_entry_bytes, delete_url_bytes, entry_names_bytes, extract_entry_bytes,
     extract_url_bytes, put_entry_bytes, put_url_bytes, set_archive_compression,
+    zip_extract_url_bytes, zip_stat_entries_bytes,
 };
 pub use ffi_archive::*;
 pub use ffi_stream::*;

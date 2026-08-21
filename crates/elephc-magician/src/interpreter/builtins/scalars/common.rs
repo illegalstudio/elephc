@@ -50,13 +50,23 @@ pub(in crate::interpreter) fn eval_resource_payload(
 /// `get_resource_type()`, so every eval display path needs this answer. The two resource
 /// origins record closure in two different, deliberately unmerged ways:
 ///
-/// - A HOST resource closed by the compiled program carries the `-id` sentinel
-///   `fclose`/`pclose`/`closedir` stamp into its Mixed box (see
-///   `elephc::codegen::lower_inst::builtins::io`), so a negative payload is closed.
-/// - An EVAL-CREATED resource carries no sentinel, because its payload IS the key of
-///   `EvalStreamResources`; negating it would break every builtin that later resolves the
-///   handle. Its close state lives in those tables, so `EvalStreamResources::is_live`
-///   answers for it.
+/// - A HOST resource records closure in the compiled program's RESOURCE REGISTRY, which
+///   only the runtime can read, so `RuntimeValueOps::resource_is_closed` asks it. Nothing
+///   about the payload word answers this: since the generation-safe registry migration an
+///   open host payload is an opaque handle, and `fclose` publishes the closed state on the
+///   registry slot. Reading the word alone reported `stream` for every closed host handle
+///   — `fclose($r); eval('var_dump($r);')` printed `resource(5) of type (stream)` while
+///   the same program's NATIVE `var_dump($r)`, which already consults the registry
+///   through `__rt_resource_type_name`, printed `(Unknown)`.
+/// - An EVAL-CREATED resource is not in that registry at all: its payload IS the key of
+///   `EvalStreamResources` (it carries `EVAL_RESOURCE_PAYLOAD_BASE`), and negating it
+///   would break every builtin that later resolves the handle. Its close state lives in
+///   those tables, so `EvalStreamResources::is_live` answers for it. Handing such a
+///   payload to the registry would find no slot and report it open forever.
+/// - The legacy `-id` sentinel arm stays first. `apply_resource_release_sentinel`
+///   (`elephc::codegen::lower_inst::builtins::io`) still stamps a negative word into a
+///   Mixed-typed box on close, and the runtime's own type-name helper keeps the same
+///   short-circuit.
 ///
 /// The payload is read as `as i64`, NOT through `i64::try_from`. `raw_value_word` returns
 /// `u64` and the sentinel for id 5 is `0xFFFF_FFFF_FFFF_FFFB`, which `i64::try_from`
@@ -76,7 +86,7 @@ pub(in crate::interpreter) fn eval_resource_is_closed(
     if payload >= EVAL_RESOURCE_PAYLOAD_BASE {
         return Ok(!context.stream_resources().is_live(payload));
     }
-    Ok(false)
+    values.resource_is_closed(payload as u64)
 }
 
 /// Returns the PHP resource type name a display path should print for one resource cell.
