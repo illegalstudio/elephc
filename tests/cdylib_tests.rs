@@ -75,6 +75,43 @@ fn compile_cdylib_failure(prefix: &str, source: &str) -> String {
     stderr
 }
 
+/// Compiles a multi-file cdylib fixture and returns its expected failure diagnostic.
+fn compile_cdylib_files_failure(prefix: &str, files: &[(&str, &str)], entry: &str) -> String {
+    let dir = make_test_dir(prefix);
+    for (name, source) in files {
+        fs::write(dir.join(name), source).unwrap();
+    }
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", entry])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        !output.status.success(),
+        "unsafe multi-file cdylib source unexpectedly compiled"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    fs::remove_dir_all(&dir).ok();
+    stderr
+}
+
+/// Runs one alternate cdylib validation terminal path and returns its failure diagnostic.
+fn compile_cdylib_mode_failure(prefix: &str, source: &str, args: &[&str]) -> String {
+    let dir = make_test_dir(prefix);
+    fs::write(dir.join("failure.php"), source).unwrap();
+    let output = elephc_command(&dir)
+        .args(args)
+        .arg("failure.php")
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        !output.status.success(),
+        "unsafe cdylib source unexpectedly passed alternate validation mode"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    fs::remove_dir_all(&dir).ok();
+    stderr
+}
+
 /// Returns the platform-conventional shared-library file name for `stem`.
 fn shared_lib_name(stem: &str) -> String {
     if cfg!(target_os = "macos") {
@@ -152,6 +189,11 @@ function add_i64(int $a, int $b): int {
 }
 
 #[Export]
+function scalar_throw(int $value): int {
+    throw new RuntimeException("scalar boom");
+}
+
+#[Export]
 function symbol_string(string $input): string {
     return $input;
 }
@@ -168,12 +210,20 @@ int main(int argc, char **argv) {
     void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!lib) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 2; }
     int32_t (*init)(void) = (int32_t (*)(void))dlsym(lib, "elephc_init");
+    int32_t (*last_status)(void) = (int32_t (*)(void))dlsym(lib, "elephc_last_status");
+    const char *(*last_error)(void) = (const char *(*)(void))dlsym(lib, "elephc_last_error");
     int64_t (*add)(int64_t, int64_t) = (int64_t (*)(int64_t, int64_t))dlsym(lib, "add_i64");
+    int64_t (*scalar_throw)(int64_t) =
+        (int64_t (*)(int64_t))dlsym(lib, "scalar_throw");
     int32_t (*vt)(const char *, size_t) =
         (int32_t (*)(const char *, size_t))dlsym(lib, "validate_token");
     void (*shutdown)(void) = (void (*)(void))dlsym(lib, "elephc_shutdown");
-    if (!init || !add || !vt || !shutdown) { fprintf(stderr, "dlsym failed\n"); return 3; }
+    if (!init || !last_status || !last_error || !add || !scalar_throw || !vt || !shutdown) {
+        fprintf(stderr, "dlsym failed\n"); return 3;
+    }
     if (init() != 0) return 4;
+    if (scalar_throw(7) != 0 || last_status() != 2 || !last_error()) return 5;
+    if (add(40, 2) != 42 || last_status() != 0 || last_error() != NULL) return 6;
     printf("%lld %d %d\n", (long long)add(40, 2), vt("supersecret", 11), vt("nope", 4));
     shutdown();
     return 0;
@@ -245,6 +295,7 @@ const STRING_HOST_C: &str = r#"
 typedef uint32_t (*abi_version_fn)(void);
 typedef int32_t (*init_fn)(void);
 typedef void (*shutdown_fn)(void);
+typedef int32_t (*last_status_fn)(void);
 typedef const char *(*last_error_fn)(void);
 typedef void (*free_fn)(void *);
 typedef int32_t (*string_export_fn)(const char *, size_t, char **, size_t *);
@@ -258,6 +309,7 @@ int main(int argc, char **argv) {
     LOAD(elephc_abi_version, p_abi_version, abi_version_fn);
     LOAD(elephc_init, p_init, init_fn);
     LOAD(elephc_shutdown, p_shutdown, shutdown_fn);
+    LOAD(elephc_last_status, p_last_status, last_status_fn);
     LOAD(elephc_last_error, p_last_error, last_error_fn);
     LOAD(elephc_free, p_free, free_fn);
     LOAD(roundtrip, p_roundtrip, string_export_fn);
@@ -267,7 +319,7 @@ int main(int argc, char **argv) {
     LOAD(concat_success, p_concat_success, string_export_fn);
     LOAD(force_allocation_failure, p_force_allocation_failure, string_export_fn);
     LOAD(add_after_failure, p_add_after_failure, add_fn);
-    if (!p_abi_version || !p_init || !p_shutdown || !p_last_error || !p_free ||
+    if (!p_abi_version || !p_init || !p_shutdown || !p_last_status || !p_last_error || !p_free ||
         !p_roundtrip || !p_maybe_throw || !p_empty_throw || !p_cleanup_throw ||
         !p_concat_success || !p_force_allocation_failure || !p_add_after_failure)
         return 3;
@@ -280,6 +332,7 @@ int main(int argc, char **argv) {
     if (p_roundtrip((const char *)binary, sizeof(binary), &out, &out_len) != ELEPHC_STATUS_OK)
         return 5;
     if (!out || out_len != sizeof(binary) || memcmp(out, binary, sizeof(binary)) != 0 ||
+        p_last_status() != ELEPHC_STATUS_OK ||
         out[out_len] != '\0') return 6;
     p_free(out);
 
@@ -292,7 +345,8 @@ int main(int argc, char **argv) {
 
     out_len = 99;
     if (p_roundtrip("x", 1, NULL, &out_len) != ELEPHC_STATUS_INVALID_ARGUMENT ||
-        out_len != 0 || !p_last_error()) return 8;
+        p_last_status() != ELEPHC_STATUS_INVALID_ARGUMENT || out_len != 0 ||
+        !p_last_error()) return 8;
     out = (char *)(uintptr_t)1;
     if (p_roundtrip("x", 1, &out, NULL) != ELEPHC_STATUS_INVALID_ARGUMENT ||
         out != NULL || !p_last_error()) return 9;
@@ -348,7 +402,8 @@ int main(int argc, char **argv) {
     out = (char *)(uintptr_t)1;
     out_len = 99;
     if (p_empty_throw("ignored", 7, &out, &out_len) != ELEPHC_STATUS_PHP_EXCEPTION ||
-        out != NULL || out_len != 0) return 19;
+        p_last_status() != ELEPHC_STATUS_PHP_EXCEPTION || out != NULL || out_len != 0)
+        return 19;
     error = p_last_error();
     if (!error || strcmp(error, "") != 0) return 20;
 
@@ -369,7 +424,8 @@ int main(int argc, char **argv) {
     out = (char *)(uintptr_t)1;
     out_len = 99;
     if (p_force_allocation_failure("x", 1, &out, &out_len) !=
-            ELEPHC_STATUS_ALLOCATION_FAILURE || out != NULL || out_len != 0)
+            ELEPHC_STATUS_ALLOCATION_FAILURE ||
+        p_last_status() != ELEPHC_STATUS_ALLOCATION_FAILURE || out != NULL || out_len != 0)
         return 23;
     error = p_last_error();
     if (!error || !strstr(error, "allocation failed")) return 24;
@@ -586,6 +642,49 @@ fn test_cdylib_namespaced_exports_use_stable_c_symbols() {
     fs::remove_dir_all(&dir).ok();
 }
 
+/// Compiles the generated header as C++ when PHP parameter names are C++ keywords.
+#[test]
+fn test_cdylib_header_escapes_c_and_cpp_parameter_keywords() {
+    let dir = make_test_dir("elephc_cdylib_cpp_header");
+    fs::write(
+        dir.join("keywords.php"),
+        r#"<?php
+#[Export]
+function keyword_args(int $class, int $new, int $template): int {
+    return $class + $new + $template;
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "keywords.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::write(
+        dir.join("header.cpp"),
+        "#include \"libkeywords.h\"\nint main() { return 0; }\n",
+    )
+    .unwrap();
+    let cxx = Command::new("c++")
+        .current_dir(&dir)
+        .args(["-std=c++17", "-fsyntax-only", "header.cpp"])
+        .output()
+        .expect("failed to spawn the system C++ compiler");
+    assert!(
+        cxx.status.success(),
+        "generated header is not valid C++:\n{}",
+        String::from_utf8_lossy(&cxx.stderr)
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Verifies that the ELF dynamic symbol table contains exactly the documented
 /// boundary entry points and `#[Export]` trampolines.
 #[test]
@@ -624,9 +723,11 @@ fn test_cdylib_dynamic_symbols_expose_only_public_abi_on_linux() {
         "elephc_abi_version",
         "elephc_init",
         "elephc_shutdown",
+        "elephc_last_status",
         "elephc_last_error",
         "elephc_free",
         "add_i64",
+        "scalar_throw",
         "symbol_string",
         "validate_token",
     ]
@@ -669,9 +770,11 @@ fn test_cdylib_dynamic_symbols_expose_only_public_abi_on_macos() {
         .collect::<BTreeSet<_>>();
     let expected = [
         "add_i64",
+        "scalar_throw",
         "elephc_abi_version",
         "elephc_free",
         "elephc_init",
+        "elephc_last_status",
         "elephc_last_error",
         "elephc_shutdown",
         "symbol_string",
@@ -685,9 +788,9 @@ fn test_cdylib_dynamic_symbols_expose_only_public_abi_on_macos() {
     fs::remove_dir_all(&dir).ok();
 }
 
-/// Verifies that `#[Export]` signatures outside the v1 scalar set are rejected
+/// Verifies that `#[Export]` signatures outside the scalar set are rejected
 /// with a compile error instead of producing a trampoline with an undefined
-/// C ABI (arrays have no defined marshaling in v1).
+/// C ABI (arrays have no defined marshaling).
 #[test]
 fn test_export_with_unsupported_parameter_type_is_rejected() {
     let dir = make_test_dir("elephc_cdylib_badsig");
@@ -708,7 +811,7 @@ fn test_export_with_unsupported_parameter_type_is_rejected() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("unsupported type for --emit cdylib"),
-        "expected the v1 scalar-set diagnostic, got:\n{}",
+        "expected the scalar-set diagnostic, got:\n{}",
         stderr
     );
 
@@ -872,6 +975,226 @@ function roundtrip(string $input): string {
         stderr.contains("opaque invocation 'dynamic_object_new"),
         "expected the dynamic-constructor restriction, got:\n{stderr}"
     );
+}
+
+/// Rejects a reachable EIR `Fatal` terminator produced by an implicitly returning `never` body.
+#[test]
+fn test_cdylib_export_rejects_reachable_fatal_terminator() {
+    let stderr = compile_cdylib_failure(
+        "elephc_cdylib_fatal_terminator",
+        r#"<?php
+function never_returns(): never {
+}
+
+#[Export]
+function roundtrip(string $input): string {
+    never_returns();
+}
+"#,
+    );
+    assert!(
+        stderr.contains("fatal terminator")
+            && stderr.contains("roundtrip -> never_returns"),
+        "expected the fatal terminator and complete call path, got:\n{stderr}"
+    );
+}
+
+/// Traverses destructors that a fixed-class allocation can run during export cleanup.
+#[test]
+fn test_cdylib_export_rejects_destructor_exit() {
+    let stderr = compile_cdylib_failure(
+        "elephc_cdylib_destructor_exit",
+        r#"<?php
+class Killer {
+    public function __destruct() {
+        exit(7);
+    }
+}
+
+#[Export]
+function roundtrip(string $input): string {
+    $killer = new Killer();
+    return $input;
+}
+"#,
+    );
+    assert!(
+        stderr.contains("Killer::__destruct")
+            && stderr.contains("exit/die cannot return through the cdylib error boundary"),
+        "expected the destructor call path and exit restriction, got:\n{stderr}"
+    );
+}
+
+/// Traverses every body behind an include-variant dispatcher, including an unloaded fatal arm.
+#[test]
+fn test_cdylib_export_rejects_exit_in_include_variant() {
+    let stderr = compile_cdylib_files_failure(
+        "elephc_cdylib_include_variant_exit",
+        &[
+            (
+                "main.php",
+                r#"<?php
+if ($argc > 1) {
+    include 'safe.php';
+} else {
+    include 'fatal.php';
+}
+
+#[Export]
+function roundtrip(string $input): string {
+    return included_helper($input);
+}
+"#,
+            ),
+            (
+                "safe.php",
+                "<?php function included_helper(string $input): string { return $input; }",
+            ),
+            (
+                "fatal.php",
+                "<?php function included_helper(string $input): string { exit(7); }",
+            ),
+        ],
+        "main.php",
+    );
+    assert!(
+        stderr.contains("included_helper")
+            && stderr.contains("exit/die cannot return through the cdylib error boundary"),
+        "expected every include variant to be traversed, got:\n{stderr}"
+    );
+}
+
+/// Rejects only runtime builtin argument shapes that can still reach raw process exits.
+#[test]
+fn test_cdylib_export_rejects_fatal_builtin_subsets() {
+    let cases = [
+        (
+            "str_repeat",
+            r#"<?php
+#[Export]
+function roundtrip(string $input): string {
+    return str_repeat($input, strlen($input) - 2);
+}
+"#,
+        ),
+        (
+            "dirname",
+            r#"<?php
+#[Export]
+function roundtrip(string $input): string {
+    return dirname($input, strlen($input));
+}
+"#,
+        ),
+        (
+            "php_uname",
+            r#"<?php
+#[Export]
+function roundtrip(string $input): string {
+    return php_uname($input);
+}
+"#,
+        ),
+        (
+            "sprintf",
+            r#"<?php
+#[Export]
+function roundtrip(string $input): string {
+    return sprintf($input);
+}
+"#,
+        ),
+    ];
+    for (builtin, source) in cases {
+        let stderr = compile_cdylib_failure(
+            &format!("elephc_cdylib_fatal_builtin_{builtin}"),
+            source,
+        );
+        assert!(
+            stderr.contains(builtin)
+                && stderr.contains("process-fatal runtime path")
+                && stderr.contains("roundtrip"),
+            "expected a targeted {builtin} safety diagnostic, got:\n{stderr}"
+        );
+    }
+}
+
+/// Keeps statically proven safe builtin subsets available instead of banning whole builtins.
+#[test]
+fn test_cdylib_export_accepts_proven_safe_builtin_subsets() {
+    let dir = make_test_dir("elephc_cdylib_safe_builtin_subsets");
+    fs::write(
+        dir.join("safe.php"),
+        r#"<?php
+#[Export]
+function repeat_twice(string $input): string {
+    return str_repeat($input, 2);
+}
+
+#[Export]
+function literal_format(string $input): string {
+    return sprintf("safe %% literal");
+}
+"#,
+    )
+    .unwrap();
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "safe.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "proven-safe builtin subsets must compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// Follows a statically resolved callback body passed through a runtime builtin.
+#[test]
+fn test_cdylib_export_rejects_fatal_runtime_callback_body() {
+    let stderr = compile_cdylib_failure(
+        "elephc_cdylib_runtime_callback_exit",
+        r#"<?php
+#[Export]
+function roundtrip(string $input): string {
+    $callback = function (string $value): string {
+        exit(7);
+    };
+    array_map($callback, [$input]);
+    return $input;
+}
+"#,
+    );
+    assert!(
+        stderr.contains("exit/die cannot return through the cdylib error boundary"),
+        "expected the runtime callback body to be traversed, got:\n{stderr}"
+    );
+}
+
+/// Runs the same call-graph restriction for `--check --emit cdylib` and `--emit-ir`.
+#[test]
+fn test_cdylib_safety_runs_in_check_and_emit_ir_modes() {
+    let source = r#"<?php
+#[Export]
+function roundtrip(string $input): string {
+    exit(7);
+}
+"#;
+    for (mode, args) in [
+        ("check", &["--check"][..]),
+        ("emit_ir", &["--emit-ir"][..]),
+    ] {
+        let stderr = compile_cdylib_mode_failure(
+            &format!("elephc_cdylib_safety_{mode}"),
+            source,
+            args,
+        );
+        assert!(
+            stderr.contains("exit/die cannot return through the cdylib error boundary"),
+            "expected {mode} to run cdylib call-graph safety, got:\n{stderr}"
+        );
+    }
 }
 
 /// Verifies that executable mode still compiles a program containing
