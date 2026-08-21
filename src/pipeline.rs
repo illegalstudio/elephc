@@ -471,7 +471,12 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
-    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new(&ast);
+    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new_with_type_metadata(
+        &ast,
+        &check_result.functions,
+        &check_result.classes,
+        &check_result.interfaces,
+    );
     let ast = post_typecheck_optimizer.propagate(ast);
     timings.record_since("opt-prop", phase_started);
 

@@ -217,7 +217,10 @@ Current dead-code-elimination coverage includes:
   - `break`
   - `continue`
 - statements after exhaustive `try/catch` and `try/finally` exits
-- unreachable `catch` paths when the post-DCE `try` body can no longer throw
+- unreachable `catch` paths when the post-DCE `try` body can no longer throw, or when its exact and constrained throwable domains cannot match that handler
+- exact thrown-class routing for explicit `throw new Class`, statically proven arithmetic failures, and fixed-point summaries of direct user functions and exact-receiver methods; unresolved calls, late-bound instance dispatch, dynamic operands, and external constructors retain an unknown `Throwable` domain
+- source-order handler subtraction for unknown throws, including the PHP `Throwable = Exception | Error` root partition, so a later handler is removed once earlier catches exhaust its remaining domain without assuming arbitrary interfaces or open class families are closed
+- caught-variable domains preserved through nested `try` blocks and simple local aliases/reassignments, allowing `throw $e` to retain the incoming exact or constrained class while writes through unknown paths invalidate that fact conservatively
 - shadowed `catch` clauses whose exception types are already fully covered by earlier handlers, including all later handlers after `catch (Throwable ...)`
 - shadowed `switch` patterns whose match points are already covered by earlier case labels, including full-case removal or fallthrough-body merging when no entry pattern remains
 - internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
@@ -242,7 +245,8 @@ Current dead-code-elimination coverage includes:
 - `switch (true|false)` cases using single guard-like patterns can feed the same internal region pruning inside the selected case body, again with local-write invalidation to stay conservative
 - `catch` and `finally` bodies now invalidate outer guard facts only for locals written on the relevant pre-handler paths, so nested pruning there stays sound without discarding unrelated guard facts
 - throw-path invalidation for `switch` now consults the CFG-lite reachable block set, so writes in impossible case bodies do not unnecessarily kill catch-body guards, while reachable case writes before a `throw` still invalidate them
-- catch-side guard invalidation is now path-aware: writes that only happen on non-throwing `try` paths no longer block pruning inside the `catch`
+- catch-side guard invalidation is now path- and exception-type-aware: writes that only happen on non-throwing paths or paths throwing into a different handler no longer block pruning inside the selected `catch`, while call-aware by-reference writes performed by the throwing instruction itself still invalidate the affected locals
+- finally-entry guard invalidation separates normal/throw/return/break transfers from unconditional `exit`/`die` paths, which PHP terminates without running `finally`; branch-local writes on exit-only paths therefore no longer discard unrelated facts in the finally body
 - condition-only empty `if` / `elseif` chains reduced to just the observable condition checks that still matter
 - empty `elseif` bodies in the middle of a live chain folded into the minimum negated guard needed for later branches
 - trailing block tails sunk into `if` and `ifdef` fallthrough branches, so later statements are only retained on paths that can still reach them
@@ -556,7 +560,7 @@ The current optimizer is still intentionally local. It does not yet implement:
 
 - full fixed-point/basic-block constant propagation across arbitrary loops and general path merges
 - object/property facts, nested-array facts, and per-class constructor effect summaries beyond the current array-literal facts and unioned by-ref signatures
-- exact exception-type reachability, nested rethrow modeling, and less conservative `finally` invalidation beyond the current path-aware `try` heuristics
+- exact exception inference for unresolved/dynamic calls, open instance-dispatch sets, and runtime operand types beyond the current explicit-throw, exact-callable, and statically proven operator cases
 - broader control-flow normalization beyond the current local AST shell rewrites
 - backend-specific peephole cleanup
 - elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)

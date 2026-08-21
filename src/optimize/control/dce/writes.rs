@@ -11,6 +11,14 @@
 use super::*;
 use super::guards::{clear_guards_for_name, extend_guards};
 use super::state::{GuardState, RelSide};
+use crate::optimize::exception_flow::{
+    active_expr_thrown_types, active_stmt_thrown_types, active_thrown_types_overlap,
+    ThrownTypes,
+};
+
+mod finally_paths;
+
+pub(super) use finally_paths::invalidated_guards_for_finally_paths;
 
 /// Invalidates guard state for any variable written by a statement.
 /// Collects all written variable names from the statement and removes
@@ -113,40 +121,74 @@ fn apply_guard_invalidation(guards: &mut GuardState, invalidation: Invalidation)
 /// If the block does not contain throwing statements, returns a clone of `guards`.
 /// Otherwise, collects all variables written on throw paths and invalidates
 /// corresponding guards in the returned state.
-pub(super) fn invalidated_guards_for_throw_paths(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
+pub(super) fn invalidated_guards_for_throw_paths(
+    guards: &GuardState,
+    stmts: &[Stmt],
+    matching: Option<&ThrownTypes>,
+) -> GuardState {
     if !block_may_throw(stmts) {
         return guards.clone();
     }
 
-    let mut written = Vec::new();
-    collect_written_names_on_throw_paths_in_block(stmts, vec![Vec::new()], &mut written, guards);
-    if written.is_empty() {
+    let mut written = ThrowPathInvalidation::default();
+    collect_written_names_on_throw_paths_in_block(
+        stmts,
+        vec![Vec::new()],
+        &mut written,
+        guards,
+        matching,
+    );
+    if written.names.is_empty() && !written.all {
         return guards.clone();
     }
 
     let mut next = guards.clone();
-    invalidate_guards_for_written_names(&mut next, &written);
+    if written.all {
+        apply_guard_invalidation(&mut next, Invalidation::All);
+    } else {
+        invalidate_guards_for_written_names(&mut next, &written.names);
+    }
     next
 }
 
-/// Computes guard state through a try-catch-finally construct.
-/// Combines invalidation from the try body and each catch clause,
-/// and clears guards for the catch exception variable. Finally block
-/// statements do not propagate written-variable invalidation to the
-/// caller because finally always executes.
-pub(super) fn invalidated_guards_for_finally_paths(
-    guards: &GuardState,
-    try_body: &[Stmt],
-    catches: &[crate::parser::ast::CatchClause],
-) -> GuardState {
-    let mut next = invalidated_guards_for_block(guards, try_body);
-    for catch in catches {
-        next = invalidated_guards_for_block(&next, &catch.body);
-        if let Some(variable) = catch.variable.as_deref() {
-            clear_guards_for_name(&mut next, variable);
+/// Caller-local invalidation accumulated from exception paths entering one handler.
+#[derive(Default)]
+struct ThrowPathInvalidation {
+    names: Vec<String>,
+    all: bool,
+}
+
+/// Records prior path writes plus writes the throwing construct itself may perform.
+fn record_throw_path_invalidation(
+    written: &mut ThrowPathInvalidation,
+    path: &[String],
+    invalidation: Invalidation,
+) {
+    merge_written_path(&mut written.names, path);
+    match invalidation {
+        Invalidation::Names(names) => {
+            for name in names {
+                push_written_name(&mut written.names, &name);
+            }
         }
+        Invalidation::All => written.all = true,
     }
-    next
+}
+
+/// Extends one fallthrough path with a construct's call-aware local writes.
+fn extend_throw_path_with_invalidation(
+    path: &mut Vec<String>,
+    invalidation: Invalidation,
+    written: &mut ThrowPathInvalidation,
+) {
+    match invalidation {
+        Invalidation::Names(names) => {
+            for name in names {
+                push_written_name(path, &name);
+            }
+        }
+        Invalidation::All => written.all = true,
+    }
 }
 
 /// Recursively collects all variable names that may be written on throw paths
@@ -156,8 +198,9 @@ pub(super) fn invalidated_guards_for_finally_paths(
 fn collect_written_names_on_throw_paths_in_block(
     stmts: &[Stmt],
     mut incoming_paths: Vec<Vec<String>>,
-    written: &mut Vec<String>,
+    written: &mut ThrowPathInvalidation,
     guards: &GuardState,
+    matching: Option<&ThrownTypes>,
 ) -> Vec<Vec<String>> {
     let mut current_guards = guards.clone();
     for stmt in stmts {
@@ -173,6 +216,7 @@ fn collect_written_names_on_throw_paths_in_block(
                 written,
                 &mut next_paths,
                 &current_guards,
+                matching,
             );
         }
         incoming_paths = next_paths;
@@ -189,9 +233,10 @@ fn collect_written_names_on_throw_paths_in_block(
 fn collect_written_names_on_throw_paths_in_stmt(
     stmt: &Stmt,
     path: Vec<String>,
-    written: &mut Vec<String>,
+    written: &mut ThrowPathInvalidation,
     next_paths: &mut Vec<Vec<String>>,
     guards: &GuardState,
+    matching: Option<&ThrownTypes>,
 ) {
     match &stmt.kind {
         StmtKind::If {
@@ -200,21 +245,34 @@ fn collect_written_names_on_throw_paths_in_stmt(
             elseif_clauses,
             else_body,
         } => {
-            if expr_effect(condition).may_throw {
-                merge_written_path(written, &path);
+            let condition_invalidation = expr_invalidation(condition);
+            if thrown_types_match(&active_expr_thrown_types(condition), matching) {
+                record_throw_path_invalidation(
+                    written,
+                    &path,
+                    condition_invalidation.clone(),
+                );
             }
+            let mut condition_path = path;
+            extend_throw_path_with_invalidation(
+                &mut condition_path,
+                condition_invalidation,
+                written,
+            );
             next_paths.extend(collect_written_names_on_throw_paths_in_block(
                 then_body,
-                vec![path.clone()],
+                vec![condition_path.clone()],
                 written,
                 &extend_guards(guards, condition, true),
+                matching,
             ));
             next_paths.extend(collect_written_names_on_throw_paths_in_if_false_path(
                 elseif_clauses,
                 else_body,
-                path,
+                condition_path,
                 written,
                 &extend_guards(guards, condition, false),
+                matching,
             ));
             return;
         }
@@ -228,6 +286,7 @@ fn collect_written_names_on_throw_paths_in_stmt(
                 vec![path.clone()],
                 written,
                 guards,
+                matching,
             ));
             if let Some(body) = else_body {
                 next_paths.extend(collect_written_names_on_throw_paths_in_block(
@@ -235,6 +294,7 @@ fn collect_written_names_on_throw_paths_in_stmt(
                     vec![path],
                     written,
                     guards,
+                    matching,
                 ));
             } else {
                 next_paths.push(path);
@@ -257,10 +317,22 @@ fn collect_written_names_on_throw_paths_in_stmt(
             }
             let reachable = collect_reachable_cfg_blocks(&cfg.blocks, &entry_blocks);
 
-            if expr_effect(subject).may_throw {
-                merge_written_path(written, &path);
+            let subject_invalidation = expr_invalidation(subject);
+            if thrown_types_match(&active_expr_thrown_types(subject), matching) {
+                record_throw_path_invalidation(
+                    written,
+                    &path,
+                    subject_invalidation.clone(),
+                );
             }
+            let mut subject_path = path;
+            extend_throw_path_with_invalidation(
+                &mut subject_path,
+                subject_invalidation,
+                written,
+            );
 
+            let mut direct_scan_path = subject_path.clone();
             let mut fallthrough_paths = Vec::new();
             for (index, (patterns, body)) in cases.iter().enumerate() {
                 let direct_entry = direct_case_entries.contains(&index);
@@ -271,17 +343,23 @@ fn collect_written_names_on_throw_paths_in_stmt(
 
                 if direct_entry {
                     for pattern in patterns {
-                        if expr_effect(pattern).may_throw {
-                            merge_written_path(written, &path);
+                        let pattern_invalidation = expr_invalidation(pattern);
+                        if thrown_types_match(&active_expr_thrown_types(pattern), matching) {
+                            record_throw_path_invalidation(
+                                written,
+                                &direct_scan_path,
+                                pattern_invalidation.clone(),
+                            );
                         }
+                        extend_throw_path_with_invalidation(
+                            &mut direct_scan_path,
+                            pattern_invalidation,
+                            written,
+                        );
                     }
+                    fallthrough_paths.push(direct_scan_path.clone());
                 }
-
-                let mut incoming = Vec::new();
-                if direct_entry {
-                    incoming.push(path.clone());
-                }
-                incoming.extend(fallthrough_paths);
+                let incoming = std::mem::take(&mut fallthrough_paths);
                 if incoming.is_empty() {
                     fallthrough_paths = Vec::new();
                 } else {
@@ -290,6 +368,7 @@ fn collect_written_names_on_throw_paths_in_stmt(
                         incoming,
                         written,
                         guards,
+                        matching,
                     );
                 }
             }
@@ -299,7 +378,7 @@ fn collect_written_names_on_throw_paths_in_stmt(
                 if reachable.get(default_entry).copied().unwrap_or_default() {
                     let mut incoming = Vec::new();
                     if direct_default_entry {
-                        incoming.push(path.clone());
+                        incoming.push(subject_path.clone());
                     }
                     incoming.extend(fallthrough_paths);
                     if !incoming.is_empty() {
@@ -308,51 +387,34 @@ fn collect_written_names_on_throw_paths_in_stmt(
                             incoming,
                             written,
                             guards,
+                            matching,
                         );
                     }
                 }
             }
 
             if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
-                let mut fallthrough = path;
-                collect_written_names(stmt, &mut fallthrough);
+                let mut fallthrough = subject_path;
+                extend_throw_path_with_invalidation(
+                    &mut fallthrough,
+                    stmt_invalidation(stmt),
+                    written,
+                );
                 next_paths.push(fallthrough);
             }
             return;
         }
-        StmtKind::Try {
-            try_body,
-            catches,
-            finally_body,
-        } => {
-            next_paths.extend(collect_written_names_on_throw_paths_in_block(
-                try_body,
-                vec![path.clone()],
-                written,
-                guards,
-            ));
-            for catch in catches {
-                let mut catch_path = path.clone();
-                if let Some(variable) = catch.variable.as_deref() {
-                    push_written_name(&mut catch_path, variable);
-                }
-                next_paths.extend(collect_written_names_on_throw_paths_in_block(
-                    &catch.body,
-                    vec![catch_path],
-                    written,
-                    guards,
-                ));
+        StmtKind::Try { .. } => {
+            if thrown_types_match(&active_stmt_thrown_types(stmt), matching) {
+                record_throw_path_invalidation(written, &path, stmt_invalidation(stmt));
             }
-            if let Some(body) = finally_body {
-                next_paths.extend(collect_written_names_on_throw_paths_in_block(
-                    body,
-                    vec![path],
-                    written,
-                    guards,
-                ));
-            } else if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
+            if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
                 let mut fallthrough = path;
-                collect_written_names(stmt, &mut fallthrough);
+                extend_throw_path_with_invalidation(
+                    &mut fallthrough,
+                    stmt_invalidation(stmt),
+                    written,
+                );
                 next_paths.push(fallthrough);
             }
             return;
@@ -360,13 +422,17 @@ fn collect_written_names_on_throw_paths_in_stmt(
         _ => {}
     }
 
-    if stmt_may_throw(stmt) {
-        merge_written_path(written, &path);
+    if thrown_types_match(&active_stmt_thrown_types(stmt), matching) {
+        record_throw_path_invalidation(written, &path, stmt_invalidation(stmt));
     }
 
     if matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough) {
         let mut fallthrough = path;
-        collect_written_names(stmt, &mut fallthrough);
+        extend_throw_path_with_invalidation(
+            &mut fallthrough,
+            stmt_invalidation(stmt),
+            written,
+        );
         next_paths.push(fallthrough);
     }
 }
@@ -379,36 +445,64 @@ fn collect_written_names_on_throw_paths_in_if_false_path(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: &Option<Vec<Stmt>>,
     path: Vec<String>,
-    written: &mut Vec<String>,
+    written: &mut ThrowPathInvalidation,
     guards: &GuardState,
+    matching: Option<&ThrownTypes>,
 ) -> Vec<Vec<String>> {
     let Some((condition, body)) = elseif_clauses.first() else {
         return else_body
             .as_ref()
             .map(|body| {
-                collect_written_names_on_throw_paths_in_block(body, vec![path.clone()], written, guards)
+                collect_written_names_on_throw_paths_in_block(
+                    body,
+                    vec![path.clone()],
+                    written,
+                    guards,
+                    matching,
+                )
             })
             .unwrap_or_else(|| vec![path]);
     };
 
-    if expr_effect(condition).may_throw {
-        merge_written_path(written, &path);
+    let condition_invalidation = expr_invalidation(condition);
+    if thrown_types_match(&active_expr_thrown_types(condition), matching) {
+        record_throw_path_invalidation(
+            written,
+            &path,
+            condition_invalidation.clone(),
+        );
     }
+    let mut condition_path = path;
+    extend_throw_path_with_invalidation(
+        &mut condition_path,
+        condition_invalidation,
+        written,
+    );
 
     let mut next_paths = collect_written_names_on_throw_paths_in_block(
         body,
-        vec![path.clone()],
+        vec![condition_path.clone()],
         written,
         &extend_guards(guards, condition, true),
+        matching,
     );
     next_paths.extend(collect_written_names_on_throw_paths_in_if_false_path(
         &elseif_clauses[1..],
         else_body,
-        path,
+        condition_path,
         written,
         &extend_guards(guards, condition, false),
+        matching,
     ));
     next_paths
+}
+
+/// Returns whether a throwing source can enter the selected catch route.
+fn thrown_types_match(thrown: &ThrownTypes, matching: Option<&ThrownTypes>) -> bool {
+    if thrown.is_empty() {
+        return false;
+    }
+    matching.is_none_or(|matching| active_thrown_types_overlap(thrown, matching))
 }
 
 /// Appends all variable names from `path` into `written`, deduplicating
@@ -461,183 +555,6 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
     guards
         .condition_guards
         .retain(|known| !known.names.iter().any(|name| written.iter().any(|written_name| written_name == name)));
-}
-
-/// Recursively collects all variable names written by a statement and its
-/// nested sub-statements, appending them to `written`. Handles assignments,
-/// increments/decrements, loop constructs, try-catch, switch, if/ifdef,
-/// list unpacking, and expression statements.
-fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
-    match &stmt.kind {
-        StmtKind::Assign { name, .. }
-        | StmtKind::TypedAssign { name, .. }
-        | StmtKind::StaticVar { name, .. } => push_written_name(written, name),
-        StmtKind::RefAssign { target, source } => {
-            push_written_name(written, target);
-            // Aliasing a plain variable writes through to it; property/call sources
-            // do not write a local (their reads are tracked separately).
-            if let ExprKind::Variable(source_name) = &source.kind {
-                push_written_name(written, source_name);
-            }
-        }
-        StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => {
-            push_written_name(written, array)
-        }
-        StmtKind::ListUnpack { vars, .. } => {
-            for name in vars {
-                push_written_name(written, name);
-            }
-        }
-        StmtKind::Global { vars } => {
-            for name in vars {
-                push_written_name(written, name);
-            }
-        }
-        StmtKind::ExprStmt(expr) => collect_expr_written_names(expr, written),
-        StmtKind::If {
-            then_body,
-            elseif_clauses,
-            else_body,
-            ..
-        } => {
-            collect_written_names_in_block(then_body, written);
-            for (_, body) in elseif_clauses {
-                collect_written_names_in_block(body, written);
-            }
-            if let Some(body) = else_body {
-                collect_written_names_in_block(body, written);
-            }
-        }
-        StmtKind::IfDef {
-            then_body,
-            else_body,
-            ..
-        } => {
-            collect_written_names_in_block(then_body, written);
-            if let Some(body) = else_body {
-                collect_written_names_in_block(body, written);
-            }
-        }
-        StmtKind::While { body, .. }
-        | StmtKind::DoWhile { body, .. }
-        | StmtKind::NamespaceBlock { body, .. }
-        | StmtKind::IncludeOnceGuard { body, .. } => {
-            collect_written_names_in_block(body, written)
-        }
-        StmtKind::For {
-            init,
-            update,
-            body,
-            ..
-        } => {
-            if let Some(stmt) = init {
-                collect_written_names(stmt, written);
-            }
-            if let Some(stmt) = update {
-                collect_written_names(stmt, written);
-            }
-            collect_written_names_in_block(body, written);
-        }
-        StmtKind::Foreach {
-            array,
-            key_var,
-            value_var,
-            value_by_ref,
-            body,
-        } => {
-            if *value_by_ref {
-                if let Some(root) = lvalue_root(array) {
-                    push_written_name(written, root);
-                }
-            }
-            if let Some(name) = key_var {
-                push_written_name(written, name);
-            }
-            push_written_name(written, value_var);
-            collect_written_names_in_block(body, written);
-        }
-        StmtKind::Switch { cases, default, .. } => {
-            for (_, body) in cases {
-                collect_written_names_in_block(body, written);
-            }
-            if let Some(body) = default {
-                collect_written_names_in_block(body, written);
-            }
-        }
-        StmtKind::Try {
-            try_body,
-            catches,
-            finally_body,
-        } => {
-            collect_written_names_in_block(try_body, written);
-            for catch in catches {
-                if let Some(name) = &catch.variable {
-                    push_written_name(written, name);
-                }
-                collect_written_names_in_block(&catch.body, written);
-            }
-            if let Some(body) = finally_body {
-                collect_written_names_in_block(body, written);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Iterates over a block of statements and collects all written variable
-/// names by delegating to `collect_written_names` for each statement.
-fn collect_written_names_in_block(stmts: &[Stmt], written: &mut Vec<String>) {
-    for stmt in stmts {
-        collect_written_names(stmt, written);
-    }
-}
-
-/// Collects variable names written by expressions: pre/post increment/decrement
-/// and assignment expressions. For assignments, also collects names from the
-/// target (variable, array access, property access) and recursively from
-/// the value and any prelude statements.
-fn collect_expr_written_names(expr: &Expr, written: &mut Vec<String>) {
-    match &expr.kind {
-        ExprKind::PreIncrement(name)
-        | ExprKind::PostIncrement(name)
-        | ExprKind::PreDecrement(name)
-        | ExprKind::PostDecrement(name) => push_written_name(written, name),
-        ExprKind::Assignment {
-            target,
-            value,
-            prelude,
-            ..
-        } => {
-            for stmt in prelude {
-                collect_written_names(stmt, written);
-            }
-            collect_expr_written_names(value, written);
-            collect_assignment_target_written_names(target, written);
-        }
-        _ => {}
-    }
-}
-
-/// Collects variable names written through an assignment target expression.
-/// Handles plain variables, array accesses (collecting the array base name),
-/// and property accesses. Recurses for complex targets but stops at
-/// non-variable non-array-access expressions.
-fn collect_assignment_target_written_names(target: &Expr, written: &mut Vec<String>) {
-    match &target.kind {
-        ExprKind::Variable(name) => push_written_name(written, name),
-        ExprKind::ArrayAccess { array, index } => {
-            if let ExprKind::Variable(name) = &array.kind {
-                push_written_name(written, name);
-            }
-            collect_expr_written_names(array, written);
-            collect_expr_written_names(index, written);
-        }
-        ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. } => {
-            collect_expr_written_names(object, written);
-        }
-        _ => collect_expr_written_names(target, written),
-    }
 }
 
 /// Appends `name` to `written` if it is not already present (deduplication).

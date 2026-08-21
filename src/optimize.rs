@@ -21,6 +21,7 @@ use std::rc::Rc;
 mod control;
 mod effect_analysis;
 mod effects;
+mod exception_flow;
 mod fold;
 mod propagate;
 pub mod reachability;
@@ -30,6 +31,7 @@ use effect_analysis::{
     collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
 };
 use effects::*;
+use exception_flow::{with_exception_flow_analysis, ExceptionFlowAnalysis};
 use fold::*;
 use propagate::*;
 
@@ -184,14 +186,42 @@ type ConstantEnv = HashMap<String, PropagatedValue>;
 pub struct PostTypecheckOptimizer {
     callable_effects: CallableEffectAnalysis,
     by_ref_signatures: ByRefSignatures,
+    exception_flow: Rc<ExceptionFlowAnalysis>,
 }
 
 impl PostTypecheckOptimizer {
     /// Builds the reusable analysis from the program entering post-typecheck optimization.
     pub fn new(program: &Program) -> Self {
+        Self::new_with_optional_type_metadata(program, None)
+    }
+
+    /// Builds reusable analyses with checker function signatures and canonical type hierarchy.
+    pub fn new_with_type_metadata(
+        program: &Program,
+        functions: &HashMap<String, crate::types::FunctionSig>,
+        classes: &HashMap<String, crate::types::ClassInfo>,
+        interfaces: &HashMap<String, crate::types::InterfaceInfo>,
+    ) -> Self {
+        Self::new_with_optional_type_metadata(program, Some((functions, classes, interfaces)))
+    }
+
+    /// Builds callable and exception analyses, optionally using authoritative checker metadata.
+    fn new_with_optional_type_metadata(
+        program: &Program,
+        type_metadata: Option<(
+            &HashMap<String, crate::types::FunctionSig>,
+            &HashMap<String, crate::types::ClassInfo>,
+            &HashMap<String, crate::types::InterfaceInfo>,
+        )>,
+    ) -> Self {
+        let callable_effects = CallableEffectAnalysis::from_program(program);
+        let exception_flow = with_callable_effect_analysis(&callable_effects, || {
+            Rc::new(ExceptionFlowAnalysis::from_program(program, type_metadata))
+        });
         Self {
-            callable_effects: CallableEffectAnalysis::from_program(program),
+            callable_effects,
             by_ref_signatures: collect_by_ref_signatures(program),
+            exception_flow,
         }
     }
 
@@ -227,7 +257,9 @@ impl PostTypecheckOptimizer {
     /// Eliminates dead code using the shared callable-effect summary.
     pub fn eliminate_dead_code(&self, program: Program) -> Program {
         with_callable_effect_analysis(&self.callable_effects, || {
-            with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+            with_exception_flow_analysis(&self.exception_flow, || {
+                with_by_ref_signatures(self.by_ref_signatures.clone(), || dce_block(program))
+            })
         })
     }
 }
