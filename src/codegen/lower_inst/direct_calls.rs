@@ -404,6 +404,20 @@ pub(super) fn materialize_direct_call_arg_for_param(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             Ok(PhpType::Str)
         }
+        PhpType::Object(name)
+            if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, x1");                      // pass the unboxed object payload to the typed parameter
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, rdi");                    // pass the unboxed object payload to the typed parameter
+                }
+            }
+            Ok(PhpType::Object(name))
+        }
         PhpType::Mixed if source_ty.codegen_repr() != PhpType::Mixed => {
             emit_box_current_value_as_mixed(ctx.emitter, source_ty);
             Ok(PhpType::Mixed)
@@ -464,4 +478,3 @@ pub(super) fn emit_mixed_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) 
         }
     }
 }
-

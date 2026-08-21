@@ -25878,7 +25878,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_close",
-      "codegen_line": 1171,
+      "codegen_line": 1162,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -25960,7 +25960,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_copy_handle",
-      "codegen_line": 1307,
+      "codegen_line": 1298,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26042,7 +26042,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_errno",
-      "codegen_line": 1144,
+      "codegen_line": 1135,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26124,7 +26124,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_error",
-      "codegen_line": 1154,
+      "codegen_line": 1145,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26220,7 +26220,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_escape",
-      "codegen_line": 1379,
+      "codegen_line": 1370,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26309,7 +26309,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_exec",
-      "codegen_line": 1129,
+      "codegen_line": 1120,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26405,7 +26405,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_getinfo",
-      "codegen_line": 1186,
+      "codegen_line": 1177,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26494,7 +26494,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_init",
-      "codegen_line": 223,
+      "codegen_line": 214,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26590,7 +26590,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_add_handle",
-      "codegen_line": 1546,
+      "codegen_line": 1529,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26679,7 +26679,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_close",
-      "codegen_line": 1645,
+      "codegen_line": 1628,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26761,7 +26761,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_errno",
-      "codegen_line": 1731,
+      "codegen_line": 1714,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26857,7 +26857,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_exec",
-      "codegen_line": 1585,
+      "codegen_line": 1568,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -26946,7 +26946,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_get_handles",
-      "codegen_line": 1858,
+      "codegen_line": 1841,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27028,7 +27028,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_getcontent",
-      "codegen_line": 1656,
+      "codegen_line": 1639,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27124,7 +27124,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_info_read",
-      "codegen_line": 1625,
+      "codegen_line": 1608,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27197,7 +27197,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_init",
-      "codegen_line": 1535,
+      "codegen_line": 1518,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27285,7 +27285,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_remove_handle",
-      "codegen_line": 1561,
+      "codegen_line": 1544,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27388,7 +27388,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_select",
-      "codegen_line": 1599,
+      "codegen_line": 1582,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27505,7 +27505,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_setopt",
-      "codegen_line": 1699,
+      "codegen_line": 1682,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27601,7 +27601,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_multi_strerror",
-      "codegen_line": 1740,
+      "codegen_line": 1723,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27697,7 +27697,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_pause",
-      "codegen_line": 1401,
+      "codegen_line": 1392,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27786,7 +27786,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_reset",
-      "codegen_line": 1271,
+      "codegen_line": 1262,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -27896,7 +27896,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_setopt",
-      "codegen_line": 271,
+      "codegen_line": 262,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28006,7 +28006,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_setopt_array",
-      "codegen_line": 1120,
+      "codegen_line": 1111,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28095,7 +28095,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_share_close",
-      "codegen_line": 1836,
+      "codegen_line": 1819,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28177,7 +28177,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_share_errno",
-      "codegen_line": 1838,
+      "codegen_line": 1821,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28243,7 +28243,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_share_init",
-      "codegen_line": 1797,
+      "codegen_line": 1780,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28317,7 +28317,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_share_init_persistent",
-      "codegen_line": 1920,
+      "codegen_line": 1903,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28427,7 +28427,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_share_setopt",
-      "codegen_line": 1819,
+      "codegen_line": 1802,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28523,7 +28523,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_share_strerror",
-      "codegen_line": 1846,
+      "codegen_line": 1829,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28605,7 +28605,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_strerror",
-      "codegen_line": 1417,
+      "codegen_line": 1408,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28701,7 +28701,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_unescape",
-      "codegen_line": 1388,
+      "codegen_line": 1379,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28790,7 +28790,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_upkeep",
-      "codegen_line": 1406,
+      "codegen_line": 1397,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],
@@ -28856,7 +28856,7 @@
       "checker_line": null,
       "codegen_file": "src/curl_prelude.rs",
       "codegen_function": "curl_version",
-      "codegen_line": 1430,
+      "codegen_line": 1421,
       "notes": [
         "Implemented by the compiler-injected curl prelude."
       ],

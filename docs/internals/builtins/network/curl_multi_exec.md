@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1585](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1585) (`curl_multi_exec`)
+- **Lowering**: [`src/curl_prelude.rs`:1568](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1568) (`curl_multi_exec`)
 - **Function symbol**: `curl_multi_exec()`
 
 

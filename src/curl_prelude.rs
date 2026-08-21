@@ -77,27 +77,18 @@
 //!   instead of `array|false`. `curl_strerror()` returns `string` rather than `?string`,
 //!   which is not a limitation but a value that is never null. Runtime behaviour is
 //!   otherwise PHP's. `docs/php/curl.md`'s "Differences from PHP" section is where these reach users.
-//! - THE MULTI INTERFACE ADDS FOUR MORE DIVERGENCES OF THE SAME FAMILY, all in its
-//!   surface and all documented at their declarations: `curl_multi_info_read()` leaves its
+//! - THE MULTI INTERFACE ADDS FOUR MORE SIGNATURE DIVERGENCES:
+//!   `curl_multi_info_read()` leaves its
 //!   return type undeclared instead of `array|false` (declaring the union makes a
 //!   `$info === false` guard answer TRUE for a real array once the same variable is later
 //!   indexed — measured, the exact shape `curl_version()` documents); and
 //!   `curl_multi_add_handle()`/`curl_multi_remove_handle()`/`curl_multi_getcontent()` take
-//!   `mixed $handle` instead of `CurlHandle $handle`, with a runtime `instanceof` guard
-//!   that raises php-src's own `TypeError`. That last one is a BACKEND limitation rather
-//!   than a checker one: an object that reaches the caller as a `mixed` — which every
-//!   handle read out of `curl_multi_info_read()`'s array or `curl_multi_get_handles()`'s
-//!   list necessarily is — arrives at a TYPED object parameter as the boxed Mixed cell, so
-//!   the callee reads the cell's header where the object's slots should be and
-//!   `$handle->__elephc_handle` comes back `null`. A `mixed` parameter receives the object
-//!   itself. Without this, `curl_multi_getcontent($info['handle'])` — the canonical PHP
-//!   multi loop — would be a compile error, or, written with the `instanceof` narrowing
-//!   the checker accepts, a SILENTLY WRONG answer.
-//! - THE SHARE INTERFACE ADDS NO NEW SIGNATURE DIVERGENCE of the union-return or
-//!   mixed-parameter families above — `CurlShareHandle`/`CurlSharePersistentHandle` are
-//!   never read back out of a `mixed` array/return slot the way a multi-attached
-//!   `CurlHandle` is, so `curl_share_setopt()`/`curl_share_errno()`/`curl_share_close()`
-//!   stay typed `CurlShareHandle` throughout. It DOES add one new `curl_setopt()`
+//!   `mixed $handle` instead of `CurlHandle $handle`, with a runtime `instanceof` guard.
+//!   This is now a CHECKER limitation only: call lowering correctly unboxes a Mixed-sourced
+//!   object after `instanceof` narrowing, but the checker rejects the canonical unguarded
+//!   `$info['handle']` / list-element call before it can reach that lowering. Keeping the
+//!   public parameter `mixed` lets the wrapper perform the runtime check PHP performs.
+//! - THE SHARE INTERFACE ADDS NO NEW SIGNATURE DIVERGENCE of those families. It DOES add one new `curl_setopt()`
 //!   `$kind` (`7`, `KIND_SHARE`): `CURLOPT_SHARE`'s value is the ONE object read out of
 //!   `curl_setopt()`'s `mixed $value` in this whole file, handled before the scalar-type
 //!   guard (see the `if ($kind === 7)` branch below) and requiring an `elephc_curl_easy_
@@ -1478,15 +1469,7 @@ final class CurlMultiHandle {
         return $h;
     }
 
-    // `mixed $handle`, NOT `CurlHandle $handle`, and that is FORCED BY THE BACKEND, not a
-    // looseness: a value that reached the caller as a `mixed` (an array element, e.g.
-    // `$info['handle']`) and is then passed to a TYPED object parameter arrives as the
-    // boxed Mixed cell rather than the object, so every property read inside the callee
-    // reads the cell's header instead of the object's slots. Measured: a `CurlHandle`
-    // whose `$__elephc_handle` is a live resource reads back as `null` through a typed
-    // parameter and as the resource through a `mixed` one. The runtime guard at each
-    // public entry point below is what keeps the type honest.
-    public function __elephc_attach(int $id, mixed $handle): void {
+    public function __elephc_attach(int $id, CurlHandle $handle): void {
         $this->__elephc_ids[] = $id;
         $this->__elephc_handles[] = $handle;
     }

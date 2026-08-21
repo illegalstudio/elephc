@@ -1,30 +1,16 @@
 //! Purpose:
-//! Pins a KNOWN MISCOMPILE, not a desired behaviour: an object that reaches a call site as a
-//! `mixed` (read out of an array, an array property, or any other Mixed-typed storage) and is
-//! then passed to a parameter TYPED with its class arrives as the boxed Mixed cell instead of
-//! the object, so every property read inside the callee reads the cell's header where the
-//! object's slots should be.
+//! Regression coverage for objects that reach a typed call parameter through `mixed` storage.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - **THE ASSERTIONS BELOW DESCRIBE WRONG OUTPUT ON PURPOSE.** Real PHP 8.5 answers
-//!   `resource/1` for every read in the fixture; elephc answers `NULL/0` through the typed
-//!   parameter. When the miscompile is fixed, this file MUST be updated (the expectations
-//!   become PHP's) rather than deleted — the test failing is the signal that it was fixed.
-//! - WHY IT IS PINNED AT ALL: the curl multi surface works around it. `curl_multi_info_read()`
-//!   returns its `handle` inside a PHP array, so every handle a caller pulls out of that array
-//!   is a `mixed`; `curl_multi_add_handle()` / `curl_multi_remove_handle()` /
-//!   `curl_multi_getcontent()` therefore declare `mixed $handle` plus a runtime `instanceof`
-//!   guard instead of php-src's `CurlHandle $handle` (see `src/curl_prelude.rs`'s header).
-//!   Tasks that add `CurlShareHandle` / `CURLFile` will meet the same wall. Without this pin
-//!   the workaround looks like an arbitrary divergence.
-//! - THE CHECKER ALREADY REFUSES the unguarded form (`Mixed` where `Object(C)` is expected is
-//!   a compile error), so the ONLY way to reach the miscompile is the `instanceof` narrowing
-//!   the checker accepts — which is what the fixture does, and what makes it silent.
-//! - IDENTITY IS NOT AFFECTED: `===` compares the same object either way, which is why the
-//!   curl identity map is sound while property reads through a typed parameter are not.
+//! - The checker accepts the typed call after `instanceof` narrowing, while EIR still carries
+//!   the source in the boxed `Mixed` representation used by array and property storage.
+//! - Call materialization must unbox that source before loading the typed-object ABI slot.
+//! - Curl's guarded multi-handle path depends on this after its public `mixed` parameter has
+//!   been narrowed; the public signature stays `mixed` because the checker still rejects an
+//!   unguarded Mixed array element where a typed object parameter is declared.
 
 use crate::support::*;
 
@@ -40,7 +26,6 @@ use crate::support::*;
 /// typed-param=resource/1
 /// ```
 ///
-/// elephc differs on the LAST line only.
 const MIXED_SOURCED_OBJECT_SOURCE: &str = r#"<?php
 final class Holder {
     public mixed $payload = null;
@@ -64,28 +49,17 @@ echo "mixed-param=", read_mixed($fromProperty), "\n";
 if ($fromProperty instanceof Holder) { echo "typed-param=", read_typed($fromProperty), "\n"; }
 "#;
 
-/// KNOWN LIMITATION PIN — the last line is WRONG and this test asserts the wrong value.
-///
-/// `typed-param=NULL/0` is elephc reading the boxed Mixed cell's own words (its tag and its
-/// payload pointer) as if they were `Holder`'s `$payload` and `$flag` slots. PHP 8.5 prints
-/// `typed-param=resource/1`. Update this expectation — do not delete the test — when the
-/// backend passes the object rather than its box.
+/// Verifies that a Mixed-sourced object reaches a typed parameter as its object payload.
 #[test]
-fn test_mixed_sourced_object_through_typed_param_is_miscompiled() {
+fn test_mixed_sourced_object_through_typed_param_is_unboxed() {
     let out = compile_and_run(MIXED_SOURCED_OBJECT_SOURCE);
     assert_eq!(
         out,
-        "identity=same\ndirect-typed=resource/1\nmixed-param=resource/1\ntyped-param=NULL/0\n",
-        "this fixture PINS a known miscompile: PHP answers typed-param=resource/1. \
-         If this assertion now fails with the PHP value, the backend was fixed — update \
-         the expectation here and drop the `mixed $handle` workaround documented in \
-         src/curl_prelude.rs"
+        "identity=same\ndirect-typed=resource/1\nmixed-param=resource/1\ntyped-param=resource/1\n"
     );
 }
 
-/// The workaround the curl prelude uses, pinned as WORKING: the same object through a
-/// `mixed` parameter with a runtime `instanceof` guard reads correctly, and rejects a
-/// non-object argument the way a declared type would.
+/// Verifies that an explicit Mixed parameter can still guard and read an object dynamically.
 #[test]
 fn test_mixed_param_with_instanceof_guard_reads_correctly() {
     let out = compile_and_run(

@@ -829,13 +829,13 @@ signatures do not allow either.
 
 Three multi functions take `mixed $handle` instead of `CurlHandle $handle`, with
 a runtime `instanceof` guard that raises php-src's own `TypeError`:
-`curl_multi_add_handle()`, `curl_multi_remove_handle()`,
-`curl_multi_getcontent()`. This is deliberate and load-bearing: a handle read out
-of `curl_multi_info_read()`'s array or `curl_multi_get_handles()`'s list arrives
-as a `mixed`, and passing a `mixed`-sourced object to a *typed* object parameter
-is a known miscompile (documented in
-[PHP compatibility](compatibility.md)). Without the `mixed` parameter, the
-canonical multi loop would either be a compile error or silently wrong.
+`curl_multi_add_handle()`, `curl_multi_remove_handle()`, and
+`curl_multi_getcontent()`. A handle read out of `curl_multi_info_read()`'s array
+or `curl_multi_get_handles()`'s list has static type `mixed`; elephc's checker
+does not yet defer that object-parameter check to runtime, so a direct typed
+signature would reject the canonical PHP loop before code generation. Explicit
+`instanceof` narrowing is compiled correctly; the wider wrapper signature is
+kept only so the wrapper can perform that runtime guard itself.
 
 ### Errors raised where PHP is silent
 
