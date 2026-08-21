@@ -2,7 +2,7 @@
 title: "join()"
 description: "Joins array elements into a single string using a separator (alias of implode)."
 sidebar:
-  order: 420
+  order: 430
 ---
 
 ## join()

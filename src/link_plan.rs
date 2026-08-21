@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 const EMBEDDED_BRIDGE_RELATIONSHIPS: &[(&str, &[&str])] = &[(
     "elephc_magician",
-    &["elephc_crypto", "elephc_phar"],
+    &["elephc_crypto", "elephc_iconv", "elephc_phar"],
 )];
 
 /// Identifies which compiler surface contributed a linker input.

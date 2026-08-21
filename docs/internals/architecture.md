@@ -343,6 +343,7 @@ src/
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
 │   ├── dynamic_new.rs         Builtin-class allow-list metadata for dynamic object construction
 │   ├── hash_crypto.rs         `hash()` / `hash_hmac()` routing through the elephc-crypto staticlib
+│   ├── iconv_bridge.rs        `iconv*()` entry-point publication into runtime function-pointer slots
 │   ├── phar_stream.rs         `phar://` URL and PHAR archive metadata parsing for I/O lowering
 │   ├── runtime_features.rs    Runtime helper-family derivation keeping optional native link deps pay-for-use
 │   ├── stream_filters/        zlib/bzip2/iconv stream-filter attachment helper emitters
@@ -408,6 +409,7 @@ src/
 crates/
 ├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
+├── elephc-iconv/              Charset-conversion and RFC 2047 MIME bridge staticlib behind PHP `iconv*()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
 ├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude

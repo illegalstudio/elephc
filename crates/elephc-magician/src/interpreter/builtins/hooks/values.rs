@@ -279,6 +279,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StrSplit,
     /// Dispatches `str_word_count(...)`.
     StrWordCount,
+    /// Dispatches the whole `iconv*` extension family.
+    Iconv,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
     /// Dispatches `str_repeat(...)`.
@@ -661,6 +663,7 @@ impl EvalValuesHook {
                 ),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::Iconv => eval_iconv_values(name, evaluated_args, context, values),
             Self::Strlen => match name {
                 "mb_strlen" => match evaluated_args {
                     [value] => eval_mb_strlen_result(*value, None, context, values),

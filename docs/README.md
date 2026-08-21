@@ -47,6 +47,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Arrays](php/arrays.md) — indexed, associative, copy-on-write, 50+ built-in array functions
 - [Math](php/math.md) — abs, floor, ceil, round, trigonometry, logarithms, random, constants
 - [BCMath](php/bcmath.md) — exact arbitrary-precision decimal arithmetic, scale, rounding, and errors
+- [iconv](php/iconv.md) — character-set conversion, `//TRANSLIT`/`//IGNORE`, character-oriented string functions, RFC 2047 MIME headers, and the encoding trio
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals

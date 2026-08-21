@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **473 / 2030** (23%).
+Overall builtin coverage: **483 / 2030** (24%).
 
 ## Builtin coverage by PHP module
 
@@ -33,7 +33,7 @@ Overall builtin coverage: **473 / 2030** (23%).
 | `gettext` | 0 / 10 | 0% | 0 | 0 |
 | `gmp` | 0 / 51 | 0% | 0 | 0 |
 | `hash` | 9 / 15 | 60% | 9 | 9 |
-| `iconv` | 0 / 10 | 0% | 0 | 0 |
+| `iconv`† | 10 / 10 | 100% | 10 | 10 |
 | `intl` | 0 / 183 | 0% | 0 | 0 |
 | `json` | 5 / 5 | 100% | 5 | 5 |
 | `ldap` | 0 / 55 | 0% | 0 | 0 |
@@ -111,6 +111,7 @@ In addition, elephc implements 3 PHP language constructs that PHP does not count
 | [Reflection](./classes.md) ([PHP](https://www.php.net/manual/en/book.reflection.php)) | 🟡 Partial |  |
 | [DateTime](./datetime.md) ([PHP](https://www.php.net/manual/en/book.datetime.php)) | 🟡 Partial |  |
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
+| [iconv](./iconv.md) ([PHP](https://www.php.net/manual/en/book.iconv.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |

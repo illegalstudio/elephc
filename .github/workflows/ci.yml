@@ -23,6 +23,7 @@ env:
     -p elephc-pdo
     -p elephc-crypto
     -p elephc-bcmath
+    -p elephc-iconv
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
@@ -77,7 +78,7 @@ jobs:
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
-        # libelephc_phar.a (PHAR),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -148,7 +149,7 @@ jobs:
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
-        # libelephc_phar.a (PHAR),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -214,7 +215,7 @@ jobs:
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
-        # libelephc_phar.a (PHAR),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build

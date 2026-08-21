@@ -215,6 +215,14 @@ evidence = "tests/codegen/calendar.rs"
 modules  = ["calendar"]
 
 [[extensions]]
+feature  = "iconv"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.iconv.php"
+docs     = "docs/php/iconv.md"
+evidence = "tests/codegen/strings/iconv.rs"
+modules  = ["iconv"]
+
+[[extensions]]
 feature  = "GD / image"
 status   = "partial"
 php      = "https://www.php.net/manual/en/book.image.php"

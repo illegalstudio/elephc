@@ -86,6 +86,17 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         php_extension: Some("bcmath"),
     },
     BridgeStaticlib {
+        lib_name: "elephc_iconv",
+        env_var: "ELEPHC_ICONV_LIB_DIR",
+        crate_name: "elephc-iconv",
+        flag_name: "iconv",
+        whole_archive: false,
+        macos_frameworks: &[],
+        needs_libdl: true,
+        // The charset bridge implements PHP's procedural `iconv` extension.
+        php_extension: Some("iconv"),
+    },
+    BridgeStaticlib {
         lib_name: "elephc_phar",
         env_var: "ELEPHC_PHAR_LIB_DIR",
         crate_name: "elephc-phar",
@@ -531,6 +542,32 @@ impl BridgeStaticlib {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every bridge must be built and archived by CI, or its shards cannot link.
+    ///
+    /// A shard runs from a nextest archive with no source tree, so a bridge missing from
+    /// either list fails at link time on CI while passing locally, where the compiler
+    /// builds bridges on demand.
+    #[test]
+    fn every_bridge_is_built_and_archived_by_ci() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+            .expect("read ci workflow");
+        let archive = std::fs::read_to_string(root.join(".config/nextest.toml"))
+            .expect("read nextest config");
+        for bridge in BRIDGES {
+            assert!(
+                workflow.contains(&format!("-p {}", bridge.crate_name)),
+                "{} is missing from BRIDGE_CRATES in .github/workflows/ci.yml",
+                bridge.crate_name
+            );
+            assert!(
+                archive.contains(&format!("debug/lib{}.a", bridge.lib_name)),
+                "lib{}.a is missing from the archive include list in .config/nextest.toml",
+                bridge.lib_name
+            );
+        }
+    }
 
     /// Creates an empty directory unique across parallel test threads.
     fn scratch(name: &str) -> PathBuf {

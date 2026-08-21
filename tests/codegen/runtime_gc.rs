@@ -11,6 +11,8 @@
 mod basics;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
+#[path = "runtime_gc/iconv.rs"]
+mod iconv;
 #[path = "runtime_gc/parse_url.rs"]
 mod parse_url;
 #[path = "runtime_gc/regressions.rs"]

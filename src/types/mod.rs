@@ -52,6 +52,7 @@ mod schema;
 pub(crate) mod session_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
+pub(crate) mod iconv_constants;
 pub(crate) mod stream_constants;
 pub(crate) mod string_constants;
 /// Type checker diagnostics and warnings.

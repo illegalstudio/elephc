@@ -15,6 +15,7 @@ categories = ["compilers", "command-line-utilities"]
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
 # libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
 # (hash/HMAC family), libelephc_bcmath.a (arbitrary-precision decimal math),
+# libelephc_iconv.a (character-set conversion and RFC 2047 MIME headers),
 # libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo), and
@@ -22,8 +23,8 @@ categories = ["compilers", "command-line-utilities"]
 # (optional eval runtime) into target/<profile>/, where linker.rs locates them
 # for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]

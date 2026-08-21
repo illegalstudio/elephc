@@ -882,6 +882,15 @@ mod tests {
         assert!(!config.web);
     }
 
+    /// Verifies `--with-iconv` records the charset bridge for force-linking.
+    #[test]
+    fn with_iconv_records_forced_crate() {
+        let args = vec!["elephc".into(), "--with-iconv".into(), "app.php".into()];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("iconv"));
+        assert!(!config.web);
+    }
+
     /// Verifies `--with-regex` records the dynamic-code regex capability without web mode.
     #[test]
     fn with_regex_records_runtime_capability() {

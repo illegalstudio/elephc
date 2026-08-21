@@ -91,14 +91,15 @@ Some optional features are implemented as Rust *bridge crates* (`staticlib`
 archives) that elephc links into the program: `pdo` (database access), `tls`
 (`https://`/`ftps://` streams), `crypto` (the `hash()`/`md5()`/`sha1()` family),
 `bcmath` (exact arbitrary-precision decimal arithmetic),
+`iconv` (character-set conversion and the character-oriented `iconv_*` functions),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
 processing), `eval` (the Magician interpreter fallback for dynamic `eval()`),
 and `web` (the `--web` server).
 
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
-calling a `bc*` function pulls in `bcmath`, referencing `PDO` pulls in `pdo`,
-and so on. An `eval()` call pulls in Magician
+calling a `bc*` function pulls in `bcmath`, calling an `iconv*` function pulls in
+`iconv`, referencing `PDO` pulls in `pdo`, and so on. An `eval()` call pulls in Magician
 only when it needs runtime parsing: eligible literal fragments can be parsed at
 compile time and lowered to native EIR without the interpreter bridge. Programs
 that do not need a feature never link its crate, so binaries stay small.
@@ -114,6 +115,7 @@ that detection cannot see. The flag is repeatable:
 elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
 elephc app.php --with-bcmath
+elephc app.php --with-iconv
 elephc app.php --with-eval
 ```
 

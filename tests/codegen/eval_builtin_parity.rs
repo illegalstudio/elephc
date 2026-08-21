@@ -606,3 +606,82 @@ echo implode(",", $d);');
         "1,90,91,92,4,5|2,3:1,90,91,92,4,5|2,3:0|1,7,8,2,3:1,9,3"
     );
 }
+
+/// Verifies dynamic eval reaches Magician's iconv conversion and character-count paths.
+#[test]
+fn test_eval_iconv_conversion_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo bin2hex(iconv("UTF-8", "ISO-8859-1", "café"));
+echo ":";
+echo iconv_strlen("héllo");
+echo ":";
+echo iconv_substr("héllo", 1, 3);
+echo ":";
+echo iconv_strpos("héllo", "l");
+echo ":";
+echo iconv_strrpos("abcabc", "bc");');
+"#,
+    );
+
+    assert_eq!(out, "636166e9:5:éll:2:4");
+}
+
+/// Verifies dynamic eval reaches Magician's MIME encoder, decoder, and header decoder.
+#[test]
+fn test_eval_iconv_mime_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo iconv_mime_encode("Subject", "Prüfung", ["scheme" => "Q"]);
+echo "|";
+echo iconv_mime_decode("Subject: =?ISO-8859-1?Q?Pr=FCfung?=");
+echo "|";
+$headers = iconv_mime_decode_headers("A: 1
+B: 2
+A: 3");
+echo $headers["A"][0], $headers["A"][1], $headers["B"];');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "Subject: =?UTF-8?Q?Pr=C3=BCfung?=|Subject: Prüfung|132"
+    );
+}
+
+/// Verifies eval shares the process-wide encoding trio with the native builtins.
+#[test]
+fn test_eval_iconv_encoding_state_is_shared() {
+    let out = compile_and_run(
+        r#"<?php
+iconv_set_encoding("internal_encoding", "ISO-8859-1");
+eval('echo iconv_get_encoding("internal_encoding");
+echo ":";
+echo iconv_strlen("héllo");
+echo ":";
+echo iconv_set_encoding("internal_encoding", "UTF-8") ? "yes" : "no";');
+echo ":", iconv_strlen("héllo");
+"#,
+    );
+
+    assert_eq!(out, "ISO-8859-1:6:yes:5");
+}
+
+/// Verifies eval raises the same catchable `ValueError` as the compiled backend.
+#[test]
+fn test_eval_iconv_strpos_offset_error_parity() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    eval('iconv_strpos("héllo", "l", 99);');
+} catch (\ValueError $error) {
+    echo get_class($error), "|", $error->getMessage();
+}
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "ValueError|iconv_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"
+    );
+}

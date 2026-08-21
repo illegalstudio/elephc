@@ -1,0 +1,12 @@
+[package]
+name = "elephc-iconv"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PHP iconv extension engine and C ABI for elephc"
+publish = false
+
+# staticlib: linked into compiled PHP programs. rlib: lets Magician and unit
+# tests consume the same Rust implementation instead of a second port.
+[lib]
+crate-type = ["staticlib", "rlib"]

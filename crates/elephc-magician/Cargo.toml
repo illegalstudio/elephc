@@ -12,6 +12,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }
 elephc-crypto = { path = "../elephc-crypto" }
+elephc-iconv = { path = "../elephc-iconv" }
 elephc-phar = { path = "../elephc-phar" }
 flate2 = "1"
 inventory = "0.3"

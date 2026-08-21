@@ -609,3 +609,99 @@ fn test_error_openssl_encrypt_tag_must_be_variable() {
         "openssl_encrypt(): Argument #6 ($tag) could not be passed by reference",
     );
 }
+
+expect_builtin_arity_error!(
+    test_error_iconv_wrong_args,
+    "<?php iconv('UTF-8');",
+    "iconv() takes exactly 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_strlen_wrong_args,
+    "<?php iconv_strlen();",
+    "iconv_strlen() takes 1 or 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_substr_wrong_args,
+    "<?php iconv_substr('abc');",
+    "iconv_substr() takes 2 to 4 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_strpos_wrong_args,
+    "<?php iconv_strpos('abc');",
+    "iconv_strpos() takes 2 to 4 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_strrpos_wrong_args,
+    "<?php iconv_strrpos('abc');",
+    "iconv_strrpos() takes 2 or 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_mime_encode_wrong_args,
+    "<?php iconv_mime_encode('Subject');",
+    "iconv_mime_encode() takes 2 or 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_mime_decode_wrong_args,
+    "<?php iconv_mime_decode();",
+    "iconv_mime_decode() takes 1 to 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_mime_decode_headers_wrong_args,
+    "<?php iconv_mime_decode_headers();",
+    "iconv_mime_decode_headers() takes 1 to 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_get_encoding_wrong_args,
+    "<?php iconv_get_encoding('all', 'extra');",
+    "iconv_get_encoding() takes at most 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_iconv_set_encoding_wrong_args,
+    "<?php iconv_set_encoding('internal_encoding');",
+    "iconv_set_encoding() takes exactly 2 arguments"
+);
+
+/// Verifies `iconv()` rejects a statically non-string charset argument.
+#[test]
+fn test_error_iconv_charset_type() {
+    expect_error(
+        "<?php iconv([1, 2], 'UTF-8', 'x');",
+        "iconv() from_encoding argument must be string",
+    );
+}
+
+/// Verifies `iconv_strlen()` rejects a statically non-string subject.
+#[test]
+fn test_error_iconv_strlen_string_type() {
+    expect_error(
+        "<?php iconv_strlen([1, 2]);",
+        "iconv_strlen() string argument must be string",
+    );
+}
+
+/// Verifies the nullable `$encoding` parameter still rejects a container argument.
+#[test]
+fn test_error_iconv_strlen_encoding_type() {
+    expect_error(
+        "<?php iconv_strlen('abc', [1, 2]);",
+        "iconv_strlen() encoding argument must be string or null",
+    );
+}
+
+/// Verifies `iconv_mime_encode()` rejects a non-array `$options` argument.
+#[test]
+fn test_error_iconv_mime_encode_options_type() {
+    expect_error(
+        "<?php iconv_mime_encode('Subject', 'value', 'not-an-array');",
+        "iconv_mime_encode() options argument must be array",
+    );
+}

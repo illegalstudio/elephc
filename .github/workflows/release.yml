@@ -154,7 +154,7 @@ jobs:
           echo "Verified release binary version: ${ACTUAL}"
 
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -169,6 +169,7 @@ jobs:
             libelephc_pdo.a \
             libelephc_crypto.a \
             libelephc_bcmath.a \
+            libelephc_iconv.a \
             libelephc_phar.a \
             libelephc_tz.a \
             libelephc_image.a \
@@ -242,6 +243,7 @@ jobs:
               lib.install "libelephc_pdo.a"
               lib.install "libelephc_crypto.a"
               lib.install "libelephc_bcmath.a"
+              lib.install "libelephc_iconv.a"
               lib.install "libelephc_phar.a"
               lib.install "libelephc_tz.a"
               lib.install "libelephc_image.a"
