@@ -27,69 +27,16 @@ fn php_visible_extension_builtins() -> Vec<String> {
     names
 }
 
-/// Every injected prelude that can declare a PHP-visible builtin, by name.
+/// Every injected prelude's declarations, as the AST the pipeline really injects.
 ///
-/// `prelude_contracts_match_their_injected_signatures` requires each
-/// `BackendImplementation::Prelude` contract to be declared by exactly one of these,
-/// so a second prelude quietly redeclaring a name is a failure, not a coin toss.
-const PRELUDE_SOURCES: &[(&str, &str)] = &[
-    ("hash_prelude", crate::hash_prelude::HASH_PRELUDE_SRC),
-    ("curl_prelude", crate::curl_prelude::CURL_PRELUDE_SRC),
-    ("pdo_prelude", crate::pdo_prelude::PDO_PRELUDE_SRC),
-    ("tz_prelude", crate::tz_prelude::TZ_PRELUDE_SRC),
-    ("var_export_prelude", crate::var_export_prelude::VAR_EXPORT_PRELUDE_SRC),
-    ("image_prelude", crate::image_prelude::IMAGE_PRELUDE_SRC),
-    ("web_prelude", crate::web_prelude::WEB_PRELUDE_SRC),
-];
-
-/// The preludes whose PHP-visible surface the shared builtin catalog claims, each with
-/// whether this build's catalog actually publishes that surface.
-///
-/// The curl slice is feature-gated (`catalog_curl.rs`), so with the root `curl` feature
-/// off the catalog does not claim the curl prelude's PHP surface AT ALL and
-/// "declared implies contracted" is simply not an invariant of that configuration —
-/// asserting it there would fail on all thirty-four names for no defect. See
-/// `catalog_hosted_preludes_declare_no_uncontracted_php_function` for why the other five
-/// preludes in `PRELUDE_SOURCES` are not in this list in any configuration.
-const CATALOG_HOSTED_PRELUDES: &[(&str, &str, bool)] = &[
-    ("hash_prelude", crate::hash_prelude::HASH_PRELUDE_SRC, true),
-    (
-        "curl_prelude",
-        crate::curl_prelude::CURL_PRELUDE_SRC,
-        cfg!(feature = "curl"),
-    ),
-];
-
-/// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
-/// with the reason each exclusion is correct rather than an oversight.
-const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
-    "curl_file_create",
-    "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
-     is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
-     resolves through the native-class fallback, see elephc-magician's \
-     interpreter::builtins::curl module doc. A contract would need an eval binding that \
-     does not exist, or an EvalImplementationPending label that would be false because \
-     eval() can already call it. Consequence, accepted: the PHP comparison page counts \
-     the curl module 32/33 rather than 33/33.",
-)];
-
-/// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
-///
-/// `--strict-php` hides extension builtins at the catalog level with no notion of code origin,
-/// so a prelude calling one (instead of its `internal: true` `__elephc_*` alias) would break
-/// strict-mode compiles of programs that trigger that prelude's injection.
-///
-/// THIS USED TO BE HALF A GATE. Every prelude was PHP text, and the audit was a `grep` for
-/// `name(` that tolerated bare mentions in comments and had to reason about the character before
-/// the match to tell a call from `elephc_pdo_column_data_ptr(` or `->ptr(`. Now that every
-/// prelude builds its declarations in Rust, the audit just reads the call sites off the AST —
-/// and `called_function_names` panics on any node it does not model, so a prelude that grows a
-/// construct this audit cannot see fails loudly instead of silently leaving the net.
-#[test]
-fn preludes_built_in_rust_never_call_php_visible_extension_builtins() {
-    let extension_names = php_visible_extension_builtins();
-
-    let built: &[(&str, crate::parser::ast::Program)] = &[
+/// TEN ARE BUILT IN RUST and one is not: `curl_prelude` still tokenizes and parses PHP
+/// text at injection time (see `crate::curl_prelude::inject_if_used_for_version` for the
+/// deviation and the ROADMAP entry for the transcription that removes it). Parsing it
+/// HERE is what keeps the curl surface inside the audits below, which the conversion to
+/// built preludes re-expressed over ASTs — a source-text prelude left out of them would be
+/// silently unaudited rather than loudly unconverted.
+fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program)> {
+    vec![
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
         ("tz_prelude", crate::tz_prelude::tz_declarations()),
         (
@@ -108,6 +55,7 @@ fn preludes_built_in_rust_never_call_php_visible_extension_builtins() {
             ),
         ),
         ("image_prelude", crate::image_prelude::image_declarations()),
+        ("curl_prelude", parsed_curl_prelude()),
         (
             "version_prelude",
             crate::version_prelude::version_declarations(
@@ -138,10 +86,98 @@ fn preludes_built_in_rust_never_call_php_visible_extension_builtins() {
             ),
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
-    ];
+    ]
+}
+
+/// Parses `CURL_PRELUDE_SRC` exactly as `curl_prelude::inject_if_used_for_version` does.
+fn parsed_curl_prelude() -> crate::parser::ast::Program {
+    let tokens = crate::lexer::tokenize(crate::curl_prelude::CURL_PRELUDE_SRC)
+        .expect("curl prelude must tokenize");
+    crate::parser::parse_internal(&tokens).expect("curl prelude must parse")
+}
+
+/// Every injected prelude rendered back to PHP source, for the two audits that read
+/// DECLARATION TEXT rather than call sites.
+///
+/// The signature audits compare a declared parameter's type spelling and its default
+/// EXPRESSION against the catalog, and `crate::synthetic_class::print` is the faithful
+/// rendering of a built program — `printing_round_trips` re-parses its output and compares
+/// node for node over every built prelude, so an assertion made against this text is as
+/// strong as one made against hand-written source. The curl prelude contributes its real
+/// source, which is the artifact in its case.
+///
+/// `prelude_contracts_match_their_injected_signatures` requires each
+/// `BackendImplementation::Prelude` contract to be declared by exactly one of these, so a
+/// second prelude quietly redeclaring a name is a failure, not a coin toss.
+fn prelude_sources() -> Vec<(&'static str, String)> {
+    injected_prelude_programs()
+        .into_iter()
+        .map(|(name, program)| {
+            let source = if name == "curl_prelude" {
+                crate::curl_prelude::CURL_PRELUDE_SRC.to_string()
+            } else {
+                crate::synthetic_class::print::print_program(&program)
+            };
+            (name, source)
+        })
+        .collect()
+}
+
+/// The preludes whose PHP-visible surface the shared builtin catalog claims, each with
+/// whether this build's catalog actually publishes that surface.
+///
+/// The curl slice is feature-gated (`catalog_curl.rs`), so with the root `curl` feature
+/// off the catalog does not claim the curl prelude's PHP surface AT ALL and
+/// "declared implies contracted" is simply not an invariant of that configuration —
+/// asserting it there would fail on all thirty-four names for no defect. See
+/// `catalog_hosted_preludes_declare_no_uncontracted_php_function` for why the other
+/// preludes in `prelude_sources` are not in this list in any configuration.
+fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
+    prelude_sources()
+        .into_iter()
+        .filter_map(|(name, source)| match name {
+            "hash_prelude" => Some((name, source, true)),
+            "curl_prelude" => Some((name, source, cfg!(feature = "curl"))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// PHP-visible functions a catalog-hosted prelude declares WITHOUT a shared contract,
+/// with the reason each exclusion is correct rather than an oversight.
+const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
+    "curl_file_create",
+    "a plain alias of the CURLFile constructor. It has no `builtin!` binding (the prelude \
+     is the whole implementation) and no `eval_builtin!` home either — inside eval() it \
+     resolves through the native-class fallback, see elephc-magician's \
+     interpreter::builtins::curl module doc. A contract would need an eval binding that \
+     does not exist, or an EvalImplementationPending label that would be false because \
+     eval() can already call it. Consequence, accepted: the PHP comparison page counts \
+     the curl module 32/33 rather than 33/33.",
+)];
+
+/// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
+///
+/// `--strict-php` hides extension builtins at the catalog level with no notion of code origin,
+/// so a prelude calling one (instead of its `internal: true` `__elephc_*` alias) would break
+/// strict-mode compiles of programs that trigger that prelude's injection.
+///
+/// THIS USED TO BE HALF A GATE. Every prelude was PHP text, and the audit was a `grep` for
+/// `name(` that tolerated bare mentions in comments and had to reason about the character before
+/// the match to tell a call from `elephc_pdo_column_data_ptr(` or `->ptr(`. Now the audit reads
+/// the call sites off the AST — and `called_function_names` panics on any node it does not
+/// model, so a prelude that grows a construct this audit cannot see fails loudly instead of
+/// silently leaving the net.
+///
+/// `curl_prelude` is the one member that is parsed rather than built (see
+/// `injected_prelude_programs`); it is audited through the same AST path, because the gate is
+/// about what a prelude CALLS, not about how its declarations were produced.
+#[test]
+fn injected_preludes_never_call_php_visible_extension_builtins() {
+    let extension_names = php_visible_extension_builtins();
 
     let mut violations: Vec<String> = Vec::new();
-    for (prelude, program) in built {
+    for (prelude, program) in &injected_prelude_programs() {
         let called = crate::synthetic_class::called_function_names(program);
         for name in &extension_names {
             if called.iter().any(|call| call.eq_ignore_ascii_case(name)) {
@@ -233,6 +269,7 @@ struct PreludeParam {
 /// contracts whenever the root `curl` feature publishes them.
 #[test]
 fn prelude_contracts_match_their_injected_signatures() {
+    let sources = prelude_sources();
     let mut checked: Vec<&str> = Vec::new();
     let mut curl_checked = 0usize;
     for contract in elephc_builtin_contract::contracts() {
@@ -243,17 +280,17 @@ fn prelude_contracts_match_their_injected_signatures() {
             continue;
         }
 
-        let found = PRELUDE_SOURCES
+        let found = sources
             .iter()
             .filter_map(|(prelude, source)| {
                 parse_prelude_declaration(source, contract.name).map(|params| (*prelude, params))
             })
             .collect::<Vec<_>>();
-        let sources = found.iter().map(|(prelude, _)| *prelude).collect::<Vec<_>>();
+        let declaring = found.iter().map(|(prelude, _)| *prelude).collect::<Vec<_>>();
         assert_eq!(
             found.len(),
             1,
-            "{} must be declared by exactly one prelude, found {sources:?}",
+            "{} must be declared by exactly one prelude, found {declaring:?}",
             contract.name
         );
 
@@ -449,8 +486,17 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         TypeSpec::Str => "string",
         TypeSpec::Bool => "bool",
         TypeSpec::Void => "void",
+        // Neither is a PHP scalar, and neither is `Mixed`'s open surface: `Ptr` is elephc's
+        // own `ptr` type and `Callable` is the owned descriptor `callable` lowers to. Both
+        // have exactly one spelling a prelude may use, so they compare like the scalars
+        // rather than like `Mixed`.
+        TypeSpec::Ptr => "ptr",
+        TypeSpec::Callable => "callable",
         TypeSpec::Mixed => {
-            return !matches!(declared, "int" | "float" | "string" | "bool");
+            return !matches!(
+                declared,
+                "int" | "float" | "string" | "bool" | "ptr" | "callable"
+            );
         }
     };
     declared == scalar
@@ -506,12 +552,12 @@ fn default_text(default: &DefaultSpec) -> String {
 #[test]
 fn catalog_hosted_preludes_declare_no_uncontracted_php_function() {
     let mut audited = 0usize;
-    for (prelude, source, published) in CATALOG_HOSTED_PRELUDES {
+    for (prelude, source, published) in catalog_hosted_preludes() {
         if !published {
             continue;
         }
         audited += 1;
-        for name in php_visible_declarations(source) {
+        for name in php_visible_declarations(&source) {
             if let Some(reason) = UNCONTRACTED_PRELUDE_DECLARATIONS
                 .iter()
                 .find(|(allowed, _)| *allowed == name)
