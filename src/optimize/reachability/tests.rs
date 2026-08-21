@@ -1095,3 +1095,75 @@ fn prune_keeps_dynamic_call_magic_on_live_class() {
     assert!(has_method(&program, "T", "__call"));
     assert!(has_method(&program, "T", "__callStatic"));
 }
+
+/// Verifies the curl prelude's dynamic-dispatch sites are exactly the two USER-callable ones.
+///
+/// THE CURL PRELUDE IS THE LARGEST DECLARATION SET THIS PASS IS EVER HANDED, and it is the
+/// one prelude that registers NOTHING with `PreludeInventory::record_internal_callable_method`.
+/// PDO registers four methods whose generic callable syntax only ever invokes closure
+/// descriptors the prelude itself created, so clearing their dynamic hazards cannot delete a
+/// user declaration. Curl's two sites are the opposite: `curl_setopt()` asks
+/// `is_callable($value)` about the USER'S value, and `__elephc_curl_sync_read_slot`'s internal
+/// dispatcher `call_user_func()`s the user's read callback. Their hazards are load-bearing —
+/// see `curl_prelude::reachability_tests::a_string_named_curl_callback_survives_pruning` for
+/// the callback that only they keep alive.
+///
+/// This list is the justification for that empty registration set, so it is checked rather
+/// than remembered. A new `$callback()`, `$this->$name()` or `call_user_func()` in the prelude
+/// fails here, which is the moment to ask PDO's question: does the site invoke only closures
+/// the prelude created (register it) or a value the user supplied (leave the hazard alone)?
+///
+/// It also pins that NO curl class method carries a dynamic hazard at all. The registration
+/// API is method-only, so a method-free hazard set is what makes "nothing to register" the
+/// complete answer rather than a partial one.
+#[test]
+fn curl_prelude_dispatches_only_user_callables() {
+    let program = parse("<?php $ch = curl_init('https://example.com'); echo curl_exec($ch);");
+    let program = crate::autoload::collect_aliases(program);
+    let mut inventory = PreludeInventory::new();
+    let program = crate::curl_prelude::inject_if_used(program, true, &mut inventory);
+    let program = crate::name_resolver::resolve(program).expect("fixture must resolve");
+    let program = crate::func_args::desugar(program).expect("fixture must desugar");
+    let program = crate::optimize::fold_constants(program);
+    let check = crate::types::check(&program).expect("fixture must type check");
+    let signatures = super::usage::CallSignatureIndex::from_check_result(&check);
+
+    let mut hazardous_functions: Vec<&str> = Vec::new();
+    let mut hazardous_methods: Vec<String> = Vec::new();
+    for statement in &program {
+        match &statement.kind {
+            StmtKind::FunctionDecl { name, .. } => {
+                if has_dynamic_hazard(&super::usage::scan_function(statement, &signatures)) {
+                    hazardous_functions.push(name.as_str());
+                }
+            }
+            StmtKind::ClassDecl { name, methods, .. } => {
+                for method in methods {
+                    let usage = super::usage::scan_method(method, name, None, &signatures);
+                    if has_dynamic_hazard(&usage) {
+                        hazardous_methods.push(format!("{name}::{}", method.name));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    hazardous_functions.sort_unstable();
+    assert_eq!(
+        hazardous_functions,
+        ["__elephc_curl_sync_read_slot", "curl_setopt"],
+        "the curl prelude's dynamic-dispatch sites changed"
+    );
+    assert!(
+        hazardous_methods.is_empty(),
+        "a curl class method now dispatches dynamically: {hazardous_methods:?} — \
+         `record_internal_callable_method` registers METHODS, so this is the case that \
+         would need one",
+    );
+}
+
+/// Returns whether one scanned declaration widened any dynamic lookup class.
+fn has_dynamic_hazard(usage: &super::usage::Usage) -> bool {
+    usage.hazards.dynamic_function || usage.hazards.dynamic_method || usage.hazards.dynamic_class
+}

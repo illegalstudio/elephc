@@ -132,10 +132,17 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
+    // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
+    // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
+    // a program that reaches curl only dynamically, and declaration-reachability would then
+    // delete every one of those declarations again (measured: 40 functions in, 1 out,
+    // `curl_init` and `CurlHandle` both gone). See
+    // `curl_prelude::reachability_tests::forcing_the_curl_group_keeps_the_whole_surface`.
     let forced_groups: HashSet<String> = [
         (with_crates.contains("pdo"), "pdo"),
         (with_crates.contains("tz"), "tz"),
         (with_crates.contains("image"), "image"),
+        (with_crates.contains("curl"), "curl"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
