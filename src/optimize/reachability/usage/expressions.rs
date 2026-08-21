@@ -1005,6 +1005,7 @@ mod tests {
         "call_user_func_array",
         "iterator_apply",
         "ob_start",
+        "pcntl_signal",
         "preg_replace_callback",
         "spl_autoload_register",
         "spl_autoload_unregister",
