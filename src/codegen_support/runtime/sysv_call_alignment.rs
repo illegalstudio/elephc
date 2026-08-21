@@ -56,10 +56,11 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
     ("__rt_array_rand", "frameless: calls __rt_random_uniform, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
-    (
-        "__rt_report_uncaught_exception",
-        "frameless: calls __rt_itoa on the fatal path, integer-only assembly",
-    ),
+    // __rt_report_uncaught_exception deliberately has NO entry here: it lives in
+    // NOT_STATICALLY_ANALYZABLE (its `and rsp, -16` realigns every call and defeats the
+    // walker), and a second entry in this list would silently absorb a real violation if
+    // the realignment were ever removed — analyze() drops `misaligned` findings for
+    // unanalyzable helpers, so this list must never double-cover one.
     (
         "__rt_incref",
         "frameless: calls __rt_heap_debug_check_live, and only in --heap-debug builds. \
