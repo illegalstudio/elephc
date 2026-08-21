@@ -8,7 +8,7 @@
 //!
 //! Key details:
 //! - Runs after type checking so `FunctionSig.params` carries fully-resolved
-//!   PhpTypes and we can reject anything outside the v1 scalar marshaling set
+//!   PhpTypes and can reject anything outside the public scalar/string marshaling set
 //!   with a single uniform error message.
 //! - Only top-level user functions are eligible — methods, closures, arrow
 //!   functions, and extern declarations carry their own ABIs and are out of
@@ -42,7 +42,7 @@ pub struct ExportedFunction {
 
 /// Walks the post-typecheck program AST and returns every user function
 /// declared with the `#[Export]` attribute, paired with its resolved
-/// `FunctionSig`. Signatures are validated against the v1 scalar marshaling
+/// `FunctionSig`. Signatures are validated against the public marshaling
 /// rules and rejected with a localized error otherwise.
 ///
 /// Matches both the bare `#[Export]` form and the fully-qualified
@@ -98,11 +98,12 @@ pub fn collect(
 }
 
 /// Returns the fixed lifecycle symbols reserved by every generated cdylib.
-fn lifecycle_symbols() -> [&'static str; 5] {
+fn lifecycle_symbols() -> [&'static str; 6] {
     [
         "elephc_abi_version",
         "elephc_init",
         "elephc_shutdown",
+        "elephc_last_status",
         "elephc_last_error",
         "elephc_free",
     ]
@@ -155,7 +156,7 @@ fn has_export_attribute(stmt: &Stmt) -> bool {
 }
 
 /// Validates that every parameter and return type has a defined cdylib ABI.
-/// Scalar v1 signatures remain unchanged; Stage B additionally accepts the
+/// Scalar C signatures remain unchanged; the owned-string ABI additionally accepts the
 /// exact binary-safe `string -> string` status/out-parameter surface.
 fn validate_signature(
     name: &str,
@@ -166,7 +167,7 @@ fn validate_signature(
         return Err(CompileError::new(
             span,
             &format!(
-                "exported function '{}' uses variadic parameters; #[Export] v1 requires a fixed parameter list",
+                "exported function '{}' uses variadic parameters; #[Export] requires a fixed parameter list",
                 name
             ),
         ));
@@ -175,17 +176,17 @@ fn validate_signature(
         return Err(CompileError::new(
             span,
             &format!(
-                "exported function '{}' uses by-reference parameters; #[Export] v1 accepts only by-value scalars",
+                "exported function '{}' uses by-reference parameters; #[Export] accepts only by-value scalars",
                 name
             ),
         ));
     }
     for (i, (_, ty)) in sig.params.iter().enumerate() {
-        if !is_v1_param_type(ty) {
+        if !is_scalar_param_type(ty) {
             return Err(CompileError::new(
                 span,
                 &format!(
-                    "exported function '{}' parameter #{} has unsupported type for --emit cdylib v1; supported: int, float, bool, string",
+                    "exported function '{}' parameter #{} has unsupported type for --emit cdylib; supported: int, float, bool, string",
                     name,
                     i + 1
                 ),
@@ -204,11 +205,11 @@ fn validate_signature(
         }
         return Ok(());
     }
-    if !is_v1_return_type(&sig.return_type) {
+    if !is_scalar_return_type(&sig.return_type) {
         return Err(CompileError::new(
             span,
             &format!(
-                "exported function '{}' return type is unsupported for --emit cdylib v1; supported: int, float, bool, void",
+                "exported function '{}' return type is unsupported for --emit cdylib; supported: int, float, bool, void",
                 name
             ),
         ));
@@ -229,16 +230,16 @@ pub fn is_string_roundtrip_signature(sig: &FunctionSig) -> bool {
         && !sig.ref_params.first().copied().unwrap_or(false)
 }
 
-/// Returns whether `ty` can be marshaled as a v1 C-ABI export parameter.
-fn is_v1_param_type(ty: &PhpType) -> bool {
+/// Returns whether `ty` can be marshaled as a scalar C-ABI export parameter.
+fn is_scalar_param_type(ty: &PhpType) -> bool {
     matches!(
         ty,
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
     )
 }
 
-/// Returns whether `ty` can be marshaled as a v1 C-ABI export return value.
-fn is_v1_return_type(ty: &PhpType) -> bool {
+/// Returns whether `ty` can be marshaled as a scalar C-ABI export return value.
+fn is_scalar_return_type(ty: &PhpType) -> bool {
     matches!(
         ty,
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void

@@ -220,7 +220,7 @@ fn emit_user_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.pic_data_refs,
+        emitter.cdylib_boundary,
     );
     let epilogue_label = user_function_epilogue_symbol(function);
     let mut ctx = FunctionContext::new(
@@ -257,7 +257,7 @@ pub(super) fn emit_synthetic_function_with_label(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.pic_data_refs,
+        emitter.cdylib_boundary,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -328,7 +328,7 @@ fn emit_class_method(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.pic_data_refs,
+        emitter.cdylib_boundary,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
     let mut ctx = FunctionContext::new(
@@ -569,14 +569,14 @@ fn emit_generator_constructor(
         }
         match target.arch {
             Arch::AArch64 => {
-                emitter.instruction(
+                emitter.instruction(                                            // store the owned Mixed cell into the generator start_args slot
                     &format!("str {}, [x19, #{}]", gen_reg, store_off)
-                )                                                               // store the owned Mixed cell into the generator start_args slot
+                )
             }
             Arch::X86_64 => {
-                emitter.instruction(
+                emitter.instruction(                                            // store the owned Mixed cell into the generator start_args slot
                     &format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg)
-                )                                                               // store the owned Mixed cell into the generator start_args slot
+                )
             }
         }
     }
@@ -585,16 +585,16 @@ fn emit_generator_constructor(
     match target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov x9, #{}", n));                    // number of boxed start arguments forwarded to the body
-            emitter.instruction(
+            emitter.instruction(                                                // publish the start argument count
                 &format!("str x9, [x19, #{}]", FIBER_START_ARG_COUNT_OFFSET)
-            );                                                                  // publish the start argument count
+            );
             emitter.instruction("mov x0, x19");                                 // return the Generator object to the caller
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // publish the start argument count
                 "mov QWORD PTR [r12 + {}], {}",
                 FIBER_START_ARG_COUNT_OFFSET, n
-            ));                                                                 // publish the start argument count
+            ));
             emitter.instruction("mov rax, r12");                                // return the Generator object to the caller
         }
     }
@@ -621,7 +621,7 @@ fn emit_generator_body(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.pic_data_refs,
+        emitter.cdylib_boundary,
     );
     let epilogue_label = format!("{}_epilogue", body_label);
     let mut ctx = FunctionContext::new(
@@ -691,9 +691,9 @@ fn emit_generator_callback(
                 emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off));  // load the boxed Mixed start argument
             }
             Arch::X86_64 => {
-                emitter.instruction(
+                emitter.instruction(                                            // load the boxed Mixed start argument
                     &format!("mov rax, QWORD PTR [r12 + {}]", load_off)
-                );                                                              // load the boxed Mixed start argument
+                );
             }
         }
         if gen_param_kind(ty) == GenParamKind::Mixed {
@@ -785,16 +785,16 @@ fn emit_generator_callback(
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop any stack-passed parameters after the body returns
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // park the body return value for getReturn()
                 &format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)
-            );                                                                  // park the body return value for getReturn()
+            );
             emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!(
+            emitter.instruction(&format!(                                       // park the body return value for getReturn()
                 "mov QWORD PTR [r12 + {}], rax",
                 GEN_RETURN_VALUE_OFFSET
-            ));                                                                 // park the body return value for getReturn()
+            ));
             emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
         }
     }

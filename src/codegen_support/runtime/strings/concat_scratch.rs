@@ -337,7 +337,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
 
 /// Converts an impossible allocation into a recoverable cdylib boundary escape.
 fn emit_cdylib_allocation_escape(emitter: &mut Emitter) {
-    if !emitter.pic_data_refs {
+    if !emitter.cdylib_boundary {
         return;
     }
     match emitter.target.arch {

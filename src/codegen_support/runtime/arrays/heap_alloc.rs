@@ -261,7 +261,7 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
-    if emitter.pic_data_refs {
+    if emitter.cdylib_boundary {
         crate::codegen_support::abi::emit_symbol_address(
             emitter,
             "x9",
@@ -511,7 +511,7 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
 
     // -- fatal error: heap memory exhausted --
     emitter.label("__rt_heap_exhausted");
-    if emitter.pic_data_refs {
+    if emitter.cdylib_boundary {
         crate::codegen_support::abi::emit_symbol_address(
             emitter,
             "r8",
@@ -568,13 +568,13 @@ mod tests {
     /// Verifies PIC allocators recover through the cdylib boundary instead of exiting.
     #[test]
     fn pic_heap_allocator_routes_exhaustion_to_cdylib_boundary() {
-        let mut arm = Emitter::new_pic(Target::new(Platform::MacOS, Arch::AArch64));
+        let mut arm = Emitter::new_cdylib(Target::new(Platform::MacOS, Arch::AArch64));
         emit_heap_alloc(&mut arm);
         let arm_asm = arm.output();
         assert!(arm_asm.contains(crate::codegen_support::cdylib::BOUNDARY_ACTIVE));
         assert!(arm_asm.contains("b __rt_throw_current"));
 
-        let mut x86 = Emitter::new_pic(Target::new(Platform::Linux, Arch::X86_64));
+        let mut x86 = Emitter::new_cdylib(Target::new(Platform::Linux, Arch::X86_64));
         emit_heap_alloc(&mut x86);
         let x86_asm = x86.output();
         assert!(x86_asm.contains(crate::codegen_support::cdylib::BOUNDARY_STATUS));

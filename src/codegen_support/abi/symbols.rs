@@ -162,7 +162,11 @@ pub fn emit_store_reg_to_extern_symbol(
     symbol: &str,
     byte_offset: usize,
 ) {
-    let scratch = symbol_scratch_reg(emitter);
+    let scratch = match (emitter.target.arch, reg) {
+        (Arch::AArch64, "x9") => "x10",
+        (Arch::X86_64, "r11") => "r10",
+        _ => symbol_scratch_reg(emitter),
+    };
     emit_extern_symbol_address(emitter, scratch, symbol);
     emit_store_to_address(emitter, reg, scratch, byte_offset);
 }
@@ -217,15 +221,15 @@ pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, b
             } else {
                 emit_symbol_address(emitter, scratch, symbol);
                 if is_float_register(reg) {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // load the floating-point symbol payload from a non-zero byte offset
                         "movsd {}, QWORD PTR [{} + {}]",
                         reg, scratch, byte_offset
-                    )); // load the floating-point symbol payload from a non-zero byte offset
+                    ));
                 } else {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // load the integer or pointer symbol payload from a non-zero byte offset
                         "mov {}, QWORD PTR [{} + {}]",
                         reg, scratch, byte_offset
-                    )); // load the integer or pointer symbol payload from a non-zero byte offset
+                    ));
                 }
             }
         }
@@ -282,15 +286,15 @@ pub fn emit_store_reg_to_symbol(
             } else {
                 emit_symbol_address(emitter, scratch, symbol);
                 if is_float_register(reg) {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // store the floating-point payload into a non-zero symbol byte offset
                         "movsd QWORD PTR [{} + {}], {}",
                         scratch, byte_offset, reg
-                    )); // store the floating-point payload into a non-zero symbol byte offset
+                    ));
                 } else {
-                    emitter.instruction(&format!(
+                    emitter.instruction(&format!(                               // store the integer or pointer payload into a non-zero symbol byte offset
                         "mov QWORD PTR [{} + {}], {}",
                         scratch, byte_offset, reg
-                    )); // store the integer or pointer payload into a non-zero symbol byte offset
+                    ));
                 }
             }
         }

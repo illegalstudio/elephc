@@ -10,7 +10,7 @@
 //! - `crate::codegen_support` owns shared target, runtime, ABI, and metadata helpers.
 
 mod block_emit;
-mod callable_reachability;
+pub(crate) mod callable_reachability;
 pub(crate) mod context;
 mod enum_singletons;
 mod eval_callable_helpers;
@@ -207,7 +207,7 @@ pub fn generate_user_asm_from_ir_with_options(
     web_isolation: WebIsolation,
 ) -> Result<String> {
     let mut emitter = match emit {
-        Emit::Cdylib => Emitter::new_pic(module.target),
+        Emit::Cdylib => Emitter::new_cdylib(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
     if module.target.arch == Arch::X86_64 {
@@ -358,6 +358,7 @@ fn finalize_user_asm(
                 "elephc_abi_version",
                 "elephc_init",
                 "elephc_shutdown",
+                "elephc_last_status",
                 "elephc_last_error",
                 "elephc_free",
             ] {

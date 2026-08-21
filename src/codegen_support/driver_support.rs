@@ -88,7 +88,7 @@ pub fn generate_runtime_with_features_pic(
     // the monolithic object.
     let dead_strip = target.platform == crate::codegen_support::platform::Platform::MacOS;
     let mut emitter = if pic {
-        Emitter::new_pic(target)
+        Emitter::new_cdylib(target)
     } else {
         Emitter::new(target)
     };

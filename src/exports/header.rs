@@ -5,10 +5,11 @@
 //! - `crate::pipeline::backend` after a cdylib links successfully.
 //!
 //! Key details:
-//! - Scalar export prototypes preserve the v1 ABI exactly.
+//! - Scalar export prototypes preserve their original C signatures exactly.
 //! - The exact `string -> string` surface uses status plus owned output parameters.
 //! - Export ordering and include-guard normalization are deterministic.
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use crate::types::PhpType;
@@ -16,7 +17,7 @@ use crate::types::PhpType;
 use super::{is_string_roundtrip_signature, ExportedFunction};
 
 /// Public ABI version returned by `elephc_abi_version()` and written to generated headers.
-pub const ELEPHC_ABI_VERSION: u32 = 2;
+pub const ELEPHC_ABI_VERSION: u32 = 3;
 
 /// Renders one complete C header for `library_stem` and the resolved exports.
 pub fn render_c_header(library_stem: &str, exports: &[&ExportedFunction]) -> String {
@@ -46,6 +47,8 @@ pub fn render_c_header(library_stem: &str, exports: &[&ExportedFunction]) -> Str
     writeln!(out, "uint32_t elephc_abi_version(void);").unwrap();
     writeln!(out, "int32_t elephc_init(void);").unwrap();
     writeln!(out, "void elephc_shutdown(void);").unwrap();
+    writeln!(out, "/* Status recorded by the most recent exported call. */").unwrap();
+    writeln!(out, "int32_t elephc_last_status(void);").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "/* Borrowed, NUL-terminated diagnostic; NULL means no recorded error.").unwrap();
     writeln!(out, " * A recorded empty message is a non-NULL pointer to an empty string.").unwrap();
@@ -72,7 +75,8 @@ pub fn render_c_header(library_stem: &str, exports: &[&ExportedFunction]) -> Str
 /// Renders one public export prototype using its resolved PHP signature.
 fn render_export(out: &mut String, export: &ExportedFunction) {
     if is_string_roundtrip_signature(&export.sig) {
-        let param = c_identifier(&export.sig.params[0].0);
+        let param = c_parameter_names(&export.sig.params, &["output_ptr", "output_len"])[0]
+            .clone();
         writeln!(out, "/* On success, *output_ptr is caller-owned and must be released with").unwrap();
         writeln!(out, " * elephc_free(); output_len is authoritative and excludes the optional").unwrap();
         writeln!(out, " * trailing NUL byte. Failure leaves both outputs NULL/zero. */").unwrap();
@@ -88,8 +92,8 @@ fn render_export(out: &mut String, export: &ExportedFunction) {
     let return_type = c_scalar_return_type(&export.sig.return_type);
     write!(out, "{return_type} {}(", export.c_name).unwrap();
     let mut parameters = Vec::new();
-    for (name, php_type) in &export.sig.params {
-        let name = c_identifier(name);
+    let names = c_parameter_names(&export.sig.params, &[]);
+    for ((_, php_type), name) in export.sig.params.iter().zip(names) {
         match php_type {
             PhpType::Str => {
                 parameters.push(format!("const char *{name}_ptr"));
@@ -108,7 +112,7 @@ fn render_export(out: &mut String, export: &ExportedFunction) {
     writeln!(out, ");").unwrap();
 }
 
-/// Maps a validated v1 scalar return type to its stable C spelling.
+/// Maps a validated scalar return type to its stable C spelling.
 fn c_scalar_return_type(php_type: &PhpType) -> &'static str {
     match php_type {
         PhpType::Void => "void",
@@ -139,7 +143,156 @@ fn c_identifier(name: &str) -> String {
     if normalized.as_bytes()[0].is_ascii_digit() {
         normalized.insert(0, '_');
     }
+    if c_or_cpp_keyword(&normalized)
+        || normalized.starts_with("__")
+        || normalized
+            .strip_prefix('_')
+            .and_then(|rest| rest.as_bytes().first())
+            .is_some_and(u8::is_ascii_uppercase)
+    {
+        normalized.insert_str(0, "php_");
+    }
     normalized
+}
+
+/// Produces collision-free C parameter bases, accounting for expanded string pairs.
+fn c_parameter_names(params: &[(String, PhpType)], reserved: &[&str]) -> Vec<String> {
+    let mut used = reserved
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<HashSet<_>>();
+    let mut names = Vec::with_capacity(params.len());
+    for (raw, ty) in params {
+        let base = c_identifier(raw);
+        let mut suffix = 1usize;
+        loop {
+            let candidate = if suffix == 1 {
+                base.clone()
+            } else {
+                format!("{base}_{suffix}")
+            };
+            let emitted = match ty {
+                PhpType::Str => vec![format!("{candidate}_ptr"), format!("{candidate}_len")],
+                _ => vec![candidate.clone()],
+            };
+            if emitted.iter().all(|name| !used.contains(name)) {
+                used.extend(emitted);
+                names.push(candidate);
+                break;
+            }
+            suffix += 1;
+        }
+    }
+    names
+}
+
+/// Returns whether an identifier is reserved by either ISO C or C++.
+fn c_or_cpp_keyword(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "alignas"
+            | "alignof"
+            | "and"
+            | "and_eq"
+            | "asm"
+            | "auto"
+            | "bitand"
+            | "bitor"
+            | "bool"
+            | "break"
+            | "case"
+            | "catch"
+            | "char"
+            | "char8_t"
+            | "char16_t"
+            | "char32_t"
+            | "class"
+            | "compl"
+            | "concept"
+            | "const"
+            | "consteval"
+            | "constexpr"
+            | "constinit"
+            | "const_cast"
+            | "continue"
+            | "co_await"
+            | "co_return"
+            | "co_yield"
+            | "decltype"
+            | "default"
+            | "delete"
+            | "do"
+            | "double"
+            | "dynamic_cast"
+            | "else"
+            | "enum"
+            | "explicit"
+            | "export"
+            | "extern"
+            | "false"
+            | "float"
+            | "for"
+            | "friend"
+            | "goto"
+            | "if"
+            | "inline"
+            | "int"
+            | "long"
+            | "mutable"
+            | "namespace"
+            | "new"
+            | "noexcept"
+            | "not"
+            | "not_eq"
+            | "nullptr"
+            | "operator"
+            | "or"
+            | "or_eq"
+            | "private"
+            | "protected"
+            | "public"
+            | "register"
+            | "reinterpret_cast"
+            | "requires"
+            | "return"
+            | "short"
+            | "signed"
+            | "sizeof"
+            | "static"
+            | "static_assert"
+            | "static_cast"
+            | "struct"
+            | "switch"
+            | "template"
+            | "this"
+            | "thread_local"
+            | "throw"
+            | "true"
+            | "try"
+            | "typedef"
+            | "typeid"
+            | "typename"
+            | "union"
+            | "unsigned"
+            | "using"
+            | "virtual"
+            | "void"
+            | "volatile"
+            | "wchar_t"
+            | "while"
+            | "xor"
+            | "xor_eq"
+            | "_Alignas"
+            | "_Alignof"
+            | "_Atomic"
+            | "_Bool"
+            | "_Complex"
+            | "_Generic"
+            | "_Imaginary"
+            | "_Noreturn"
+            | "_Static_assert"
+            | "_Thread_local"
+    )
 }
 
 #[cfg(test)]
@@ -182,9 +335,10 @@ mod tests {
         );
         let header = render_c_header("libroundtrip", &[&roundtrip, &add]);
 
-        assert!(header.contains("#define ELEPHC_ABI_VERSION UINT32_C(2)"));
+        assert!(header.contains("#define ELEPHC_ABI_VERSION UINT32_C(3)"));
         assert!(header.contains("#define ELEPHC_STATUS_PHP_EXCEPTION INT32_C(2)"));
         assert!(header.contains("uint32_t elephc_abi_version(void);"));
+        assert!(header.contains("int32_t elephc_last_status(void);"));
         assert!(header.contains("int64_t add_i64(int64_t a, int64_t b);"));
         assert!(header.contains("int32_t roundtrip(const char *input_ptr, size_t input_len, char **output_ptr, size_t *output_len);"));
         assert!(header.contains("must be released with"));
@@ -214,5 +368,23 @@ mod tests {
         let header = render_c_header("namespaced", &[&export]);
         assert!(header.contains("int32_t Demo_roundtrip("));
         assert!(!header.contains("Demo\\roundtrip"));
+    }
+
+    /// Avoids C and C++ keywords while keeping expanded parameter names unique.
+    #[test]
+    fn renders_c_and_cpp_safe_parameter_names() {
+        let scalar = export(
+            "keywords",
+            vec![
+                ("class", PhpType::Int),
+                ("php_class", PhpType::Int),
+                ("new", PhpType::Str),
+            ],
+            PhpType::Int,
+        );
+        let header = render_c_header("keywords", &[&scalar]);
+        assert!(header.contains(
+            "int64_t keywords(int64_t php_class, int64_t php_class_2, const char *php_new_ptr, size_t php_new_len);"
+        ));
     }
 }
