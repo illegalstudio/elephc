@@ -219,6 +219,8 @@ fn builtin_is_available(
 ) -> bool {
     !(strict_php && spec.is_extension())
         && (!matches!(spec.area(), EvalArea::Regex) || regex_available)
+        && (!matches!(spec.area(), EvalArea::Pcntl)
+            || eval_pcntl_builtin_is_available(spec.name))
 }
 
 /// Looks up an eval builtin spec WITHOUT the strict-PHP filter.

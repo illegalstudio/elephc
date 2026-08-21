@@ -26,6 +26,7 @@ env:
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
+    -p elephc-pcntl
     -p elephc-magician
     -p elephc-web
 
@@ -79,8 +80,8 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), and libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -150,8 +151,8 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), and libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -216,8 +217,8 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), and libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES

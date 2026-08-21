@@ -349,7 +349,7 @@ pub(super) fn resolve_constant_name(
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
 /// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
-        if matches!(
+    if matches!(
             name,
             "PHP_OS"
                 // The PHP version surface, baked per compilation from `--php-version` / `--web`
@@ -405,8 +405,11 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "PHP_EOL"
                 | "DIRECTORY_SEPARATOR"
         ) {
-            return true;
-        }
+        return true;
+    }
+    if crate::types::pcntl_constants::is_pcntl_int_constant(name) {
+        return true;
+    }
     // Shared source-of-truth slices for JSON, stream/socket, session, array, and math constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()

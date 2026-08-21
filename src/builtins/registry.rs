@@ -450,6 +450,10 @@ mod tests {
             callback_parameter_indices(lookup("usort").expect("usort builtin")),
             vec![1]
         );
+        assert_eq!(
+            callback_parameter_indices(lookup("pcntl_signal").expect("pcntl_signal builtin")),
+            vec![1]
+        );
         assert!(callback_parameter_indices(lookup("strlen").expect("strlen builtin")).is_empty());
     }
 

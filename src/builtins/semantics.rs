@@ -133,6 +133,22 @@ pub enum BuiltinTargetStrategy {
 pub enum BuiltinTargetSupport {
     /// The semantic strategy is valid on macOS AArch64, Linux AArch64, and Linux x86_64.
     All,
+    /// The semantic strategy is valid on Linux AArch64 and Linux x86_64 only.
+    Linux,
+    /// The semantic strategy is valid on macOS AArch64 only.
+    MacOs,
+}
+
+impl BuiltinTargetSupport {
+    /// Returns whether this semantic contract is implemented on macOS.
+    pub const fn supports_macos(self) -> bool {
+        matches!(self, Self::All | Self::MacOs)
+    }
+
+    /// Returns whether this semantic contract is implemented on Linux.
+    pub const fn supports_linux(self) -> bool {
+        matches!(self, Self::All | Self::Linux)
+    }
 }
 
 /// Runtime functions that a backend-neutral lowering may emit.
@@ -436,6 +452,57 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         },
         lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)),
     }
+}
+
+/// Builds the shared descriptor for one typed PCNTL bridge operation.
+pub const fn pcntl_semantics(target: crate::ir::PcntlRuntime) -> BuiltinSemantics {
+    let target_support = match target.target_support() {
+        crate::ir::PcntlTargetSupport::All => BuiltinTargetSupport::All,
+        crate::ir::PcntlTargetSupport::Linux => BuiltinTargetSupport::Linux,
+        crate::ir::PcntlTargetSupport::MacOs => BuiltinTargetSupport::MacOs,
+    };
+    BuiltinSemantics {
+        validation: BuiltinValidation::Shared(validate_pcntl_scalar_arguments),
+        result_type: BuiltinResultType::Declared,
+        effects: BuiltinEffects::Static(target.effects()),
+        result_ownership: target.result_ownership(),
+        requirements: BuiltinRequirements::Static(&[BuiltinRequirement::Bridge("elephc_pcntl")]),
+        target_strategy: BuiltinTargetStrategy::RuntimeCall,
+        target_support,
+        runtime_functions: BuiltinRuntimeFunctions::None,
+        argument_lowering: BuiltinArgumentLowering::Standard,
+        callable: BuiltinCallablePolicy::StaticOnly(
+            "PCNTL callbacks use a dedicated process-runtime ABI",
+        ),
+        lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Pcntl(target)),
+    }
+}
+
+/// Rejects values that the PCNTL scalar ABI cannot coerce through PHP integer semantics.
+fn validate_pcntl_scalar_arguments(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
+    for (index, ty) in input.arg_types.iter().enumerate() {
+        if !matches!(
+            ty.codegen_repr(),
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::Void
+                | PhpType::Float
+                | PhpType::TaggedScalar
+                | PhpType::Str
+                | PhpType::Mixed
+                | PhpType::Union(_)
+        ) {
+            return Err(CompileError::new(
+                input.span,
+                &format!(
+                    "{}() argument {} must be int-compatible",
+                    input.name,
+                    index + 1
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Builds the complete shared descriptor for one PHP internal-array-pointer builtin.

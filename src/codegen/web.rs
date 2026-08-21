@@ -74,6 +74,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     abi::emit_frame_prologue(emitter, RESET_FRAME_SIZE);
 
     let mut labels = LabelGen::new();
+    if super::context::module_uses_pcntl_signal_handlers(module) {
+        abi::emit_call_label(emitter, "__rt_pcntl_release_handlers");
+    }
     for record in data.static_locals() {
         emit_static_local_reset(emitter, record, &mut labels);
     }

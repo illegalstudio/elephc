@@ -2475,6 +2475,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     crate::builtins::semantics::BuiltinResultOwnership::Fresh
                 )
             }
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Pcntl(target))) => {
+                matches!(
+                    target.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                )
+            }
             Some(Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
             )) => matches!(

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Reference targets, scalar coercion, defaults, and object type checks stay aligned by index.
+//! - Extra positional arguments to user-defined callables are evaluated but ignored like PHP.
 
 use super::*;
 
@@ -196,7 +197,13 @@ fn bind_dynamic_positional_method_arg(
         );
     }
     let param_index = *next_positional;
-    if param_index >= bound_args.len() || bound_args[param_index].is_some() {
+    if param_index >= bound_args.len() {
+        *next_positional = next_positional
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        return Ok(());
+    }
+    if bound_args[param_index].is_some() {
         return Err(EvalStatus::RuntimeFatal);
     }
     let ref_target = method_parameter_ref_target(

@@ -266,6 +266,7 @@ impl Checker {
                             continue;
                         }
                         if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                            || pcntl_output_type(builtin_name, arg, idx).is_some()
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
                                 && is_openssl_encrypt_tag_arg(arg, idx))
                         {
@@ -289,6 +290,13 @@ impl Checker {
                     if let Some(arg) = expanded_args.get(2) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                        }
+                    }
+                }
+                for (idx, arg) in expanded_args.iter().enumerate() {
+                    if let Some(output_ty) = pcntl_output_type(builtin_name, arg, idx) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), output_ty);
                         }
                     }
                 }
@@ -561,6 +569,41 @@ fn output_variable(arg: &Expr) -> Option<&String> {
     match &arg.kind {
         ExprKind::Variable(name) => Some(name),
         ExprKind::NamedArg { value, .. } => output_variable(value),
+        _ => None,
+    }
+}
+
+/// Returns the post-call type of a write-only PCNTL output argument, when applicable.
+fn pcntl_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType> {
+    let builtin = php_symbol_key(builtin);
+    let positional_parameter = match builtin.as_str() {
+        "pcntl_wait" => ["status", "flags", "resource_usage"].get(index).copied(),
+        "pcntl_waitpid" => ["process_id", "status", "flags", "resource_usage"]
+            .get(index)
+            .copied(),
+        "pcntl_waitid" => ["idtype", "id", "info", "flags"].get(index).copied(),
+        "pcntl_sigprocmask" => ["mode", "signals", "old_signals"].get(index).copied(),
+        "pcntl_sigwaitinfo" => ["signals", "info"].get(index).copied(),
+        "pcntl_sigtimedwait" => ["signals", "info", "seconds", "nanoseconds"]
+            .get(index)
+            .copied(),
+        _ => return None,
+    };
+    let parameter = match &arg.kind {
+        ExprKind::NamedArg { name, .. } => php_symbol_key(name),
+        _ => positional_parameter?.to_string(),
+    };
+    match parameter.as_str() {
+        "status" => Some(PhpType::Int),
+        "resource_usage" => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Int),
+        }),
+        "info" => Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        }),
+        "old_signals" => Some(PhpType::Array(Box::new(PhpType::Int))),
         _ => None,
     }
 }

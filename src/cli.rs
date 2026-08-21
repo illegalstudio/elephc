@@ -125,7 +125,7 @@ Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex)
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, pcntl, eval, regex)
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
@@ -902,11 +902,13 @@ mod tests {
             "elephc".into(),
             "--with-pdo".into(),
             "--with-tls".into(),
+            "--with-pcntl".into(),
             "app.php".into(),
         ];
         let config = compile_config(&args);
         assert!(config.with_crates.contains("pdo"));
         assert!(config.with_crates.contains("tls"));
+        assert!(config.with_crates.contains("pcntl"));
     }
 
     /// Verifies `--with-web` aliases `--web` (full web mode) instead of being

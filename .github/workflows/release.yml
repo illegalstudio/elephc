@@ -154,7 +154,7 @@ jobs:
           echo "Verified release binary version: ${ACTUAL}"
 
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-pcntl -p elephc-web
 
       - name: Strip binary
         run: strip target/release/elephc
@@ -172,6 +172,7 @@ jobs:
             libelephc_phar.a \
             libelephc_tz.a \
             libelephc_image.a \
+            libelephc_pcntl.a \
             libelephc_web.a
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
@@ -245,6 +246,7 @@ jobs:
               lib.install "libelephc_phar.a"
               lib.install "libelephc_tz.a"
               lib.install "libelephc_image.a"
+              lib.install "libelephc_pcntl.a"
               lib.install "libelephc_web.a"
             end
 
@@ -291,6 +293,11 @@ jobs:
               (testpath/"img.php").write('<?php \$im = imagecreatetruecolor(3, 2); echo imagesx(\$im) . "x" . imagesy(\$im);')
               system bin/"elephc", "img.php"
               assert_equal "3x2", shell_output("#{testpath}/img")
+
+              # Exercise the PCNTL bridge from the Homebrew lib/ layout.
+              (testpath/"pcntl.php").write('<?php echo pcntl_getpriority();')
+              system bin/"elephc", "pcntl.php"
+              assert_match(/\A-?\d+\z/, shell_output("#{testpath}/pcntl").strip)
 
               # Exercise the web bridge link path from the Homebrew lib/ layout.
               (testpath/"web.php").write('<?php echo "web-ok";')

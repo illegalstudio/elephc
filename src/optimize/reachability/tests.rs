@@ -228,6 +228,10 @@ fn scan_records_builtin_callback_parameters() {
             "<?php preg_replace_callback('/x/', 'replace_value', 'x');",
             "replace_value",
         ),
+        (
+            "<?php pcntl_signal(signal: SIGALRM, handler: 'handle_alarm');",
+            "handle_alarm",
+        ),
         ("<?php array_walk($values, 'walk_value');", "walk_value"),
         ("<?php ob_start('output_handler');", "output_handler"),
     ] {

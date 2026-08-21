@@ -18,12 +18,13 @@ categories = ["compilers", "command-line-utilities"]
 # libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo), and
-# libelephc_web.a (--web prefork HTTP server), and libelephc_magician.a
+# libelephc_web.a (--web prefork HTTP server), libelephc_pcntl.a (process
+# control), and libelephc_magician.a
 # (optional eval runtime) into target/<profile>/, where linker.rs locates them
 # for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]
@@ -60,6 +61,9 @@ flate2 = "1"
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
 elephc-phar = { path = "crates/elephc-phar" }
+# PCNTL's small rlib surface owns the target constant catalog shared by AOT and runtime eval;
+# emitted programs still link its staticlib only when PCNTL usage is detected.
+elephc-pcntl = { path = "crates/elephc-pcntl" }
 # indicatif drives the live per-phase spinner and cargo-style "Linking" event
 # lines shown while compiling; console (indicatif's own transitive color/TTY
 # crate) is added directly too since errors/report.rs and timings.rs style text
@@ -68,7 +72,7 @@ elephc-phar = { path = "crates/elephc-phar" }
 indicatif = "0.17"
 console = "0.15"
 
-# Bridge crates are runtime staticlibs, not used by the Rust compiler itself,
+# Most bridge crates are runtime staticlibs, not used by the Rust compiler itself,
 # but codegen tests link their libelephc_*.a artifacts into compiled PHP
 # programs. They ship as dev-dependencies so `cargo test` / `cargo nextest run`
 # build them automatically. Without this, staticlibs are only built by `cargo

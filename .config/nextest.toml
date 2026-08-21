@@ -35,6 +35,9 @@ relative-to = "target"
 path = "debug/libelephc_image.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_pcntl.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_magician.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
@@ -164,6 +167,14 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(test_eval_declared_method_return_type_values)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_declared_enum_marker_interface_inheritance)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_declared_enum_marker_interface_inheritance)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # The profile-differential corpus compiles and runs each case once per maintained

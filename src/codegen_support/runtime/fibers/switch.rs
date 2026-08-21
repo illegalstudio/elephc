@@ -88,6 +88,14 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fiber_switch ---");
     emitter.label_global("__rt_fiber_switch");
 
+    // -- PHP forbids cooperative context switches from inside a signal callback --
+    abi::emit_load_symbol_to_reg(emitter, "x9", "__rt_pcntl_dispatching", 0);  // x9 = active signal-dispatch guard
+    emitter.instruction("cbz x9, __rt_fiber_switch_signal_ok");                 // ordinary fiber switches proceed outside handlers
+    abi::emit_symbol_address(emitter, "x0", "_fiber_msg_switch_signal");       // x0 = stable FiberError message
+    emitter.instruction("mov x1, #49");                                         // x1 = message byte length
+    emitter.instruction("bl __rt_fiber_throw_state_error");                     // reject the context switch through PHP's exception path
+    emitter.label("__rt_fiber_switch_signal_ok");
+
     // -- save callee-saved state on the current stack --
     emitter.instruction(&format!("sub sp, sp, #{}", AARCH64_SWITCH_SAVE_BYTES)); // reserve space for the full switch save area
     emitter.instruction("stp x19, x20, [sp]");                                  // save callee-saved general-purpose registers x19/x20
@@ -249,6 +257,15 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_switch ---");
     emitter.label_global("__rt_fiber_switch");
+
+    // -- PHP forbids cooperative context switches from inside a signal callback --
+    abi::emit_load_symbol_to_reg(emitter, "r9", "__rt_pcntl_dispatching", 0);  // r9 = active signal-dispatch guard
+    emitter.instruction("test r9, r9");                                         // is a PHP signal handler currently running?
+    emitter.instruction("jz __rt_fiber_switch_signal_ok_x86");                  // ordinary fiber switches proceed outside handlers
+    abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_switch_signal");     // rdi = stable FiberError message
+    emitter.instruction("mov esi, 49");                                         // rsi = message byte length
+    emitter.instruction("call __rt_fiber_throw_state_error");                   // reject the context switch through PHP's exception path
+    emitter.label("__rt_fiber_switch_signal_ok_x86");
 
     // -- save callee-saved state on the current stack --
     emitter.instruction("push rbx");                                            // preserve the source context's callee-saved base register

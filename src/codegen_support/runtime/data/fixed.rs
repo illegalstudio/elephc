@@ -608,6 +608,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fiber_msg_suspend_unserialize\n_fiber_msg_suspend_unserialize:\n    .ascii \"Cannot suspend a fiber while unserialize() is active\"\n");
     out.push_str(".globl _fiber_msg_unsupported_callable\n_fiber_msg_unsupported_callable:\n    .ascii \"Fiber callable is not supported by this compiler\"\n");
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
+    out.push_str(".globl _fiber_msg_switch_signal\n_fiber_msg_switch_signal:\n    .ascii \"Cannot switch fibers in current execution context\"\n");
     out.push_str(&emit_builtin_callable_data(target));
     out.push_str(&comm_directive("_gc_allocs", 8, target));
     out.push_str(&comm_directive("_gc_frees", 8, target));
@@ -1320,6 +1321,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
     out.push_str(&system::emit_strtotime_data());
+    out.push_str(&system::emit_pcntl_data());
     out.push_str(&emit_php_uname_data());
 
     out

@@ -335,6 +335,38 @@ sidebar:
 | [`header()`](./builtins/misc/header.md) | `(string $header, bool $replace = true, int $response_code = 0): void` | `void` | ✓ | ✓ |
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_alarm()`](./builtins/misc/pcntl_alarm.md) | `(int $seconds): int` | `int` | ✓ | ✓ |
+| [`pcntl_async_signals()`](./builtins/misc/pcntl_async_signals.md) | `(bool $enable = null): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_errno()`](./builtins/misc/pcntl_errno.md) | `(): int` | `int` | ✓ | ✓ |
+| [`pcntl_exec()`](./builtins/misc/pcntl_exec.md) | `(string $path, mixed $args = [], mixed $env_vars = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_fork()`](./builtins/misc/pcntl_fork.md) | `(): int` | `int` | ✓ | ✓ |
+| [`pcntl_get_last_error()`](./builtins/misc/pcntl_get_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`pcntl_getcpu()`](./builtins/misc/pcntl_getcpu.md) | `(): int` | `int` | ✓ | ✓ |
+| [`pcntl_getcpuaffinity()`](./builtins/misc/pcntl_getcpuaffinity.md) | `(int $process_id = null): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_getpriority()`](./builtins/misc/pcntl_getpriority.md) | `(int $process_id = null, int $mode = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_getqos_class()`](./builtins/misc/pcntl_getqos_class.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_setcpuaffinity()`](./builtins/misc/pcntl_setcpuaffinity.md) | `(int $process_id = null, mixed $cpu_ids = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_setns()`](./builtins/misc/pcntl_setns.md) | `(int $process_id = null, int $nstype = 1073741824): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_setpriority()`](./builtins/misc/pcntl_setpriority.md) | `(int $priority, int $process_id = null, int $mode = 0): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_setqos_class()`](./builtins/misc/pcntl_setqos_class.md) | `(mixed $qos_class = Pcntl\QosClass::Default): void` | `void` | ✓ | ✓ |
+| [`pcntl_signal()`](./builtins/misc/pcntl_signal.md) | `(int $signal, mixed $handler, bool $restart_syscalls = true): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_signal_dispatch()`](./builtins/misc/pcntl_signal_dispatch.md) | `(): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_signal_get_handler()`](./builtins/misc/pcntl_signal_get_handler.md) | `(int $signal): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigprocmask()`](./builtins/misc/pcntl_sigprocmask.md) | `(int $mode, mixed $signals, mixed $old_signals = []): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_sigtimedwait()`](./builtins/misc/pcntl_sigtimedwait.md) | `(mixed $signals, mixed $info = [], int $seconds = 0, int $nanoseconds = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_sigwaitinfo()`](./builtins/misc/pcntl_sigwaitinfo.md) | `(mixed $signals, mixed $info = []): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_strerror()`](./builtins/misc/pcntl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
+| [`pcntl_unshare()`](./builtins/misc/pcntl_unshare.md) | `(int $flags): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_wait()`](./builtins/misc/pcntl_wait.md) | `(mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_waitid()`](./builtins/misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_waitpid()`](./builtins/misc/pcntl_waitpid.md) | `(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
+| [`pcntl_wexitstatus()`](./builtins/misc/pcntl_wexitstatus.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_wifcontinued()`](./builtins/misc/pcntl_wifcontinued.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_wifexited()`](./builtins/misc/pcntl_wifexited.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_wifsignaled()`](./builtins/misc/pcntl_wifsignaled.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_wifstopped()`](./builtins/misc/pcntl_wifstopped.md) | `(int $status): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_wstopsig()`](./builtins/misc/pcntl_wstopsig.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
+| [`pcntl_wtermsig()`](./builtins/misc/pcntl_wtermsig.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |

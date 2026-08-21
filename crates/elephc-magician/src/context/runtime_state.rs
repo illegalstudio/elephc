@@ -12,6 +12,45 @@
 use super::*;
 
 impl ElephcEvalContext {
+    /// Returns the eval-owned handler registered for one signal.
+    pub fn pcntl_signal_handler(&self, signal: i32) -> Option<EvalPcntlSignalHandler> {
+        self.pcntl_signal_handlers.get(&signal).copied()
+    }
+
+    /// Replaces one eval-owned signal handler and returns the previous entry.
+    pub fn set_pcntl_signal_handler(
+        &mut self,
+        signal: i32,
+        handler: EvalPcntlSignalHandler,
+    ) -> Option<EvalPcntlSignalHandler> {
+        self.pcntl_signal_handlers.insert(signal, handler)
+    }
+
+    /// Returns whether Magician dispatches queued signal handlers at statement safe points.
+    pub const fn pcntl_async_signals(&self) -> bool {
+        self.pcntl_async_signals
+    }
+
+    /// Changes automatic signal dispatch and returns its prior state.
+    pub fn set_pcntl_async_signals(&mut self, enabled: bool) -> bool {
+        std::mem::replace(&mut self.pcntl_async_signals, enabled)
+    }
+
+    /// Enters the non-reentrant signal-dispatch region and reports whether entry succeeded.
+    pub fn begin_pcntl_dispatch(&mut self) -> bool {
+        if self.pcntl_dispatching {
+            false
+        } else {
+            self.pcntl_dispatching = true;
+            true
+        }
+    }
+
+    /// Leaves the signal-dispatch region after normal completion or exception cleanup.
+    pub fn end_pcntl_dispatch(&mut self) {
+        self.pcntl_dispatching = false;
+    }
+
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name) || self.native_functions.contains_key(name)

@@ -35,6 +35,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // install the throw helper's frame pointer
     abi::emit_load_symbol_to_reg(emitter, "x19", "_exc_handler_top", 0);
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
+    emitter.instruction("bl __rt_pcntl_abort_dispatch");                        // restore PCNTL mask/guard state before a handler exception longjmps
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
     emitter.instruction("bl __rt_exception_cleanup_frames");                    // run cleanup callbacks for every unwound activation frame
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
@@ -65,6 +66,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
     emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?
     emitter.instruction("jz __rt_throw_current_uncaught");                      // fall back to a fatal uncaught-exception path when no handler exists
+    emitter.instruction("call __rt_pcntl_abort_dispatch");                      // restore PCNTL mask/guard state before a handler exception longjmps
     emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // rdi = activation record that should survive this catch
     emitter.instruction("call __rt_exception_cleanup_frames");                  // run cleanup callbacks for every unwound activation frame
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);

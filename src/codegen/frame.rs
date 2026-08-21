@@ -361,6 +361,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     // the eval context are still alive. The exit-path flush in abi::emit_exit
     // stays as the guard for exit()/die() and fatal terminations.
     abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+    if ctx.uses_pcntl_signal_handlers() {
+        abi::emit_call_label(ctx.emitter, "__rt_pcntl_release_handlers");
+    }
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);

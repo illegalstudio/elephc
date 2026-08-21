@@ -255,6 +255,11 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("jmp __rt_diag_warning");                               // emit or suppress one eval runtime warning
 
+    label_c_global(emitter, "__elephc_eval_set_pcntl_dispatching");
+    abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
+    emitter.instruction("mov QWORD PTR [r9], rdi");                             // publish Magician handler execution to the Fiber guard
+    emitter.instruction("ret");                                                 // return to the Rust interpreter
+
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal release register
     emitter.instruction("jmp __rt_decref_mixed");                               // release one eval-owned boxed Mixed cell
