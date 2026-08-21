@@ -9,16 +9,22 @@
 //! - `cargo test -p elephc-tz` (the rlib) exercises the serialization directly.
 //!
 //! Key details:
-//! - The returned pointer is owned by a `static Mutex<CString>` and stays valid
-//!   until the next call to the same function. The compiled PHP program is
-//!   single-threaded and copies the bytes immediately, mirroring the PDO bridge.
+//! - The returned pointer is owned by a per-thread `RefCell<CString>` and stays
+//!   valid until the next call to the same function ON THAT THREAD. The compiled
+//!   PHP program is single-threaded and copies the bytes immediately, mirroring
+//!   the PDO bridge. The cells are per-thread rather than process-global for a
+//!   lifetime reason: stashing DROPS the `CString` the cell held, so a global cell
+//!   would let one thread free the bytes another thread was just handed a pointer
+//!   into (`elephc-pdo` shipped exactly that bug — see
+//!   `sqlstate_buffers_are_isolated_between_threads`).
 //! - An empty return marks "no data" (a false-zone or unknown name), since every
 //!   present location/transition serialization is non-empty.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::sync::{Mutex, OnceLock};
+use std::thread::LocalKey;
 
 use crate::{abbreviations, zone_location, zone_transitions};
 
@@ -33,14 +39,21 @@ unsafe fn zone_name<'a>(ptr: *const c_char) -> Cow<'a, str> {
     }
 }
 
-/// Moves `s` into `cell` and returns a pointer to its NUL-terminated bytes. The
-/// pointer is valid until the next call that stashes into the same cell. A
-/// `String` carrying an interior NUL (never produced here) degrades to empty.
-fn stash(cell: &'static Mutex<CString>, s: String) -> *const c_char {
+/// Moves `s` into the calling thread's `cell` and returns a pointer to its
+/// NUL-terminated bytes. The pointer is valid until the next call that stashes
+/// into the same cell on that thread. A `String` carrying an interior NUL (never
+/// produced here) degrades to empty.
+///
+/// The assignment drops the previous `CString`, which is why the cell is
+/// per-thread: a shared cell would free those bytes under any other thread still
+/// holding the pointer it was handed.
+fn stash(cell: &'static LocalKey<RefCell<CString>>, s: String) -> *const c_char {
     let value = CString::new(s).unwrap_or_default();
-    let mut guard = cell.lock().expect("tz bridge buffer mutex poisoned");
-    *guard = value;
-    guard.as_ptr()
+    cell.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        *slot = value;
+        slot.as_ptr()
+    })
 }
 
 /// Serializes one zone's transitions as `ts\toffset\tdst\tabbr\ttime` rows joined
@@ -108,22 +121,28 @@ fn serialize_abbreviations() -> String {
     out
 }
 
-/// Returns the process-wide buffer cell for transition results.
-fn transitions_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::default()))
+/// Returns the calling thread's buffer cell for transition results.
+fn transitions_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static CELL: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &CELL
 }
 
-/// Returns the process-wide buffer cell for location results.
-fn location_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::default()))
+/// Returns the calling thread's buffer cell for location results.
+fn location_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static CELL: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &CELL
 }
 
-/// Returns the process-wide buffer cell for the abbreviation table.
-fn abbreviations_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::default()))
+/// Returns the calling thread's buffer cell for the abbreviation table.
+fn abbreviations_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static CELL: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &CELL
 }
 
 /// C ABI: returns a zone's `getTransitions()` rows serialized as
@@ -167,9 +186,47 @@ mod tests {
     //!
     //! Key details:
     //! - Exercises the serialize_* helpers directly (the `extern "C"` wrappers add
-    //!   only pointer plumbing over them).
+    //!   only pointer plumbing over them), plus one cross-thread test that covers
+    //!   the pointer plumbing itself.
 
     use super::*;
+
+    /// Each thread's stashed result stays alive until that thread has copied it
+    /// out. Two threads asking for *different* zones at the same moment must each
+    /// read back their own: with one process-wide cell, the second thread's
+    /// `stash` drops the `CString` the first was just handed a pointer into, so
+    /// that thread reads freed memory. (`elephc-pdo` shipped this exact bug and it
+    /// reached CI as non-UTF-8 garbage where a SQLSTATE belonged.)
+    #[test]
+    fn location_buffers_are_isolated_between_threads() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles = ["Europe/Paris", "UTC"].map(|zone| {
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let expected = serialize_location(zone);
+                assert!(!expected.is_empty(), "{zone} must serialize non-empty");
+                let name = CString::new(zone).expect("zone name");
+
+                // Both threads take their pointer before either reads it: that is
+                // the window in which one process-wide cell frees the string the
+                // other thread is still holding a pointer into.
+                barrier.wait();
+                let pointer = unsafe { elephc_tz_location(name.as_ptr()) };
+                barrier.wait();
+                let actual = unsafe { CStr::from_ptr(pointer) }
+                    .to_string_lossy()
+                    .into_owned();
+                assert_eq!(
+                    actual, expected,
+                    "location buffer was overwritten by the other thread"
+                );
+            })
+        });
+
+        for handle in handles {
+            handle.join().expect("tz location worker must not panic");
+        }
+    }
 
     /// Paris transitions serialize to 185 newline-joined rows of 5 tab fields each,
     /// with the synthetic LMT row first.

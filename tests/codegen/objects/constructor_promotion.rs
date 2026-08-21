@@ -220,3 +220,101 @@ echo ":" . $fromReturn->getName();
     );
     assert_eq!(out, "InDrC:idFC:id");
 }
+
+/// A `parent::__construct()` that OMITS a by-reference promoted default still binds a cell
+/// that outlives the call.
+///
+/// The caller-side cell for an omitted optional by-reference argument is an ordinary stack
+/// slot released when the call returns — except where the callee can KEEP the reference, and
+/// a constructor that promotes `&$value` into a property is exactly that case. `new Child()`
+/// reaches the parent constructor through the lexical-static lowering rather than the
+/// object-allocation one, so it needs the same exemption and nothing pinned it before.
+#[test]
+fn test_parent_constructor_by_ref_promoted_default_outlives_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public function __construct(public int &$value = 1) {}
+}
+class Child extends Base {
+    public function __construct() { parent::__construct(); }
+}
+$c = new Child();
+echo $c->value;
+$c->value = 7;
+echo ":", $c->value;
+"#,
+    );
+    assert_eq!(out, "1:7");
+}
+
+/// `new $cls($var)` — a DYNAMIC constructor call with a runtime class string — reaches the
+/// by-reference argument stager through the receiver-REGISTER materializer
+/// (`objects::dynamic_mixed_candidates::emit_dynamic_new_mixed_constructor_call`) rather than
+/// the direct-call one, so it is the second constructor path whose promoted property borrows
+/// the argument's cell for the object's whole life. The property must READ the caller's value
+/// after the constructor returns; a caller-stack cell would leave it pointing into a released
+/// frame and read garbage.
+///
+/// KNOWN GAP, PINNED HONESTLY: the write direction does NOT propagate back
+/// (`$dynamic->value = 7` leaves `$shared` at 42 where PHP updates it to 7), so the dynamic
+/// path binds a copy rather than the caller's slot. That is PRE-EXISTING — the same source
+/// prints `42:42:42:1` at the commit before this task's by-reference work — and unrelated to
+/// the cell lifetime this fixture exists for. The expectation below therefore records
+/// today's behaviour; PHP 8.5 prints `42:42:7:1`.
+#[test]
+fn test_dynamic_new_binds_a_by_ref_promoted_property_to_the_caller_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int &$value = 1) {}
+}
+$eager = new Box();
+$shared = 42;
+$cls = "Box";
+$dynamic = new $cls($shared);
+echo $dynamic->value, ":", $shared, ":";
+$dynamic->value = 7;
+echo $shared, ":", $eager->value;
+"#,
+    );
+    assert_eq!(
+        out, "42:42:42:1",
+        "the promoted property must read the caller's value through a cell that outlived the \
+         constructor call; the third field is the pre-existing write-direction gap (PHP: 7)"
+    );
+}
+
+/// THE DYNAMIC-NEW CELL-LIFETIME PIN. `new $cls($holder->n)` passes a PROPERTY, not a local,
+/// to a by-reference promoted constructor parameter — and a property source is exactly the
+/// shape that plans a real caller-side cell (`plan_ref_arg_temp_cells` skips locals, whose
+/// own frame slot is passed directly, and array elements, which already have an address).
+///
+/// The promoted property BORROWS that cell for the object's whole life, so it must be heap
+/// storage: this fixture reads the property AFTER the constructor returned, which a
+/// caller-stack cell could not survive. Reverting the dynamic-new path to
+/// `RefArgCellLifetime::CallOnly` makes this program fail to compile — the receiver-register
+/// stager refuses to stage a cell while the receiver sits in a caller-saved register
+/// (verified by flipping the constant: *"receiver-register method call staging a
+/// by-reference cell with the receiver in x0"*).
+///
+/// HEAP BALANCE IS DELIBERATELY NOT ASSERTED: the borrowed cell is never freed (one 16-byte
+/// block per constructed object), the narrower pre-existing defect `materialize_temporary_ref_arg_cell`
+/// documents — only the object model can own that cell.
+#[test]
+fn test_dynamic_new_by_ref_promoted_property_from_a_property_source_outlives_the_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public function __construct(public int &$value = 1) {}
+}
+final class Holder { public int $n = 42; }
+$eager = new Box();
+$holder = new Holder();
+$cls = "Box";
+$dynamic = new $cls($holder->n);
+echo $dynamic->value, ":", $holder->n, ":", $eager->value;
+"#,
+    );
+    assert_eq!(out, "42:42:1");
+}

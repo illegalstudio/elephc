@@ -131,7 +131,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &callee_sig.return_type)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
     }
@@ -169,6 +169,15 @@ pub(super) fn lower_lexical_instance_static_method_call(
     let mut ref_params = Vec::with_capacity(target.ref_params.len() + 1);
     ref_params.push(false);
     ref_params.extend(target.ref_params.iter().copied());
+    // `parent::__construct(...)` reaches this lowering, and a parent constructor may PROMOTE
+    // a by-reference parameter into a property that borrows the argument's cell for the whole
+    // life of the object — so a constructor target keeps its heap cell while every other
+    // method takes the caller-stack one (see `RefArgCellLifetime`).
+    let ref_cell_lifetime = if method_name.eq_ignore_ascii_case("__construct") {
+        RefArgCellLifetime::MayOutliveCall
+    } else {
+        RefArgCellLifetime::CallOnly
+    };
     let call_args = materialize_method_call_args_with_receiver_local_and_refs(
         ctx,
         this_slot,
@@ -176,6 +185,7 @@ pub(super) fn lower_lexical_instance_static_method_call(
         &inst.operands,
         &param_types,
         &ref_params,
+        ref_cell_lifetime,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -186,7 +196,7 @@ pub(super) fn lower_lexical_instance_static_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    emit_ref_arg_writebacks(ctx, &call_args)
 }
 
 /// Emits an indirect static-vtable call for a late-bound `static::method()` receiver.

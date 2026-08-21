@@ -13,6 +13,8 @@
 
 pub mod abi;
 pub mod context;
+#[cfg(feature = "curl")]
+mod curl_ffi;
 pub mod errors;
 pub mod eval_ir;
 mod eval_php_profile;

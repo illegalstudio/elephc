@@ -91,3 +91,50 @@ pub(super) fn lists_entry_names_for_supported_archive_families() {
     std::fs::remove_file(&tar_path).ok();
     std::fs::remove_file(&zip_path).ok();
 }
+
+/// Each thread's published result stays alive until that thread has copied it
+/// out. Two threads publishing *differently sized* payloads at the same moment
+/// must each read back their own: with one process-wide buffer, the second
+/// thread's `publish_result` clears and refills it — reallocating away the bytes
+/// the first thread was just handed a pointer into. (`elephc-pdo` shipped this
+/// exact bug and it reached CI as non-UTF-8 garbage where a SQLSTATE belonged.)
+///
+/// A thread republishing on its OWN thread legitimately invalidates its own
+/// pointer — that is the documented contract — so each thread publishes exactly
+/// once and the only interference is the other thread's.
+#[test]
+pub(super) fn extract_buffers_are_isolated_between_threads() {
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    // Distinct fill bytes as well as distinct sizes, so a cross-thread read is
+    // detectable whichever thread publishes last.
+    let handles = [(1_usize, 0xAA_u8), (4096_usize, 0x55_u8)].map(|(size, fill)| {
+        let barrier = std::sync::Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            let expected = vec![fill; size];
+            let mut out_len: usize = 0;
+
+            barrier.wait();
+            let pointer = publish_result(expected.clone(), &mut out_len);
+            assert!(!pointer.is_null(), "publish must return a pointer");
+
+            // Both threads have filled the buffer and taken their pointer before
+            // either reads through it: that is the window in which one
+            // process-wide buffer frees the bytes the other thread points at.
+            barrier.wait();
+            assert_eq!(
+                out_len,
+                expected.len(),
+                "published length was overwritten by the other thread"
+            );
+            let actual = unsafe { std::slice::from_raw_parts(pointer, expected.len()) }.to_vec();
+            assert_eq!(
+                actual, expected,
+                "extract buffer was overwritten by the other thread"
+            );
+        })
+    });
+
+    for handle in handles {
+        handle.join().expect("publish worker must not panic");
+    }
+}

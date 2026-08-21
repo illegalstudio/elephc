@@ -244,6 +244,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
@@ -278,6 +279,12 @@ fn try_compile_source_to_asm_with_defines_repr(
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
+    // Mirror `pipeline::backend`: report the bridges this fixture actually links to
+    // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during
+    // instruction lowering, so the seed has to land before `generate_user_asm_*`.
+    elephc::codegen::set_linked_extensions(test_linked_extensions(
+        &check_result.required_libraries,
+    ));
     let exported_functions = HashMap::new();
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
@@ -668,6 +675,41 @@ pub(crate) fn compile_and_run_with_php_ini(source: &str, ini: &str) -> String {
         &default_link_paths(),
         &[],
         &[("PHPRC", ini_path.as_os_str())],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+/// Compiles and runs PHP source with extra environment variables set on the COMPILED
+/// PROGRAM's process (not on the compiler's).
+///
+/// The generalization of `compile_and_run_with_php_ini`, which is the same call with one
+/// hard-coded `PHPRC` entry. Fixtures reach for this when the behavior under test is
+/// decided by the environment the binary RUNS in — `tests/codegen/curl/easy_ca.rs` uses it
+/// for `CURL_CA_BUNDLE`, which the curl bridge reads once per process at the first
+/// `curl_init()`, so it has to be in place before the program starts rather than set from
+/// inside it.
+pub(crate) fn compile_and_run_with_env(
+    source: &str,
+    env: &[(&str, &std::ffi::OsStr)],
+) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_env_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_with_env(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+        env,
     );
     let _ = fs::remove_dir_all(&dir);
     output

@@ -124,7 +124,7 @@ fn emit_range_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving range-construction spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for start, end, count, step, and destination array bookkeeping
-    emitter.instruction("sub rsp, 40");                                         // reserve aligned spill slots for range-construction bookkeeping while keeping nested calls 16-byte aligned
+    emitter.instruction("sub rsp, 48");                                         // ROUNDED UP to a 16-byte multiple: `push rbp` already landed rsp on a 16-byte boundary, so reserving an odd multiple of 8 here would leave every `call` in this body misaligned and hand the callee a stack SysV x86_64 forbids. Pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`; see arrays/array_free_deep.rs for the curl SIGSEGV that class of bug produced.
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the inclusive range start value across count calculation and destination-array allocation
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the inclusive range end value across count calculation and destination-array allocation
     emitter.instruction("mov r10, rdx");                                        // copy the requested PHP step before normalizing it to a traversal magnitude
@@ -176,7 +176,7 @@ fn emit_range_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the destination integer range array pointer before publishing the final logical length
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the computed integer range element count before publishing the final logical length
     emitter.instruction("mov QWORD PTR [rax], r10");                            // publish the final logical length in the destination integer range array header
-    emitter.instruction("add rsp, 40");                                         // release the range-construction spill slots before returning
+    emitter.instruction("add rsp, 48");                                         // release the range-construction spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the constructed integer range array pointer in rax
 

@@ -71,6 +71,19 @@ pub(in crate::interpreter) fn eval_call(
     if matches!(name, "fsockopen" | "pfsockopen") {
         return eval_builtin_fsockopen_call(args, context, scope, values);
     }
+    // The two by-reference curl builtins, intercepted here for the same reason every other
+    // by-reference builtin above is: `eval_positional_expr_call` hands its hook only
+    // `&[EvalExpr]`, which has already lost named-argument metadata, and the by-value
+    // dispatchers have no reference targets at all. See
+    // `crate::interpreter::builtins::curl::curl_multi_exec`'s header.
+    #[cfg(feature = "curl")]
+    if name == "curl_multi_exec" {
+        return eval_builtin_curl_multi_exec_call(args, context, scope, values);
+    }
+    #[cfg(feature = "curl")]
+    if name == "curl_multi_info_read" {
+        return eval_builtin_curl_multi_info_read_call(args, context, scope, values);
+    }
     // `opcache_get_configuration` is prelude-provided on the native side (not a
     // catalog builtin), so eval dispatches it as a plain runtime handler rather than
     // through the PHP-visible builtin registry, keeping the two builtin sets in sync.

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use crate::codegen_support::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
+use crate::types::curl_constants::CURL_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
@@ -30,8 +31,10 @@ use crate::types::PhpType;
 /// Built-in constants include platform-specific values (e.g., `FNM_*` flags differ
 /// between macOS and Linux), `PATHINFO_*` bitmask values, `ENT_*` HTML-escaping flags,
 /// stream handles (`STDIN`/`STDOUT`/`STDERR`), `LOCK_*` values, array callback-mode
-/// constants, `JSON_*` integer constants, and `PREG_*` integer constants. User constants
-/// come from `const` declarations and `define()` calls discovered by `collect_constant_decls`.
+/// constants, `JSON_*` integer constants, `PREG_*` integer constants, and `CURL_INT_CONSTANTS`
+/// (`CURLOPT_*`/`CURLINFO_*`/`CURLE_*`/`CURL_*`, always materialized regardless of whether the
+/// program links curl). User constants come from `const` declarations and `define()` calls
+/// discovered by `collect_constant_decls`.
 ///
 /// The PHP VERSION SURFACE (`PHP_VERSION`, `PHP_VERSION_ID`, `PHP_MAJOR_VERSION`,
 /// `PHP_MINOR_VERSION`, `PHP_RELEASE_VERSION`, `PHP_EXTRA_VERSION`) and `PHP_SAPI` are baked
@@ -257,6 +260,15 @@ pub(crate) fn collect_constants(
         );
     }
     for (name, value) in ERROR_LEVEL_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    // `ext/curl` constants materialize from the frozen `CURL_INT_CONSTANTS` table
+    // unconditionally — like JSON_*, their value is a compile-time literal that needs no
+    // libcurl link, even in a program that never mentions curl.
+    for (name, value) in CURL_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

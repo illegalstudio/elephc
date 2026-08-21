@@ -20,7 +20,9 @@
 //!   (a descriptor number the kernel reissued after `fclose`) call
 //!   `__rt_resource_id_mint` first, which overwrites instead of preserving; see
 //!   `runtime::resource_ids`.
-//! - TWO RESOURCE KINDS ARE EXCLUDED, both of them incremental-hash contexts. PHP 8
+//! - FIVE RESOURCE KINDS ARE EXCLUDED. Two are incremental-hash contexts; the other three
+//!   are libcurl handles (easy, multi, share). All five are OBJECT-backed in PHP 8, so none
+//!   of them may consume anything from the resource counter. PHP 8
 //!   makes `hash_init()` return a `HashContext` OBJECT (`crate::hash_prelude`), so the
 //!   context belongs to the OBJECT handle space and must consume nothing from the
 //!   resource counter — otherwise every `fopen()` in a hashing program would report an
@@ -40,6 +42,15 @@
 //!     instead of reusing kind 2: handing `0x4000000000000000 + n` to
 //!     `elephc_crypto_free` would be a wild free. Kind 5 has no arm in
 //!     `__rt_mixed_free_deep`'s kind ladder and falls through to the plain box free.
+//!   - KIND 6 is a `CurlHandle`. Its low payload word is the `elephc_curl` bridge's own
+//!     `i64` handle id, and the tag-9 cell OWNS it: `__rt_mixed_free_deep` routes kind 6
+//!     to `__rt_curl_easy_free`. PHP 8 migrated curl sessions from resources to the
+//!     `CurlHandle` OBJECT exactly as it did `HashContext`, so it is excluded here for
+//!     exactly the reason kind 2 is — otherwise every `fopen()` in a curl program would
+//!     report an id one higher than PHP's.
+//!   - KIND 7 is a `CurlMultiHandle`, kind 8 a `CurlShareHandle`/`CurlSharePersistentHandle`
+//!     — the identical OBJECT-not-resource reasoning kind 6 documents, for the identical
+//!     `fopen()`-id-shift reason.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -100,6 +111,12 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a HashContext is an OBJECT in PHP and must consume no resource id
     emitter.instruction("cmp x2, #5");                                          // resource kind 5 = eval's inert handle on the same HashContext
     emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // eval hashing must not shift the ids the host program's fopen() reports
+    emitter.instruction("cmp x2, #6");                                          // resource kind 6 = a libcurl easy handle
+    emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a CurlHandle is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("cmp x2, #7");                                          // resource kind 7 = a libcurl multi handle
+    emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a CurlMultiHandle is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("cmp x2, #8");                                          // resource kind 8 = a libcurl share handle
+    emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a CurlShareHandle/CurlSharePersistentHandle is an OBJECT in PHP and must consume no resource id
     emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
     emitter.instruction("bl __rt_resource_id_of");                              // bind a display id if this payload does not already have one
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // the id lives in the side table; the cell is boxed unchanged
@@ -182,6 +199,12 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_alloc");                      // a HashContext is an OBJECT in PHP and must consume no resource id
     emitter.instruction("cmp QWORD PTR [rbp - 24], 5");                         // resource kind 5 = eval's inert handle on the same HashContext
     emitter.instruction("je __rt_mixed_from_value_alloc");                      // eval hashing must not shift the ids the host program's fopen() reports
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 6");                         // resource kind 6 = a libcurl easy handle
+    emitter.instruction("je __rt_mixed_from_value_alloc");                      // a CurlHandle is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 7");                         // resource kind 7 = a libcurl multi handle
+    emitter.instruction("je __rt_mixed_from_value_alloc");                      // a CurlMultiHandle is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 8");                         // resource kind 8 = a libcurl share handle
+    emitter.instruction("je __rt_mixed_from_value_alloc");                      // a CurlShareHandle/CurlSharePersistentHandle is an OBJECT in PHP and must consume no resource id
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the native resource payload into the registry argument
     emitter.instruction("call __rt_resource_id_of");                            // bind a display id if this payload does not already have one
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // the id lives in the side table; the cell is boxed unchanged
@@ -232,7 +255,9 @@ mod tests {
         emitter.output()
     }
 
-    /// Pins BOTH hash-context exclusions in the tag-9 arm, as exact multi-line sequences.
+    /// Pins ALL FIVE object-backed exclusions in the tag-9 arm, as exact multi-line
+    /// sequences: the two hash contexts and the three libcurl handles (easy, multi,
+    /// share).
     ///
     /// WHY THE WHOLE SEQUENCE AND NOT A SUBSTRING. `contains("cmp x2, #5")` is satisfied
     /// by `cmp x2, #50`, and `contains("cmp x2, #2")` by the `#2` inside `#24` — a pin
@@ -241,10 +266,10 @@ mod tests {
     /// either half is deleted, reordered, or pointed at a different label.
     ///
     /// Nothing pinned kind 2 on either target before this module existed, which is how
-    /// the exclusion could have been dropped unnoticed; kind 5 was added beside it and
-    /// both are asserted here so neither can regress alone.
+    /// the exclusion could have been dropped unnoticed; kinds 5, 6, 7 and 8 were added
+    /// beside it and all five are asserted here so none can regress alone.
     #[test]
-    fn aarch64_excludes_both_hash_context_kinds_from_resource_id_binding() {
+    fn aarch64_excludes_object_backed_kinds_from_resource_id_binding() {
         let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
         assert!(asm.contains("__rt_mixed_from_value_resource:\n"), "{asm}");
         assert!(
@@ -253,6 +278,12 @@ mod tests {
                  \x20   b.eq __rt_mixed_from_value_alloc\n\
                  \x20   cmp x2, #5\n\
                  \x20   b.eq __rt_mixed_from_value_alloc\n\
+                 \x20   cmp x2, #6\n\
+                 \x20   b.eq __rt_mixed_from_value_alloc\n\
+                 \x20   cmp x2, #7\n\
+                 \x20   b.eq __rt_mixed_from_value_alloc\n\
+                 \x20   cmp x2, #8\n\
+                 \x20   b.eq __rt_mixed_from_value_alloc\n\
                  \x20   mov x0, x1\n\
                  \x20   bl __rt_resource_id_of\n"
             ),
@@ -260,12 +291,12 @@ mod tests {
         );
     }
 
-    /// Pins the same two exclusions on x86_64.
+    /// Pins the same five exclusions on x86_64.
     ///
     /// Separate emitters, separate arms: forgetting one target is the default way this
     /// change goes wrong, and an aarch64-only pin would not notice.
     #[test]
-    fn x86_64_excludes_both_hash_context_kinds_from_resource_id_binding() {
+    fn x86_64_excludes_object_backed_kinds_from_resource_id_binding() {
         let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
         assert!(asm.contains("__rt_mixed_from_value_resource:\n"), "{asm}");
         assert!(
@@ -273,6 +304,12 @@ mod tests {
                 "    cmp QWORD PTR [rbp - 24], 2\n\
                  \x20   je __rt_mixed_from_value_alloc\n\
                  \x20   cmp QWORD PTR [rbp - 24], 5\n\
+                 \x20   je __rt_mixed_from_value_alloc\n\
+                 \x20   cmp QWORD PTR [rbp - 24], 6\n\
+                 \x20   je __rt_mixed_from_value_alloc\n\
+                 \x20   cmp QWORD PTR [rbp - 24], 7\n\
+                 \x20   je __rt_mixed_from_value_alloc\n\
+                 \x20   cmp QWORD PTR [rbp - 24], 8\n\
                  \x20   je __rt_mixed_from_value_alloc\n\
                  \x20   mov rax, QWORD PTR [rbp - 16]\n\
                  \x20   call __rt_resource_id_of\n"
@@ -298,7 +335,7 @@ mod tests {
             ),
         ] {
             let asm = emit_for(target);
-            for kind in [2, 5] {
+            for kind in [2, 5, 6, 7, 8] {
                 assert!(
                     asm.contains(&format!("    cmp {kind_operand}, {}{kind}\n", sigil(target))),
                     "kind {kind} exclusion must compare the resource kind word\n{asm}"

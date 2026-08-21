@@ -62,9 +62,59 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         "stream_socket_recvfrom" => {
             eval_dynamic_stream_socket_recvfrom_call(evaluated_args, context, values)?
         }
+        #[cfg(feature = "curl")]
+        "curl_multi_exec" => eval_dynamic_curl_multi_exec_call(evaluated_args, context, values)?,
+        #[cfg(feature = "curl")]
+        "curl_multi_info_read" => {
+            eval_dynamic_curl_multi_info_read_call(evaluated_args, context, values)?
+        }
         _ => return Ok(None),
     };
     Ok(result)
+}
+
+/// Evaluates a dynamic `curl_multi_exec()` call when `$still_running` is a writable lvalue.
+///
+/// `Ok(None)` when it is not, which hands the call back to the ordinary by-value dispatcher
+/// and its warning — the same fall-through contract every other arm in this file uses.
+#[cfg(feature = "curl")]
+fn eval_dynamic_curl_multi_exec_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) =
+        bind_evaluated_ref_builtin_args(&["multi_handle", "still_running"], evaluated_args, false)?;
+    let multi_handle = required_evaluated_ref_arg(&bound, 0)?;
+    let Some(still_running) = optional_evaluated_ref_arg(&bound, 1) else {
+        return Ok(None);
+    };
+    let Some(target) = still_running.ref_target.clone() else {
+        return Ok(None);
+    };
+    eval_curl_multi_exec_with_target(multi_handle.value, &target, context, values).map(Some)
+}
+
+/// Evaluates a dynamic `curl_multi_info_read()` call when `$queued_messages` is writable.
+#[cfg(feature = "curl")]
+fn eval_dynamic_curl_multi_info_read_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["multi_handle", "queued_messages"],
+        evaluated_args,
+        false,
+    )?;
+    let multi_handle = required_evaluated_ref_arg(&bound, 0)?;
+    let Some(queued) = optional_evaluated_ref_arg(&bound, 1) else {
+        return Ok(None);
+    };
+    let Some(target) = queued.ref_target.clone() else {
+        return Ok(None);
+    };
+    eval_curl_multi_info_read_with_target(multi_handle.value, &target, context, values).map(Some)
 }
 
 /// Evaluates a dynamic `settype()` call when the first argument is writable.

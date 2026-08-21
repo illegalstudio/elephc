@@ -1,0 +1,40 @@
+[package]
+name = "elephc-curl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "libcurl-backed easy-handle bridge staticlib for elephc's ext/curl surface"
+publish = false
+
+# Built as a C-callable staticlib (linked into compiled PHP programs that use
+# curl_*, supplied by the PHP-program linker together with the real
+# libcurl.a/libssl.a/libcrypto.a/libz.a from a managed native package) and an rlib (so
+# the bridge is unit-tested via `cargo test -p elephc-curl`). Mirrors
+# crates/elephc-tls / elephc-pdo / elephc-crypto.
+#
+# Unlike those crates, this bridge DECLARES libcurl's `extern "C"` symbols
+# without linking them: `cargo build -p elephc-curl` only ever produces the
+# staticlib/rlib archives, which never invoke the system linker, so the
+# unresolved libcurl symbols simply stay unresolved in the archive. See
+# `build.rs` for how `cargo test -p elephc-curl` opts into a real link.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# The default (non-RETURNTRANSFER) write callback streams the response body
+# straight to fd 1 via `libc::write`, matching PHP CLI's `curl_exec()` output.
+libc = "0.2"
+# Encodes `elephc_curl_global_info`'s `curl_version()` associative array as a
+# JSON blob for the PHP-facing layer to decode. Pure Rust, already vendored
+# at the workspace root, so no new transitive footprint.
+#
+# `preserve_order` IS REQUIRED FOR PHP PARITY, not a stylistic preference. A PHP
+# array is ORDERED, and every blob this crate encodes becomes one: `curl_version()`,
+# `curl_getinfo()`'s no-option array and `CURLINFO_CERTINFO`. Without the feature
+# `serde_json::Map` is a `BTreeMap`, so the JSON comes out BYTE-SORTED and
+# `foreach`/`array_keys()`/`json_encode()` over the decoded array would report an
+# order php-src never produces (`age` before `version_number`, `ALTSVC` before
+# `AsynchDNS`). With it, `Map` is an `IndexMap` and the insertion order in
+# `crate::abi::build_global_info_json`/`crate::info` — which is php-src's own field
+# order, measured — survives all the way to the PHP value.
+serde_json = { version = "1", features = ["preserve_order"] }

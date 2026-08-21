@@ -20,20 +20,22 @@ pub(super) unsafe fn slice<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     }
 }
 
-/// Stores extracted bytes in the process-global result buffer and returns its pointer.
+/// Stores extracted bytes in the calling thread's result buffer and returns its
+/// pointer, valid until that thread's next publish. The buffer is per-thread
+/// because refilling it reallocates: one process-global buffer would free the
+/// bytes another thread was just handed a pointer into.
 pub(super) fn publish_result(bytes: Vec<u8>, out_len: *mut usize) -> *const u8 {
-    let mut buffer = EXTRACT_BUFFER
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .expect("elephc_phar extract buffer poisoned");
-    buffer.clear();
-    buffer.extend_from_slice(&bytes);
-    write_len(out_len, buffer.len());
-    if buffer.is_empty() {
-        b"".as_ptr()
-    } else {
-        buffer.as_ptr()
-    }
+    EXTRACT_BUFFER.with(|slot| {
+        let mut buffer = slot.borrow_mut();
+        buffer.clear();
+        buffer.extend_from_slice(&bytes);
+        write_len(out_len, buffer.len());
+        if buffer.is_empty() {
+            b"".as_ptr()
+        } else {
+            buffer.as_ptr()
+        }
+    })
 }
 
 /// Returns the process-global table for buffered PHAR write streams.

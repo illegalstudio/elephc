@@ -14,6 +14,7 @@
 
 mod allocation;
 mod branch_simplify;
+mod by_ref_alias;
 mod checked_int_sink;
 mod cfg;
 mod clobber;

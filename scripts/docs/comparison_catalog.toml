@@ -223,6 +223,15 @@ evidence = "tests/codegen/image"
 notes    = "Enabled with --with-image"
 
 [[extensions]]
+feature  = "cURL"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.curl.php"
+docs     = "docs/php/curl.md"
+evidence = "tests/codegen/curl"
+notes    = "All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 32 shared-contract functions this baseline knows; curl_multi_get_handles()/curl_share_init_persistent() are PHP 8.5 additions counted separately above, and curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract."
+modules  = ["curl"]
+
+[[extensions]]
 feature  = "OpenSSL"
 status   = "partial"
 php      = "https://www.php.net/manual/en/book.openssl.php"
@@ -248,3 +257,7 @@ notes = "Builtin percentages are computed against the vendored PHP CLI snapshot 
 [[limitations]]
 title = "Three native targets"
 notes = "Binaries target macOS ARM64, Linux ARM64, and Linux x86_64; PHP itself runs on many more platforms."
+
+[[limitations]]
+title = "A Mixed-sourced object needs explicit narrowing before a typed object parameter"
+notes = "An object pulled out of an array, an array property, or other `mixed`-typed storage is rejected at a class-typed call parameter until an `instanceof` guard narrows it; PHP would defer that check to runtime. Once narrowed, elephc unboxes the object and passes it correctly. The curl multi wrappers accept `mixed` plus a runtime guard because `curl_multi_info_read()` returns its handle inside an array and canonical callers do not add a separate narrowing guard. Pinned by `test_mixed_sourced_object_through_typed_param_is_unboxed`."

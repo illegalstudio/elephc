@@ -269,6 +269,21 @@ def _backend_signature_call(name: str, support: dict) -> str:
     return f"{name}({', '.join(params)})"
 
 
+def _prelude_route_text(b: dict) -> str:
+    """Name the injected prelude that implements one prelude-routed builtin.
+
+    More than one prelude declares PHP-visible builtins (``src/hash_prelude.rs``
+    and ``src/curl_prelude.rs`` today), so the name is read from the extracted
+    lowering rather than hard-coded. Falls back to a prelude-neutral phrase when
+    the record carries no lowering block.
+    """
+    source = Path(((b.get("lowering") or {}).get("codegen_file") or "")).name
+    suffix = "_prelude.rs"
+    if source.endswith(suffix):
+        return f"the compiler-injected {source[: -len(suffix)]} prelude"
+    return "an injected elephc-PHP prelude"
+
+
 def _availability_section(b: dict) -> str:
     """Two-line support matrix: compiled (AOT) vs eval() interpreter."""
     lines = ["## Availability", ""]
@@ -288,7 +303,7 @@ def _availability_section(b: dict) -> str:
             route_text = {
             "language-construct": "a dedicated compiler language-construct path",
             "dedicated-syntax": "a dedicated AST/EIR syntax path",
-            "prelude": "the compiler-injected hash prelude",
+            "prelude": _prelude_route_text(b),
             }.get(route, "the Elephc compiler")
             lines.append(f"- **Compiled (AOT)**: supported through {route_text}.")
         if aot.get("signature_override_reason"):

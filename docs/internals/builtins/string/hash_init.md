@@ -2,7 +2,7 @@
 title: "hash_init() — internals"
 description: "Compiler internals for hash_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 410
+  order: 444
 ---
 
 ## `hash_init()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/hash_prelude.rs`:1](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs#L1) (`hash_init`)
+- **Lowering**: [`src/hash_prelude.rs`:124](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs#L124) (`hash_init`)
 - **Function symbol**: `hash_init()`
 
 

@@ -57,7 +57,9 @@ impl EvalStreamResources {
     /// `stream_contexts` and `hash_contexts` are consulted even though no close path ever
     /// removes them, which keeps them permanently live — the behaviour eval `hash_init()`
     /// has today, where the interpreter still hands back a resource although the compiled
-    /// side models a `HashContext` as an object.
+    /// side models a `HashContext` as an object. `curl_easy_handles` (curl feature only)
+    /// is the same shape for the same reason: `curl_close()` is a documented PHP 8 no-op,
+    /// so a curl handle id never leaves this table before `EvalStreamResources::drop`.
     pub(crate) fn is_live(&self, id: i64) -> bool {
         let EvalStreamResources {
             chunk_sizes: _,
@@ -76,6 +78,12 @@ impl EvalStreamResources {
             streams,
             user_wrapper_directories,
             user_wrapper_streams,
+            #[cfg(feature = "curl")]
+            curl_easy_handles,
+            #[cfg(feature = "curl")]
+            curl_multi_handles,
+            #[cfg(feature = "curl")]
+            curl_share_handles,
         } = self;
         streams.contains_key(&id)
             || user_wrapper_streams.contains_key(&id)
@@ -86,6 +94,18 @@ impl EvalStreamResources {
             || hash_contexts.contains_key(&id)
             || stream_contexts.contains_key(&id)
             || process_children.contains_key(&id)
+            || {
+                #[cfg(feature = "curl")]
+                {
+                    curl_easy_handles.contains_key(&id)
+                        || curl_multi_handles.contains_key(&id)
+                        || curl_share_handles.contains_key(&id)
+                }
+                #[cfg(not(feature = "curl"))]
+                {
+                    false
+                }
+            }
     }
 
     /// Returns a local or remote socket name for a socket resource.

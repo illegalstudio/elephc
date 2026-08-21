@@ -14,6 +14,18 @@
 //!   `hash()` (links elephc_crypto -> the `hash` extension); the negative case links no
 //!   bridge. Core extensions (json) always report loaded; a bridge with no linked
 //!   staticlib (curl) never does.
+//! - THE CURL ASSERTIONS BELOW ARE THE NEGATIVE HALF, and they stay `false` on purpose:
+//!   none of these programs mentions a `curl_*` name or passes `--with-curl`, so the
+//!   bridge is not linked and `extension_loaded('curl')` must say so. The positive
+//!   half — a program that calls `curl_init()` and reports curl LOADED — lives in
+//!   `tests/codegen/curl/easy_handle.rs` rather than here, because compiling a curl
+//!   program through this file's CLI subprocess would additionally require a managed
+//!   native `curl` project (manifest + lock + installed artifacts) inside each test's
+//!   isolated `XDG_CACHE_HOME`, which these tests deliberately keep empty. The codegen
+//!   harness links the same bridge and seeds the same extension list
+//!   (`support::runner::test_linked_extensions`, mirroring
+//!   `pipeline::backend`'s use of `linker::php_extension_for_lib`), so the positive case
+//!   is still exercised end to end on a machine with the packages installed.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -28,6 +28,7 @@ env:
     -p elephc-image
     -p elephc-magician
     -p elephc-web
+    -p elephc-curl
 
 jobs:
   # Compile each platform once, then let that platform's tests start as soon as
@@ -80,10 +81,34 @@ jobs:
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
+
+      - name: Build curl-aware magician staticlib
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
 
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
@@ -151,10 +176,34 @@ jobs:
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
+
+      - name: Build curl-aware magician staticlib
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
 
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
@@ -217,10 +266,34 @@ jobs:
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke). Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
+
+      - name: Build curl-aware magician staticlib
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
 
       - name: Archive test binaries
         run: cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
@@ -455,7 +528,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -491,7 +564,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -527,7 +600,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -658,6 +731,264 @@ jobs:
           test -n "$pdo_test_binary"
           bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
+
+  # curl fixtures each link the elephc_curl bridge against a real, managed
+  # libcurl/libssh2/nghttp2/openssl/zlib build (see
+  # tests/codegen/support/curl_native.rs) that the
+  # ordinary shards' machines don't provision, so give them their own jobs that
+  # materialize that native cache first, cached across runs by an actions/cache keyed
+  # on the committed lock plus the recipe sources that decide what gets built. Three
+  # things are still unverified going into a first run here -- not reasons to exclude
+  # the tests, but the first places to look if this job goes red:
+  #   (a) the x86_64 callback trampoline asm cross-assembles but has never actually
+  #       executed on real hardware -- codegen::curl::callbacks on
+  #       curl-codegen-tests-linux-x86_64 is the first time it runs.
+  #   (b) the eval+curl duplicate-symbol link shape (elephc_magician and elephc_curl
+  #       both linked into one program, exercised by codegen::curl::eval) is
+  #       unverified on the Linux container's toolchain/ld.
+  #   (c) this is also the first time `elephc native install` fetches
+  #       curl/libssh2/nghttp2/openssl/zlib source over the network and builds it
+  #       from scratch *inside* the elephc-ci
+  #       container image on Linux -- managed-native-smoke only proves those recipes
+  #       on the bare ubuntu-24.04(-arm) runner images (no `container:` there).
+  #       openssl's Configure needs `perl`, but that part is not actually at risk:
+  #       .github/docker/ci.Dockerfile installs build-essential, which hard-Depends on
+  #       dpkg-dev, which hard-Depends on the full `perl` package (Depends install
+  #       unconditionally, --no-install-recommends notwithstanding), so perl with every
+  #       module Configure needs is already guaranteed present. The genuine unknown is
+  #       everything else about a from-source build reaching out over the network from
+  #       inside this specific minimal container for the first time.
+  curl-codegen-tests-macos-aarch64:
+    name: Curl Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install test-only native providers
+        run: brew install pcre2
+
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Deliberately the shared default path (unlike managed-native-smoke, which
+        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
+        # from-empty install): here we *want* one warm, reusable cache root that
+        # persists across runs via the key below, and it must also be the path
+        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
+        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-macos-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-macos-aarch64-
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Extract test archive
+        # `elephc` is a build dependency of other integration tests that invoke it via
+        # CARGO_BIN_EXE_elephc, so the same nextest archive that carries the
+        # codegen_tests binary also carries target/debug/elephc (see the archive
+        # notes in .config/nextest.toml) -- one extraction gives us both.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
+        # `install --locked` reproduces exactly the versions pinned in the committed
+        # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
+        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
+        # more deterministic for a test job than `add`, which resolves against the
+        # manifest and can rewrite the lock. Artifacts are content-addressed by
+        # (recipe, source sha, target, toolchain fingerprint) under the cache
+        # restored above, so this is a fast no-op once warm and only pays the
+        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
+        # invalidated cache.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Run curl codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$curl_test_binary"
+          bash scripts/ci/run_curl_codegen_shard.sh \
+            "$curl_test_binary" "${{ matrix.shard }}" 4
+
+  curl-codegen-tests-linux-x86_64:
+    name: Curl Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Deliberately the shared default path (unlike managed-native-smoke, which
+        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
+        # from-empty install): here we *want* one warm, reusable cache root that
+        # persists across runs via the key below, and it must also be the path
+        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
+        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-linux-x86_64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-linux-x86_64-
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Extract test archive
+        # `elephc` is a build dependency of other integration tests that invoke it via
+        # CARGO_BIN_EXE_elephc, so the same nextest archive that carries the
+        # codegen_tests binary also carries target/debug/elephc (see the archive
+        # notes in .config/nextest.toml) -- one extraction gives us both.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
+        # `install --locked` reproduces exactly the versions pinned in the committed
+        # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
+        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
+        # more deterministic for a test job than `add`, which resolves against the
+        # manifest and can rewrite the lock. Artifacts are content-addressed by
+        # (recipe, source sha, target, toolchain fingerprint) under the cache
+        # restored above, so this is a fast no-op once warm and only pays the
+        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
+        # invalidated cache.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Run curl codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$curl_test_binary"
+          bash scripts/ci/run_curl_codegen_shard.sh \
+            "$curl_test_binary" "${{ matrix.shard }}" 4
+
+  curl-codegen-tests-linux-aarch64:
+    name: Curl Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
+        # Deliberately the shared default path (unlike managed-native-smoke, which
+        # points ELEPHC_NATIVE_CACHE at an isolated $RUNNER_TEMP dir to prove a
+        # from-empty install): here we *want* one warm, reusable cache root that
+        # persists across runs via the key below, and it must also be the path
+        # `native install` and the skip gate (tests/codegen/support/curl_native.rs)
+        # both resolve by default, since no ELEPHC_NATIVE_CACHE override is set.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/elephc/native
+          key: curl-native-linux-aarch64-${{ hashFiles('examples/curl-get/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            curl-native-linux-aarch64-
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Extract test archive
+        # `elephc` is a build dependency of other integration tests that invoke it via
+        # CARGO_BIN_EXE_elephc, so the same nextest archive that carries the
+        # codegen_tests binary also carries target/debug/elephc (see the archive
+        # notes in .config/nextest.toml) -- one extraction gives us both.
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+
+      - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
+        # `install --locked` reproduces exactly the versions pinned in the committed
+        # examples/curl-get/elephc.lock (curl 8.21.0, libssh2 1.11.1, nghttp2
+        # 1.70.0, openssl 3.5.7, zlib 1.3.2) --
+        # more deterministic for a test job than `add`, which resolves against the
+        # manifest and can rewrite the lock. Artifacts are content-addressed by
+        # (recipe, source sha, target, toolchain fingerprint) under the cache
+        # restored above, so this is a fast no-op once warm and only pays the
+        # ~4.5 minute from-source build (see managed-native-smoke) on a cold or
+        # invalidated cache.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/curl-get/elephc.toml
+
+      - name: Run curl codegen test shard
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$curl_test_binary"
+          bash scripts/ci/run_curl_codegen_shard.sh \
+            "$curl_test_binary" "${{ matrix.shard }}" 4
 
   # Eval integration tests compile, link, and run full programs while exercising
   # eval/magician paths, so keep them out of the ordinary codegen shards. Two
@@ -817,7 +1148,15 @@ jobs:
         # The exporter joins the shared contract to the AOT `builtin!` and
         # Magician `eval_builtin!` bindings. `extract.py` prefers this prebuilt
         # debug binary, so compile it before any documentation checks.
-        run: cargo build --example gen_builtins
+        #
+        # `--features curl` is THE CANONICAL DOCUMENTATION CONFIGURATION, and this
+        # job is both the generator and the drift gate, so the two can never
+        # diverge. It is the only configuration in which the exporter can see the
+        # PHP-visible `curl_*` contracts (feature-gated in the shared catalog) and
+        # Magician's matching eval bindings; a default-feature build documents 34
+        # fewer functions than the compiler supports. `extract.py` fails loudly
+        # rather than regenerate the smaller catalog if this flag is ever dropped.
+        run: cargo build --example gen_builtins --features curl
 
       - name: Enforce builtin target architecture
         run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
@@ -857,6 +1196,60 @@ jobs:
             echo "$changes"
             exit 1
           fi
+
+  curl-feature-contract:
+    name: Curl feature contract coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: rust-curl-feature-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            rust-curl-feature-
+
+      # Every other job builds the workspace with default features, and the
+      # nextest archive is no exception, so nothing else in CI ever compiles
+      # `elephc-builtin-contract`'s `curl` feature with its tests attached. The
+      # gated curl jobs do reach it, but only through the inner `cargo build`
+      # in src/linker/bridges.rs, which is compile-only. Without the steps
+      # below, adding a `curl_*` eval home with no matching shared contract
+      # keeps all of CI green and first fails as a `validate_shared_eval_coverage`
+      # panic inside a compiled user program's `eval()`.
+      #
+      # NO STEP HERE NEEDS A NATIVE libcurl, which is what keeps this job cheap
+      # enough to be always-on. The crate-level steps satisfy `curl_ffi`'s
+      # `elephc_curl_*` externs from its own `#[cfg(test)] mod test_stubs`; the
+      # root-level steps never reach Magician's eval dispatch table at all (they
+      # read builtin metadata only), so the linker drops every reference to it.
+      - name: Catalog coverage with the curl surface published
+        run: cargo test -p elephc-builtin-contract --features curl
+
+      - name: Magician eval bindings with the curl surface published
+        run: cargo test -p elephc-magician --features curl
+
+      # The root `curl` feature (Cargo.toml) relays both edges, which is what puts
+      # the shared catalog's curl contracts and Magician's eval bindings in ONE
+      # process. Only then can the cross-backend parity suite apply its full
+      # per-contract assertions — name sets, signature shapes, eval coverage — to
+      # the thirty-four `curl_*` surfaces instead of counting them and moving on.
+      - name: Cross-backend parity with the curl surface published
+        run: cargo test --features curl --test builtin_parity_tests
+
+      # The compiler-side half: `builtins::parity_tests` compares every
+      # prelude-provided contract with the PHP declaration its injected prelude
+      # actually ships, which is the only AOT signature a prelude route has.
+      - name: Compiler prelude parity with the curl surface published
+        run: cargo test -p elephc --lib --features curl builtins::parity_tests
 
   managed-native-smoke:
     name: Managed Native Packages (${{ matrix.target }})
@@ -933,6 +1326,26 @@ jobs:
             --target "${{ matrix.target }}" \
             --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
 
+      - name: Materialize catalog curl (and its libssh2/nghttp2/openssl/zlib dependencies) from verified source
+        # curl's recipe declares libssh2, nghttp2, openssl and zlib as
+        # dependencies, and libssh2 declares openssl and zlib in turn (see
+        # src/native_deps/catalog.rs), so this one `native add` also
+        # materializes all four from verified source. A cold build of the whole
+        # chain measured ~6 minutes on a fast local machine, comfortably inside
+        # this job's timeout; see `crates/elephc-curl/build.rs` for why the
+        # elephc_curl BRIDGE staticlib (built via BRIDGE_CRATES elsewhere)
+        # still needs these raw libcurl/libssh2/libssl/libcrypto/libz/libnghttp2
+        # archives at PHP-program link time even though `cargo build -p
+        # elephc-curl` itself does not.
+        shell: bash
+        run: |
+          ./target/debug/elephc native add curl \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/curl-get/elephc.toml
+          git diff --exit-code -- \
+            examples/curl-get/elephc.toml \
+            examples/curl-get/elephc.lock
+
       - name: Compile and run regex through the production resolver
         shell: bash
         run: |
@@ -943,6 +1356,24 @@ jobs:
           grep -F "Valid email pattern" "$RUNNER_TEMP/date-json-regex.out"
           grep -F "Unicode letters detected" "$RUNNER_TEMP/date-json-regex.out"
 
+      - name: Compile and run curl through the production resolver
+        # Exercises the full chain the 194 curl codegen fixtures also need but
+        # cannot assume in ordinary CI (see tests/codegen/support/curl_native.rs):
+        # the elephc_curl bridge staticlib linked against a real, managed
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2. The GET to
+        # example.com may or may not reach the network on a given runner, so
+        # only network-independent output is asserted — the compiled binary
+        # always reaches real curl_exec()/curl_errno()/curl_error() either way.
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ matrix.target }}" \
+            examples/curl-get/main.php
+          ./examples/curl-get/main > "$RUNNER_TEMP/curl-get.out"
+          grep -F "GET http://example.com/" "$RUNNER_TEMP/curl-get.out"
+          grep -F "handle still usable after curl_close()" "$RUNNER_TEMP/curl-get.out"
+          grep -F "connection refused, as expected" "$RUNNER_TEMP/curl-get.out"
+
       - name: Reinstall locked state offline
         shell: bash
         run: |
@@ -951,6 +1382,11 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path examples/date-json-regex/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/curl-get/elephc.toml
 
   test:
     name: Build & Test
@@ -971,9 +1407,16 @@ jobs:
       - pdo-codegen-tests-macos-aarch64
       - pdo-codegen-tests-linux-x86_64
       - pdo-codegen-tests-linux-aarch64
+      - curl-codegen-tests-macos-aarch64
+      - curl-codegen-tests-linux-x86_64
+      - curl-codegen-tests-linux-aarch64
+      - eval-codegen-tests-macos-aarch64
+      - eval-codegen-tests-linux-x86_64
+      - eval-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
       - managed-native-smoke
+      - curl-feature-contract
     if: always()
     steps:
       - name: Verify test jobs
@@ -993,9 +1436,16 @@ jobs:
           test "${{ needs.pdo-codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.pdo-codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.pdo-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.curl-codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.curl-codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.curl-codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.eval-codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"
+          test "${{ needs.curl-feature-contract.result }}" = "success"
 
   benchmark:
     name: Benchmark Suite

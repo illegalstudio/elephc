@@ -58,6 +58,8 @@ use std::process::{Child, Command, Stdio};
 use crate::stream_wrappers;
 use crate::value::RuntimeCellHandle;
 
+#[cfg(feature = "curl")]
+mod curl;
 mod file_process_opening;
 mod operations;
 mod resource_registration;
@@ -66,6 +68,13 @@ mod storage;
 mod types;
 
 use types::*;
+
+/// Re-exported for `crate::interpreter::builtins::curl::callbacks`, the one caller outside
+/// this module that has to NAME a callback slot's state (to install, clear, or copy one).
+/// Every other curl field on `EvalStreamResources` stays private behind an accessor because
+/// nothing outside needs its type.
+#[cfg(feature = "curl")]
+pub(crate) use types::EvalCurlCallbackSlot;
 
 /// Eval-owned table of local file streams keyed by runtime resource payload.
 #[derive(Default)]
@@ -77,6 +86,23 @@ pub(crate) struct EvalStreamResources {
     directories: HashMap<i64, EvalDirectoryStream>,
     filter_resources: HashSet<i64>,
     hash_contexts: HashMap<i64, EvalHashContext>,
+    // Analogous to `hash_contexts`: PHP 8's `curl_init()` returns a `CurlHandle` OBJECT,
+    // not a resource, so it is keyed from this SAME `next_id` counter (never its own),
+    // consumes no PHP resource id, and is freed only here — see
+    // `crate::interpreter::builtins::curl`'s module doc for the full argument and
+    // `EvalCurlEasyHandle`'s own doc for the PHP-layer mirror fields it carries.
+    #[cfg(feature = "curl")]
+    curl_easy_handles: HashMap<i64, EvalCurlEasyHandle>,
+    // The multi and share tables share the SAME `next_id` counter as `curl_easy_handles`
+    // and every other eval-owned resource, which is what makes a table key alone enough to
+    // TYPE a curl handle: an easy key can never also be a multi key, so
+    // `curl_multi_add_handle($mh, $ch)` distinguishes its two arguments purely by which
+    // table each key resolves in — the eval counterpart of AOT's `instanceof CurlHandle`
+    // guards. See `crate::stream_resources::curl` for the accessors.
+    #[cfg(feature = "curl")]
+    curl_multi_handles: HashMap<i64, EvalCurlMultiHandle>,
+    #[cfg(feature = "curl")]
+    curl_share_handles: HashMap<i64, EvalCurlShareHandle>,
     process_children: HashMap<i64, Child>,
     socket_listeners: HashMap<i64, TcpListener>,
     socket_names: HashMap<i64, EvalSocketNames>,

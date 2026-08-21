@@ -65,3 +65,24 @@ pub(in crate::interpreter) fn eval_throw_builtin_division_by_zero_error<T>(
     context.set_pending_throw(exception);
     Err(EvalStatus::UncaughtThrowable)
 }
+
+/// Creates and schedules a `RuntimeException` through eval's normal Throwable channel.
+///
+/// Feature-gated: today's callers are all `crate::interpreter::builtins::curl` allocation-
+/// and libcurl-failure paths (`curl_escape`/`curl_unescape`'s encode/decode failure,
+/// `curl_init`'s easy-handle allocation failure, `curl_copy_handle`'s duplication
+/// failure), which exist only under the `curl` feature — see that module's own doc for
+/// why.
+#[cfg(feature = "curl")]
+pub(in crate::interpreter) fn eval_throw_runtime_exception<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("RuntimeException")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}

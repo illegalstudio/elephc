@@ -19,8 +19,10 @@
 //!   single-threaded, so the table mutexes are simplicity, not contention
 //!   management.
 //! - Fallible entry points collapse failure to a `-1`/`0` sentinel. String
-//!   results return `*const c_char` into a per-result static buffer that elephc
-//!   copies into an owned PHP string immediately on return.
+//!   results return `*const c_char` into a per-result, per-thread buffer that elephc
+//!   copies into an owned PHP string immediately on return. Those buffers are
+//!   thread-local so that writing one never frees a pointer another thread is still
+//!   holding.
 //! - Every `extern "C"` entry point runs its body inside `ffi_guard`, a
 //!   `catch_unwind` panic firewall (F-QUAL-02), and takes every table lock through
 //!   `lock_recover`. Without the pair, one panic under a `conns()`/`stmts()` lock
@@ -64,6 +66,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread::LocalKey;
 
 /// A live connection, tagged by its driver.
 enum Conn {
@@ -217,9 +220,9 @@ pub(crate) fn lock_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Returns a pointer to a `'static` NUL-terminated C string literal. Used as the
 /// [`ffi_guard`] fallback of the `*const c_char` entry points, which must hand back a
 /// readable C string even in the panic path. It deliberately does NOT route through
-/// the per-result static cells: the panic being caught may have happened while one of
-/// those cells was locked or half-written, so the fallback must not depend on any
-/// state the panicking body could have touched.
+/// the per-result thread-local cells: the panic being caught may have happened while
+/// one of those cells was borrowed or half-written, so the fallback must not depend on
+/// any state the panicking body could have touched.
 fn static_cstr(bytes: &'static [u8]) -> *const c_char {
     debug_assert_eq!(
         bytes.last(),
@@ -229,16 +232,20 @@ fn static_cstr(bytes: &'static [u8]) -> *const c_char {
     bytes.as_ptr() as *const c_char
 }
 
-/// Static buffer holding the last message captured by a failed `elephc_pdo_open`.
-fn open_error_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer holding the last message captured by a failed `elephc_pdo_open`.
+fn open_error_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static SQLSTATE captured alongside the last failed connection open.
-fn open_sqlstate_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread SQLSTATE captured alongside the last failed connection open.
+fn open_sqlstate_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
 /// Native driver code captured alongside the last failed connection open.
@@ -286,52 +293,68 @@ fn store_open_failure(dsn: &str, message: &str) {
     open_native_code_cell().store(native_code, Ordering::Relaxed);
 }
 
-/// Static buffer for the most recent `elephc_pdo_errmsg` result.
-fn errmsg_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_errmsg` result.
+fn errmsg_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_column_name` result.
-fn colname_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_column_name` result.
+fn colname_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_column_table_name` result.
-fn table_name_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_column_table_name` result.
+fn table_name_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_column_decltype` result.
-fn decltype_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_column_decltype` result.
+fn decltype_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_column_native_type` result.
-fn native_type_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_column_native_type` result.
+fn native_type_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer holding PDO_CUBRID's current result-column default value.
-fn cubrid_column_default_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer holding PDO_CUBRID's current result-column default value.
+fn cubrid_column_default_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Return buffer for PDO_DBLIB column-source metadata.
-fn dblib_column_source_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+/// Per-thread return buffer for PDO_DBLIB column-source metadata.
+fn dblib_column_source_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static CELL: RefCell<CString> = RefCell::new(CString::new("").unwrap());
+    }
+    &CELL
 }
 
-/// Static buffer for the most recent emulated statement SQL result.
-fn stmt_sent_sql_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent emulated statement SQL result.
+fn stmt_sent_sql_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
 thread_local! {
@@ -339,126 +362,174 @@ thread_local! {
     static COLDATA_CELL: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Static buffer for the most recent `elephc_pdo_driver_name` result.
-fn drivername_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_driver_name` result.
+fn drivername_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recently resolved `pdo.dsn.*` INI alias.
-fn dsn_alias_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recently resolved `pdo.dsn.*` INI alias.
+fn dsn_alias_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_sqlstate` result.
-fn sqlstate_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_sqlstate` result.
+fn sqlstate_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_stmt_sqlstate` result.
-fn stmt_sqlstate_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_stmt_sqlstate` result.
+fn stmt_sqlstate_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_stmt_errmsg` result.
-fn stmt_errmsg_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_stmt_errmsg` result.
+fn stmt_errmsg_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Return buffer for PDO_DBLIB connection operating-system diagnostics.
-fn dblib_os_errmsg_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+/// Per-thread return buffer for PDO_DBLIB connection operating-system diagnostics.
+fn dblib_os_errmsg_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static CELL: RefCell<CString> = RefCell::new(CString::new("").unwrap());
+    }
+    &CELL
 }
 
-/// Return buffer for PDO_DBLIB statement operating-system diagnostics.
-fn dblib_stmt_os_errmsg_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+/// Per-thread return buffer for PDO_DBLIB statement operating-system diagnostics.
+fn dblib_stmt_os_errmsg_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static CELL: RefCell<CString> = RefCell::new(CString::new("").unwrap());
+    }
+    &CELL
 }
 
-/// Shared return buffer for textual PDO_FIREBIRD attributes.
-fn firebird_attribute_cell() -> &'static Mutex<CString> {
-    static CELL: OnceLock<Mutex<CString>> = OnceLock::new();
-    CELL.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+/// Per-thread return buffer for textual PDO_FIREBIRD attributes.
+fn firebird_attribute_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static CELL: RefCell<CString> = RefCell::new(CString::new("").unwrap());
+    }
+    &CELL
 }
 
-/// Static buffer for the most recent PDO_IBM string-valued attribute result.
-fn ibm_attribute_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent PDO_IBM string-valued attribute result.
+fn ibm_attribute_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
 /// Stores the latest SQLSRV sensitivity label/information-type text return.
-fn sqlsrv_classification_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::new("").unwrap()))
+fn sqlsrv_classification_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::new("").unwrap());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_server_version` result.
-fn server_version_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_server_version` result.
+fn server_version_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_client_version` result.
-fn client_version_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_client_version` result.
+fn client_version_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_server_info` result.
-fn server_info_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_server_info` result.
+fn server_info_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_connection_status` result.
-fn connection_status_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_connection_status` result.
+fn connection_status_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent `elephc_pdo_last_insert_id_text` result.
-fn last_insert_id_text_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent `elephc_pdo_last_insert_id_text` result.
+fn last_insert_id_text_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static buffer for the most recent PostgreSQL text result returned to PHP
-/// (`elephc_pdo_lob_create` / `elephc_pdo_copy_out`). Shared because each result is
-/// copied into an owned PHP string before the next call writes the cell.
-fn pg_text_result_cell() -> &'static Mutex<CString> {
-    static C: OnceLock<Mutex<CString>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(CString::default()))
+/// Per-thread buffer for the most recent PostgreSQL text result returned to PHP
+/// (`elephc_pdo_lob_create` / `elephc_pdo_copy_out`). One cell serves both because
+/// each result is copied into an owned PHP string before the next call on that
+/// thread writes the cell.
+fn pg_text_result_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
 }
 
-/// Static byte buffer for the most recent whole or bounded BLOB / large-object read
+/// Per-thread byte buffer for the most recent whole or bounded BLOB / large-object read
 /// (`elephc_pdo_blob_read_at`, `elephc_pdo_lob_read_at`, and their legacy whole-value
 /// variants), bulk-copied out through
 /// `elephc_pdo_blob_data_ptr` (or, on the fallback path, drained byte-by-byte through
 /// `elephc_pdo_blob_byte`). A `Vec<u8>` rather than a `CString` because BLOBs are
-/// binary and may contain embedded NUL bytes; shared because the prelude copies each
-/// result into a PHP string (wrapped in a `php://memory` stream) before the next read
-/// overwrites the cell.
-fn blob_cell() -> &'static Mutex<Vec<u8>> {
-    static C: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
-    C.get_or_init(|| Mutex::new(Vec::new()))
+/// binary and may contain embedded NUL bytes; one cell serves every read because the
+/// prelude copies each result into a PHP string (wrapped in a `php://memory` stream)
+/// before the next read on that thread overwrites the cell.
+fn blob_cell() -> &'static LocalKey<RefCell<Vec<u8>>> {
+    thread_local! {
+        static C: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    }
+    &C
 }
 
-/// Stores `s` (NUL bytes stripped) into the per-result static `cell` and returns
-/// a pointer into it. Valid until the next call writing the same cell; elephc
-/// copies it into an owned PHP string on return.
-fn store_cstr(cell: &'static Mutex<CString>, s: &str) -> *const c_char {
+/// Stores `s` (NUL bytes stripped) into the calling thread's `cell` and returns a
+/// pointer into it. Valid until the next call writing the same cell on that
+/// thread; elephc copies it into an owned PHP string on return.
+///
+/// The cells are per-thread rather than process-global for a lifetime reason, not a
+/// contention one: this assignment DROPS the `CString` the cell held, freeing the
+/// bytes any pointer previously handed out of the same cell still points at. With
+/// one process-wide cell that free could land between another thread's
+/// `store_cstr` and its caller's read of the returned pointer — a use-after-free
+/// that reads whatever the allocator handed the block to next (`cargo test
+/// -p elephc-pdo -- --ignored` runs the live PostgreSQL and MySQL round trips
+/// concurrently and did exactly that, reading non-UTF-8 garbage for a SQLSTATE).
+/// A thread only ever invalidates pointers it was itself handed, and the prelude
+/// copies each one before its next bridge call.
+fn store_cstr(cell: &'static LocalKey<RefCell<CString>>, s: &str) -> *const c_char {
     let bytes: Vec<u8> = s.bytes().filter(|&b| b != 0).collect();
     let cstr = CString::new(bytes).unwrap_or_default();
-    let mut guard = lock_recover(cell);
-    *guard = cstr;
-    guard.as_ptr()
+    cell.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        *slot = cstr;
+        slot.as_ptr()
+    })
 }
 
 /// Stores raw bytes into the current thread's result buffer and returns a pointer
@@ -1023,12 +1094,12 @@ pub unsafe extern "C" fn elephc_pdo_open_persistent(
 }
 
 /// Returns a pointer to the message captured by the most recent failed
-/// `elephc_pdo_open`. Valid until the next failed open. A caught panic degrades to
-/// an empty message.
+/// `elephc_pdo_open`. Valid until the next failed open on the calling thread. A
+/// caught panic degrades to an empty message.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_last_open_error() -> *const c_char {
     ffi_guard(static_cstr(b"\0"), || {
-        lock_recover(open_error_cell()).as_ptr()
+        open_error_cell().with(|slot| slot.borrow().as_ptr())
     })
 }
 
@@ -1037,7 +1108,7 @@ pub extern "C" fn elephc_pdo_last_open_error() -> *const c_char {
 #[no_mangle]
 pub extern "C" fn elephc_pdo_last_open_sqlstate() -> *const c_char {
     ffi_guard(static_cstr(b"\0"), || {
-        lock_recover(open_sqlstate_cell()).as_ptr()
+        open_sqlstate_cell().with(|slot| slot.borrow().as_ptr())
     })
 }
 
@@ -1548,8 +1619,9 @@ pub extern "C" fn elephc_pdo_errcode(conn_id: i64) -> i64 {
     })
 }
 
-/// Returns a pointer to the connection's current error message. Valid until the
-/// next `elephc_pdo_errmsg`. A caught panic degrades to an empty message.
+/// Returns a pointer to the connection's current error message. Valid until the next
+/// `elephc_pdo_errmsg` on the calling thread. A caught panic degrades to an empty
+/// message.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
     ffi_guard(static_cstr(b"\0"), || {
@@ -1580,7 +1652,7 @@ pub extern "C" fn elephc_pdo_errmsg(conn_id: i64) -> *const c_char {
 /// (`"00000"` on success). Unknown handles also report `"00000"` (no operation
 /// has been recorded for them), and so does a caught panic — the call that panicked
 /// has already reported its own `-1`/`0` failure, which is what the prelude raises
-/// on. Valid until the next `elephc_pdo_sqlstate`.
+/// on. Valid until the next `elephc_pdo_sqlstate` on the calling thread.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_sqlstate(conn_id: i64) -> *const c_char {
     ffi_guard(static_cstr(b"00000\0"), || {
@@ -1687,7 +1759,7 @@ pub unsafe extern "C" fn elephc_pdo_cubrid_quote(
                 Err(_) => return -1,
             };
             let length = output.len() as i64;
-            *lock_recover(blob_cell()) = output;
+            blob_cell().with(|slot| *slot.borrow_mut() = output);
             return length;
         }
         #[cfg(not(feature = "cubrid"))]
@@ -2759,7 +2831,7 @@ pub unsafe extern "C" fn elephc_pdo_blob_read(
         match result {
             Ok(bytes) => {
                 let len = bytes.len() as i64;
-                *lock_recover(blob_cell()) = bytes;
+                blob_cell().with(|slot| *slot.borrow_mut() = bytes);
                 len
             }
             Err(_) => -1,
@@ -2829,7 +2901,7 @@ pub unsafe extern "C" fn elephc_pdo_blob_read_at(
         match result {
             Ok(bytes) => {
                 let length = bytes.len() as i64;
-                *lock_recover(blob_cell()) = bytes;
+                blob_cell().with(|slot| *slot.borrow_mut() = bytes);
                 length
             }
             Err(_) => -1,
@@ -2897,7 +2969,7 @@ pub unsafe extern "C" fn elephc_pdo_lob_get(conn_id: i64, oid: *const c_char) ->
         match result {
             Some(bytes) => {
                 let len = bytes.len() as i64;
-                *lock_recover(blob_cell()) = bytes;
+                blob_cell().with(|slot| *slot.borrow_mut() = bytes);
                 len
             }
             None => -1,
@@ -2949,7 +3021,7 @@ pub unsafe extern "C" fn elephc_pdo_lob_read_at(
         match result {
             Some(bytes) => {
                 let length = bytes.len() as i64;
-                *lock_recover(blob_cell()) = bytes;
+                blob_cell().with(|slot| *slot.borrow_mut() = bytes);
                 length
             }
             None => -1,
@@ -3043,39 +3115,46 @@ pub unsafe extern "C" fn elephc_pdo_lob_put(
     })
 }
 
-/// Returns a pointer to the first byte of the shared blob buffer filled by the most
-/// recent `elephc_pdo_blob_read` / `elephc_pdo_lob_get`, or a NULL pointer when that
-/// buffer is empty (which is also the caught-panic sentinel). Mirrors the
-/// `elephc_pdo_column_data_ptr` contract: the pointer is valid until the next call
-/// that rewrites the cell, and the prelude copies the whole run of
+/// Returns a pointer to the first byte of the calling thread's blob buffer, filled by
+/// the most recent `elephc_pdo_blob_read` / `elephc_pdo_lob_get` on that thread, or a
+/// NULL pointer when that buffer is empty (which is also the caught-panic sentinel).
+/// Mirrors the `elephc_pdo_column_data_ptr` contract: the pointer is valid until the
+/// next call on that thread that rewrites the cell, and the prelude copies the whole run of
 /// `elephc_pdo_blob_read`-reported bytes out immediately through `ptr_read_string`.
 /// It exists so a BLOB is bulk-copied in one call instead of one PHP-level bridge
 /// call per byte through `elephc_pdo_blob_byte` (kept as the fallback/compat path).
 #[no_mangle]
 pub extern "C" fn elephc_pdo_blob_data_ptr() -> *const c_char {
     ffi_guard(std::ptr::null(), || {
-        let guard = lock_recover(blob_cell());
-        if guard.is_empty() {
-            std::ptr::null()
-        } else {
-            guard.as_ptr() as *const c_char
-        }
+        blob_cell().with(|slot| {
+            let slot = slot.borrow();
+            if slot.is_empty() {
+                std::ptr::null()
+            } else {
+                slot.as_ptr() as *const c_char
+            }
+        })
     })
 }
 
-/// Returns the byte at `offset` in the shared blob buffer populated by the most recent
-/// `elephc_pdo_blob_read` / `elephc_pdo_lob_get`, or 0 when out of range (or on a caught
-/// panic). This is the fallback/compat drain path — one bridge call per byte — kept
-/// alongside the bulk `elephc_pdo_blob_data_ptr`; like `elephc_pdo_column_data_byte`,
-/// it preserves embedded NUL bytes on the round-trip into a PHP string.
+/// Returns the byte at `offset` in the calling thread's blob buffer, populated by the
+/// most recent `elephc_pdo_blob_read` / `elephc_pdo_lob_get` on that thread, or 0 when
+/// out of range (or on a caught panic). This is the fallback/compat drain path — one
+/// bridge call per byte — kept alongside the bulk `elephc_pdo_blob_data_ptr`; like
+/// `elephc_pdo_column_data_byte`, it preserves embedded NUL bytes on the round-trip
+/// into a PHP string.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_blob_byte(offset: i64) -> i64 {
     ffi_guard(0, || {
         if offset < 0 {
             return 0;
         }
-        let guard = lock_recover(blob_cell());
-        guard.get(offset as usize).map(|&b| b as i64).unwrap_or(0)
+        blob_cell().with(|slot| {
+            slot.borrow()
+                .get(offset as usize)
+                .map(|&b| b as i64)
+                .unwrap_or(0)
+        })
     })
 }
 
@@ -3616,7 +3695,7 @@ pub extern "C" fn elephc_pdo_output_data(stmt_id: i64, idx: i64) -> i64 {
             return -2;
         };
         let length = data.len() as i64;
-        *lock_recover(blob_cell()) = data;
+        blob_cell().with(|slot| *slot.borrow_mut() = data);
         length
     })
 }
@@ -4958,7 +5037,7 @@ pub extern "C" fn elephc_pdo_stmt_errcode(stmt_id: i64) -> i64 {
 /// Returns a pointer to the statement's last error message (see
 /// `elephc_pdo_stmt_errcode` for how PostgreSQL/MySQL statements share their
 /// connection's bookkeeping). Empty string for an unknown handle — and for a caught
-/// panic. Valid until the next `elephc_pdo_stmt_errmsg`.
+/// panic. Valid until the next `elephc_pdo_stmt_errmsg` on the calling thread.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_stmt_errmsg(stmt_id: i64) -> *const c_char {
     ffi_guard(static_cstr(b"\0"), || {
@@ -5076,7 +5155,7 @@ pub extern "C" fn elephc_pdo_stmt_sent_sql(stmt_id: i64) -> *const c_char {
 /// connection has since closed reports `"HY000"`. A caught panic degrades to the
 /// unknown-handle answer, `"00000"` — the call that panicked has already reported its
 /// own failure sentinel, which is what the prelude raises on. Valid until the next
-/// `elephc_pdo_stmt_sqlstate`.
+/// `elephc_pdo_stmt_sqlstate` on the calling thread.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_stmt_sqlstate(stmt_id: i64) -> *const c_char {
     ffi_guard(static_cstr(b"00000\0"), || {
@@ -5219,6 +5298,51 @@ mod tests {
 
         for handle in handles {
             handle.join().expect("column-data worker must not panic");
+        }
+    }
+
+    /// SQLSTATE results retain their own bytes until the caller on each thread has
+    /// copied them out of the bridge-owned return buffer. Two threads reporting
+    /// *different* SQLSTATEs at the same moment must each read back their own: with
+    /// one process-wide return cell, the second thread's `store_cstr` drops the
+    /// `CString` the first thread was just handed a pointer into, so that thread
+    /// reads freed memory (the CI `pg_round_trip`/`my_round_trip` pair, which run
+    /// concurrently under `cargo test -- --ignored`, raced exactly this way and read
+    /// non-UTF-8 garbage where `"00000"` belonged).
+    #[test]
+    fn sqlstate_buffers_are_isolated_between_threads() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles = [false, true].map(|force_error| {
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let dsn = cs("sqlite::memory:");
+                let conn = unsafe { elephc_pdo_open(dsn.as_ptr()) };
+                assert!(conn > 0, "open failed");
+                let ddl = cs("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+                assert_eq!(unsafe { elephc_pdo_exec(conn, ddl.as_ptr()) }, 0);
+                let expected = if force_error {
+                    let ins = cs("INSERT INTO t (id) VALUES (1)");
+                    assert_eq!(unsafe { elephc_pdo_exec(conn, ins.as_ptr()) }, 1);
+                    assert_eq!(unsafe { elephc_pdo_exec(conn, ins.as_ptr()) }, -1);
+                    "23000"
+                } else {
+                    "00000"
+                };
+
+                // Both threads take their pointer before either reads it: that is
+                // the window in which one process-wide cell frees the string the
+                // other thread is still holding a pointer into.
+                barrier.wait();
+                let pointer = elephc_pdo_sqlstate(conn);
+                barrier.wait();
+                let actual = unsafe { read(pointer) };
+                elephc_pdo_close(conn);
+                assert_eq!(actual, expected, "SQLSTATE buffer was overwritten by the other thread");
+            })
+        });
+
+        for handle in handles {
+            handle.join().expect("sqlstate worker must not panic");
         }
     }
 

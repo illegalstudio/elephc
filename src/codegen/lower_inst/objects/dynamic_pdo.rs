@@ -325,6 +325,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_initialize(
         &inst.operands,
         &params,
         &refs,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -334,7 +335,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_initialize(
     );
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
     emit_void_sentinel(ctx);
     store_if_result(ctx, inst)
 }

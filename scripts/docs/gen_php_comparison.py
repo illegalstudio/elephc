@@ -48,6 +48,16 @@ NOT_IN_BASELINE = {
     "log2": "No PHP equivalent (PHP has log(), log10(), log1p())",
 }
 
+# Public registry builtins that PHP DOES define, but only in a release NEWER than
+# the vendored baseline snapshot. They are neither a coverage gap nor a "Beyond
+# PHP" extension: counting them against the older baseline's denominator would
+# claim coverage of functions that baseline never had, so they are reported in
+# their own sentence instead. Name -> the PHP release that added it.
+NEWER_THAN_BASELINE = {
+    "curl_multi_get_handles": "8.5",
+    "curl_share_init_persistent": "8.5",
+}
+
 
 def _load_json(path: Path, required_keys: tuple[str, ...], errors: list[str]):
     if not path.exists():
@@ -128,18 +138,24 @@ def validate_catalog(catalog: dict, repo_root: Path, baseline_extensions=()) -> 
 
 def match_builtins(registry: list, baseline_functions: dict):
     """Split registry entries into per-PHP-extension supported lists,
-    elephc-specific extensions ('Beyond PHP'), and language constructs."""
+    elephc-specific extensions ('Beyond PHP'), language constructs, and
+    functions that postdate the baseline snapshot."""
     # Staleness guard: NOT_IN_BASELINE is only correct while every name in it
     # is genuinely absent from the baseline. If a baseline refresh adds one
     # back (e.g. a new PHP release ships it), the escape hatch has gone
     # stale and must be pruned rather than silently keep swallowing it.
     dead = sorted(set(NOT_IN_BASELINE) & set(baseline_functions))
     assert not dead, f"NOT_IN_BASELINE entries now exist in the baseline; remove them: {dead}"
+    # Same guard for the newer-than-baseline hatch: once the snapshot is refreshed
+    # onto a PHP that ships these, they must be counted in coverage, not excused.
+    dead = sorted(set(NEWER_THAN_BASELINE) & set(baseline_functions))
+    assert not dead, f"NEWER_THAN_BASELINE entries now exist in the baseline; remove them: {dead}"
 
     errors: list[str] = []
     per_ext: dict[str, list] = {}
     beyond: list = []
     constructs: list = []
+    newer: list = []
     for entry in registry:
         if entry["is_internal"]:
             continue
@@ -153,16 +169,19 @@ def match_builtins(registry: list, baseline_functions: dict):
                 constructs.append(entry)
             elif name in NOT_IN_BASELINE:
                 beyond.append(entry)
+            elif name in NEWER_THAN_BASELINE:
+                newer.append(entry)
             else:
                 errors.append(
                     f"builtin '{name}' is public in builtin_registry.json but absent from "
                     f"php_baseline.json: flag it (is_extension/is_internal), add it to "
-                    f"LANGUAGE_CONSTRUCTS if it is a PHP construct, or refresh the baseline "
+                    f"LANGUAGE_CONSTRUCTS if it is a PHP construct, list it in "
+                    f"NEWER_THAN_BASELINE if a newer PHP added it, or refresh the baseline "
                     f"with scripts/docs/extract_php_baseline.py"
                 )
             continue
         per_ext.setdefault(ext, []).append(entry)
-    return per_ext, beyond, constructs, errors
+    return per_ext, beyond, constructs, newer, errors
 
 
 def _pct(part: int, whole: int) -> str:
@@ -191,7 +210,7 @@ def _catalog_table(entries: list) -> list[str]:
     return lines
 
 
-def render(baseline, per_ext, beyond, constructs, catalog) -> str:
+def render(baseline, per_ext, beyond, constructs, newer, catalog) -> str:
     functions = baseline["functions"]
     totals: dict[str, int] = {}
     for ext in functions.values():
@@ -276,6 +295,17 @@ def render(baseline, per_ext, beyond, constructs, catalog) -> str:
             f"In addition, elephc implements {len(constructs)} PHP language "
             f"constructs that PHP does not count as functions: {names}.",
         ]
+    if newer:
+        names = ", ".join(
+            f"`{b['name']}()` (PHP {NEWER_THAN_BASELINE[b['name']]})"
+            for b in sorted(newer, key=lambda b: b["name"])
+        )
+        lines += [
+            "",
+            f"elephc also implements {len(newer)} function(s) that PHP added "
+            f"AFTER this baseline release, so they cannot be counted against it: "
+            f"{names}.",
+        ]
 
     lines += ["", "## Language constructs", ""]
     lines += _catalog_table(catalog.get("language", []))
@@ -337,14 +367,14 @@ def run(repo_root: Path = REPO_ROOT) -> int:
         return _fail(errors)
 
     errors.extend(validate_catalog(catalog, repo_root, baseline["extensions"]))
-    per_ext, beyond, constructs, match_errors = match_builtins(
+    per_ext, beyond, constructs, newer, match_errors = match_builtins(
         registry, baseline["functions"]
     )
     errors.extend(match_errors)
     if errors:
         return _fail(errors)
 
-    page = render(baseline, per_ext, beyond, constructs, catalog)
+    page = render(baseline, per_ext, beyond, constructs, newer, catalog)
     output = repo_root / "docs" / "php" / "compatibility.md"
     output.write_text(page, encoding="utf-8")
     print(f"wrote {output.relative_to(repo_root)}")

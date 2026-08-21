@@ -7,7 +7,7 @@
 //! Key details:
 //! - All executable metadata comes from the compiled catalog and stale dimensions fail closed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -16,6 +16,35 @@ use serde::{Deserialize, Serialize};
 use super::catalog;
 use super::error::{NativeError, NativeErrorKind};
 use super::manifest::ManifestDocument;
+
+/// Declares every catalog-required transitive dependency directly onto the manifest, so a package
+/// with a non-empty `PackageVersion::dependencies` (first: `curl` depends on `openssl` and
+/// `zlib`) never requires its consumer to hand-list those dependencies themselves. Already
+/// (re)build calls of `elephc native add curl`/`update` stay idempotent: a dependency already
+/// declared at any version is left untouched.
+pub fn declare_transitive_dependencies(manifest: &mut ManifestDocument) -> Result<(), NativeError> {
+    let mut frontier: Vec<String> = manifest.dependencies().keys().cloned().collect();
+    let mut visited: BTreeSet<String> = BTreeSet::new();
+    while let Some(name) = frontier.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let selected = manifest
+            .dependencies()
+            .get(&name)
+            .cloned()
+            .expect("frontier package remains declared");
+        let version = catalog::version(&name, Some(&selected))?;
+        for dependency in version.dependencies {
+            if !manifest.dependencies().contains_key(*dependency) {
+                let dependency_version = catalog::version(dependency, None)?;
+                manifest.set_dependency(dependency, dependency_version.version)?;
+            }
+            frontier.push((*dependency).to_string());
+        }
+    }
+    Ok(())
+}
 
 /// Strict generated native lockfile schema.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -162,6 +191,44 @@ mod tests {
     /// Builds the canonical one-package manifest fixture.
     fn manifest() -> ManifestDocument {
         ManifestDocument::parse("[native]\nschema = 1\n[native.dependencies]\npcre2 = \"10.47\"\n").unwrap()
+    }
+
+    /// Verifies declaring only `curl` transitively materializes every library it links onto
+    /// the manifest, so `elephc native add curl` never requires the caller to hand-list any
+    /// of them. The walk is a real closure, not one level: `libssh2`'s own `openssl`/`zlib`
+    /// dependencies are reached through `libssh2`, not through `curl`.
+    #[test]
+    fn declares_curl_transitive_dependencies_onto_manifest() {
+        let mut manifest = ManifestDocument::parse(
+            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\n",
+        )
+        .unwrap();
+        declare_transitive_dependencies(&mut manifest).unwrap();
+        assert_eq!(manifest.dependencies().get("libssh2").map(String::as_str), Some("1.11.1"));
+        assert_eq!(manifest.dependencies().get("nghttp2").map(String::as_str), Some("1.70.0"));
+        assert_eq!(manifest.dependencies().get("openssl").map(String::as_str), Some("3.5.7"));
+        assert_eq!(manifest.dependencies().get("zlib").map(String::as_str), Some("1.3.2"));
+        // The now fully-declared manifest locks without failing closed.
+        let lock = NativeLock::from_manifest(&manifest).unwrap();
+        assert_eq!(lock.package.len(), 5);
+        assert!(lock.package("libssh2").is_some());
+        assert!(lock.package("nghttp2").is_some());
+        assert!(lock.package("openssl").is_some());
+        assert!(lock.package("zlib").is_some());
+    }
+
+    /// Verifies an already-declared transitive dependency is left untouched (idempotent, and
+    /// respects an explicit prior declaration instead of silently overriding it).
+    #[test]
+    fn transitive_declaration_does_not_override_an_existing_dependency() {
+        let mut manifest = ManifestDocument::parse(
+            "[native]\nschema = 1\n[native.dependencies]\ncurl = \"8.21.0\"\nopenssl = \"3.5.7\"\n",
+        )
+        .unwrap();
+        declare_transitive_dependencies(&mut manifest).unwrap();
+        declare_transitive_dependencies(&mut manifest).unwrap();
+        assert_eq!(manifest.dependencies().len(), 5);
+        assert_eq!(manifest.dependencies().get("openssl").map(String::as_str), Some("3.5.7"));
     }
 
     /// Verifies lock rendering is stable and carries all three ordered target plans.

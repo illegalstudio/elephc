@@ -66,6 +66,10 @@ struct TestBridgeStaticlib {
     lib_name: &'static str,
     /// Cargo package that produces `lib<lib_name>.a` for tests.
     package: &'static str,
+    /// PHP extension name this bridge provides, mirroring the `php_extension` field of
+    /// the production bridge table in `src/linker/bridges.rs`. `None` for bridges with no
+    /// distinct PHP extension (the tz bridge folds into `date`; eval is internal).
+    php_extension: Option<&'static str>,
 }
 
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
@@ -73,34 +77,47 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
+        php_extension: Some("openssl"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_pdo",
         package: "elephc-pdo",
+        php_extension: Some("PDO"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_crypto",
         package: "elephc-crypto",
+        php_extension: Some("hash"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_bcmath",
         package: "elephc-bcmath",
+        php_extension: Some("bcmath"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
+        php_extension: Some("Phar"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_tz",
         package: "elephc-tz",
+        php_extension: None,
     },
     TestBridgeStaticlib {
         lib_name: "elephc_image",
         package: "elephc-image",
+        php_extension: Some("gd"),
     },
     TestBridgeStaticlib {
         lib_name: "elephc_magician",
         package: "elephc-magician",
+        php_extension: None,
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_curl",
+        package: "elephc-curl",
+        php_extension: Some("curl"),
     },
 ];
 
@@ -249,12 +266,48 @@ fn requested_bridge_staticlibs<'a>(actual_link_libs: &[&str]) -> Vec<&'a TestBri
         .collect()
 }
 
-/// Builds any requested bridge staticlibs missing from the debug target directory.
-fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Path) {
-    let _guard = BRIDGE_STATICLIB_BUILD_LOCK
+/// Maps the bridges a fixture links to the PHP extension names `extension_loaded()` must
+/// report, mirroring what `pipeline::backend` does with `linker::php_extension_for_lib`.
+///
+/// That table lives in the `elephc` BINARY crate and is unreachable from an integration
+/// test, so the mapping is carried on `TEST_BRIDGE_STATICLIBS` — the list this harness
+/// already mirrors from it — rather than invented per test.
+pub(crate) fn test_linked_extensions(required_libraries: &[String]) -> Vec<String> {
+    let mut extensions: Vec<String> = Vec::new();
+    for bridge in TEST_BRIDGE_STATICLIBS {
+        let Some(extension) = bridge.php_extension else {
+            continue;
+        };
+        if required_libraries.iter().any(|lib| lib == bridge.lib_name)
+            && !extensions.iter().any(|existing| existing == extension)
+        {
+            extensions.push(extension.to_string());
+        }
+    }
+    extensions
+}
+
+/// Locks `BRIDGE_STATICLIB_BUILD_LOCK`, recovering the guard if an earlier holder
+/// panicked while it was held (poisoning it) instead of re-panicking on every later
+/// call. One fixture's bridge-build failure must stay that fixture's own loud,
+/// attributed failure -- it must not turn every OTHER fixture that merely shares this
+/// process into a misleading `PoisonError` that names no real cause. The guarded
+/// payload is `()`: a panic while holding this lock only ever happens mid `cargo
+/// build`/`fs::copy`, never mid-mutation of shared state, so there is nothing a panic
+/// could have left inconsistent and recovering is always safe. Mirrors the identical
+/// `lock_recover` pattern already used for FFI-facing locks in
+/// `elephc-curl`/`elephc-pdo`/`elephc-image` (F-QUAL-02), applied here to the harness's
+/// own build-serialization lock instead of a bridge's runtime state.
+fn lock_bridge_staticlib_build() -> std::sync::MutexGuard<'static, ()> {
+    BRIDGE_STATICLIB_BUILD_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("bridge staticlib build lock poisoned");
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Builds any requested bridge staticlibs missing from the debug target directory.
+fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Path) {
+    let _guard = lock_bridge_staticlib_build();
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path = bridge_staticlib_dir.join(format!("lib{}.a", bridge.lib_name));
         let requires_libpq_profile = bridge.lib_name == "elephc_pdo"
@@ -370,6 +423,130 @@ pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
     ensure_bridge_staticlibs(actual_link_libs, &bridge_staticlib_dir());
 }
 
+/// Builds (or reuses, if fresh) the curl-aware magician archive a fixture that links BOTH
+/// `elephc_magician` (it calls `eval()`) and `elephc_curl` (it uses the curl surface, inside
+/// or outside eval) needs. Mirrors the production fix in `src/linker/bridges.rs`'s
+/// `BridgeStaticlib::magician_curl_archive_path`/`build_magician_curl_staticlib` exactly,
+/// for the identical reason documented there: `crates/elephc-magician`'s default build
+/// (`cargo build -p elephc-magician`, no features) never compiles curl's eval homes in at
+/// all (`crates/elephc-magician/src/interpreter/builtins/curl/mod.rs`'s module doc), so a
+/// fixture that needs `curl_init()` et al. reachable from `eval()` needs a SEPARATE archive
+/// built `--features curl` — and that build must land at a DISTINCT filename
+/// (`libelephc_magician_curl.a`), built into an ISOLATED `--target-dir`, never written
+/// in-place over the plain `libelephc_magician.a` every curl-free eval fixture in this same
+/// test binary already relies on. `cargo test` runs multiple test binaries (and, within one
+/// binary, multiple `#[test]` functions) concurrently, so an in-place-overwrite approach
+/// here would risk the exact cross-test contamination the production bug report documents:
+/// a curl-free eval fixture racing against this build could pick up a stale curl-aware
+/// `libelephc_magician.a` and fail to link.
+///
+/// Guarded by `BRIDGE_STATICLIB_BUILD_LOCK` (the same lock `ensure_bridge_staticlibs`
+/// takes) so two fixtures needing this in parallel do not race the same `cargo build`.
+///
+/// Archived CI shards (`ELEPHC_TEST_PREBUILT_BRIDGES=1`) trust a prebuilt copy the
+/// build-archive job placed alongside every other bridge instead of ever attempting the
+/// `cargo build` below: those shards run from an extracted nextest archive with
+/// `CARGO_NET_OFFLINE=true` and no cargo registry cache restored, so an on-demand
+/// `cargo build -p elephc-magician --features curl` there cannot resolve its
+/// dependency graph at all -- it fails immediately with "no matching package named `X`
+/// found ... offline mode", which is exactly what happened before the build-archive
+/// jobs started producing this artifact (see .config/nextest.toml's
+/// `[[profile.ci.archive.include]]` list and the "Build curl-aware magician staticlib"
+/// step in .github/workflows/ci.yml). If the trusted copy is somehow still missing,
+/// fail loudly and immediately with a message that names the real cause instead of
+/// falling through into that same doomed, confusing offline build.
+fn ensure_magician_curl_staticlib(bridge_staticlib_dir: &Path) {
+    let _guard = lock_bridge_staticlib_build();
+
+    let archive_path = bridge_staticlib_dir.join("libelephc_magician_curl.a");
+
+    if prebuilt_bridge_staticlibs_are_trusted() {
+        assert!(
+            archive_path.exists(),
+            "ELEPHC_TEST_PREBUILT_BRIDGES is set but {} is missing -- the build-archive \
+             job's nextest archive did not include the curl-aware magician staticlib. \
+             See .config/nextest.toml's [[profile.ci.archive.include]] list and the \
+             \"Build curl-aware magician staticlib\" step in .github/workflows/ci.yml.",
+            archive_path.display()
+        );
+        return;
+    }
+
+    if !bridge_staticlib_needs_build(&archive_path, "elephc-magician") {
+        return;
+    }
+
+    // Isolated `--target-dir`, exactly like the production fix: a plain `cargo build -p
+    // elephc-magician --features curl` against the ordinary workspace `target/` would
+    // overwrite the very same `libelephc_magician.a` a curl-free fixture in this same test
+    // process depends on (Cargo does not vary a staticlib's output filename by feature
+    // set).
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let curl_target_dir = manifest_dir.join("target/elephc-magician-curl-test-build");
+    let status = Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "elephc-magician",
+            "--features",
+            "curl",
+            "--target-dir",
+        ])
+        .arg(&curl_target_dir)
+        .current_dir(manifest_dir)
+        .status()
+        .unwrap_or_else(|err| panic!("failed to run cargo build for elephc-magician --features curl: {err}"));
+    assert!(status.success(), "failed to build curl-aware elephc-magician staticlib");
+
+    let built = curl_target_dir.join("debug/libelephc_magician.a");
+    std::fs::create_dir_all(bridge_staticlib_dir).unwrap_or_else(|err| {
+        panic!(
+            "failed to create bridge staticlib directory {}: {err}",
+            bridge_staticlib_dir.display()
+        )
+    });
+    std::fs::copy(&built, &archive_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy curl-aware magician archive from {} to {}: {err}",
+            built.display(),
+            archive_path.display()
+        )
+    });
+}
+
+/// Returns a NEW link plan with the `elephc_magician` `NamedLibrary` entry renamed to the
+/// curl-aware archive — the test-harness equivalent of `src/linker/bridges.rs`'s
+/// `resolve()` routing `elephc_magician` to `magician_curl_archive_path()` only when the
+/// SAME plan also names `elephc_curl`. Every other item, including a magician-only plan's
+/// `elephc_magician` entry (when `needs_magician_curl` is `false`), passes through
+/// unchanged. Takes `&LinkPlan` and returns an owned copy rather than consuming the
+/// original, so callers can keep using the original plan's borrows (e.g. `named_libraries`'
+/// `Vec<&str>`) afterward.
+fn magician_curl_aware_plan(
+    plan: &elephc::link_plan::LinkPlan,
+    needs_magician_curl: bool,
+) -> elephc::link_plan::LinkPlan {
+    use elephc::link_plan::LinkItem;
+
+    let items = plan
+        .items()
+        .iter()
+        .cloned()
+        .map(|item| match item {
+            LinkItem::NamedLibrary { name, origin }
+                if needs_magician_curl && name == "elephc_magician" =>
+            {
+                LinkItem::NamedLibrary {
+                    name: "elephc_magician_curl".to_string(),
+                    origin,
+                }
+            }
+            other => other,
+        })
+        .collect();
+    elephc::link_plan::LinkPlan::from_items(items)
+}
+
 /// Reports whether a bridge staticlib is missing or older than its package
 /// sources. This keeps codegen tests from linking stale bridge archives after a
 /// bridge crate changes inside the same worktree. Archived CI runs can declare
@@ -433,6 +610,140 @@ fn bridge_staticlib_dir_for(
     }
 
     manifest_dir.join("target/debug")
+}
+
+#[cfg(test)]
+mod curl_native_link_order_tests {
+    use super::*;
+    use elephc::codegen::LinkRequirement;
+    use std::path::PathBuf;
+    use elephc::link_plan::{LinkItem, LinkOrigin};
+
+    /// Builds the package set `curl_native::CURL_NATIVE_PACKAGES` declares, with synthetic
+    /// paths, so this test asserts ORDER without needing the machine to have the packages.
+    fn fake_packages() -> Vec<super::super::curl_native::CurlNativePackage> {
+        [
+            ("curl", vec!["libcurl.a"]),
+            ("libssh2", vec!["libssh2.a"]),
+            ("openssl", vec!["libssl.a", "libcrypto.a"]),
+            ("zlib", vec!["libz.a"]),
+            ("nghttp2", vec!["libnghttp2.a"]),
+        ]
+        .into_iter()
+        .map(|(name, archives)| {
+            let library_dir = PathBuf::from(format!("/cache/{name}/lib"));
+            super::super::curl_native::CurlNativePackage {
+                name,
+                archives: archives.iter().map(|a| library_dir.join(a)).collect(),
+                library_dir,
+            }
+        })
+        .collect()
+    }
+
+    /// Returns the archive filenames a plan emits, in plan order.
+    fn archive_names(plan: &elephc::link_plan::LinkPlan) -> Vec<String> {
+        plan.items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::StaticArchive { path, .. } => {
+                    Some(path.file_name()?.to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// THE LINK ORDER GNU `ld` REQUIRES, asserted as a property rather than a literal list:
+    /// every archive precedes the archives that satisfy it.
+    ///
+    /// GNU ld scans archives once, left to right; Apple's ld64 re-scans to a fixed point.
+    /// A plan that is merely "complete" therefore links on macOS and can fail on Linux, so
+    /// ordering has to be checked here, on a machine that cannot observe the failure.
+    #[test]
+    fn managed_curl_archives_precede_the_archives_that_satisfy_them() {
+        let mut plan = elephc::link_plan::LinkPlan::new();
+        push_curl_native_archives(&mut plan, &fake_packages());
+        let names = archive_names(&plan);
+
+        let at = |needle: &str| {
+            names
+                .iter()
+                .position(|name| name == needle)
+                .unwrap_or_else(|| panic!("{needle} missing from {names:?}"))
+        };
+        // libssh2.a(comp.o) calls deflateInit_/deflate/deflateEnd, and its crypto backend
+        // is our OpenSSL: both must be scanned after it.
+        assert!(at("libssh2.a") < at("libz.a"), "{names:?}");
+        assert!(at("libssh2.a") < at("libssl.a"), "{names:?}");
+        assert!(at("libssh2.a") < at("libcrypto.a"), "{names:?}");
+        // libcurl.a references every one of them.
+        for dependency in ["libssh2.a", "libssl.a", "libcrypto.a", "libz.a", "libnghttp2.a"] {
+            assert!(at("libcurl.a") < at(dependency), "{names:?}");
+        }
+        assert_eq!(names.len(), 6, "{names:?}");
+    }
+
+    /// THE REGRESSION THIS FIXES. A `streams::` fixture calls `fopen($path, …)` with a
+    /// non-literal filename, whose requirements include `SystemLibrary("z")`
+    /// (`src/builtins/requirements.rs::fopen_requirements`). That `-lz` is planned BEFORE
+    /// the managed curl chain, and while the managed packages were emitted as `-l` NAMES
+    /// through the plan's shared dedupe set, the earlier `-lz` suppressed the managed zlib
+    /// entirely — leaving nothing after `libssh2.a` to resolve `deflateInit_`. GNU ld
+    /// failed the link on both Linux targets; ld64 re-scanned and never noticed.
+    ///
+    /// Managed archives are exact paths now, so they cannot collide with a named library at
+    /// all: the early `-lz` still appears, AND `libz.a` still follows `libssh2.a`.
+    #[test]
+    fn an_earlier_system_zlib_cannot_suppress_the_managed_one() {
+        let mut plan = elephc::link_plan::LinkPlan::new();
+        // Exactly what the runtime-requirement loop emits first for these fixtures.
+        plan.push(LinkItem::NamedLibrary {
+            name: "z".to_string(),
+            origin: LinkOrigin::Runtime,
+        });
+        push_curl_native_archives(&mut plan, &fake_packages());
+
+        let names = archive_names(&plan);
+        let ssh2 = names.iter().position(|n| n == "libssh2.a").expect("libssh2.a");
+        let zlib = names.iter().position(|n| n == "libz.a").expect("libz.a");
+        assert!(zlib > ssh2, "managed libz.a must follow libssh2.a: {names:?}");
+
+        // And the fixture's own `-lz` is untouched: this is not a deduplication fix.
+        let named: Vec<&str> = plan
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::NamedLibrary { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(named, vec!["z"]);
+    }
+
+    /// The managed chain must never re-enter the plan as `-l` names, whatever else is in
+    /// it: a `-lssl` resolved through the search path could bind a SYSTEM OpenSSL into a
+    /// fixture whose entire purpose is proving the pinned build linked.
+    #[test]
+    fn managed_curl_packages_are_never_named_libraries() {
+        let requirements = TestLinkRequirements::new(
+            vec!["elephc_curl".to_string()],
+            vec![
+                LinkRequirement::SystemLibrary("z".to_string()),
+                LinkRequirement::SystemLibrary("bz2".to_string()),
+                LinkRequirement::Bridge("elephc_phar"),
+            ],
+        );
+        let plan = test_link_plan(&requirements, &[], &[]);
+        for item in plan.items() {
+            if let LinkItem::NamedLibrary { name, .. } = item {
+                assert!(
+                    !["curl", "ssh2", "ssl", "crypto", "nghttp2"].contains(&name.as_str()),
+                    "managed native package leaked in as -l{name}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -525,6 +836,19 @@ fn source_tree_newer_than(dir: &Path, archive_mtime: std::time::SystemTime) -> b
 /// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
 /// static linking when no extra libs are needed. Linux links each selected PDO
 /// system client after the bridge archive, followed by the common runtime libs.
+///
+/// `-dead_strip` ON macOS MATCHES `src/linker/command.rs`'s production `render_macos_command`
+/// (which has carried it unconditionally for every `Emit::Executable` link), and this
+/// harness previously omitted it — invisible until a fixture links two bridges that embed
+/// the SAME upstream symbols (e.g. `elephc_crypto`'s hash/cipher entry points, embedded
+/// both standalone and inside the curl-aware `elephc_magician` archive): production's
+/// `-dead_strip` link resolves the duplicates as non-fatal `ld: warning: duplicate symbol`
+/// and keeps one definition; without it, this harness's `ld` invocation turned the SAME
+/// duplicates into a hard `ld: N duplicate symbols` link failure — first surfaced by the
+/// eval+curl fixtures in `tests/codegen/curl/eval.rs`, which are also what confirmed this
+/// one-flag difference (not `archive_dedup.rs`-style whole-archive deduplication, which
+/// only `elephc_curl`'s `whole_archive: true` entry among the three involved bridges
+/// participates in) is the actual, sufficient fix.
 pub(crate) fn link_binary(
     obj_path: &Path,
     runtime_obj: &Path,
@@ -547,6 +871,17 @@ pub(crate) fn link_binary(
     if needs_bridge_staticlib {
         ensure_bridge_staticlibs(&actual_link_libs, &bridge_staticlib_dir);
     }
+    // A fixture that links BOTH `elephc_magician` (it calls `eval()`) and `elephc_curl`
+    // needs a curl-aware magician archive — the plain one `ensure_bridge_staticlibs` just
+    // built above never compiles curl's eval homes in at all. See
+    // `ensure_magician_curl_staticlib`'s own doc for the full argument and why this is a
+    // SEPARATE archive/build, not a rebuild-in-place of the plain one.
+    let needs_magician_curl = actual_link_libs.contains(&"elephc_magician")
+        && actual_link_libs.contains(&"elephc_curl");
+    if needs_magician_curl {
+        ensure_magician_curl_staticlib(&bridge_staticlib_dir);
+    }
+    let final_plan = magician_curl_aware_plan(&plan, needs_magician_curl);
     let needs_libpq = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
         && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some();
     let needs_dblib = actual_link_libs.iter().any(|lib| *lib == "elephc_pdo")
@@ -557,7 +892,7 @@ pub(crate) fn link_binary(
     match target().platform {
         Platform::MacOS => {
             let mut ld_cmd = Command::new("ld");
-            ld_cmd.args(["-arch", target().darwin_arch_name(), "-e", "_main", "-o"]);
+            ld_cmd.args(["-arch", target().darwin_arch_name(), "-e", "_main", "-dead_strip", "-o"]);
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
@@ -589,12 +924,12 @@ pub(crate) fn link_binary(
             if needs_bridge_staticlib {
                 ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
             }
-            append_test_search_paths(&mut ld_cmd, &plan);
-            append_test_link_inputs(&mut ld_cmd, &plan, Platform::MacOS);
+            append_test_search_paths(&mut ld_cmd, &final_plan);
+            append_test_link_inputs(&mut ld_cmd, &final_plan, Platform::MacOS);
             if needs_libpq {
                 ld_cmd.arg("-lpq");
             }
-            append_test_frameworks(&mut ld_cmd, &plan);
+            append_test_frameworks(&mut ld_cmd, &final_plan);
             // The PostgreSQL driver in the PDO bridge pulls in `whoami`, which
             // references CoreFoundation / SystemConfiguration on macOS.
             if actual_link_libs.iter().any(|lib| *lib == "elephc_pdo") {
@@ -613,7 +948,7 @@ pub(crate) fn link_binary(
             ld_cmd.arg("-o").arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
-            if matches!(plan.linux_mode(), elephc::link_plan::LinuxLinkMode::Static) {
+            if matches!(final_plan.linux_mode(), elephc::link_plan::LinuxLinkMode::Static) {
                 ld_cmd.arg("-static");
             }
             if !actual_link_libs.is_empty() {
@@ -622,8 +957,8 @@ pub(crate) fn link_binary(
             if needs_bridge_staticlib {
                 ld_cmd.arg(format!("-L{}", bridge_staticlib_dir.display()));
             }
-            append_test_search_paths(&mut ld_cmd, &plan);
-            append_test_link_inputs(&mut ld_cmd, &plan, Platform::Linux);
+            append_test_search_paths(&mut ld_cmd, &final_plan);
+            append_test_link_inputs(&mut ld_cmd, &final_plan, Platform::Linux);
             if needs_libpq {
                 ld_cmd.arg("-lpq");
             }
@@ -719,6 +1054,23 @@ fn test_link_plan(
             }
         }
     }
+    // The `elephc_curl` bridge declares libcurl's symbols without linking them (its
+    // staticlib never invokes a linker), so a fixture that pulls the bridge in must also
+    // supply the managed native archives the production path resolves through
+    // `native_deps` + `pipeline::backend`. The harness has no project manifest to resolve
+    // against, so it reads the same durable cache structurally — see
+    // `super::curl_native`. A fixture whose packages are missing skips before it ever
+    // reaches this point.
+    if named.contains("elephc_curl") {
+        if let Some(packages) = curl_native_packages() {
+            push_curl_native_archives(&mut plan, packages);
+            if target().platform == Platform::MacOS {
+                for framework in CURL_MACOS_FRAMEWORKS {
+                    plan.push(LinkItem::Framework((*framework).to_string()));
+                }
+            }
+        }
+    }
     for path in extra_link_paths {
         plan.push(LinkItem::SearchPath(path.as_str().into()));
     }
@@ -726,6 +1078,40 @@ fn test_link_plan(
         plan.push(LinkItem::Framework(framework.clone()));
     }
     plan.without_redundant_embedded_bridges()
+}
+
+/// Appends the managed native curl chain as EXACT ARCHIVES, in catalog dependency order.
+///
+/// THE ORDER IS THE CONTRACT, AND SO IS THE ABSENCE OF DEDUPING. GNU `ld` scans archives
+/// once, left to right, resolving only what is undefined at that moment; Apple's `ld64`
+/// re-scans until it reaches a fixed point. So a plan that links fine on macOS can fail on
+/// Linux purely on ordering — which is exactly what happened to the `streams::` fixtures:
+/// each one calls `fopen($path, …)` with a non-literal filename, whose requirements include
+/// `SystemLibrary("z")` (`src/builtins/requirements.rs::fopen_requirements`). That `-lz`
+/// landed in the plan BEFORE this block, the shared `named` set then suppressed the managed
+/// zlib as a duplicate, and nothing after `libssh2.a` could satisfy the `deflateInit_` /
+/// `deflate` / `deflateEnd` that `libssh2.a(comp.o)` needs for SSH channel compression.
+/// GNU ld reported them undefined; ld64 never noticed.
+///
+/// Pushing exact archive paths — the same `LinkItem::managed_archive` the production
+/// planner uses (`src/link_planning.rs`) — removes this whole class rather than reordering
+/// around it: managed archives never enter the `named` dedupe set, so no unrelated
+/// requirement can suppress or reorder them, and every one of them is emitted in the order
+/// `curl_native::CURL_NATIVE_PACKAGES` declares.
+fn push_curl_native_archives(
+    plan: &mut elephc::link_plan::LinkPlan,
+    packages: &[super::curl_native::CurlNativePackage],
+) {
+    use elephc::link_plan::LinkItem;
+
+    for package in packages {
+        plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+    }
+    for package in packages {
+        for archive in &package.archives {
+            plan.push(LinkItem::managed_archive(archive, package.name));
+        }
+    }
 }
 
 /// Appends every typed search path before archive and named-library inputs.

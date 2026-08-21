@@ -137,7 +137,7 @@ fn emit_array_pad_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving refcounted pad spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source indexed-array pointer, requested size, pad payload, and destination array
-    emitter.instruction("sub rsp, 56");                                         // reserve aligned spill slots for the refcounted pad bookkeeping while keeping helper calls 16-byte aligned
+    emitter.instruction("sub rsp, 64");                                         // ROUNDED UP to a 16-byte multiple: `push rbp` already landed rsp on a 16-byte boundary, so reserving an odd multiple of 8 here would leave every `call` in this body misaligned and hand the callee a stack SysV x86_64 forbids. Pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`; see arrays/array_free_deep.rs for the curl SIGSEGV that class of bug produced.
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across normalization and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the signed requested target size across normalization and append helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the borrowed pad payload across the repeated refcounted append helper calls
@@ -226,7 +226,7 @@ fn emit_array_pad_refcounted_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_pad_ref_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the padded destination indexed-array pointer in the standard x86_64 integer result register
-    emitter.instruction("add rsp, 56");                                         // release the refcounted pad spill slots before returning
+    emitter.instruction("add rsp, 64");                                         // release the refcounted pad spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
     emitter.instruction("ret");                                                 // return the padded refcounted indexed-array pointer in rax
 }

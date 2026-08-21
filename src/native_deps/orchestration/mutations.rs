@@ -13,7 +13,7 @@ use crate::native_deps::catalog;
 use crate::native_deps::cli::NativeOptions;
 use crate::native_deps::download::Downloader;
 use crate::native_deps::error::{NativeError, NativeErrorKind};
-use crate::native_deps::lockfile::NativeLock;
+use crate::native_deps::lockfile::{declare_transitive_dependencies, NativeLock};
 use crate::native_deps::manifest::ManifestDocument;
 use crate::native_deps::materialize::materialize_manifest;
 use crate::native_deps::recipe::RecipeRunner;
@@ -50,6 +50,13 @@ pub(super) fn add(
         }
     }
     manifest.set_dependency(package, version.version)?;
+    // Never require the caller to hand-list a catalog dependency (e.g. `openssl`/`zlib` for
+    // `curl`): declare every transitive package directly onto the manifest that gets published.
+    declare_transitive_dependencies(&mut manifest).map_err(|error| {
+        error
+            .with_project(&project.root)
+            .with_default_recovery(&recovery)
+    })?;
     let lock = NativeLock::from_manifest(&manifest).map_err(|error| {
         error
             .with_project(&project.root)
@@ -208,6 +215,13 @@ pub(super) fn update(
             target.as_str()
         )
     };
+    // Never require the caller to hand-list a catalog dependency (e.g. `openssl`/`zlib` for
+    // `curl`): declare every transitive package directly onto the manifest that gets published.
+    declare_transitive_dependencies(&mut manifest).map_err(|error| {
+        error
+            .with_project(&project.root)
+            .with_default_recovery(&recovery)
+    })?;
     let lock = NativeLock::from_manifest(&manifest).map_err(|error| {
         error
             .with_project(&project.root)

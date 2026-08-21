@@ -11,13 +11,47 @@
 use super::*;
 
 impl Drop for EvalStreamResources {
-    /// Frees any incremental hash contexts that were never finalized.
+    /// Frees any incremental hash contexts that were never finalized, and (curl feature
+    /// only) any curl multi, easy, and share handles this eval context ever created — see
+    /// `EvalCurlEasyHandle`'s own doc for why this `Drop` is the ONLY place they are freed.
+    ///
+    /// THE CURL ORDER IS MULTI -> EASY -> SHARE, and it is load-bearing on both ends:
+    ///
+    /// - MULTI BEFORE EASY, because `elephc_curl_multi_free` detaches every still-attached
+    ///   easy handle with `curl_multi_remove_handle` before `curl_multi_cleanup`, and it
+    ///   can only do that while those easy handles still exist. Freeing the easy handles
+    ///   first is not unsafe (libcurl's own `curl_easy_cleanup` detaches a handle from its
+    ///   multi, and the bridge skips ids it no longer knows), but it leaves the detaching
+    ///   to libcurl's internals instead of doing it explicitly.
+    /// - EASY BEFORE SHARE, because the bridge's share free is DEFERRED
+    ///   (`crates/elephc-curl/src/share.rs`'s module doc): a `curl_share_cleanup()` while
+    ///   any attached easy handle remains is refused by libcurl with `CURLSHE_IN_USE` and
+    ///   frees nothing. Running `elephc_curl_easy_free` first lets each handle's own
+    ///   `detach_easy` drain the share's attachment list, so the share free that follows
+    ///   takes the immediate path and the native share (DNS cache, cookie jar, TLS session
+    ///   cache, connection pool) is genuinely released. The other order also terminates
+    ///   correctly — the share would simply be marked `pending_free` and cleaned up by the
+    ///   LAST easy free instead — so this is a "make the common path the direct one"
+    ///   choice, not a correctness cliff. Either way nothing is freed twice: the bridge
+    ///   removes an entry from its table before cleaning it up, and this table drains.
     fn drop(&mut self) {
         for context in self.hash_contexts.drain().map(|(_, context)| context) {
             unsafe {
                 // The resource table owns these handles; draining prevents reuse
                 // after the crypto free call.
                 elephc_crypto::elephc_crypto_free(context.handle);
+            }
+        }
+        #[cfg(feature = "curl")]
+        {
+            for handle in self.curl_multi_handles.drain().map(|(_, handle)| handle) {
+                crate::curl_ffi::multi_free(handle.raw);
+            }
+            for handle in self.curl_easy_handles.drain().map(|(_, handle)| handle) {
+                crate::curl_ffi::easy_free(handle.raw);
+            }
+            for handle in self.curl_share_handles.drain().map(|(_, handle)| handle) {
+                crate::curl_ffi::share_free(handle.raw);
             }
         }
     }
@@ -247,6 +281,95 @@ pub(super) struct EvalHashContext {
     pub(super) handle: *mut c_void,
 }
 
+/// Opaque `elephc-curl` easy-handle resource, plus the same small set of PHP-layer
+/// mirror fields `crate::curl_prelude::CurlHandle` keeps on the object in the AOT
+/// build (`$__elephc_return_transfer`/`$__elephc_private`/`$__elephc_write_user`):
+/// `curl_getinfo(..., CURLINFO_PRIVATE)` and `curl_exec()`'s return-shape decision both
+/// need them and neither is anything the bridge itself tracks.
+///
+/// FREED ONLY BY `EvalStreamResources::drop`, never by any PHP-visible action: eval has
+/// no real `CurlHandle` object to hang a destructor off (this is a `resource kind 5`
+/// cell, `RuntimeValueOps::hash_context`'s doc explains why that means "no destructor
+/// runs" at Mixed-cell teardown), and `curl_close()` is a documented no-op in PHP 8
+/// itself. A curl handle created inside `eval()` therefore lives for the lifetime of the
+/// surrounding `ElephcEvalContext` — the same accepted, documented tradeoff
+/// `EvalHashContext`'s never-finalized case already makes.
+#[cfg(feature = "curl")]
+pub(super) struct EvalCurlEasyHandle {
+    /// The bridge's own easy-handle id (`elephc_curl_easy_init()`'s return value) —
+    /// NOT the eval table key. Every `elephc_curl_easy_*` call needs this, not the
+    /// `EvalStreamResources` key that boxes it into a runtime cell.
+    pub(super) raw: i64,
+    /// Mirrors `CurlHandle::$__elephc_return_transfer`.
+    pub(super) return_transfer: bool,
+    /// Mirrors `CurlHandle::$__elephc_write_user`.
+    pub(super) write_user: bool,
+    /// Mirrors `CurlHandle::$__elephc_private` (`CURLOPT_PRIVATE`'s stored value).
+    /// `None` until first set, read back as PHP `false` — matching the AOT property's
+    /// `false` default.
+    pub(super) private_value: Option<RuntimeCellHandle>,
+    /// Mirrors `CurlHandle::$__elephc_callbacks`, indexed by `crate::curl_ffi`'s `SLOT_*`.
+    /// THE ROOT for every installed callback: the bridge's own slot holds only two opaque
+    /// integers (the slot index and this handle's eval table key), never the callable, so
+    /// this table is what keeps the PHP value alive between `curl_setopt()` and the
+    /// transfer that fires it.
+    pub(super) callbacks: [EvalCurlCallbackSlot; crate::curl_ffi::SLOT_COUNT],
+}
+
+/// One `CURLOPT_*FUNCTION` slot's eval-side state.
+#[cfg(feature = "curl")]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum EvalCurlCallbackSlot {
+    /// Nothing installed: the bridge slot is cleared and libcurl's own default applies.
+    #[default]
+    Empty,
+    /// INSTALLED BUT DELIBERATELY SILENT — the `CURLOPT_DEBUGFUNCTION => null` case, and
+    /// only that one. Clearing the debug registration does not restore "nothing", it
+    /// restores libcurl's OWN default, which with `CURLOPT_VERBOSE` on dumps the entire
+    /// trace to the process's fd 2; php-src prints nothing there because its C trampoline
+    /// stays installed with no PHP callable behind it. Keeping the bridge slot registered
+    /// with no callable reproduces php exactly. See
+    /// `crate::curl_prelude::curl_setopt`'s `$slot === 4` branch, which installs a no-op
+    /// closure for the identical reason.
+    Silent,
+    /// A real PHP callable, RETAINED by this table (released on reset, overwrite, and
+    /// context teardown).
+    Callable(RuntimeCellHandle),
+}
+
+/// Opaque `elephc-curl` MULTI-handle resource, plus the eval counterpart of
+/// `crate::curl_prelude::CurlMultiHandle`'s `$__elephc_ids`/`$__elephc_handles` identity
+/// map. The AOT class needs two parallel lists because it stores real PHP OBJECTS whose
+/// identity `curl_multi_info_read()` must hand back; eval stores only the attached easy
+/// handles' EVAL TABLE KEYS, because an eval curl handle is an inert resource-kind-5 cell
+/// (`crate::interpreter::builtins::curl`'s module doc) that can be re-boxed from its key at
+/// any time — two cells carrying the same key are interchangeable and neither owns
+/// anything, so there is no double-free hazard for AOT's map to prevent here.
+#[cfg(feature = "curl")]
+pub(super) struct EvalCurlMultiHandle {
+    /// The bridge's own multi-handle id (`elephc_curl_multi_init()`'s return value).
+    pub(super) raw: i64,
+    /// EVAL TABLE KEYS of the easy handles currently attached, in add order — what
+    /// `curl_multi_get_handles()` lists and what `curl_multi_info_read()` resolves a
+    /// completion message's easy handle through.
+    pub(super) attached: Vec<i64>,
+}
+
+/// Opaque `elephc-curl` SHARE-handle resource. Carries no attachment bookkeeping of its
+/// own: the BRIDGE owns that (`crates/elephc-curl/src/share.rs`'s `ShareEntry::attached`
+/// and its deferred-free protocol), and duplicating it here would be a second, desyncable
+/// copy of the same truth.
+#[cfg(feature = "curl")]
+pub(super) struct EvalCurlShareHandle {
+    /// The bridge's own share-handle id.
+    pub(super) raw: i64,
+    /// Set for a share minted by PHP 8.5's `curl_share_init_persistent()`. Recorded only so
+    /// `curl_setopt($ch, CURLOPT_SHARE, $sh)`'s TypeError message and this table's own
+    /// teardown can tell the two apart; the bridge independently refuses to free a
+    /// persistent share, so this flag is never load-bearing for lifetime.
+    pub(super) persistent: bool,
+}
+
 /// Stream context metadata tracked by eval.
 pub(super) struct EvalStreamContext {
     pub(super) options: Option<RuntimeCellHandle>,
@@ -340,7 +463,12 @@ impl EvalOpenMode {
     }
 }
 
-/// Builds a unique temporary path for eval `tmpfile()`.
+/// Builds a unique temporary path for eval `tmpfile()` and every ephemeral stream.
+///
+/// `open_ephemeral_stream` backs `php://memory`, `data:` and buffered `phar://` writes
+/// with a file created here and unlinked immediately, so this is on the path of far more
+/// eval streams than `tmpfile()` alone — which is why its uniqueness has to hold under
+/// concurrency. See `eval_tmpfile_nonce`.
 pub(super) fn eval_tmpfile_path() -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!(
@@ -351,10 +479,143 @@ pub(super) fn eval_tmpfile_path() -> PathBuf {
     path
 }
 
-/// Returns a monotonic-ish nonce for temporary file names.
-pub(super) fn eval_tmpfile_nonce() -> u128 {
-    std::time::SystemTime::now()
+/// Returns a nonce for temporary file names that no other call in this process repeats.
+///
+/// THE WALL CLOCK ALONE IS NOT A NONCE. `SystemTime::now()` is *reported* in
+/// nanoseconds, but `CLOCK_REALTIME` only ADVANCES in whole microseconds on macOS (and
+/// at a granularity of its own, coarser than a nanosecond, elsewhere), so `as_nanos()`
+/// hands the same number to every caller inside one tick. Two threads opening an
+/// ephemeral eval stream in the same tick therefore built the SAME path, and the loser's
+/// `create_new` failed with `AlreadyExists` in the window between the winner's create and
+/// its `remove_file` — which `open_ephemeral_stream` turns into `None`, i.e. an eval
+/// `fopen("php://memory")` answering `false` for a stream with nothing wrong with it.
+///
+/// The process-wide sequence is what makes the nonce unique: `fetch_add` gives every
+/// caller a distinct number no matter how many threads ask at once. The clock stays
+/// because the sequence restarts at zero in each process, so it is the clock — with the
+/// process id — that separates one run of the compiler from the next.
+pub(super) fn eval_tmpfile_nonce() -> String {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let clock = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{clock}-{sequence}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    /// Threads: enough to have several callers inside one clock tick.
+    const RACING_THREADS: usize = 8;
+
+    /// Barrier-aligned attempts per thread.
+    const RACING_ROUNDS: usize = 256;
+
+    /// Runs `body` on `RACING_THREADS` threads, realigned on a barrier every round.
+    ///
+    /// The barrier is what turns a probabilistic race into a forced one: every round
+    /// releases all the threads at the same instant, so they call the code under test
+    /// inside the same microsecond rather than whenever the scheduler feels like it.
+    ///
+    /// `body` MUST NOT PANIC. A thread that unwinds never reaches the next
+    /// `Barrier::wait`, which hangs its siblings forever instead of failing the test —
+    /// so the callers below record what they saw and assert after the join.
+    fn race<T: Send + 'static>(
+        body: impl Fn(&mut EvalStreamResources) -> T + Send + Clone + 'static,
+    ) -> Vec<Vec<T>> {
+        let barrier = Arc::new(Barrier::new(RACING_THREADS));
+        let mut handles = Vec::with_capacity(RACING_THREADS);
+        for _ in 0..RACING_THREADS {
+            let barrier = Arc::clone(&barrier);
+            let body = body.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut observed = Vec::with_capacity(RACING_ROUNDS);
+                for _ in 0..RACING_ROUNDS {
+                    barrier.wait();
+                    // A fresh table per round so the round's file is closed and
+                    // dropped before the next one opens, keeping the fd count at
+                    // one per thread instead of one per round.
+                    let mut resources = EvalStreamResources::default();
+                    observed.push(body(&mut resources));
+                }
+                observed
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("racing thread"))
+            .collect()
+    }
+
+    /// Two threads must never build the SAME temporary path.
+    ///
+    /// This is the mechanism itself, with no filesystem in the way. The wall clock is
+    /// not a nonce: `SystemTime::now()` is *reported* in nanoseconds, but
+    /// `CLOCK_REALTIME` only ADVANCES in whole microseconds on macOS, so a name built
+    /// from the clock alone is identical for every caller inside one tick. Against a
+    /// clock-only nonce the barrier makes duplicates near-certain over these rounds;
+    /// with the sequence counter no interleaving can produce one.
+    #[test]
+    fn concurrent_temporary_paths_are_all_distinct() {
+        let observed = race(|_| eval_tmpfile_path());
+        let total = observed.iter().map(Vec::len).sum::<usize>();
+        let distinct: HashSet<&PathBuf> = observed.iter().flatten().collect();
+        assert_eq!(distinct.len(), total, "two threads built the same temporary path");
+    }
+
+    /// Concurrent eval `fopen("php://memory")` calls must all return a stream.
+    ///
+    /// The PHP-visible symptom of the same defect, through the real opener. The loser
+    /// of a path collision failed `create_new` with `AlreadyExists` in the window
+    /// between the winner's create and its `remove_file`, and `open_ephemeral_stream`
+    /// turns any such error into `None` — an eval `fopen()` answering `false` for a
+    /// stream that has nothing wrong with it. Counted rather than asserted inside the
+    /// threads, because a panic there would deadlock the barrier.
+    #[test]
+    fn concurrent_ephemeral_streams_never_fail_to_open() {
+        let failures = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&failures);
+        let observed = race(move |resources: &mut EvalStreamResources| {
+            if resources.open_path("php://memory", "w+").is_none() {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        let total = observed.iter().map(Vec::len).sum::<usize>();
+        assert_eq!(
+            failures.load(Ordering::Relaxed),
+            0,
+            "php://memory failed to open in {total} concurrent attempts"
+        );
+    }
+
+    /// A temporary path must stay inside the temp directory and carry this process id.
+    ///
+    /// The NEGATIVE CONTROL for the two tests above: a bare global counter would make
+    /// every path distinct within this process and pass both, while colliding with
+    /// every OTHER elephc process on the machine. The sequence restarts at zero in each
+    /// process, so the process id is what keeps concurrent processes apart, and the
+    /// directory is what keeps the file out of the compiling project.
+    #[test]
+    fn temporary_paths_stay_scoped_to_this_process_and_the_temp_directory() {
+        let path = eval_tmpfile_path();
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "{} is not in the temp directory",
+            path.display()
+        );
+        let name = path
+            .file_name()
+            .expect("temporary file name")
+            .to_string_lossy()
+            .into_owned();
+        let prefix = format!("elephc-magician-tmpfile-{}-", std::process::id());
+        assert!(name.starts_with(&prefix), "{name} does not start with {prefix}");
+        assert!(name.len() > prefix.len(), "{name} carries no nonce");
+    }
 }

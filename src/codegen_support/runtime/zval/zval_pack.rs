@@ -239,7 +239,7 @@ fn emit_zval_pack_element_linux_x86_64(emitter: &mut Emitter) {
     // -- set up stack frame and spill the incoming payload triple --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 56");                                         // reserve tag/lo/hi/value/type_info slots
+    emitter.instruction("sub rsp, 64");                                         // ROUNDED UP to a 16-byte multiple: `push rbp` already landed rsp on a 16-byte boundary, so reserving an odd multiple of 8 here would leave every `call` in this body misaligned and hand the callee a stack SysV x86_64 forbids. Pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`; see arrays/array_free_deep.rs for the curl SIGSEGV that class of bug produced.
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the tag
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the low payload word
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the high payload word
@@ -357,7 +357,7 @@ fn emit_zval_pack_element_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rcx");                                        // return the zval pointer in rax
 
     emitter.label("__rt_zval_pack_done");
-    emitter.instruction("add rsp, 56");                                         // release the local slots
+    emitter.instruction("add rsp, 64");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zval pointer in rax
 }

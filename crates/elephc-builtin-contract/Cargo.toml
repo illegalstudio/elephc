@@ -8,3 +8,11 @@ publish = false
 
 [lib]
 crate-type = ["rlib"]
+
+# Publishes the PHP-visible `curl_*` surface contracts (`src/catalog_curl.rs`).
+# Off by default and turned on only by `elephc-magician`'s own `curl` feature:
+# that crate's `ext/curl` eval bindings are gated the same way, and the shared
+# catalog's backend-coverage audit requires the two sets to move together. See
+# `src/catalog_curl.rs`'s module doc for the full rationale.
+[features]
+curl = []

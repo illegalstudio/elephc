@@ -19,19 +19,22 @@
 //!   pre-existing APP13, leaving all other segments and the entropy-coded data
 //!   untouched, so the result stays a decodable JPEG.
 
+use std::cell::RefCell;
 use std::os::raw::c_char;
-use std::sync::{Mutex, OnceLock};
+use std::thread::LocalKey;
 
 use crate::xfer::{in_bytes, set_out};
-use crate::{cstr_arg, ffi_guard, lock_recover};
+use crate::{cstr_arg, ffi_guard};
 
-/// Datasets from the last `iptcparse`, grouped by `record#dataset` key in
-/// first-seen order, each key holding its values in occurrence order. PHP's
+/// Per-thread datasets from the last `iptcparse`, grouped by `record#dataset` key
+/// in first-seen order, each key holding its values in occurrence order. PHP's
 /// `iptcparse` returns one array of values per key, so grouping here lets the
 /// prelude build that shape with string-keyed writes only.
-fn iptc_groups() -> &'static Mutex<Vec<(String, Vec<Vec<u8>>)>> {
-    static CELL: OnceLock<Mutex<Vec<(String, Vec<Vec<u8>>)>>> = OnceLock::new();
-    CELL.get_or_init(Mutex::default)
+fn iptc_groups() -> &'static LocalKey<RefCell<Vec<(String, Vec<Vec<u8>>)>>> {
+    thread_local! {
+        static CELL: RefCell<Vec<(String, Vec<Vec<u8>>)>> = const { RefCell::new(Vec::new()) };
+    }
+    &CELL
 }
 
 /// Parses the first `len` bytes of the input staging buffer as an IPTC IIM block,
@@ -56,7 +59,7 @@ pub extern "C" fn elephc_iptc_parse(len: i64) -> i64 {
             }
         }
         let count = groups.len() as i64;
-        *lock_recover(iptc_groups()) = groups;
+        iptc_groups().with(|slot| *slot.borrow_mut() = groups);
         count
     })
 }
@@ -65,7 +68,7 @@ pub extern "C" fn elephc_iptc_parse(len: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_iptc_key_count() -> i64 {
     ffi_guard(-1, move || {
-        lock_recover(iptc_groups()).len() as i64
+        iptc_groups().with(|slot| slot.borrow().len() as i64)
     })
 }
 
@@ -74,12 +77,13 @@ pub extern "C" fn elephc_iptc_key_count() -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_iptc_key(index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = lock_recover(iptc_groups());
-        let Some((key, _)) = usize::try_from(index).ok().and_then(|i| guard.get(i)) else {
+        let Some(bytes) = iptc_groups().with(|slot| {
+            let slot = slot.borrow();
+            let (key, _) = usize::try_from(index).ok().and_then(|i| slot.get(i))?;
+            Some(key.clone().into_bytes())
+        }) else {
             return -1;
         };
-        let bytes = key.clone().into_bytes();
-        drop(guard);
         set_out(bytes)
     })
 }
@@ -89,11 +93,13 @@ pub extern "C" fn elephc_iptc_key(index: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_iptc_val_count(index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = lock_recover(iptc_groups());
-        match usize::try_from(index).ok().and_then(|i| guard.get(i)) {
-            Some((_, values)) => values.len() as i64,
-            None => -1,
-        }
+        iptc_groups().with(|slot| {
+            let slot = slot.borrow();
+            match usize::try_from(index).ok().and_then(|i| slot.get(i)) {
+                Some((_, values)) => values.len() as i64,
+                None => -1,
+            }
+        })
     })
 }
 
@@ -102,16 +108,16 @@ pub extern "C" fn elephc_iptc_val_count(index: i64) -> i64 {
 #[no_mangle]
 pub extern "C" fn elephc_iptc_val(key_index: i64, val_index: i64) -> i64 {
     ffi_guard(-1, move || {
-        let guard = lock_recover(iptc_groups());
-        let value = usize::try_from(key_index)
-            .ok()
-            .and_then(|i| guard.get(i))
-            .and_then(|(_, values)| usize::try_from(val_index).ok().and_then(|j| values.get(j)));
-        let Some(value) = value else {
+        let Some(bytes) = iptc_groups().with(|slot| {
+            let slot = slot.borrow();
+            usize::try_from(key_index)
+                .ok()
+                .and_then(|i| slot.get(i))
+                .and_then(|(_, values)| usize::try_from(val_index).ok().and_then(|j| values.get(j)))
+                .cloned()
+        }) else {
             return -1;
         };
-        let bytes = value.clone();
-        drop(guard);
         set_out(bytes)
     })
 }

@@ -2,7 +2,7 @@
 title: "hash_final()"
 description: "Finalizes an incremental hashing context and returns the digest (hex, or raw bytes when $binary). Provided by the compiler-injected hash prelude in compiled code."
 sidebar:
-  order: 408
+  order: 442
 ---
 
 ## hash_final()

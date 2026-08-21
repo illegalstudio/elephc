@@ -36,7 +36,8 @@ mod casts_and_constants;
 mod include_paths;
 mod magic_constants;
 mod strings;
-mod io;
+mod curl;
+pub(crate) mod io;
 mod pdo;
 #[cfg(feature = "pdo-dblib")]
 mod pdo_dblib;

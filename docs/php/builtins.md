@@ -342,6 +342,40 @@ sidebar:
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | — |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` | ✓ | ✓ |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` | ✓ | ✓ |
+| [`curl_close()`](./builtins/network/curl_close.md) | `(CurlHandle $handle): void` | `void` | ✓ | ✓ |
+| [`curl_copy_handle()`](./builtins/network/curl_copy_handle.md) | `(CurlHandle $handle): CurlHandle` | `CurlHandle` | ✓ | ✓ |
+| [`curl_errno()`](./builtins/network/curl_errno.md) | `(CurlHandle $handle): int` | `int` | ✓ | ✓ |
+| [`curl_error()`](./builtins/network/curl_error.md) | `(CurlHandle $handle): string` | `string` | ✓ | ✓ |
+| [`curl_escape()`](./builtins/network/curl_escape.md) | `(CurlHandle $handle, string $string): string` | `string` | ✓ | ✓ |
+| [`curl_exec()`](./builtins/network/curl_exec.md) | `(CurlHandle $handle): string|bool` | `string|bool` | ✓ | ✓ |
+| [`curl_getinfo()`](./builtins/network/curl_getinfo.md) | `(CurlHandle $handle, int $option = null): mixed` | `mixed` | ✓ | ✓ |
+| [`curl_init()`](./builtins/network/curl_init.md) | `(string $url = null): CurlHandle` | `CurlHandle` | ✓ | ✓ |
+| [`curl_multi_add_handle()`](./builtins/network/curl_multi_add_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
+| [`curl_multi_close()`](./builtins/network/curl_multi_close.md) | `(CurlMultiHandle $multi_handle): void` | `void` | ✓ | ✓ |
+| [`curl_multi_errno()`](./builtins/network/curl_multi_errno.md) | `(CurlMultiHandle $multi_handle): int` | `int` | ✓ | ✓ |
+| [`curl_multi_exec()`](./builtins/network/curl_multi_exec.md) | `(CurlMultiHandle $multi_handle, int $still_running): int` | `int` | ✓ | ✓ |
+| [`curl_multi_get_handles()`](./builtins/network/curl_multi_get_handles.md) | `(CurlMultiHandle $multi_handle): array` | `array` | ✓ | ✓ |
+| [`curl_multi_getcontent()`](./builtins/network/curl_multi_getcontent.md) | `(mixed $handle): ?string` | `?string` | ✓ | ✓ |
+| [`curl_multi_info_read()`](./builtins/network/curl_multi_info_read.md) | `(CurlMultiHandle $multi_handle, int $queued_messages = null): mixed` | `mixed` | ✓ | ✓ |
+| [`curl_multi_init()`](./builtins/network/curl_multi_init.md) | `(): CurlMultiHandle` | `CurlMultiHandle` | ✓ | ✓ |
+| [`curl_multi_remove_handle()`](./builtins/network/curl_multi_remove_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
+| [`curl_multi_select()`](./builtins/network/curl_multi_select.md) | `(CurlMultiHandle $multi_handle, float $timeout = 1.0): int` | `int` | ✓ | ✓ |
+| [`curl_multi_setopt()`](./builtins/network/curl_multi_setopt.md) | `(CurlMultiHandle $multi_handle, int $option, mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`curl_multi_strerror()`](./builtins/network/curl_multi_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
+| [`curl_pause()`](./builtins/network/curl_pause.md) | `(CurlHandle $handle, int $flags): int` | `int` | ✓ | ✓ |
+| [`curl_reset()`](./builtins/network/curl_reset.md) | `(CurlHandle $handle): void` | `void` | ✓ | ✓ |
+| [`curl_setopt()`](./builtins/network/curl_setopt.md) | `(CurlHandle $handle, int $option, mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`curl_setopt_array()`](./builtins/network/curl_setopt_array.md) | `(CurlHandle $handle, array $options): bool` | `bool` | ✓ | ✓ |
+| [`curl_share_close()`](./builtins/network/curl_share_close.md) | `(CurlShareHandle $share_handle): void` | `void` | ✓ | ✓ |
+| [`curl_share_errno()`](./builtins/network/curl_share_errno.md) | `(CurlShareHandle $share_handle): int` | `int` | ✓ | ✓ |
+| [`curl_share_init()`](./builtins/network/curl_share_init.md) | `(): CurlShareHandle` | `CurlShareHandle` | ✓ | ✓ |
+| [`curl_share_init_persistent()`](./builtins/network/curl_share_init_persistent.md) | `(array $share_options): CurlSharePersistentHandle` | `CurlSharePersistentHandle` | ✓ | ✓ |
+| [`curl_share_setopt()`](./builtins/network/curl_share_setopt.md) | `(CurlShareHandle $share_handle, int $option, mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`curl_share_strerror()`](./builtins/network/curl_share_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
+| [`curl_strerror()`](./builtins/network/curl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
+| [`curl_unescape()`](./builtins/network/curl_unescape.md) | `(CurlHandle $handle, string $string): string` | `string` | ✓ | ✓ |
+| [`curl_upkeep()`](./builtins/network/curl_upkeep.md) | `(CurlHandle $handle): bool` | `bool` | ✓ | ✓ |
+| [`curl_version()`](./builtins/network/curl_version.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`buffer_new()`](./builtins/pointer/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
 | [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): pointer` | `pointer` | ✓ | ✓ |
 | [`ptr_get()`](./builtins/pointer/ptr_get.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |

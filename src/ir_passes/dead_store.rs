@@ -154,79 +154,13 @@ fn exclude_eval_literal_read_slots(
 /// codegen resolves the argument value back to its defining `load_local` and
 /// passes the slot's address, so the callee can read or mutate the slot through
 /// the alias. That makes every store to the slot observable, which this pass's
-/// forward `load_local`-only liveness cannot see. Because the callee signature
-/// (which parameters are by-reference) is not available to a single-function
-/// pass, any `load_local` result consumed by an instruction that is not a proven
-/// value-only consumer is treated as a potential address escape and the slot is
-/// excluded. Terminator uses never alias, so they are ignored.
+/// forward `load_local`-only liveness cannot see. The judgement itself lives in
+/// `super::by_ref_alias`, shared with `super::immutable_local_loads`, which needs
+/// exactly the same exclusion for its own (otherwise unsound) immutability proof.
 fn exclude_address_escaping_slots(function: &Function, eligible: &mut HashSet<LocalSlotId>) {
-    let mut load_result_slot: HashMap<crate::ir::ValueId, LocalSlotId> = HashMap::new();
-    for inst in &function.instructions {
-        if inst.op != Op::LoadLocal {
-            continue;
-        }
-        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
-            continue;
-        };
-        if !eligible.contains(&slot) {
-            continue;
-        }
-        if let Some(result) = inst.result {
-            load_result_slot.insert(result, slot);
-        }
+    for slot in super::by_ref_alias::address_escaping_slots(function) {
+        eligible.remove(&slot);
     }
-    if load_result_slot.is_empty() {
-        return;
-    }
-
-    for inst in &function.instructions {
-        if op_is_value_only_consumer(inst.op) {
-            continue;
-        }
-        for operand in &inst.operands {
-            if let Some(slot) = load_result_slot.get(operand) {
-                eligible.remove(slot);
-            }
-        }
-    }
-}
-
-/// Returns true when an opcode consumes all its operands purely as values, so a
-/// `load_local` result reaching it cannot alias the source slot.
-///
-/// This is an intentionally conservative allowlist (default deny): only opcodes
-/// known to read operands by value are listed. Anything else — calls, object
-/// construction, closure capture, ref-arg materialization, property/array/iterator
-/// access, and any future opcode — is treated as a possible by-reference escape so
-/// the owning slot is left out of dead store elimination.
-fn op_is_value_only_consumer(op: Op) -> bool {
-    use Op::*;
-    matches!(
-        op,
-        // Integer/float arithmetic and bitwise operators.
-        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
-            | ICheckedSubToInt | ICheckedMulToInt | ICheckedPow | IDiv | ISDiv | ISMod
-            | IPow | INeg | IBitAnd | IBitOr | IBitXor
-            | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
-            // Comparisons.
-            | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
-            | LooseNotEq | Spaceship
-            // Scalar predicates and type queries.
-            | IsNull | IsTruthy | IsEmpty | MixedTagOf
-            // Numeric/string/mixed conversions.
-            | IToF | FToI | IToStr | FToStr | BoolToStr | StrToI | StrToF | StrToNumber
-            | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
-            | MixedCastFloat | MixedCastString
-            // String value operations.
-            | StrConcat | StrLen | StrPersist | StrCharAt | StrInterpolate
-            // Output operations consume their operand by value.
-            | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
-            // Stores copy the value into other storage; they never alias the source slot.
-            | StoreLocal | StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal
-            | StoreRefCell | ExternGlobalStore
-            // Value-level ownership/refcount bookkeeping.
-            | Acquire | Release | Move | Borrow | EnsureOwned
-    )
 }
 
 /// Returns the local slots named by an instruction immediate, covering both the

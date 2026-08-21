@@ -2,7 +2,7 @@
 title: "count_chars() — internals"
 description: "Compiler internals for count_chars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 396
+  order: 430
 ---
 
 ## `count_chars()` — internals

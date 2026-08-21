@@ -749,11 +749,11 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_spl_fixed_new");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for constructor spills
     emitter.instruction("mov rbp, rsp");                                        // establish constructor frame
-    emitter.instruction("sub rsp, 24");                                         // reserve class id, size, and object spills
+    emitter.instruction("sub rsp, 32");                                         // ROUNDED UP to a 16-byte multiple: `push rbp` already landed rsp on a 16-byte boundary, so reserving an odd multiple of 8 here would leave every `call` in this body misaligned and hand the callee a stack SysV x86_64 forbids. Pinned by `every_x86_64_runtime_call_site_is_sysv_aligned`; see arrays/array_free_deep.rs for the curl SIGSEGV that class of bug produced.
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save concrete SplFixedArray class id
     emitter.instruction("cmp rsi, 0");                                          // reject negative sizes
     emitter.instruction("jge __rt_spl_fixed_new_size_ok");                      // keep non-negative sizes
-    emitter.instruction("add rsp, 24");                                         // release constructor spills before throwing
+    emitter.instruction("add rsp, 32");                                         // release constructor spills before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing
     emit_throw_exception_x86_64(
         emitter,
@@ -791,7 +791,7 @@ fn emit_new_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload object pointer
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", SPL_FIXED_STORAGE_OFFSET)); // object.storage = fixed-array storage
     emitter.instruction("mov rax, r11");                                        // return initialized SplFixedArray object
-    emitter.instruction("add rsp, 24");                                         // release constructor spills
+    emitter.instruction("add rsp, 32");                                         // release constructor spills
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return object pointer
 }

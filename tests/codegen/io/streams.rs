@@ -4086,7 +4086,10 @@ fn twoway_find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
 }
 
-const TEST_HTTPS_CERT_PEM: &str = "\
+/// The self-signed certificate every local-HTTPS fixture in this test binary presents.
+/// `pub(crate)` so `tests/codegen/curl/tls_fixture.rs` can serve the SAME material rather
+/// than minting a second one: one certificate, one expiry, one place to renew it.
+pub(crate) const TEST_HTTPS_CERT_PEM: &str = "\
 -----BEGIN CERTIFICATE-----
 MIIDDTCCAfWgAwIBAgIUYwEnFCptGtZ9bISKGHSDDyDeR78wDQYJKoZIhvcNAQEL
 BQAwFjEUMBIGA1UEAwwLZWxlcGhjLXRlc3QwHhcNMjYwNjAxMTQzMzMzWhcNMzYw
@@ -4108,7 +4111,8 @@ rmggbINQyJdm1RdcppwbOqA=
 -----END CERTIFICATE-----
 ";
 
-const TEST_HTTPS_KEY_PEM: &str = "\
+/// The private key for [`TEST_HTTPS_CERT_PEM`]. `pub(crate)` for the same reason.
+pub(crate) const TEST_HTTPS_KEY_PEM: &str = "\
 -----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCxLngWeZVAG0gT
 3eYI+g3a3lWiFAtbEymjrSt9n4BIKPH/jryO8dMWUge+bdOys+JbrrGqtYmCnoBe

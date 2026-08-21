@@ -8,7 +8,7 @@
 //! - Source download, extraction, recipe execution, receipt verification, and publication stay
 //!   behind exact source/artifact locks and never run during ordinary compilation.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -26,7 +26,9 @@ use super::recipe::{RecipeRequest, RecipeRunner};
 use super::toolchain::{NativeToolchain, ToolchainProvider};
 use super::util::unique_sibling;
 
-/// Materializes every declared package for one target after toolchain preflight.
+/// Materializes every declared package for one target after toolchain preflight, building each
+/// package's catalog dependencies before the package itself so a recipe like `curl` can link
+/// against its already-built `openssl`/`zlib` prefixes.
 pub(super) fn materialize_manifest(
     manifest: &ManifestDocument,
     target: Target,
@@ -38,24 +40,92 @@ pub(super) fn materialize_manifest(
 ) -> Result<(), NativeError> {
     let toolchain = toolchains.resolve(target)?;
     toolchain.verify_compatibility(&cache.root)?;
-    for (name, selected) in manifest.dependencies() {
-        let version = catalog::version(name, Some(selected))?;
-        catalog::ensure_target(version, target)?;
-        materialize_package(
+    let mut prefixes: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut visiting: BTreeSet<String> = BTreeSet::new();
+    for name in manifest.dependencies().keys() {
+        materialize_with_dependencies(
             name,
-            version,
+            manifest,
             target,
             offline,
             cache,
             downloader,
             recipes,
             &toolchain,
+            &mut prefixes,
+            &mut visiting,
         )?;
     }
     Ok(())
 }
 
+/// Materializes one manifest-declared package after recursively materializing every catalog
+/// dependency it lists, threading each dependency's final artifact prefix into the package's own
+/// `RecipeRequest`. Reused prefixes are cached across the whole manifest walk.
+#[allow(clippy::too_many_arguments)]
+fn materialize_with_dependencies(
+    name: &str,
+    manifest: &ManifestDocument,
+    target: Target,
+    offline: bool,
+    cache: &CacheLayout,
+    downloader: &dyn Downloader,
+    recipes: &dyn RecipeRunner,
+    toolchain: &NativeToolchain,
+    prefixes: &mut BTreeMap<String, PathBuf>,
+    visiting: &mut BTreeSet<String>,
+) -> Result<PathBuf, NativeError> {
+    if let Some(existing) = prefixes.get(name) {
+        return Ok(existing.clone());
+    }
+    if !visiting.insert(name.to_string()) {
+        return Err(NativeError::new(
+            NativeErrorKind::Catalog,
+            format!("native package '{name}' has a circular catalog dependency"),
+        ));
+    }
+    let selected = manifest.dependencies().get(name).ok_or_else(|| {
+        NativeError::new(
+            NativeErrorKind::Manifest,
+            format!("native package '{name}' is not declared"),
+        )
+    })?;
+    let version = catalog::version(name, Some(selected))?;
+    catalog::ensure_target(version, target)?;
+    let mut dependency_prefixes: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for dependency in version.dependencies {
+        let path = materialize_with_dependencies(
+            dependency,
+            manifest,
+            target,
+            offline,
+            cache,
+            downloader,
+            recipes,
+            toolchain,
+            prefixes,
+            visiting,
+        )?;
+        dependency_prefixes.insert((*dependency).to_string(), path);
+    }
+    let path = materialize_package(
+        name,
+        version,
+        target,
+        offline,
+        cache,
+        downloader,
+        recipes,
+        toolchain,
+        &dependency_prefixes,
+    )?;
+    visiting.remove(name);
+    prefixes.insert(name.to_string(), path.clone());
+    Ok(path)
+}
+
 /// Reuses or transactionally builds one exact artifact under its advisory lock.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn materialize_package(
     package: &str,
     version: &'static PackageVersion,
@@ -65,6 +135,7 @@ pub(super) fn materialize_package(
     downloader: &dyn Downloader,
     recipes: &dyn RecipeRunner,
     toolchain: &NativeToolchain,
+    dependency_prefixes: &BTreeMap<String, PathBuf>,
 ) -> Result<PathBuf, NativeError> {
     let key = ArtifactKey {
         package,
@@ -125,6 +196,7 @@ pub(super) fn materialize_package(
             source: &extracted,
             staging_prefix: &staging,
             toolchain,
+            dependency_prefixes,
         })?;
         fs::remove_dir_all(&extracted).map_err(|error| {
             NativeError::io("remove extracted native source tree", &extracted, error)

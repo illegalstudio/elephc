@@ -46,6 +46,27 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "callables": ("Misc", "Callables"),
     "spl": ("SPL", "SPL"),
     "pointers": ("Pointer", "Pointer"),
+    # `Area::Curl` covers BOTH halves of ext/curl, and they render differently:
+    #
+    #  - the forty-three `internal: true` `__elephc_curl_*` entry points, which the
+    #    elephc-PHP wrappers in `src/curl_prelude.rs` call — these contribute only to
+    #    docs/internals/builtins, never to a user-facing builtin page;
+    #  - the thirty-four PHP-visible `curl_*` contracts, which are
+    #    `BuiltinKind::PreludeProvided`: `aot.kind == "prelude"` (implemented by the
+    #    injected curl prelude, so NOT eval-only) and `eval.kind == "registry"`
+    #    (Magician's own `eval_builtin!` homes). They render exactly like the four
+    #    `hash_*` prelude contracts do.
+    #
+    # Both share the "Network" docs area with the eval interpreter's `network_env`
+    # family rather than opening a page of its own; the narrative contract (options,
+    # constants, TLS/CA behaviour) stays in the hand-written docs/php/curl.md.
+    #
+    # The PHP-visible half is published by `elephc-builtin-contract`'s `curl` feature
+    # and bound by Magician's, so THE DOCS ARE GENERATED WITH THE ROOT `curl` FEATURE
+    # ON — that is the single canonical configuration for the committed registry, the
+    # generated pages and the CI drift gate alike. `extract.run_gen_builtins` refuses
+    # to run against a default-feature exporter for exactly this reason.
+    "curl": ("Network", "Network"),
 }
 
 
@@ -361,6 +382,37 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     'cosh': ['float'],
     'count': ['array', 'int'],
     'crc32': ['string'],
+    # ext/curl. The shared contract types every handle as `Mixed` (the catalog has
+    # no object vocabulary); the precise class names below are transcribed from the
+    # injected prelude's own PHP declarations in `src/curl_prelude.rs`, which are
+    # what compiled code really enforces. Where the prelude deliberately declares
+    # `mixed` (`curl_multi_add_handle()`'s `$handle`, every `$value`) it stays mixed.
+    'curl_close': ['CurlHandle'],
+    'curl_copy_handle': ['CurlHandle'],
+    'curl_errno': ['CurlHandle'],
+    'curl_error': ['CurlHandle'],
+    'curl_escape': ['CurlHandle', 'string'],
+    'curl_exec': ['CurlHandle'],
+    'curl_getinfo': ['CurlHandle', 'int'],
+    'curl_multi_add_handle': ['CurlMultiHandle', 'mixed'],
+    'curl_multi_close': ['CurlMultiHandle'],
+    'curl_multi_errno': ['CurlMultiHandle'],
+    'curl_multi_exec': ['CurlMultiHandle', 'int'],
+    'curl_multi_get_handles': ['CurlMultiHandle'],
+    'curl_multi_info_read': ['CurlMultiHandle', 'int'],
+    'curl_multi_remove_handle': ['CurlMultiHandle', 'mixed'],
+    'curl_multi_select': ['CurlMultiHandle', 'float'],
+    'curl_multi_setopt': ['CurlMultiHandle', 'int', 'mixed'],
+    'curl_pause': ['CurlHandle', 'int'],
+    'curl_reset': ['CurlHandle'],
+    'curl_setopt': ['CurlHandle', 'int', 'mixed'],
+    'curl_setopt_array': ['CurlHandle', 'array'],
+    'curl_share_close': ['CurlShareHandle'],
+    'curl_share_errno': ['CurlShareHandle'],
+    'curl_share_init_persistent': ['array'],
+    'curl_share_setopt': ['CurlShareHandle', 'int', 'mixed'],
+    'curl_unescape': ['CurlHandle', 'string'],
+    'curl_upkeep': ['CurlHandle'],
     'ctype_alnum': ['string'],
     'ctype_alpha': ['string'],
     'ctype_digit': ['string'],
@@ -839,6 +891,20 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     "vprintf": "int",
     "vsprintf": "string",
     "iterator_apply": "int",
+    # The AOT curl prelude returns PHP 8 handle objects and php-src's own unions;
+    # transcribed from `src/curl_prelude.rs`'s declarations. `curl_version()` and
+    # `curl_multi_info_read()` are deliberately left `mixed`: the prelude declares no
+    # return type for either (see the comment above `curl_version()` for why a
+    # declared `array|false` would reinterpret the payload), and inventing one here
+    # would document a contract the compiler does not enforce.
+    "curl_copy_handle": "CurlHandle",
+    "curl_exec": "string|bool",
+    "curl_init": "CurlHandle",
+    "curl_multi_get_handles": "array",
+    "curl_multi_getcontent": "?string",
+    "curl_multi_init": "CurlMultiHandle",
+    "curl_share_init": "CurlShareHandle",
+    "curl_share_init_persistent": "CurlSharePersistentHandle",
     # The AOT hash prelude exposes PHP 8-style HashContext objects.
     "hash_init": "HashContext",
     "hash_update": "bool",

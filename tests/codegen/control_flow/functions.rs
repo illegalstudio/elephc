@@ -311,3 +311,31 @@ fn test_foreach_key_over_unknown_element_array() {
     );
     assert_eq!(out, "a=1;b=2;");
 }
+
+/// A LOOP CONDITION THAT READS A BY-REFERENCE OUT-PARAMETER MUST BE RE-EVALUATED EVERY
+/// ITERATION. The slot has exactly one store in this function (`$n = 0`) and is written
+/// only through the callee's reference alias, so the immutable-local-load analysis used to
+/// call the condition's load pure and LICM hoisted the whole `$n > 0` compare into the
+/// preheader: the body ran ONCE and the loop exited with `$n == 2`.
+///
+/// This is the shape PHP's own `curl_multi_exec($mh, $running)` loop is written in, which
+/// is how the miscompile was found; the fix (`src/ir_passes/by_ref_alias.rs`) excludes
+/// by-reference-aliased slots from the immutability proof, the same exclusion dead store
+/// elimination already made. Byte-parity vs PHP 8.5.
+#[test]
+fn test_loop_condition_reads_by_reference_out_parameter() {
+    let out = compile_and_run(
+        "<?php final class Counter { public int $left = 3; } function step(Counter $c, int &$n): int { if ($c->left > 0) { $c->left = $c->left - 1; } $n = $c->left; return 0; } function main(): void { $c = new Counter(); $n = 0; $spins = 0; do { step($c, $n); $spins++; } while ($n > 0); echo $spins, ':', $n; } main();",
+    );
+    assert_eq!(out, "3:0");
+}
+
+/// The same guarantee for a `while` loop whose condition is the by-reference out-parameter
+/// alone, with the extra statement in the body that makes the hoist profitable.
+#[test]
+fn test_while_condition_reads_by_reference_out_parameter() {
+    let out = compile_and_run(
+        "<?php function pull(array $queue, int &$left): string { $left = count($queue) - 1; return (string) $left; } function main(): void { $left = 1; $seen = 0; $queue = [1, 2, 3]; while ($left > 0) { pull($queue, $left); $seen++; array_pop($queue); } echo $seen, ':', $left; } main();",
+    );
+    assert_eq!(out, "3:0");
+}

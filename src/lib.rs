@@ -20,6 +20,8 @@ pub mod codegen;
 pub mod codegen_support;
 /// Conditional compilation directives.
 pub mod conditional;
+/// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
+pub mod curl_prelude;
 /// Error and warning reporting.
 pub mod errors;
 mod eval_aot;

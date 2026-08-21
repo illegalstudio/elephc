@@ -183,6 +183,40 @@ fn test_cli_regex_final_link_requires_managed_pcre2_project() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a final `--with-curl` link without a project fails with the same recovery
+/// style as PCRE2. The compiled program itself never calls a `curl_*` function — the
+/// explicit `--with-curl` flag is what forces `elephc_curl` into the plan here, exercising
+/// that override path directly rather than source-based detection — but planning it must
+/// still emit the `curl` native requirement and never fall back to a system `-lcurl`.
+#[test]
+fn test_cli_with_curl_final_link_requires_managed_curl_project() {
+    let dir = make_cli_test_dir("elephc_cli_curl_requires_native");
+    let cache = dir.join("native-cache-must-not-exist");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 1;").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-curl")
+        .arg(&php_path)
+        .env("ELEPHC_NATIVE_CACHE", &cache)
+        .output()
+        .expect("failed to run --with-curl compilation");
+    assert!(!output.status.success(), "--with-curl link without a project must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("curl support requires managed native package curl"),
+        "unexpected missing-project diagnostic: {stderr}"
+    );
+    assert!(stderr.contains("project: not found"), "missing project context: {stderr}");
+    assert!(
+        stderr.contains("recovery: cd --") && stderr.contains("elephc native add curl"),
+        "missing copy-paste recovery command: {stderr}"
+    );
+    assert!(!cache.exists(), "failed compilation must not create the native cache");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--check` stops after type-checking and produces "Checked" output
 /// without emitting any assembly (.s), object (.o), or binary files.
 #[test]

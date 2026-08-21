@@ -20,6 +20,7 @@ mod convert;
 mod requirements;
 mod array;
 mod callables;
+mod curl;
 mod io;
 mod string;
 mod math;

@@ -132,10 +132,17 @@ pub(crate) fn compile(config: CliConfig) {
     }
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
+    // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
+    // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
+    // a program that reaches curl only dynamically, and declaration-reachability would then
+    // delete every one of those declarations again (measured: 40 functions in, 1 out,
+    // `curl_init` and `CurlHandle` both gone). See
+    // `curl_prelude::reachability_tests::forcing_the_curl_group_keeps_the_whole_surface`.
     let forced_groups: HashSet<String> = [
         (with_crates.contains("pdo"), "pdo"),
         (with_crates.contains("tz"), "tz"),
         (with_crates.contains("image"), "image"),
+        (with_crates.contains("curl"), "curl"),
     ]
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
@@ -297,6 +304,32 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
+
+    // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
+    // the internal `__elephc_curl_*` builtins) only when the program references that
+    // surface, so non-curl binaries never declare `CurlHandle`, never link
+    // `-lelephc_curl`, and never require the managed native `curl` package. Runs after
+    // the hash prelude (both are order-independent declaration-only preludes) and before
+    // name resolution so a namespaced caller resolves to it. `--with-curl` forces the
+    // injection for a program that only reaches curl dynamically. The version selects the
+    // curl SURFACE too: `curl_multi_get_handles()` is 8.5-only.
+    crate::progress::phase("curl-prelude");
+    let phase_started = Instant::now();
+    let ast = if php_version == crate::php_version::PhpVersion::default() {
+        crate::curl_prelude::inject_if_used(
+            ast,
+            with_crates.contains("curl"),
+            &mut prelude_inventory,
+        )
+    } else {
+        crate::curl_prelude::inject_if_used_for_version(
+            ast,
+            with_crates.contains("curl"),
+            php_version,
+            &mut prelude_inventory,
+        )
+    };
+    timings.record_since("curl-prelude", phase_started);
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();

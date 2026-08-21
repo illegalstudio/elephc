@@ -33,6 +33,10 @@ pub enum Area {
     Spl,
     /// Pointer and buffer extension builtins.
     Pointers,
+    /// `ext/curl` builtins. Every member is `internal: true`: the PHP-visible
+    /// `curl_*` names are elephc-PHP wrappers declared by the curl prelude,
+    /// and these are the raw `__elephc_curl_*` entry points they call.
+    Curl,
 }
 
 /// Describes how a PHP-visible catalog entry reaches executable behavior.

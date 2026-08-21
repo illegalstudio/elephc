@@ -61,6 +61,12 @@ pub(in crate::interpreter) fn eval_builtin_get_loaded_extensions(
 }
 
 /// Builds the extension-name array for an already-resolved `$zend_extensions` flag.
+///
+/// The non-Zend list appends `"curl"` exactly when `cfg!(feature = "curl")` is set — the
+/// same single condition `extension_loaded.rs`'s `eval_extension_is_loaded` uses for
+/// `curl`, so `in_array('curl', get_loaded_extensions())` can never disagree with
+/// `extension_loaded('curl')`. See that file's module doc for why `curl` is the one
+/// deliberate exception to the otherwise-static extension lists here.
 pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     zend_extensions: bool,
     values: &mut impl RuntimeValueOps,
@@ -70,9 +76,13 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     } else {
         CORE_LOADED_EXTENSIONS
     };
-    let mut names = values.string_array_new(set.len().max(1))?;
+    let extra_capacity = usize::from(!zend_extensions && cfg!(feature = "curl"));
+    let mut names = values.string_array_new(set.len().max(1) + extra_capacity)?;
     for name in set {
         names = values.string_array_push(names, name)?;
+    }
+    if !zend_extensions && cfg!(feature = "curl") {
+        names = values.string_array_push(names, "curl")?;
     }
     Ok(names)
 }

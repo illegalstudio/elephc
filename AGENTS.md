@@ -177,12 +177,12 @@ the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
 PHP surface comes from a prelude (`pdo`, `tz`, `image`), force-injects that
 prelude so the API is declared even when usage was not detected. The flag name is
 the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
-`--with-tls`, `--with-crypto`, `--with-phar`, `--with-tz`, `--with-image`.
-`--with-web` is an alias for `--web` (the full server mode, which owns the program
-entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
-crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
-(`src/pipeline.rs`: force-link + prelude forcing) → linker
-(`src/linker.rs`: `forced_whole_archive`).
+`--with-tls`, `--with-crypto`, `--with-phar`, `--with-tz`, `--with-image`,
+`--with-curl`. `--with-web` is an alias for `--web` (the full server mode, which
+owns the program entry point). An unknown `--with-<name>` is a hard CLI error
+listing the valid crates. The end-to-end wiring is CLI (`src/cli.rs`,
+`with_crates`) → pipeline (`src/pipeline.rs`: force-link + prelude forcing) →
+linker (`src/linker.rs`: `forced_whole_archive`).
 
 `--with-regex` is the explicit non-bridge exception: it enables
 `RuntimeFeatures::regex` for opaque dynamic eval source, resolves the managed
@@ -190,6 +190,16 @@ crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
 use still auto-detects the same feature. Merely declaring `pcre2` does not link
 it, and dynamic eval without the capability leaves regex builtins unavailable
 at runtime.
+
+`curl` is the first ordinary bridge crate that ALSO needs a managed native
+package: `--with-curl` (or ordinary detection
+of a `curl_*` call, via `src/curl_prelude/detect.rs`) force-links `elephc_curl`, and `src/pipeline/backend.rs`
+mirrors that into `NativeRequirement::package("curl")` so the final link also
+resolves the managed `curl` package's `libcurl.a`, plus the `openssl`/`zlib`
+archives it declares as dependencies, in the fixed order
+`libcurl.a -> libssl.a -> libcrypto.a -> libz.a`. There is no system fallback:
+a missing `curl` package fails closed with the same `elephc native add curl`
+recovery style as PCRE2, never a `-lcurl`.
 
 ### Codegen layout
 
@@ -591,6 +601,7 @@ When cutting a release:
 - Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.
 - Zero compiler warnings policy (`cargo build` must be clean)
 - Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.
+- Bridge C-ABI return buffers are never process-global: a `static Mutex<CString>` handing out `as_ptr()` is a cross-thread use-after-free (the next call frees what an earlier caller is still reading). Use `thread_local!` cells or caller-owned allocations. Enforced by `tests/ffi_buffer_hygiene.rs`; rationale in CONTRIBUTING.md § "Expose a stable C ABI".
 
 ## Cursor Cloud specific instructions
 

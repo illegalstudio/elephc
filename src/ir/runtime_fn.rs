@@ -446,6 +446,105 @@ pub enum RuntimeFnId {
     CtypeAlpha,
     CtypeDigit,
     CtypeSpace,
+    /// Allocates a libcurl easy handle and boxes it as a resource-kind-6 Mixed cell.
+    CurlEasyInit,
+    /// Applies an integer-valued `curl_setopt()` option to an easy handle.
+    CurlEasySetoptLong,
+    /// Applies a string-valued `curl_setopt()` option to an easy handle.
+    CurlEasySetoptStr,
+    /// Applies a `struct curl_slist *`-valued `curl_setopt()` option to an easy handle.
+    CurlEasySetoptSlist,
+    /// Installs, replaces, or clears a PHP callable on one of `curl_setopt()`'s callback
+    /// options (`CURLOPT_WRITEFUNCTION` and its five first-wave siblings).
+    CurlEasySetCallback,
+    /// Reports the address of `__rt_curl_invoke_callback`, the codegen adapter that
+    /// re-enters compiled PHP from inside a libcurl callback. Reaches no bridge symbol.
+    CurlAdapterAddr,
+    /// Runs an easy handle's configured transfer to completion.
+    CurlEasyPerform,
+    /// Takes the `CURLOPT_RETURNTRANSFER`-captured response body from an easy handle.
+    CurlEasyBody,
+    /// Reports the `CURLcode` from an easy handle's most recent transfer.
+    CurlEasyErrno,
+    /// Reports libcurl's error message for an easy handle's most recent transfer.
+    CurlEasyError,
+    /// Reports the linked libcurl's `curl_version_info` data as a JSON blob.
+    CurlVersion,
+    /// Raises PHP's warning for a `curl_setopt()` option this build cannot apply.
+    CurlSetoptUnsupportedWarning,
+    /// Reads a `long`-typed `CURLINFO_*` field from an easy handle's most recent transfer
+    /// (`CURLINFO_HTTP_CODE` only, for `curl_getinfo()`).
+    CurlEasyGetinfoLong,
+    /// Reads a `double`-typed `CURLINFO_*` field from an easy handle's most recent
+    /// transfer.
+    CurlEasyGetinfoDouble,
+    /// Runs one of the bridge's string-producing easy-handle operations (the string,
+    /// list and array forms of `curl_getinfo()`, plus `curl_escape`/`curl_unescape`).
+    CurlEasyStrOp,
+    /// Resets every libcurl option on an easy handle to its default.
+    CurlEasyReset,
+    /// Applies a `CURLPAUSE_*` bitmask to an easy handle's transfer.
+    CurlEasyPause,
+    /// Runs libcurl connection upkeep on an easy handle's idle connections.
+    CurlEasyUpkeep,
+    /// Duplicates an easy handle, boxing the copy as a new resource-kind-6 Mixed cell.
+    CurlEasyCopy,
+    /// Reports libcurl's human-readable message for a `CURLcode`.
+    CurlStrerror,
+    /// Classifies a `curl_setopt()` option number against the bridge's frozen option
+    /// table, so the prelude can pick the setter that matches the option's C type.
+    CurlOptionKind,
+    /// Reads an easy handle's own bridge id out of its boxed Mixed cell, so the
+    /// `CurlMultiHandle` object can key its PHP-side id -> `CurlHandle` map on it.
+    CurlEasyId,
+    /// Allocates a libcurl multi handle and boxes it as a resource-kind-7 Mixed cell.
+    CurlMultiInit,
+    /// Attaches an easy handle to a multi handle, answering a `CURLMcode`.
+    CurlMultiAdd,
+    /// Detaches an easy handle from a multi handle, answering a `CURLMcode`.
+    CurlMultiRemove,
+    /// Drives a multi handle's attached transfers, answering the still-running count
+    /// and the `CURLMcode` packed into one integer.
+    CurlMultiExec,
+    /// Waits for a multi handle's attached transfers to become ready, answering the
+    /// number of ready descriptors (or `-1`).
+    CurlMultiSelect,
+    /// Reads one field of a multi handle's completion queue (`curl_multi_info_read()`).
+    CurlMultiInfoRead,
+    /// Applies an integer-valued `CURLMOPT_*` option to a multi handle.
+    CurlMultiSetopt,
+    /// Reports the `CURLMcode` from a multi handle's most recent operation.
+    CurlMultiErrno,
+    /// Reports libcurl's human-readable message for a `CURLMcode`.
+    CurlMultiStrerror,
+    /// Raises PHP's warning for a `CURLMOPT_*` option this build cannot apply.
+    CurlMultiSetoptUnsupportedWarning,
+    /// Allocates a libcurl share handle and boxes it as a resource-kind-8 Mixed cell.
+    CurlShareInit,
+    /// Applies an integer-valued `CURLSHOPT_*` option to a share handle.
+    CurlShareSetopt,
+    /// Reports the `CURLSHcode` from a share handle's most recent operation.
+    CurlShareErrno,
+    /// Reports libcurl's human-readable message for a `CURLSHcode`.
+    CurlShareStrerror,
+    /// Attaches an easy handle to a share handle via `CURLOPT_SHARE`, answering a boolean.
+    CurlEasySetShare,
+    /// Builds or finds the process-lifetime share for `curl_share_init_persistent()`
+    /// (PHP 8.5), boxed as a resource-kind-8 Mixed cell.
+    CurlShareInitPersistent,
+    /// Starts a fresh `curl_mime` builder for an easy handle's forthcoming
+    /// `multipart/form-data` `CURLOPT_POSTFIELDS` body.
+    CurlMimeNew,
+    /// Appends a fresh, empty part to the pending mime builder.
+    CurlMimeAddPart,
+    /// Sets one field (name, data, a local file's data, MIME type, or posted filename) on
+    /// the current pending mime part.
+    CurlMimePartField,
+    /// Attaches the pending mime builder to an easy handle via `CURLOPT_MIMEPOST`.
+    CurlMimePost,
+    /// Discards the pending mime builder without attaching it, for an array walk that
+    /// failed partway through.
+    CurlMimeAbort,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -1157,6 +1256,53 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetZipPassword => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignHash => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignOpenssl => &[BuiltinRequirement::Bridge("elephc_phar")],
+            // Every curl operation needs the `elephc_curl` bridge, which in turn makes
+            // `crate::pipeline::backend` require the managed native `curl` package (and
+            // transitively `openssl`/`zlib`). This is the whole pay-for-use contract:
+            // a program that never reaches one of these ids links none of it.
+            RuntimeFnId::CurlEasyBody
+            | RuntimeFnId::CurlEasyErrno
+            | RuntimeFnId::CurlEasyError
+            | RuntimeFnId::CurlEasyGetinfoLong
+            | RuntimeFnId::CurlEasyInit
+            | RuntimeFnId::CurlEasyPerform
+            | RuntimeFnId::CurlEasySetoptLong
+            // `CurlAdapterAddr` is deliberately ABSENT: it materializes a runtime label's
+            // address and reaches no `elephc_curl_*` symbol, exactly like the two
+            // unsupported-option warning ids below it.
+            | RuntimeFnId::CurlEasySetCallback
+            | RuntimeFnId::CurlEasyCopy
+            | RuntimeFnId::CurlEasyPause
+            | RuntimeFnId::CurlEasyReset
+            | RuntimeFnId::CurlEasyUpkeep
+            | RuntimeFnId::CurlStrerror
+            | RuntimeFnId::CurlEasyGetinfoDouble
+            | RuntimeFnId::CurlEasyStrOp
+            | RuntimeFnId::CurlEasySetoptSlist
+            | RuntimeFnId::CurlEasySetoptStr
+            | RuntimeFnId::CurlOptionKind
+            | RuntimeFnId::CurlEasyId
+            | RuntimeFnId::CurlMultiInit
+            | RuntimeFnId::CurlMultiAdd
+            | RuntimeFnId::CurlMultiRemove
+            | RuntimeFnId::CurlMultiExec
+            | RuntimeFnId::CurlMultiSelect
+            | RuntimeFnId::CurlMultiInfoRead
+            | RuntimeFnId::CurlMultiSetopt
+            | RuntimeFnId::CurlMultiErrno
+            | RuntimeFnId::CurlMultiStrerror
+            | RuntimeFnId::CurlShareInit
+            | RuntimeFnId::CurlShareSetopt
+            | RuntimeFnId::CurlShareErrno
+            | RuntimeFnId::CurlShareStrerror
+            | RuntimeFnId::CurlEasySetShare
+            | RuntimeFnId::CurlShareInitPersistent
+            | RuntimeFnId::CurlMimeNew
+            | RuntimeFnId::CurlMimeAddPart
+            | RuntimeFnId::CurlMimePartField
+            | RuntimeFnId::CurlMimePost
+            | RuntimeFnId::CurlMimeAbort
+            | RuntimeFnId::CurlVersion => &[BuiltinRequirement::Bridge("elephc_curl")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzinflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -1333,6 +1479,71 @@ impl RuntimeFnId {
         ) {
             return BuiltinResultOwnership::NonHeap;
         }
+        // The curl status/answer operations hand back a raw machine value — a `CURLcode`
+        // or a 0/1 acceptance flag — never storage. Their one operand is the boxed Mixed
+        // handle cell, so the default `MayAliasArguments` bucket would keep that owned
+        // temporary alive for the integer's whole lifetime: the leak shape already
+        // documented for `IntvalBase` above, except here the temporary owns a live
+        // libcurl handle, so the leak would also keep a socket and its TLS session open.
+        if matches!(
+            self,
+            RuntimeFnId::CurlEasyErrno
+                | RuntimeFnId::CurlEasyPerform
+                | RuntimeFnId::CurlEasySetoptLong
+                | RuntimeFnId::CurlEasySetoptSlist
+                | RuntimeFnId::CurlEasySetoptStr
+                // Installing a callback answers a bare 0/1 acceptance flag; the pointers
+                // it forwards are borrowed by the bridge, never storage it hands back.
+                | RuntimeFnId::CurlEasySetCallback
+                // A bare machine address with no operands at all: nothing to alias.
+                | RuntimeFnId::CurlAdapterAddr
+                // `curl_reset`/`curl_upkeep` answer a bare acceptance flag and
+                // `curl_pause` a bare `CURLcode`; none of the three produces storage.
+                | RuntimeFnId::CurlEasyPause
+                | RuntimeFnId::CurlEasyReset
+                | RuntimeFnId::CurlEasyUpkeep
+                // A pure table lookup: it hands back a small integer kind code and takes
+                // no handle at all, so there is no storage and nothing to alias.
+                | RuntimeFnId::CurlOptionKind
+                // A pure diagnostic: it returns nothing at all, so there is certainly no
+                // storage for the caller to keep an argument temporary alive for.
+                | RuntimeFnId::CurlSetoptUnsupportedWarning
+                | RuntimeFnId::CurlMultiSetoptUnsupportedWarning
+                // Every multi operation below hands back a raw machine integer — a
+                // `CURLMcode`, a ready-descriptor count, a packed (running, code) pair, or
+                // one completion-queue field — never storage. `CurlEasyId` merely unboxes
+                // the id the handle cell already carries, which is the purest case of all:
+                // it allocates nothing and reads no bridge state.
+                | RuntimeFnId::CurlEasyId
+                | RuntimeFnId::CurlMultiAdd
+                | RuntimeFnId::CurlMultiRemove
+                | RuntimeFnId::CurlMultiExec
+                | RuntimeFnId::CurlMultiSelect
+                | RuntimeFnId::CurlMultiInfoRead
+                | RuntimeFnId::CurlMultiSetopt
+                | RuntimeFnId::CurlMultiErrno
+                // The share operations answer the identical shape: `CurlShareSetopt` a
+                // three-way `CURLSHcode`-derived status, `CurlShareErrno` a bare
+                // `CURLSHcode`, `CurlEasySetShare` a bare acceptance flag — none of the
+                // three produces storage, and their handle operand(s) must not be kept
+                // alive by a default `MayAliasArguments` bucket that assumes otherwise.
+                | RuntimeFnId::CurlShareSetopt
+                | RuntimeFnId::CurlShareErrno
+                | RuntimeFnId::CurlEasySetShare
+                // The mime builder entry points every answer a bare `0`/`1`
+                // acceptance flag — never storage — for the identical reason: their one
+                // (or, for `CurlMimePartField`, two) operand(s) is a boxed Mixed handle
+                // cell, and the default `MayAliasArguments` bucket would keep it (and the
+                // live libcurl handle/socket it owns) alive for the boolean's whole
+                // lifetime.
+                | RuntimeFnId::CurlMimeNew
+                | RuntimeFnId::CurlMimeAddPart
+                | RuntimeFnId::CurlMimePartField
+                | RuntimeFnId::CurlMimePost
+                | RuntimeFnId::CurlMimeAbort
+        ) {
+            return BuiltinResultOwnership::NonHeap;
+        }
         if matches!(
             self,
             RuntimeFnId::Abs
@@ -1397,6 +1608,46 @@ impl RuntimeFnId {
                 | RuntimeFnId::Bindec
                 | RuntimeFnId::Hexdec
                 | RuntimeFnId::Octdec
+                // The curl operations that DO produce storage all allocate it fresh and
+                // can never alias an argument: `CurlEasyInit` boxes a brand-new Mixed
+                // handle cell (there is no argument to alias), `CurlEasyBody` /
+                // `CurlEasyError` / `CurlVersion` copy bytes out of bridge-owned buffers
+                // through `__rt_str_persist` — deliberately, because those buffers are
+                // only borrowed until the next call on the same handle — and
+                // `CurlEasyGetinfoLong` boxes its `int`/`false` answer through
+                // `__rt_mixed_from_value` from a stack out-parameter, never from the
+                // handle argument's own storage.
+                | RuntimeFnId::CurlEasyBody
+                | RuntimeFnId::CurlEasyError
+                // `curl_copy_handle` boxes a BRAND-NEW handle id: the copy shares no
+                // storage with the handle it was duplicated from, so treating it as an
+                // alias would keep the source's temporary (and its socket and TLS
+                // session) alive for the copy's whole lifetime. `curl_strerror` copies
+                // libcurl's `'static` message text into an owned string.
+                | RuntimeFnId::CurlEasyCopy
+                | RuntimeFnId::CurlStrerror
+                | RuntimeFnId::CurlEasyGetinfoDouble
+                | RuntimeFnId::CurlEasyGetinfoLong
+                | RuntimeFnId::CurlEasyInit
+                // Its bytes are copied out of the bridge's borrowed scratch buffer and
+                // boxed by `__rt_mixed_from_value`, which persists the string, so the
+                // cell handed back owns storage no argument shares.
+                | RuntimeFnId::CurlEasyStrOp
+                // `curl_multi_init()` boxes a brand-new resource-kind-7 Mixed cell (there
+                // is no argument to alias) and `curl_multi_strerror()` copies libcurl's
+                // `'static` `CURLMcode` text into an owned string, exactly as their easy
+                // siblings above do.
+                | RuntimeFnId::CurlMultiInit
+                | RuntimeFnId::CurlMultiStrerror
+                // `curl_share_init()`/`curl_share_init_persistent()` box a brand-new
+                // resource-kind-8 Mixed cell (there is no argument to alias — the
+                // persistent form's one argument is a CSV STRING, never a handle) and
+                // `curl_share_strerror()` copies libcurl's `'static` `CURLSHcode` text
+                // into an owned string, exactly as their easy/multi siblings above do.
+                | RuntimeFnId::CurlShareInit
+                | RuntimeFnId::CurlShareInitPersistent
+                | RuntimeFnId::CurlShareStrerror
+                | RuntimeFnId::CurlVersion
                 // Every property slot is re-boxed through `__rt_mixed_from_value`,
                 // which persists strings and increfs containers, so the cell handed
                 // back is independently owned and never aliases the source object's
@@ -1873,6 +2124,53 @@ impl RuntimeFnId {
             RuntimeFnId::ChunkSplit => "chunk_split",
             RuntimeFnId::CountChars => "count_chars",
             RuntimeFnId::Crc32 => "crc32",
+            RuntimeFnId::CurlEasyBody => "__elephc_curl_easy_body",
+            RuntimeFnId::CurlEasyErrno => "__elephc_curl_easy_errno",
+            RuntimeFnId::CurlEasyError => "__elephc_curl_easy_error",
+            RuntimeFnId::CurlEasyGetinfoDouble => "__elephc_curl_easy_getinfo_double",
+            RuntimeFnId::CurlEasyGetinfoLong => "__elephc_curl_easy_getinfo_long",
+            RuntimeFnId::CurlEasyStrOp => "__elephc_curl_easy_str_op",
+            RuntimeFnId::CurlEasyCopy => "__elephc_curl_easy_copy",
+            RuntimeFnId::CurlEasyInit => "__elephc_curl_easy_init",
+            RuntimeFnId::CurlEasyPause => "__elephc_curl_easy_pause",
+            RuntimeFnId::CurlEasyReset => "__elephc_curl_easy_reset",
+            RuntimeFnId::CurlEasyUpkeep => "__elephc_curl_easy_upkeep",
+            RuntimeFnId::CurlStrerror => "__elephc_curl_strerror",
+            RuntimeFnId::CurlEasyPerform => "__elephc_curl_easy_perform",
+            RuntimeFnId::CurlEasySetoptLong => "__elephc_curl_easy_setopt_long",
+            RuntimeFnId::CurlEasySetoptSlist => "__elephc_curl_easy_setopt_slist",
+            RuntimeFnId::CurlEasySetoptStr => "__elephc_curl_easy_setopt_str",
+            RuntimeFnId::CurlEasySetCallback => "__elephc_curl_easy_set_callback",
+            RuntimeFnId::CurlAdapterAddr => "__elephc_curl_adapter_addr",
+            RuntimeFnId::CurlOptionKind => "__elephc_curl_option_kind",
+            RuntimeFnId::CurlEasyId => "__elephc_curl_easy_id",
+            RuntimeFnId::CurlMultiInit => "__elephc_curl_multi_init",
+            RuntimeFnId::CurlMultiAdd => "__elephc_curl_multi_add",
+            RuntimeFnId::CurlMultiRemove => "__elephc_curl_multi_remove",
+            RuntimeFnId::CurlMultiExec => "__elephc_curl_multi_exec",
+            RuntimeFnId::CurlMultiSelect => "__elephc_curl_multi_select",
+            RuntimeFnId::CurlMultiInfoRead => "__elephc_curl_multi_info_read",
+            RuntimeFnId::CurlMultiSetopt => "__elephc_curl_multi_setopt",
+            RuntimeFnId::CurlMultiErrno => "__elephc_curl_multi_errno",
+            RuntimeFnId::CurlMultiStrerror => "__elephc_curl_multi_strerror",
+            RuntimeFnId::CurlMultiSetoptUnsupportedWarning => {
+                "__elephc_curl_multi_setopt_unsupported_warning"
+            }
+            RuntimeFnId::CurlSetoptUnsupportedWarning => {
+                "__elephc_curl_setopt_unsupported_warning"
+            }
+            RuntimeFnId::CurlShareInit => "__elephc_curl_share_init",
+            RuntimeFnId::CurlShareSetopt => "__elephc_curl_share_setopt",
+            RuntimeFnId::CurlShareErrno => "__elephc_curl_share_errno",
+            RuntimeFnId::CurlShareStrerror => "__elephc_curl_share_strerror",
+            RuntimeFnId::CurlEasySetShare => "__elephc_curl_easy_set_share",
+            RuntimeFnId::CurlShareInitPersistent => "__elephc_curl_share_init_persistent",
+            RuntimeFnId::CurlMimeNew => "__elephc_curl_mime_new",
+            RuntimeFnId::CurlMimeAddPart => "__elephc_curl_mime_add_part",
+            RuntimeFnId::CurlMimePartField => "__elephc_curl_mime_part_field",
+            RuntimeFnId::CurlMimePost => "__elephc_curl_mime_post",
+            RuntimeFnId::CurlMimeAbort => "__elephc_curl_mime_abort",
+            RuntimeFnId::CurlVersion => "__elephc_curl_version",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",
             RuntimeFnId::CtypeDigit => "ctype_digit",

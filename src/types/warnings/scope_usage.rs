@@ -119,6 +119,19 @@ pub(super) fn analyze_closure_scope(
 
 /// Implements function-like warning analysis with a set of names that are
 /// semantically used even when the body only writes them.
+///
+/// A function with an EMPTY body is exempt: it declares nothing but its own
+/// parameters, and those cannot be read by a body that has no statements, so
+/// every name would be reported unconditionally. That is noise rather than a
+/// finding — the parameter list of a deliberate no-op is part of the callable's
+/// public contract (PHP 8 named arguments bind to it), so the only way to
+/// "fix" such a warning is to rename a parameter callers may already pass by
+/// name. elephc's own injected preludes rely on this: PHP 8's `curl_close()`,
+/// `curl_multi_close()` and `curl_share_close()` are no-ops that must still
+/// declare `$handle` / `$multi_handle` / `$share_handle`
+/// (`crate::curl_prelude`), and before this exemption every compile of a
+/// program calling one printed an "Unused variable" warning pointing at a
+/// prelude line number the user cannot see.
 fn analyze_function_like_scope_with_reads(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
     variadic: Option<&String>,
@@ -127,6 +140,9 @@ fn analyze_function_like_scope_with_reads(
     preset_reads: &[String],
     warnings: &mut Vec<CompileWarning>,
 ) {
+    if body.is_empty() {
+        return;
+    }
     let mut scope = ScopeUsage::default();
     for (name, _, _, is_ref) in params {
         scope.declare(name, declaration_span);

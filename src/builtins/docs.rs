@@ -52,6 +52,7 @@ fn area_str(area: Area) -> &'static str {
         Area::Callables => "callables",
         Area::Spl => "spl",
         Area::Pointers => "pointers",
+        Area::Curl => "curl",
     }
 }
 

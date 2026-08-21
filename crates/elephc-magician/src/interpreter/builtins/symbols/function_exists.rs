@@ -131,9 +131,13 @@ pub(in crate::interpreter) fn eval_function_probe_exists(
     context: &ElephcEvalContext,
     name: &str,
 ) -> bool {
+    // The version filter is applied to the BUILTIN arm only: a user-declared function with
+    // one of these names (which PHP allows precisely because the extension function does not
+    // exist on that profile) must still be reported.
     !name.contains("::")
         && (context.has_function(name)
-            || eval_php_visible_builtin_exists(name)
+            || (eval_php_visible_builtin_exists(name)
+                && !eval_builtin_hidden_by_php_version(name))
             || eval_date_procedural_alias_exists(name)
             || eval_opcache_configuration_function_exists(name)
             || eval_opcache_reset_function_exists(name)

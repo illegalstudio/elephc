@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
+use crate::types::curl_constants::CURL_INT_CONSTANTS;
 use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
@@ -117,6 +118,13 @@ impl Checker {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in ERROR_LEVEL_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // `ext/curl` constants (CURLOPT_*, CURLINFO_*, CURLE_*, CURL_*, ...) are always
+        // registered and visible, exactly like JSON_*, even in programs that never mention
+        // curl and therefore never link the `elephc_curl` bridge. See
+        // `crate::types::curl_constants` for why.
+        for (name, _value) in CURL_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`

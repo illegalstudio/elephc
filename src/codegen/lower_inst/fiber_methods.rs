@@ -455,7 +455,15 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let null_label = ctx.next_label("nullsafe_method_null");
     let done_label = ctx.next_label("nullsafe_method_done");
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    // THE RESERVED CALLEE-SAVED NESTED-CALL REGISTER (x19/r12), not a scratch one: the
+    // receiver has to survive argument materialization, which runs runtime helpers and — for
+    // an omitted optional by-reference argument — stages a caller-side cell. A caller-saved
+    // scratch register is destroyed by both, and the method would then be entered with
+    // whatever the last helper left there as `$this`. Every other receiver-register dispatch
+    // (`lower_mixed_method_call`, callable dispatch, the array-access and intrinsic paths)
+    // already uses this register for the same reason, and `crate::codegen::frame` reserves
+    // its save slot for exactly the `NullsafeMethodCall` receivers this lowering handles.
+    let object_reg = abi::nested_call_reg(ctx.emitter);
     objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
     let receiver_ty = PhpType::Object(class_name);
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
@@ -471,6 +479,7 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
         &inst.operands,
         &param_types,
         &ref_params,
+        crate::codegen::lower_inst::RefArgCellLifetime::CallOnly,
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
@@ -485,10 +494,19 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     {
         emit_box_current_value_as_mixed(ctx.emitter, &target.return_ty.codegen_repr());
     }
+    // THE WRITEBACKS RUN ON THE CALL ARM, BEFORE THE JUMP, because that is the only arm that
+    // pushed the by-reference cell block: releasing it after `done_label` would also run on
+    // the null arm, which never pushed anything, and hand the rest of the function a stack
+    // pointer 16 bytes per cell too high. The result is therefore stored PER ARM — the
+    // writebacks clobber the result registers on their way through `__rt_mixed_unbox` /
+    // `__rt_decref_mixed`, so the call arm has to bank its return value first. Same
+    // store-then-write-back-then-jump order `method_intrinsics`' nullable dispatch uses.
+    store_if_result(ctx, inst)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     objects::emit_boxed_null(ctx);
-    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
