@@ -859,7 +859,9 @@ cargo run -- --emit-ir examples/hello/main.php
 The compiler runs the normal frontend order through type checking and AST
 optimization, lowers the optimized AST to EIR, validates the module, prints the
 textual format to stdout, and exits before runtime-cache preparation,
-assembly generation, assembling, or linking.
+assembly generation, assembling, or linking. If the source declares
+`#[Export]` functions, the cdylib call-graph safety validator also runs before
+the EIR is printed.
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive because each is
 a terminal output mode for the same source file.

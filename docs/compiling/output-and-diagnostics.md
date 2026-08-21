@@ -56,9 +56,11 @@ See [The EIR Design](../internals/the-ir.md) for how to read the output.
 
 ### `--check`
 
-Runs the front end — lexing, parsing, name resolution, type checking — and
-reports errors and warnings without writing any assembly or binary. This is the
-fastest way to validate a file.
+Runs lexing, parsing, name resolution, and type checking, then reports errors
+and warnings without writing assembly or a binary. When the source contains
+`#[Export]`, it additionally lowers EIR and runs the cdylib call-graph safety
+validator, so `--check` cannot report a false success for a library whose
+export reaches a fatal or opaque path.
 
 ```bash
 elephc --check hello.php

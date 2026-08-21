@@ -6,6 +6,9 @@
 //!
 //! Key details:
 //! - The requested EIR optimization setting is applied before printing.
+//! - Exported code receives the same cdylib call-graph safety validation as final emission.
+
+use std::collections::HashMap;
 
 use super::*;
 
@@ -17,6 +20,7 @@ pub(super) fn emit(
     filename: &str,
     web: bool,
     ir_opt: bool,
+    exported_functions: &HashMap<String, exports::ExportedFunction>,
     timings: &mut CompileTimings,
 ) {
     crate::progress::phase("ir-lower");
@@ -36,6 +40,14 @@ pub(super) fn emit(
         }
     };
     timings.record_since("ir-lower", phase_started);
+
+    if !exported_functions.is_empty() {
+        if let Err(error) = exports::validate_cdylib_call_graph(&module, exported_functions) {
+            crate::progress::clear();
+            errors::report(&error.with_file(filename.to_string()));
+            process::exit(1);
+        }
+    }
 
     crate::progress::phase("ir-opt");
     let phase_started = Instant::now();

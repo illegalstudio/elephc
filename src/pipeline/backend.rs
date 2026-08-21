@@ -287,6 +287,20 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     }
     timings.record_since("link", phase_started);
 
+    if let Some(header_path) = &output_paths.header {
+        let library_stem = header_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("libelephc_module");
+        let exports = exported_functions.values().collect::<Vec<_>>();
+        let header = exports::render_c_header(library_stem, &exports);
+        if let Err(error) = fs::write(header_path, header) {
+            crate::progress::clear();
+            eprintln!("Error writing '{}': {}", header_path.display(), error);
+            process::exit(1);
+        }
+    }
+
     // With --debug-info the DWARF line tables must be preserved past object
     // cleanup: on macOS `dsymutil` bakes them into a .dSYM while the object
     // still exists; if that fails the object is kept so debuggers can follow

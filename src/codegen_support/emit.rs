@@ -24,6 +24,11 @@ pub struct Emitter {
     /// addressing. Required for shared-library output, where the loader cannot
     /// resolve cross-object `R_X86_64_PC32` relocations at dlopen time.
     pub pic_data_refs: bool,
+    /// When `true`, user frames publish exceptional cleanup activations and
+    /// process-fatal runtime paths may unwind through the cdylib host boundary.
+    /// This is deliberately independent from position-independent addressing:
+    /// PIC is a relocation choice, while boundary recovery is an ABI contract.
+    pub cdylib_boundary: bool,
     /// When `true`, macOS runtime emission is prepared for per-symbol dead
     /// stripping: `label()` records each internal label name in
     /// `internal_labels` so the final assembly can rename them to Mach-O
@@ -47,6 +52,7 @@ impl Emitter {
             target,
             platform: target.platform,
             pic_data_refs: false,
+            cdylib_boundary: false,
             dead_strip: false,
             internal_labels: HashSet::new(),
         }
@@ -58,6 +64,13 @@ impl Emitter {
     pub fn new_pic(target: Target) -> Self {
         let mut emitter = Self::new(target);
         emitter.pic_data_refs = true;
+        emitter
+    }
+
+    /// Returns an emitter configured for the recoverable cdylib ABI.
+    pub fn new_cdylib(target: Target) -> Self {
+        let mut emitter = Self::new_pic(target);
+        emitter.cdylib_boundary = true;
         emitter
     }
 

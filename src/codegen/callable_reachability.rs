@@ -62,19 +62,19 @@ impl CallableNameSet {
 }
 
 /// Per-function finite string-callable facts indexed by EIR value id.
-pub(super) struct CallableReachabilityAnalysis {
+pub(crate) struct CallableReachabilityAnalysis {
     value_names: Vec<CallableNameSet>,
 }
 
 impl CallableReachabilityAnalysis {
     /// Runs the forward local-value analysis for one lowered EIR function.
-    pub(super) fn new(module: &Module, function: &Function) -> Self {
+    pub(crate) fn new(module: &Module, function: &Function) -> Self {
         let value_names = analyze_value_names(module, function);
         Self { value_names }
     }
 
     /// Returns a finite candidate set for `value`, or `None` for an open runtime string.
-    pub(super) fn candidates(&self, value: ValueId) -> Option<Vec<String>> {
+    pub(crate) fn candidates(&self, value: ValueId) -> Option<Vec<String>> {
         self.value_names
             .get(value.as_raw() as usize)
             .and_then(CallableNameSet::finite_names)
@@ -181,7 +181,7 @@ fn instruction_result_names(
     value_names: &[CallableNameSet],
 ) -> CallableNameSet {
     match inst.op {
-        Op::ConstStr => inst
+        Op::ConstStr | Op::ClosureNew => inst
             .immediate
             .as_ref()
             .and_then(|immediate| match immediate {

@@ -144,7 +144,9 @@ timing labels.
 You do not have to run the whole pipeline. Several flags stop early or dump an
 intermediate artifact:
 
-- [`--check`](output-and-diagnostics.md#--check) runs the front end only.
+- [`--check`](output-and-diagnostics.md#--check) normally runs the front end
+  only; when `#[Export]` is present it also lowers EIR and runs cdylib
+  call-graph safety without emitting code.
 - [`--emit-ir`](output-and-diagnostics.md#--emit-ir) prints EIR (after `ir-opt`) and stops.
 - [`--emit-asm`](output-and-diagnostics.md#--emit-asm) writes assembly without linking.
 - [`--timings`](output-and-diagnostics.md#--timings) prints how long each phase took.

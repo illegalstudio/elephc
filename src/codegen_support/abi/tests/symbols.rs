@@ -57,3 +57,19 @@ fn test_emit_extern_symbol_address_uses_got_relocations_on_aarch64() {
         )
     );
 }
+
+/// Preserves an x9 payload by resolving a PIC symbol address through x10 before storing.
+#[test]
+fn test_pic_store_x9_uses_distinct_aarch64_got_scratch() {
+    let mut emitter = Emitter::new_pic(Target::new(Platform::MacOS, Arch::AArch64));
+    emit_store_reg_to_symbol(&mut emitter, "x9", "_demo_extern", 0);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    adrp x10, _demo_extern@GOTPAGE\n",
+            "    ldr x10, [x10, _demo_extern@GOTPAGEOFF]\n",
+            "    str x9, [x10]\n",
+        )
+    );
+}

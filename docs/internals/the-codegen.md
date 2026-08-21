@@ -123,9 +123,15 @@ target-aware call helpers on macOS ARM64, Linux ARM64, and Linux x86_64. See
 ## Emit Modes
 
 `--emit executable` is the default and emits a process entry point. `--emit
-cdylib` emits a PIC user object with `#[Export]` trampolines and lifecycle
-symbols for embedding hosts. On Linux cdylib output also hides internal runtime
-symbols so separate loaded elephc modules do not preempt each other's state.
+cdylib` emits a PIC user object with `#[Export]` trampolines, ABI/error/memory
+helpers, and lifecycle symbols for embedding hosts. Every export uses a native
+exception boundary; scalar exports preserve their C signatures and publish
+status through `elephc_last_status()`, while exact `string -> string` exports
+return status directly and copy the PHP byte string into caller-owned heap
+storage. Boundary nesting is explicit and concat scratch state is saved and
+restored around each entry. Internal symbols are hidden on ELF (including
+driver-supplied `_init`/`_fini`) and private externs on Mach-O, so separate
+loaded Elephc modules do not preempt each other's runtime state.
 
 ## Key Mechanisms
 

@@ -1,7 +1,6 @@
 //! Purpose:
-//! ELF symbol-visibility post-processing for `--emit cdylib` artifacts: appends
-//! `.hidden` directives for every internal global symbol so the dynamic linker
-//! binds them locally instead of treating them as preemptible exports.
+//! Symbol-visibility post-processing for `--emit cdylib` artifacts: appends
+//! ELF `.hidden` or Mach-O `.private_extern` directives for internal globals.
 //!
 //! Called from:
 //! - `crate::codegen_support::driver_support::generate_runtime_with_features_pic()` for
@@ -26,18 +25,43 @@ use std::collections::HashSet;
 /// Scans `asm` for `.globl`/`.comm` symbol declarations and returns the same
 /// assembly with a trailing block of visibility directives covering every
 /// declared global except the names in `exported`. Symbol order follows the
-/// first declaration so output stays deterministic.
+/// first declaration so output stays deterministic for the runtime cache hash.
 pub(crate) fn append_hidden_directives(
     asm: &str,
     exported: &HashSet<String>,
     platform: crate::codegen_support::platform::Platform,
 ) -> String {
+    append_hidden_directives_with_extras(asm, exported, platform, &[])
+}
+
+/// Appends platform visibility directives for declared globals plus linker-supplied internals.
+pub(crate) fn append_hidden_directives_with_extras(
+    asm: &str,
+    exported: &HashSet<String>,
+    platform: crate::codegen_support::platform::Platform,
+    additional_internal: &[&str],
+) -> String {
     let directive = match platform {
-        crate::codegen_support::platform::Platform::MacOS => ".private_extern ",
-        _ => ".hidden ",
+        crate::codegen_support::platform::Platform::MacOS => ".private_extern",
+        _ => ".hidden",
     };
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut hidden: Vec<&str> = Vec::new();
+    append_visibility_directives(asm, exported, directive, additional_internal)
+}
+
+/// Scans global declarations and appends one deterministic visibility directive per symbol.
+fn append_visibility_directives(
+    asm: &str,
+    exported: &HashSet<String>,
+    directive: &str,
+    additional_internal: &[&str],
+) -> String {
+    let mut seen = HashSet::<String>::new();
+    let mut hidden = Vec::<String>::new();
+    for symbol in additional_internal {
+        if !symbol.is_empty() && !exported.contains(*symbol) && seen.insert((*symbol).to_string()) {
+            hidden.push((*symbol).to_string());
+        }
+    }
     for line in asm.lines() {
         let trimmed = line.trim_start();
         let symbol = if let Some(rest) = trimmed.strip_prefix(".globl ") {
@@ -47,10 +71,10 @@ pub(crate) fn append_hidden_directives(
         } else {
             continue;
         };
-        if symbol.is_empty() || exported.contains(symbol) || !seen.insert(symbol) {
+        if symbol.is_empty() || exported.contains(symbol) || !seen.insert(symbol.to_string()) {
             continue;
         }
-        hidden.push(symbol);
+        hidden.push(symbol.to_string());
     }
     if hidden.is_empty() {
         return asm.to_string();
@@ -60,10 +84,11 @@ pub(crate) fn append_hidden_directives(
     if !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push_str("\n// -- internal symbols are hidden so the cdylib exports only its public ABI --\n");
+    out.push_str("\n// -- internal symbols are local to the cdylib public ABI --\n");
     for symbol in hidden {
         out.push_str(directive);
-        out.push_str(symbol);
+        out.push(' ');
+        out.push_str(&symbol);
         out.push('\n');
     }
     out
@@ -104,5 +129,31 @@ mod tests {
     fn leaves_asm_without_globals_untouched() {
         let asm = "    mov x0, #0\n    ret\n";
         assert_eq!(append_hidden_directives(asm, &HashSet::new(), Platform::Linux), asm);
+    }
+
+    /// Uses Mach-O private extern visibility while preserving public symbols.
+    #[test]
+    fn privatizes_macho_internal_globals() {
+        let asm = ".globl _roundtrip\n_roundtrip:\n.globl __rt_heap_alloc\n__rt_heap_alloc:\n";
+        let exported: HashSet<String> = ["_roundtrip".to_string()].into_iter().collect();
+        let out = append_hidden_directives(asm, &exported, Platform::MacOS);
+        assert!(out.contains(".private_extern __rt_heap_alloc\n"));
+        assert!(!out.contains(".private_extern _roundtrip"));
+    }
+
+    /// Hides ELF CRT globals that the compiler driver adds after assembly.
+    #[test]
+    fn hides_additional_linker_globals_without_assembly_definitions() {
+        let asm = ".globl roundtrip\nroundtrip:\n";
+        let exported: HashSet<String> = ["roundtrip".to_string()].into_iter().collect();
+        let out = append_hidden_directives_with_extras(
+            asm,
+            &exported,
+            Platform::Linux,
+            &["_init", "_fini"],
+        );
+        assert!(out.contains(".hidden _init\n"));
+        assert!(out.contains(".hidden _fini\n"));
+        assert!(!out.contains(".hidden roundtrip"));
     }
 }

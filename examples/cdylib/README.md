@@ -1,8 +1,8 @@
 # `--emit cdylib` end-to-end demo
 
-Compiles a small PHP file containing two `#[Export]`-marked functions into a
-loadable shared library, then loads it from a C host that exercises the
-lifecycle entry points and the exported functions.
+This example compiles four `#[Export]` PHP functions into a shared library,
+then loads it from a normal C host. The host includes Elephc's generated header
+and exercises recoverable scalar calls plus the binary-safe owned-string ABI.
 
 ## Build and run
 
@@ -22,34 +22,42 @@ cc -o examples/cdylib/host examples/cdylib/host.c
 ./examples/cdylib/host examples/cdylib/libauth.dylib
 ```
 
+Compilation produces both the library and `examples/cdylib/libauth.h`.
+
 Expected output:
 
+```text
+elephc cdylib demo OK: recoverable scalar ABI + binary string roundtrip
 ```
-elephc cdylib demo OK: add_i64(40,2)=42, validate_token long=0 short=1
-```
 
-## What the demo covers (v1)
+## What the demo covers
 
-- `--emit cdylib` artifact naming: `lib<stem>.{so,dylib}`.
-- `dlopen` + `dlsym` resolution of the four lifecycle entry points
-  (`elephc_init`, `elephc_shutdown`, `elephc_last_error`, `elephc_free`).
-- Scalar parameter marshaling for `int` (round-trip through `add_i64`).
-- String-in parameter marshaling for `string` (`validate_token` receives a
-  `(const char* ptr, size_t len)` pair in two consecutive integer-arg regs).
-- Scalar return values (`int32_t` from `validate_token`, `int64_t` from
-  `add_i64`).
+- Conventional `lib<stem>.{so,dylib}` output and a deterministic
+  `lib<stem>.h` header.
+- Stable C-safe naming for namespaced exports (`Demo\add` becomes `Demo_add`),
+  with compile-time collision detection.
+- `dlopen`/`dlsym` access to the ABI version, lifecycle, diagnostic, allocation,
+  and declared export symbols.
+- Stable scalar C signatures with failure status queried through
+  `elephc_last_status()`.
+- A binary-safe `string -> string` call containing an embedded NUL byte.
+- Caller ownership of successful string results through `elephc_free`, including
+  safe `elephc_free(NULL)` behavior.
+- A PHP exception reported as `ELEPHC_STATUS_PHP_EXCEPTION`, followed by a
+  successful call in the same host process and a cleared last-error state.
 
-The demo works on every supported target: macOS aarch64, Linux aarch64, and
-Linux x86_64. Code generation runs in PIC mode (global data references go
-through the GOT), and on ELF targets every internal symbol is emitted with
-hidden visibility, so the `.so` exports only the lifecycle entry points and
-the `#[Export]` trampolines.
+The example works on macOS aarch64, Linux aarch64, and Linux x86_64. Internal
+compiler/runtime symbols are private on Mach-O and ELF; the public symbol table
+contains only documented Elephc boundary symbols and `#[Export]` functions.
 
-## What v1 deliberately does not cover
+## Current limits
 
-- String return values (no `elephc_free`-able host-owned strings yet).
-- Array, object, callable, or `null` parameter / return types.
-- Exception propagation from PHP back to C.
-- Thread-safety guarantees beyond a single-threaded host.
-
-These ship in follow-up iterations once v1 has bedded in.
+- String returns use the deliberately narrow exact signature
+  `string function(string)`; mixed scalar/string layouts are not yet public ABI.
+- Array, object, callable, nullable, variadic, and by-reference export values are
+  not supported.
+- The cdylib ABI is single-threaded. It does not recover from hardware faults
+  or memory corruption.
+- `exit`/`die`, fatal EIR/runtime paths, `eval`, dynamic construction, foreign
+  calls, and call paths whose dispatch prevents proving process termination
+  unreachable are rejected for every export.

@@ -58,7 +58,7 @@ selection, toolchain overrides, and transactional behavior.
 | `--emit KIND` / `--emit=KIND` | `executable` (`exe`, `bin`), `cdylib` (`dylib`, `shared`) | `executable` | Output artifact kind. `cdylib` builds a C-ABI shared library. |
 | `--emit-asm` | — | off | Write generated assembly instead of a binary. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
-| `--check` | — | off | Run front-end checks only; write nothing. |
+| `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |

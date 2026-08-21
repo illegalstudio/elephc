@@ -68,6 +68,22 @@ fn test_emit_frame_prologue_rejects_undersized_frame() {
     emit_frame_prologue(&mut emitter, 8);
 }
 
+/// Routes process-exit helpers through the active cdylib exception boundary on both targets.
+#[test]
+fn test_emit_exit_recovers_through_cdylib_boundary() {
+    for target in [
+        Target::new(Platform::MacOS, Arch::AArch64),
+        Target::new(Platform::Linux, Arch::X86_64),
+    ] {
+        let mut emitter = Emitter::new_cdylib(target);
+        emit_exit(&mut emitter, 7);
+        let asm = emitter.output();
+        assert!(asm.contains("_elephc_boundary_active"));
+        assert!(asm.contains("_elephc_boundary_status"));
+        assert!(asm.contains("__rt_throw_current"));
+    }
+}
+
 /// Tests that string return values (pointer in x1, length in x2) are preserved
 /// across function boundaries by storing them to the caller's stack frame at negative
 /// offsets and restoring them after the call. Uses offset 32 for both stores.
