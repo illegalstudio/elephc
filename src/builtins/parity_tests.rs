@@ -543,7 +543,7 @@ fn default_text(default: &DefaultSpec) -> String {
 /// of them iterates `contracts()`. Without this test that omission is silent.
 ///
 /// SCOPE. Only the preludes whose PHP surface the shared catalog claims IN THIS BUILD are
-/// audited (see `CATALOG_HOSTED_PRELUDES`). `pdo_prelude`, `tz_prelude`,
+/// audited (see `catalog_hosted_preludes`). `pdo_prelude`, `tz_prelude`,
 /// `var_export_prelude`, `image_prelude` and `web_prelude` ship PHP-visible functions that
 /// have no shared contracts AT ALL by design (`var_export`, `imagecreate`, `setcookie`,
 /// `session_*`, `pdo_drivers`, `timezone_*` — verified: none of them appears in
