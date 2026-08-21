@@ -14,7 +14,7 @@ function token_min_length(): int {
 
 #[Export]
 function validate_token(string $token): int {
-    // Returns 0 on accept, 1 on reject through the unchanged scalar export ABI.
+    // Returns 0 on accept, 1 on reject through the stable scalar C signature.
     if (strlen($token) >= token_min_length()) {
         return 0;
     }
@@ -24,6 +24,14 @@ function validate_token(string $token): int {
 #[Export]
 function add_i64(int $a, int $b): int {
     return $a + $b;
+}
+
+#[Export]
+function scalar_failure(int $value): int {
+    if ($value === 7) {
+        throw new RuntimeException("requested scalar failure");
+    }
+    throw new RuntimeException("unexpected scalar failure input");
 }
 
 #[Export]

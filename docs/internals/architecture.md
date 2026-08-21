@@ -105,8 +105,8 @@ PHP source (.php)
 ┌──────────────┐
 │   Exports    │  src/exports.rs
 │    Scan      │  Collects #[Export]-marked functions and validates their
-│              │  C-ABI signatures for --emit cdylib (warns and ignores
-│              │  them in executable mode).
+│              │  C-ABI signatures and post-lowering safety graph (warns and
+│              │  ignores them only in normal executable emission).
 └─────┬────────┘
       │
       ▼
@@ -367,11 +367,12 @@ src/
 │   │   ├── target.rs          Platform / Arch / Target definitions and derived codegen properties
 │   │   ├── linux_transform.rs Linux post-emit transforms, syscall mapping, C-symbol remapping
 │   │   └── toolchain.rs       Assembler / linker invocation
-│   ├── cdylib.rs              Scalar/owned-string C-ABI boundaries + lifecycle/error/memory symbols
+│   ├── cdylib.rs              Owned-string boundary orchestration + lifecycle/status/error/memory symbols
+│   ├── cdylib/boundary.rs     Recoverable scalar wrappers + nested boundary/concat state
 │   ├── visibility.rs          ELF hidden / Mach-O private visibility for internal cdylib globals
 │   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
 │   ├── data_section.rs        String/float literal .data section
-│   ├── emit.rs                Assembly text buffer
+│   ├── emit.rs                Assembly text buffer plus independent PIC/cdylib-boundary modes
 │   │
 │   └── runtime/               Runtime routines and target-specific emission helpers
 │       ├── mod.rs             Runtime module boundary; re-exports the emission entry points

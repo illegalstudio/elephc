@@ -15,7 +15,9 @@ the exact mapped ABI.
 
 The mode supports macOS aarch64 (`.dylib`), Linux aarch64 (`.so`), and Linux
 x86_64 (`.so`). The ABI is single-threaded: a host must not call the same
-Elephc library concurrently.
+Elephc library concurrently. Boundary depth and concat scratch state are
+nest-safe, so internal recovery cannot accidentally deactivate an outer
+boundary.
 
 ## Building a cdylib
 
@@ -68,6 +70,11 @@ Existing scalar signatures keep their original ABI:
 | `string` | `const char *ptr, size_t len` | see the owned-string ABI below |
 | `void` | — | `void` |
 
+Scalar calls now run through the same recoverable native boundary while keeping
+those return types unchanged. On failure they return the zero value for their C
+return type (`0`, `0.0`, or no value for `void`); the host must call
+`elephc_last_status()` to distinguish that failure from a legitimate zero.
+
 The first string-return ABI is deliberately exact: one by-value `string`
 parameter and a `string` return. A function such as `roundtrip` has this C
 prototype:
@@ -105,6 +112,7 @@ Every generated header declares:
 uint32_t  elephc_abi_version(void);
 int32_t   elephc_init(void);
 void      elephc_shutdown(void);
+int32_t   elephc_last_status(void);
 const char *elephc_last_error(void);
 void      elephc_free(void *ptr);
 ```
@@ -112,6 +120,11 @@ void      elephc_free(void *ptr);
 Call `elephc_init()` after loading the library and `elephc_shutdown()` before
 unloading it. `elephc_abi_version()` must match `ELEPHC_ABI_VERSION` from the
 header. `elephc_free(NULL)` is safe.
+
+ABI version 3 adds recovery for the pre-existing scalar signatures and the
+`elephc_last_status()` query. A successful scalar or owned-string call records
+`ELEPHC_STATUS_OK`; a recovered scalar failure records the same named status
+that the owned-string wrapper would return directly.
 
 The named status constants are:
 
@@ -132,7 +145,7 @@ error: the function returns a non-NULL pointer to `""`, not `NULL`.
 
 ## Recoverable errors and restrictions
 
-The owned-string wrapper installs Elephc's native exception boundary before it
+Every export wrapper installs Elephc's native exception boundary before it
 calls PHP. Escaping supported Throwables are converted to
 `ELEPHC_STATUS_PHP_EXCEPTION`; boundary-reachable allocation failures receive
 their own status. Function-frame cleanup runs before control returns to C, so a
@@ -143,12 +156,13 @@ recoverable. Hardware faults, memory corruption, and foreign code that aborts
 the process are not contained.
 
 `exit` and `die` cannot return a status, so the compiler rejects them when they
-are transitively reachable from a string-returning export, including through a
-fixed constructor or statically invoked closure. It also rejects `eval`,
-runtime-selected constructors, foreign calls, and other opaque dynamic
-invocation paths on that surface when it cannot prove process termination
-unreachable. Scalar exports retain their existing ABI and do not gain a status
-return channel.
+are transitively reachable from any export, including through fixed
+constructors/destructors, include-variant dispatchers, and statically resolved
+runtime callbacks or closures. It also rejects reachable fatal EIR terminators,
+fatal builtin argument subsets, `eval`, runtime-selected constructors, foreign
+calls, and other opaque invocation paths when it cannot prove process
+termination unreachable. The same validation runs for exported code under
+plain `--check` and `--emit-ir`, not only during final cdylib emission.
 
 ## C consumption
 
@@ -182,12 +196,12 @@ complete error-and-recovery host.
 ## Symbol visibility and PIC
 
 The public symbol table contains only declared `#[Export]` functions plus
-`elephc_abi_version`, `elephc_init`, `elephc_shutdown`, `elephc_last_error`, and
-`elephc_free`. ELF internals use hidden visibility; Mach-O internals are private
-externs. On Linux the CRT-supplied `_init`/`_fini` definitions are localized as
-well. Runtime helpers, buffers, data constants, and non-exported PHP functions
-therefore do not become host ABI or preempt another loaded Elephc library's
-state.
+`elephc_abi_version`, `elephc_init`, `elephc_shutdown`,
+`elephc_last_status`, `elephc_last_error`, and `elephc_free`. ELF internals use
+hidden visibility; Mach-O internals are private externs. On Linux the
+CRT-supplied `_init`/`_fini` definitions are localized as well. Runtime helpers,
+buffers, data constants, and non-exported PHP functions therefore do not become
+host ABI or preempt another loaded Elephc library's state.
 
 Cdylib code generation is position-independent. Global references use the GOT
 (`@GOTPCREL` on x86_64 and `:got:`/`:got_lo12:` on AArch64), allowing the
@@ -198,7 +212,8 @@ dynamic loader to relocate the library.
 - One `.php` or `.lfc` entry source per cdylib; normal includes/requires still
   work.
 - The ABI is single-threaded and exposes no per-host runtime context.
-- Only the exact `string -> string` owned-result surface has a recoverable
-  status boundary; the pre-existing scalar export ABI is unchanged.
+- String results still use only the exact `string -> string` owned-result
+  surface; scalar signatures preserve their existing C prototypes and expose
+  recovered status through `elephc_last_status()`.
 - Array, object, callable, nullable, variadic, by-reference, and generic string
   return signatures are not public ABI.

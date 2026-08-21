@@ -1,8 +1,8 @@
 # `--emit cdylib` end-to-end demo
 
-This example compiles three `#[Export]` PHP functions into a shared library,
+This example compiles four `#[Export]` PHP functions into a shared library,
 then loads it from a normal C host. The host includes Elephc's generated header
-and exercises the unchanged scalar ABI plus the binary-safe owned-string ABI.
+and exercises recoverable scalar calls plus the binary-safe owned-string ABI.
 
 ## Build and run
 
@@ -27,7 +27,7 @@ Compilation produces both the library and `examples/cdylib/libauth.h`.
 Expected output:
 
 ```text
-elephc cdylib demo OK: scalar ABI + recoverable binary string roundtrip
+elephc cdylib demo OK: recoverable scalar ABI + binary string roundtrip
 ```
 
 ## What the demo covers
@@ -38,7 +38,8 @@ elephc cdylib demo OK: scalar ABI + recoverable binary string roundtrip
   with compile-time collision detection.
 - `dlopen`/`dlsym` access to the ABI version, lifecycle, diagnostic, allocation,
   and declared export symbols.
-- The unchanged scalar ABI for `int` returns and string input parameters.
+- Stable scalar C signatures with failure status queried through
+  `elephc_last_status()`.
 - A binary-safe `string -> string` call containing an embedded NUL byte.
 - Caller ownership of successful string results through `elephc_free`, including
   safe `elephc_free(NULL)` behavior.
@@ -57,6 +58,6 @@ contains only documented Elephc boundary symbols and `#[Export]` functions.
   not supported.
 - The cdylib ABI is single-threaded. It does not recover from hardware faults
   or memory corruption.
-- `exit`/`die`, `eval`, dynamic construction, foreign calls, and call paths
-  whose dispatch prevents proving process termination unreachable are rejected
-  for string-returning exports.
+- `exit`/`die`, fatal EIR/runtime paths, `eval`, dynamic construction, foreign
+  calls, and call paths whose dispatch prevents proving process termination
+  unreachable are rejected for every export.
