@@ -309,12 +309,17 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("curl-prelude");
     let phase_started = Instant::now();
     let ast = if php_version == crate::php_version::PhpVersion::default() {
-        crate::curl_prelude::inject_if_used(ast, with_crates.contains("curl"))
+        crate::curl_prelude::inject_if_used(
+            ast,
+            with_crates.contains("curl"),
+            &mut prelude_inventory,
+        )
     } else {
         crate::curl_prelude::inject_if_used_for_version(
             ast,
             with_crates.contains("curl"),
             php_version,
+            &mut prelude_inventory,
         )
     };
     timings.record_since("curl-prelude", phase_started);

@@ -1950,8 +1950,14 @@ function curl_share_init_persistent(array $share_options): CurlSharePersistentHa
 pub fn inject_if_used(
     program: crate::parser::ast::Program,
     force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> crate::parser::ast::Program {
-    inject_if_used_for_version(program, force, crate::php_version::PhpVersion::default())
+    inject_if_used_for_version(
+        program,
+        force,
+        crate::php_version::PhpVersion::default(),
+        inventory,
+    )
 }
 
 /// Injects the curl prelude generated for an explicit PHP compatibility version.
@@ -1966,13 +1972,34 @@ pub fn inject_if_used_for_version(
     program: crate::parser::ast::Program,
     force: bool,
     php_version: crate::php_version::PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> crate::parser::ast::Program {
     if !force && !detect::program_uses_curl(&program) {
         return program;
     }
+    // PARSED, not built — the one prelude left that still tokenizes PHP text at injection
+    // time. Every sibling now constructs its declarations in Rust
+    // (`crate::hash_prelude::hash_declarations`,
+    // `crate::pdo_prelude::build::pdo_declarations`, …), which is where this one belongs
+    // too. Transcribing it is a project of its own rather than a line of this change: PDO's
+    // conversion needed `crate::synthetic_class::transcribe` plus the
+    // `ELEPHC_ORACLE_PHP`/`ELEPHC_ORACLE_WHICH` node-by-node oracle to prove the built AST
+    // reproduces the text, across every profile — and this surface is ~2,000 lines with its
+    // own version fences on top. Until that lands (ROADMAP: "Build the curl prelude in Rust
+    // like every other stdlib prelude"), the cost is PAY-FOR-USE and bounded: the tokenizer
+    // and parser run only on a compile that actually reaches the curl surface, never on the
+    // other ones. `CURL_PRELUDE_SRC` stays the single source of truth meanwhile, and
+    // `crate::builtins::parity_tests` audits it against the shared catalog through the same
+    // gates the built preludes go through.
     let source = prelude_source_for_version(php_version);
     let tokens = crate::lexer::tokenize(source.as_ref()).expect("curl prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("curl prelude must parse");
+    // Declaration reachability prunes what nothing reaches, so the surface has to be
+    // declared to it: this is what lets `--with-curl` keep the whole thing (through
+    // `PruneOptions::forced_groups`) for a program whose only route to curl is one the
+    // compiler cannot see. Nothing here is registered with `record_internal_callable_method`
+    // — see `reachability_tests` below for the measurement that says why not.
+    inventory.record_program("curl", &combined);
     combined.extend(program);
     combined
 }
@@ -2292,5 +2319,139 @@ mod surface_audit_tests {
                 "{source} must NOT trigger curl prelude injection"
             );
         }
+    }
+}
+
+/// How the injected curl surface meets declaration reachability.
+///
+/// Declaration pruning runs over EVERY program and the curl prelude is the largest thing it
+/// can be handed, so what it may and may not delete here is worth pinning rather than
+/// inferring. Two facts, each measured rather than assumed:
+///
+/// 1. `--with-curl` needs the prelude's inventory group in `PruneOptions::forced_groups`, or
+///    the flag injects a surface the pruner deletes again on the next pass.
+/// 2. The prelude's dynamic-dispatch sites hand off a USER-SUPPLIED callable, so their
+///    dynamic hazards are load-bearing and must NOT be cleared the way
+///    `PreludeInventory::record_internal_callable_method` clears PDO's. NO curl declaration
+///    is registered, and what keeps that answer honest is
+///    `crate::optimize::reachability::tests::curl_prelude_dispatches_only_user_callables`,
+///    which enumerates the hazard sites — it lives there rather than here because the
+///    per-declaration scan it reads is private to the reachability module.
+#[cfg(test)]
+mod reachability_tests {
+    use std::collections::HashSet;
+
+    use crate::optimize::reachability::{PreludeInventory, PruneOptions};
+    use crate::parser::ast::{Program, Stmt, StmtKind};
+
+    /// Runs the real frontend over `source` with the curl prelude injected.
+    fn injected(source: &str, force: bool) -> (Program, PreludeInventory, crate::types::CheckResult) {
+        let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
+        let program = crate::parser::parse(&tokens).expect("fixture must parse");
+        let program = crate::autoload::collect_aliases(program);
+        let mut inventory = PreludeInventory::new();
+        let program = super::inject_if_used(program, force, &mut inventory);
+        let program = crate::name_resolver::resolve(program).expect("fixture must resolve");
+        let program = crate::func_args::desugar(program).expect("fixture must desugar");
+        let program = crate::optimize::fold_constants(program);
+        let check = crate::types::check(&program).expect("fixture must type check");
+        (program, inventory, check)
+    }
+
+    /// Prunes one injected fixture, optionally forcing the `curl` inventory group.
+    fn prune(source: &str, force: bool, forced_group: bool) -> Program {
+        let (program, inventory, mut check) = injected(source, force);
+        let forced: HashSet<String> = if forced_group {
+            ["curl".to_string()].into_iter().collect()
+        } else {
+            HashSet::new()
+        };
+        let exported = HashSet::new();
+        crate::optimize::prune_unreachable_declarations(
+            program,
+            &mut check,
+            PruneOptions {
+                inventory: &inventory,
+                forced_groups: &forced,
+                exported_functions: &exported,
+                eval_forced: false,
+            },
+        )
+    }
+
+    /// Returns whether a top-level function declaration survives.
+    fn has_function(program: &[Stmt], name: &str) -> bool {
+        program.iter().any(|statement| {
+            matches!(&statement.kind, StmtKind::FunctionDecl { name: declared, .. }
+                if declared.eq_ignore_ascii_case(name))
+        })
+    }
+
+    /// Returns whether a top-level class declaration survives.
+    fn has_class(program: &[Stmt], name: &str) -> bool {
+        program.iter().any(|statement| {
+            matches!(&statement.kind, StmtKind::ClassDecl { name: declared, .. }
+                if declared.eq_ignore_ascii_case(name))
+        })
+    }
+
+    /// Verifies `--with-curl` keeps the whole injected surface, and that it takes the forced
+    /// inventory group to do it.
+    ///
+    /// The fixture NEVER MENTIONS CURL — that is the case `--with-curl` exists for, a program
+    /// whose only route to the surface is one the compiler cannot see (an `eval()` body, a
+    /// computed function name). Injection alone is not enough for it: with no executable edge
+    /// and no forced group, reachability correctly concludes nothing reaches `curl_init()` and
+    /// deletes the surface the flag just asked for. The negative half is the point of the
+    /// test, not decoration.
+    #[test]
+    fn forcing_the_curl_group_keeps_the_whole_surface() {
+        let source = "<?php function helper(): int { return 1; } echo helper();";
+
+        let forced = prune(source, true, true);
+        assert!(has_function(&forced, "curl_init"), "--with-curl must keep curl_init()");
+        assert!(
+            has_function(&forced, "curl_multi_init"),
+            "--with-curl must keep the multi surface"
+        );
+        assert!(has_class(&forced, "CurlHandle"), "--with-curl must keep CurlHandle");
+        assert!(has_class(&forced, "CURLFile"), "--with-curl must keep CURLFile");
+
+        let unforced = prune(source, true, false);
+        assert!(
+            !has_function(&unforced, "curl_init") && !has_class(&unforced, "CurlHandle"),
+            "without the forced group the injected surface is pruned away again — which is \
+             why `pipeline::compile` lists `curl` in `forced_groups`"
+        );
+    }
+
+    /// Verifies a callback named only by a STRING through `curl_setopt()` survives pruning.
+    ///
+    /// THIS IS WHY NO CURL DECLARATION IS REGISTERED WITH
+    /// `PreludeInventory::record_internal_callable_method`. PDO registers four methods whose
+    /// generic callable syntax only ever invokes closure descriptors the prelude itself
+    /// created; clearing their dynamic hazards is safe because no user declaration can be on
+    /// the other end. Curl's two dynamic sites are the opposite: `curl_setopt()` asks
+    /// `is_callable($value)` about the USER'S value, and `__elephc_curl_sync_read_slot`'s
+    /// dispatcher `call_user_func($user, …)`s the user's read callback. The user writes the
+    /// name as a bare string into a `mixed $value` parameter, and nothing connects that string
+    /// to the declaration — so the prelude's dynamic-function hazard is the ONLY thing keeping
+    /// `my_writer` alive, and registering `curl_setopt` as internal-callable would silently
+    /// delete a callback the program still calls. Verified by removing the `curl_setopt()`
+    /// line: `my_writer` is then pruned and this assertion fails.
+    #[test]
+    fn a_string_named_curl_callback_survives_pruning() {
+        let pruned = prune(
+            "<?php function my_writer($ch, string $data): int { return 1; } \
+             $ch = curl_init('https://example.com'); \
+             curl_setopt($ch, CURLOPT_WRITEFUNCTION, 'my_writer'); \
+             curl_exec($ch);",
+            false,
+            false,
+        );
+        assert!(
+            has_function(&pruned, "my_writer"),
+            "a CURLOPT_WRITEFUNCTION callback named by string must not be pruned"
+        );
     }
 }
