@@ -82,7 +82,7 @@ fn test_error_pcntl_status_requires_int() {
 fn test_error_pcntl_wait_status_must_be_variable() {
     expect_error(
         "<?php pcntl_wait(0);",
-        "pcntl_wait() parameter $status must be passed a variable",
+        "pcntl_wait(): Argument #1 ($status) could not be passed by reference",
     );
 }
 
@@ -91,7 +91,7 @@ fn test_error_pcntl_wait_status_must_be_variable() {
 fn test_error_pcntl_waitpid_resource_usage_must_be_variable() {
     expect_error(
         "<?php $status = 0; pcntl_waitpid(1, $status, 0, []);",
-        "pcntl_waitpid() parameter $resource_usage must be passed a variable",
+        "pcntl_waitpid(): Argument #4 ($resource_usage) could not be passed by reference",
     );
 }
 
@@ -100,7 +100,7 @@ fn test_error_pcntl_waitpid_resource_usage_must_be_variable() {
 fn test_error_pcntl_waitid_info_must_be_variable() {
     expect_error(
         "<?php pcntl_waitid(P_ALL, null, []);",
-        "pcntl_waitid() parameter $info must be passed a variable",
+        "pcntl_waitid(): Argument #3 ($info) could not be passed by reference",
     );
 }
 
@@ -145,7 +145,7 @@ fn test_error_pcntl_exec_requires_string_array_values() {
 fn test_error_pcntl_signal_mask_output_must_be_variable() {
     expect_error(
         "<?php pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1], []);",
-        "pcntl_sigprocmask() parameter $old_signals must be passed a variable",
+        "pcntl_sigprocmask(): Argument #3 ($old_signals) could not be passed by reference",
     );
 }
 
@@ -155,7 +155,7 @@ fn test_error_pcntl_signal_mask_output_must_be_variable() {
 fn test_error_pcntl_signal_wait_info_must_be_variable() {
     expect_error(
         "<?php pcntl_sigwaitinfo([SIGUSR1], []);",
-        "pcntl_sigwaitinfo() parameter $info must be passed a variable",
+        "pcntl_sigwaitinfo(): Argument #2 ($info) could not be passed by reference",
     );
 }
 

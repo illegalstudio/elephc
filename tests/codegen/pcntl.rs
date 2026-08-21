@@ -516,19 +516,19 @@ fn test_pcntl_signal_get_handler_rejects_invalid_signal() {
     assert!(!out.success, "invalid signal unexpectedly succeeded");
     #[cfg(target_os = "macos")]
     assert!(
-        out.stderr.contains(
+        out.stdout.contains(
             "Uncaught ValueError: pcntl_signal_get_handler(): Argument #1 ($signal) must be between 1 and 31"
         ),
-        "unexpected stderr: {}",
-        out.stderr
+        "unexpected stdout: {}",
+        out.stdout
     );
     #[cfg(target_os = "linux")]
     assert!(
-        out.stderr.contains(
+        out.stdout.contains(
             "Uncaught ValueError: pcntl_signal_get_handler(): Argument #1 ($signal) must be between 1 and 64"
         ),
-        "unexpected stderr: {}",
-        out.stderr
+        "unexpected stdout: {}",
+        out.stdout
     );
 }
 
