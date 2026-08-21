@@ -42034,7 +42034,7 @@
       "checker_line": null,
       "codegen_file": "src/hash_prelude.rs",
       "codegen_function": "hash_copy",
-      "codegen_line": 1,
+      "codegen_line": 160,
       "notes": [
         "Implemented by the compiler-injected hash prelude."
       ],
@@ -42454,7 +42454,7 @@
       "checker_line": null,
       "codegen_file": "src/hash_prelude.rs",
       "codegen_function": "hash_final",
-      "codegen_line": 1,
+      "codegen_line": 148,
       "notes": [
         "Implemented by the compiler-injected hash prelude."
       ],
@@ -42761,7 +42761,7 @@
       "checker_line": null,
       "codegen_file": "src/hash_prelude.rs",
       "codegen_function": "hash_init",
-      "codegen_line": 1,
+      "codegen_line": 124,
       "notes": [
         "Implemented by the compiler-injected hash prelude."
       ],
@@ -42857,7 +42857,7 @@
       "checker_line": null,
       "codegen_file": "src/hash_prelude.rs",
       "codegen_function": "hash_update",
-      "codegen_line": 1,
+      "codegen_line": 136,
       "notes": [
         "Implemented by the compiler-injected hash prelude."
       ],

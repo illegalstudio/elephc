@@ -527,8 +527,8 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # prelude-provided contract added in a third area would have shipped a page naming the
 # wrong prelude and linking to an unrelated line — generated, committed, and plausible
 # enough to survive review. Both now raise. When a new prelude family lands, add its area
-# here; the seven prelude sources the compiler can inject are enumerated in
-# ``src/builtins/parity_tests.rs``'s PRELUDE_SOURCES, and its
+# here; the prelude sources the compiler can inject are enumerated in
+# ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
 PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
@@ -544,6 +544,32 @@ PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
         "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
     ),
 }
+
+
+def find_prelude_declaration(source: str, canonical: str):
+    """Locate where an injected prelude declares ``canonical``, in either prelude form.
+
+    A prelude declares a PHP function in ONE OF TWO WAYS, and the generated page has to
+    link to whichever one this prelude actually uses:
+
+    * BUILT IN RUST — ``function("hash_copy")`` opening a ``synthetic_class`` builder
+      chain. This is every stdlib prelude now, and it is why matching only the PHP form
+      silently produced a line-1 anchor for all four ``hash_*`` pages.
+    * PHP SOURCE TEXT — ``function hash_copy(...)`` at the start of a line inside the
+      prelude's embedded source. ``curl_prelude.rs`` is the last one shaped this way
+      (see its injector for why, and the ROADMAP entry for the conversion).
+
+    Both patterns reject a longer identifier ending in the name, so
+    ``__elephc_curl_easy_body`` cannot answer for ``curl_easy_body``. Returns the match, or
+    ``None`` when neither form declares it — which the caller turns into a loud failure
+    rather than an anchor pointing at an unrelated place in the file.
+    """
+    built = re.search(
+        rf"(?<![A-Za-z0-9_])function\(\s*\"{re.escape(canonical)}\"\s*\)", source
+    )
+    if built is not None:
+        return built
+    return re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
 
 
 def resolve_non_registry_lowering(
@@ -577,7 +603,7 @@ def resolve_non_registry_lowering(
             ) from None
         lowering.sig_file = sig_file
         prelude = repo / "src" / source
-        match = re.search(rf"^function\s+{re.escape(canonical)}\s*\(", read(prelude), re.MULTILINE)
+        match = find_prelude_declaration(read(prelude), canonical)
         if match is None:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is not declared by src/{source}. "

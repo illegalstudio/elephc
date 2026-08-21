@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/hash_prelude.rs`:1](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs#L1) (`hash_copy`)
+- **Lowering**: [`src/hash_prelude.rs`:160](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs#L160) (`hash_copy`)
 - **Function symbol**: `hash_copy()`
 
 
