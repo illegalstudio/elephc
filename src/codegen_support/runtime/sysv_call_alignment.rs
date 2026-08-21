@@ -151,6 +151,13 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
     ),
     ("__rt_closure_bind", "realigns explicitly with `and rsp, -16`"),
     (
+        "__rt_report_uncaught_exception",
+        "realigns explicitly with `and rsp, -16` before draining the output buffers. The \
+         walk tracks rsp as an exact offset from the entry, and a hard realignment has no \
+         such offset — but it is also the one construct that cannot BE misaligned: the \
+         following `call` runs on a 16-byte boundary by construction, whatever the path in",
+    ),
+    (
         "__rt_gc_mark_reachable",
         "shares a tail between the framed body and a frameless early-out",
     ),
