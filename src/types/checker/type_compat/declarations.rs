@@ -234,9 +234,9 @@ impl Checker {
         Ok(())
     }
 
-    /// Semantically resolves a declaration default when it is a scoped constant access, then
-    /// validates the resolved type against the declared type. Other defaults keep the syntactic
-    /// validation used by declarations that do not depend on completed class-like metadata.
+    /// Semantically resolves a declaration default when it references a global or scoped
+    /// constant, then validates the resolved type against the declared type. Other defaults keep
+    /// the syntactic validation used by declarations without deferred metadata dependencies.
     pub(crate) fn validate_resolved_declared_default_type(
         &mut self,
         expected_ty: &PhpType,
@@ -248,6 +248,14 @@ impl Checker {
             return Ok(());
         };
         let default_ty = match &default_expr.kind {
+            ExprKind::ConstRef(name) => {
+                self.constants.get(name.as_str()).cloned().ok_or_else(|| {
+                    CompileError::new(
+                        default_expr.span,
+                        &format!("Undefined constant: {}", name),
+                    )
+                })?
+            }
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, default_expr)?
             }
@@ -277,8 +285,8 @@ impl Checker {
     }
 
     /// Validates a method parameter default while class-like schemas are being built.
-    /// Direct scoped constant accesses are deferred until enum cases and class/interface
-    /// constants are available; other defaults use the existing schema-time validation.
+    /// Global and scoped constant accesses are deferred until top-level constants and complete
+    /// class-like metadata are available; other defaults use schema-time validation.
     pub(crate) fn validate_schema_parameter_default_type(
         &self,
         expected_ty: &PhpType,
@@ -287,7 +295,10 @@ impl Checker {
         context: &str,
     ) -> Result<(), CompileError> {
         if default_expr.is_some_and(|default| {
-            matches!(default.kind, ExprKind::ScopedConstantAccess { .. })
+            matches!(
+                default.kind,
+                ExprKind::ConstRef(_) | ExprKind::ScopedConstantAccess { .. }
+            )
         }) {
             return Ok(());
         }

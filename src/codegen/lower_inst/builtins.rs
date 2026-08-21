@@ -63,7 +63,6 @@ pub(crate) mod system;
 pub(crate) mod strings;
 pub(crate) mod types;
 
-pub(crate) use count_empty::*;
 pub(in crate::codegen::lower_inst) use eval_facade::*;
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;
@@ -73,6 +72,100 @@ pub(crate) use type_predicates::*;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";
+
+/// Lowers `count()` while preserving native SimpleXML wrapper dispatch for boxed receivers.
+pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return count_empty::lower_count(ctx, inst);
+    }
+    let value = expect_operand(inst, 0)?;
+    if !matches!(
+        ctx.value_php_type(value)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return count_empty::lower_count(ctx, inst);
+    }
+    lower_mixed_count(ctx, inst, value)
+}
+
+/// Dispatches boxed SimpleXML wrappers through their native count handler before generic Mixed count.
+fn lower_mixed_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<()> {
+    let count_key = php_symbol_key("count");
+    let mut candidates = super::mixed_simplexml_candidates(ctx);
+    candidates.retain(|candidate| {
+        let Some(class_info) = ctx.module.class_infos.get(&candidate.class_name) else {
+            return false;
+        };
+        class_info
+            .method_impl_classes
+            .get(&count_key)
+            .map(String::as_str)
+            .unwrap_or(candidate.class_name.as_str())
+            .eq_ignore_ascii_case("SimpleXMLElement")
+    });
+    if candidates.is_empty() {
+        return lower_generic_mixed_count(ctx, inst, value);
+    }
+
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let fallback_label = ctx.next_label("mixed_count_fallback");
+    let done_label = ctx.next_label("mixed_count_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_count_{}",
+                super::label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &fallback_label);
+    super::emit_mixed_simplexml_class_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &fallback_label,
+    );
+
+    let opcode = crate::internal_extensions::operation_registry()
+        .object_handler("simplexml", "count")
+        .ok_or_else(|| CodegenIrError::invalid_module("missing SimpleXML count object handler"))?
+        .opcode;
+    for label in &match_labels {
+        ctx.emitter.label(label);
+        super::internal_extensions::lower_mixed_receiver_internal_extension_call(
+            ctx,
+            inst,
+            receiver_reg,
+            opcode,
+            &PhpType::Int,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&fallback_label);
+    lower_generic_mixed_count(ctx, inst, value)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Preserves the established boxed array/hash/SPL count fallback for non-SimpleXML values.
+fn lower_generic_mixed_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
+    store_if_result(ctx, inst)
+}
 
 /// Lowers one compiler-resident PHP language construct by its canonical name.
 pub(super) fn lower_language_construct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

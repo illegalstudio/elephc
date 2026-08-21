@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Backend coverage and signature profiles come from `elephc-builtin-contract`.
-//! - No independent static-only, eval-only, or signature-extension allowlist exists here.
+//! - DOM registry names remain one explicit AOT-only set until their shared contracts land.
 
 use std::collections::BTreeSet;
 
@@ -15,6 +15,23 @@ use elephc_builtin_contract::{
     aot_signature_profile, aot_support, contracts, eval_signature, eval_support,
     AotSignatureOverrideReason, BackendImplementation, BackendSupport, BuiltinSignature,
 };
+
+/// DOM registry names not yet represented by the shared builtin contract catalog.
+const DOM_AOT_ONLY_BUILTINS: &[&str] = &[
+    "dom_import_simplexml",
+    "Dom\\import_simplexml",
+    "libxml_set_streams_context",
+    "libxml_use_internal_errors",
+    "libxml_get_last_error",
+    "libxml_get_errors",
+    "libxml_clear_errors",
+    "libxml_disable_entity_loader",
+    "libxml_set_external_entity_loader",
+    "libxml_get_external_entity_loader",
+    "simplexml_load_file",
+    "simplexml_load_string",
+    "simplexml_import_dom",
+];
 
 /// Verifies all contract surfaces outside the ordinary AOT registry have typed routes.
 #[test]
@@ -72,7 +89,11 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
 /// Verifies the public compiler and Magician name sets match shared support records.
 #[test]
 fn backend_public_name_sets_derive_from_shared_support() {
-    let expected_aot = contracts()
+    let contract_names = contracts()
+        .iter()
+        .map(|contract| contract.name)
+        .collect::<BTreeSet<_>>();
+    let contract_aot = contracts()
         .iter()
         .filter(|contract| !contract.internal)
         .filter(|contract| {
@@ -86,6 +107,27 @@ fn backend_public_name_sets_derive_from_shared_support() {
             )
         })
         .map(|contract| contract.name)
+        .collect::<BTreeSet<_>>();
+    let dom_aot_only = DOM_AOT_ONLY_BUILTINS
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        dom_aot_only.len(),
+        DOM_AOT_ONLY_BUILTINS.len(),
+        "duplicate DOM AOT-only builtin name"
+    );
+    let overlap = contract_names
+        .intersection(&dom_aot_only)
+        .copied()
+        .collect::<Vec<_>>();
+    assert!(
+        overlap.is_empty(),
+        "remove DOM names migrated to the shared contract catalog: {overlap:?}"
+    );
+    let expected_aot = contract_aot
+        .union(&dom_aot_only)
+        .copied()
         .collect::<BTreeSet<_>>();
     let actual_aot = elephc::builtin_metadata::php_visible_builtin_names()
         .iter()

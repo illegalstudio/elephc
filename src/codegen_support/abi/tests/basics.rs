@@ -87,3 +87,23 @@ fn test_emit_preserve_and_restore_return_value_for_strings() {
         )
     );
 }
+
+/// Verifies AArch64 truthiness helpers use long conditional branches past one MiB.
+#[test]
+fn test_emit_branch_helpers_use_inverted_short_guards_on_aarch64() {
+    let mut emitter = test_emitter();
+    emit_branch_if_int_result_zero(&mut emitter, "zero_target");
+    emit_branch_if_int_result_nonzero(&mut emitter, "nonzero_target");
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    cbnz x0, 1f\n",
+            "    b zero_target\n",
+            "1:\n",
+            "    cbz x0, 1f\n",
+            "    b nonzero_target\n",
+            "1:\n",
+        )
+    );
+}

@@ -1,0 +1,16 @@
+[package]
+name = "elephc-dom"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pinned PHP DOM/libxml/SimpleXML bridge for the elephc PHP-to-native compiler"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+
+[build-dependencies]
+cc = "1"
+sha2 = "0.10"

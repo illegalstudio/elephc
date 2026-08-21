@@ -30,6 +30,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::Variable(_)
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
@@ -290,6 +291,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(walk_expr(*inner, pass))),
     };
+    let kind = pass.transform_expr(span, kind);
     Expr { kind, span }
 }
 

@@ -19,8 +19,8 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declared_return_type_compatible, is_pdo_exception_get_code_contract,
-    late_static_return_compatible,
+    allows_untyped_tostring_override, declared_return_type_compatible,
+    is_pdo_exception_get_code_contract, late_static_return_compatible,
     validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
@@ -283,7 +283,12 @@ fn validate_static_interface_method(
         .methods
         .iter()
         .find(|m| m.is_static && php_symbol_key(&m.name) == method_name);
-    if required_sig.declared_return && !actual_sig.declared_return {
+    let untyped_tostring_override_allowed = actual_method
+        .is_some_and(|method| allows_untyped_tostring_override(method, false, required_sig));
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !untyped_tostring_override_allowed
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -344,7 +349,7 @@ fn validate_static_interface_method(
             &actual_sig.return_type,
         )
     });
-    if required_sig.declared_return && !return_compatible {
+    if required_sig.declared_return && !return_compatible && !untyped_tostring_override_allowed {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -509,7 +514,12 @@ fn validate_interface_method(
         .methods
         .iter()
         .find(|m| php_symbol_key(&m.name) == method_name);
-    if required_sig.declared_return && !actual_sig.declared_return {
+    let untyped_tostring_override_allowed = actual_method
+        .is_some_and(|method| allows_untyped_tostring_override(method, false, required_sig));
+    if required_sig.declared_return
+        && !actual_sig.declared_return
+        && !untyped_tostring_override_allowed
+    {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)
@@ -570,7 +580,7 @@ fn validate_interface_method(
             &actual_sig.return_type,
         )
     });
-    if required_sig.declared_return && !return_compatible {
+    if required_sig.declared_return && !return_compatible && !untyped_tostring_override_allowed {
         return Err(CompileError::new(
             actual_method
                 .map(|m| m.span)

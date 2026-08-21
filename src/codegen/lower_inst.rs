@@ -44,6 +44,7 @@ mod exceptions;
 mod externs;
 mod floats;
 mod hashes;
+mod internal_extensions;
 mod iterators;
 mod objects;
 mod ownership;
@@ -142,6 +143,19 @@ pub(super) use runtime_wrappers::{
 
 const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 const BORROWED_MIXED_ARG_CELL_BYTES: usize = 32;
+
+/// Emits the module-wide DOM XPath callable resolvers when the runtime bridge is required.
+///
+/// Native DOM callbacks reference these symbols even when wrapper construction or
+/// boxed dispatch reaches the bridge before a direct internal-extension call.
+pub(super) fn ensure_dom_xpath_callable_resolvers(
+    ctx: &mut FunctionContext<'_>,
+) -> Result<()> {
+    if ctx.module.required_runtime_features.dom_bridge {
+        internal_extensions::emit_dom_xpath_callable_resolver(ctx)?;
+    }
+    Ok(())
+}
 
 /// Lowers one EIR instruction by opcode.
 pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) -> Result<()> {
@@ -348,6 +362,9 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EnumBackingStringToInt => enums::lower_enum_backing_string_to_int(ctx, &inst),
         Op::EnumBackingMixedToInt => enums::lower_enum_backing_mixed_to_int(ctx, &inst),
         Op::ExternCall => externs::lower_extern_call(ctx, &inst),
+        Op::InternalExtensionCall => {
+            internal_extensions::lower_internal_extension_call(ctx, &inst)
+        }
         Op::LanguageConstructCall => builtins::lower_language_construct_call(ctx, &inst),
         Op::EvalLiteralCall => builtins::lower_eval_literal_call(ctx, &inst),
         Op::EvalScopeGet => builtins::lower_eval_scope_get(ctx, &inst),
@@ -393,4 +410,344 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             inst.op.name()
         ))),
     }
+}
+
+/// Keeps the modular runtime-call dispatcher authoritative while recognizing the
+/// fourth SimpleXML fetch-for-write operand introduced by the DOM lowering.
+fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(Immediate::RuntimeCall(target)) = inst.immediate {
+        return runtime_calls::lower(ctx, inst, target);
+    }
+    if inst.operands.len() == 3 && matches!(inst.immediate, Some(Immediate::Data(_))) {
+        return array_access_runtime::lower_runtime_call(ctx, inst);
+    }
+    if let Some(()) = try_lower_array_access_runtime_call(ctx, inst)? {
+        return Ok(());
+    }
+    if inst.operands.len() == 4 {
+        return lower_mixed_array_runtime_get(ctx, inst, false);
+    }
+    array_access_runtime::lower_runtime_call(ctx, inst)
+}
+
+/// Routes boxed SimpleXML dimension reads through its native object handler.
+fn lower_mixed_array_runtime_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    for_write: bool,
+) -> Result<()> {
+    let candidates = mixed_simplexml_candidates(ctx);
+    if candidates.is_empty() || inst.operands.len() < 4 {
+        return mixed_array_runtime::lower_mixed_array_runtime_get(ctx, inst, for_write);
+    }
+
+    let receiver = expect_operand(inst, 0)?;
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let fallback_label = ctx.next_label("mixed_dimension_fallback");
+    let done_label = ctx.next_label("mixed_dimension_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_dimension_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_result(receiver)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &fallback_label);
+    emit_mixed_simplexml_class_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &fallback_label,
+    );
+
+    let opcode = crate::internal_extensions::operation_registry()
+        .object_handler("simplexml", "read_dimension")
+        .ok_or_else(|| {
+            CodegenIrError::invalid_module("missing SimpleXML read_dimension object handler")
+        })?
+        .opcode;
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let native_inst = Instruction {
+            operands: vec![inst.operands[0], inst.operands[1], inst.operands[3]],
+            ..inst.clone()
+        };
+        internal_extensions::lower_mixed_receiver_internal_extension_call(
+            ctx,
+            &native_inst,
+            receiver_reg,
+            opcode,
+            &PhpType::Object(candidate.class_name.clone()),
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&fallback_label);
+    mixed_array_runtime::lower_mixed_array_runtime_get(ctx, inst, for_write)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Preserves the modular method dispatcher except for native wrapper methods that
+/// have no EIR body and therefore must use the versioned internal-extension ABI.
+fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    if !matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return method_dispatch::lower_method_call(ctx, inst);
+    }
+    let method_name = method_name_data(ctx, inst)?.to_string();
+    let candidates = mixed_method_candidates(ctx, &method_name, inst.operands.len())?;
+    if !candidates
+        .iter()
+        .any(|candidate| mixed_receiver_internal_extension_method_opcode(ctx, candidate).is_some())
+    {
+        return method_dispatch::lower_method_call(ctx, inst);
+    }
+    lower_mixed_internal_extension_method_call(ctx, inst, object, &method_name, candidates)
+}
+
+/// Dispatches a boxed receiver across both ordinary EIR methods and bodyless native methods.
+fn lower_mixed_internal_extension_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    method_name: &str,
+    candidates: Vec<MixedMethodCandidate>,
+) -> Result<()> {
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let non_object_label = ctx.next_label("mixed_method_non_object");
+    let no_match_label = ctx.next_label("mixed_method_no_match");
+    let done_label = ctx.next_label("mixed_method_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_method_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_result(object)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
+    emit_mixed_method_class_dispatch(
+        ctx,
+        receiver_reg,
+        &candidates,
+        &match_labels,
+        &no_match_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        if let Some(opcode) = mixed_receiver_internal_extension_method_opcode(ctx, candidate) {
+            internal_extensions::lower_mixed_receiver_internal_extension_call(
+                ctx,
+                inst,
+                receiver_reg,
+                opcode,
+                &inst.result_php_type,
+            )?;
+        } else {
+            method_dispatch::lower_mixed_method_candidate_call(
+                ctx,
+                inst,
+                receiver_reg,
+                candidate,
+                method_name,
+            )?;
+        }
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&no_match_label);
+    if builtins::has_eval_context(ctx) {
+        builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    } else {
+        emit_method_call_on_null_fatal(ctx, method_name);
+    }
+    ctx.emitter.label(&non_object_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Collects ordinary method candidates plus bodyless native-wrapper candidates.
+fn mixed_method_candidates(
+    ctx: &FunctionContext<'_>,
+    method_name: &str,
+    operand_count: usize,
+) -> Result<Vec<MixedMethodCandidate>> {
+    let method_key = php_symbol_key(method_name);
+    let mut candidates = method_dispatch::mixed_method_candidates(
+        ctx,
+        method_name,
+        operand_count,
+    )?;
+    for (class_name, class_info) in &ctx.module.class_infos {
+        if candidates
+            .iter()
+            .any(|candidate| candidate.class_id == class_info.class_id)
+        {
+            continue;
+        }
+        let Some(signature) = class_info.methods.get(&method_key) else {
+            continue;
+        };
+        let regular_param_count = crate::types::call_args::regular_param_count(signature);
+        let supplied_count = operand_count.saturating_sub(1);
+        let arity_matches = supplied_count == signature.params.len()
+            || signature
+                .variadic
+                .as_ref()
+                .is_some_and(|_| supplied_count >= regular_param_count);
+        if !arity_matches {
+            continue;
+        }
+        let impl_class = class_info
+            .method_impl_classes
+            .get(&method_key)
+            .cloned()
+            .unwrap_or_else(|| class_name.clone());
+        if crate::internal_extensions::operation_registry()
+            .method(&impl_class, &method_key)
+            .filter(|operation| !operation.static_operation)
+            .is_none()
+        {
+            continue;
+        }
+        candidates.push(MixedMethodCandidate {
+            class_id: class_info.class_id,
+            class_name: class_name.clone(),
+            target: MethodCallTarget {
+                impl_class,
+                method_key: method_key.clone(),
+                dynamic_slot: None,
+                params: signature
+                    .params
+                    .iter()
+                    .map(|(_, ty)| ty.codegen_repr())
+                    .collect(),
+                ref_params: signature.ref_params.clone(),
+                return_ty: signature.return_type.clone(),
+                by_ref_return: signature.by_ref_return,
+            },
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    Ok(candidates)
+}
+
+/// Resolves a bodyless internal-wrapper method to its locked native opcode.
+fn mixed_receiver_internal_extension_method_opcode(
+    ctx: &FunctionContext<'_>,
+    candidate: &MixedMethodCandidate,
+) -> Option<u32> {
+    if class_method_already_emitted(
+        ctx,
+        &candidate.target.impl_class,
+        &candidate.target.method_key,
+        false,
+    ) || !crate::internal_extensions::is_native_wrapper_class(&candidate.target.impl_class)
+    {
+        return None;
+    }
+    crate::internal_extensions::operation_registry()
+        .method(&candidate.target.impl_class, &candidate.target.method_key)
+        .filter(|operation| !operation.static_operation)
+        .map(|operation| operation.opcode)
+}
+
+/// Walks emitted and locked internal parents for native wrapper compatibility checks.
+fn mixed_internal_extension_class_is_a(
+    ctx: &FunctionContext<'_>,
+    source_class: &str,
+    target_class: &str,
+) -> bool {
+    let target_key = php_symbol_key(target_class.trim_start_matches('\\'));
+    let mut current = Some(source_class.trim_start_matches('\\').to_string());
+    while let Some(class_name) = current {
+        if php_symbol_key(class_name.trim_start_matches('\\')) == target_key {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(class_name.as_str())
+            .and_then(|class_info| class_info.parent.clone())
+            .or_else(|| {
+                crate::internal_extensions::registry()
+                    .class(&class_name)
+                    .and_then(|class| class.parent.clone())
+            });
+    }
+    false
+}
+
+/// Concrete SimpleXML runtime class reachable through a boxed receiver.
+pub(super) struct MixedSimpleXmlCandidate {
+    pub(super) class_id: u64,
+    pub(super) class_name: String,
+}
+
+/// Collects every concrete SimpleXML wrapper class emitted in the current module.
+pub(super) fn mixed_simplexml_candidates(
+    ctx: &FunctionContext<'_>,
+) -> Vec<MixedSimpleXmlCandidate> {
+    let mut candidates = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(class_name, _)| {
+            mixed_internal_extension_class_is_a(ctx, class_name, "SimpleXMLElement")
+        })
+        .map(|(class_name, class_info)| MixedSimpleXmlCandidate {
+            class_id: class_info.class_id,
+            class_name: class_name.clone(),
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    candidates
+}
+
+/// Emits exact runtime class-id branches for boxed SimpleXML receivers.
+fn emit_mixed_simplexml_class_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    candidates: &[MixedSimpleXmlCandidate],
+    match_labels: &[String],
+    no_match_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr x9, [{}]", receiver_reg));           // load the receiver class id for dynamic SimpleXML dispatch
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare against this concrete SimpleXML wrapper class
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // route matching wrappers through the native object handler
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the receiver class id for dynamic SimpleXML dispatch
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp r11, r10");                        // compare against this concrete SimpleXML wrapper class
+                ctx.emitter.instruction(&format!("je {}", label));              // route matching wrappers through the native object handler
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, no_match_label);
 }

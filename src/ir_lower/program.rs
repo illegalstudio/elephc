@@ -114,6 +114,12 @@ pub(crate) fn lower(
         &constants,
         &fiber_return_sigs,
     );
+    super::internal_extension_method_bodies::lower_referenced_internal_extension_method_bodies(
+        &mut module,
+        check_result,
+        &constants,
+        &fiber_return_sigs,
+    );
     lower_referenced_builtin_spl_methods(&mut module, check_result, &constants, &fiber_return_sigs);
     builtin_datetime::lower_referenced_builtin_datetime_methods(
         &mut module,
@@ -122,6 +128,12 @@ pub(crate) fn lower(
         &fiber_return_sigs,
     );
     include_lowered_runtime_features(&mut module);
+    // The mainline discovery module predates native internal extensions. An
+    // internal-extension opcode is authoritative evidence that the DOM bridge
+    // must participate in the final link, including calls emitted from a
+    // synthetic extension method body.
+    module.required_runtime_features.dom_bridge |= all_lowered_functions(&module)
+        .any(|function| function.instructions.iter().any(|inst| inst.op == Op::InternalExtensionCall));
     super::effect_refinement::refine_module(&mut module);
     validate_module(&module)?;
     Ok(module)

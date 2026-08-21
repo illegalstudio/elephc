@@ -185,12 +185,12 @@ fn test_error_magic_tostring_must_take_zero_arguments() {
     );
 }
 
-/// Verifies that `__toString` returning an integer reports
+/// Verifies that `__toString` with an explicit integer return type reports
 /// "Magic method must return string: User::__toString".
 #[test]
 fn test_error_magic_tostring_must_return_string() {
     expect_error(
-        "<?php class User { public function __toString() { return 123; } }",
+        "<?php class User { public function __toString(): int { return 123; } }",
         "Magic method must return string: User::__toString",
     );
 }

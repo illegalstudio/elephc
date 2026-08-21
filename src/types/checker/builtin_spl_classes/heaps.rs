@@ -6,7 +6,8 @@
 //! - `super::inject_builtin_spl_classes()`.
 //!
 //! Key details:
-//! - Heap extraction scans for the best element via `compare()` so user subclasses can override ordering.
+//! - Insert and extraction maintain php-src's physical binary-heap layout through virtual `compare()` calls.
+//! - Debug snapshots copy that physical layout without comparison or receiver mutation.
 //! - Storage lives in per-instance arrays, allowing normal object deep-free to finalize handles.
 
 use std::collections::HashMap;
@@ -259,10 +260,48 @@ fn heap_construct_body() -> Vec<Stmt> {
     vec![property_assign_stmt(this_expr(), "values", empty_array_expr())]
 }
 
-/// Appends a value to heap storage and returns true like PHP.
+/// Inserts one value into the persistent php-src-compatible binary-heap layout.
 fn heap_insert_body() -> Vec<Stmt> {
     vec![
-        property_array_push_stmt(this_expr(), "values", var_expr("value")),
+        typed_assign_stmt("heapValues", array_type(), heap_values_expr()),
+        assign_stmt("position", count_expr(var_expr("heapValues"))),
+        array_push_stmt("heapValues", var_expr("value")),
+        assign_stmt("sifting", bool_expr(true)),
+        while_stmt(
+            binary_expr(
+                binary_expr(var_expr("position"), BinOp::Gt, int_expr(0)),
+                BinOp::And,
+                var_expr("sifting"),
+            ),
+            vec![
+                assign_stmt("parent", heap_parent_index_expr(var_expr("position"))),
+                if_stmt(
+                    binary_expr(
+                        method_call(
+                            this_expr(),
+                            "compare",
+                            vec![
+                                array_access(var_expr("heapValues"), var_expr("parent")),
+                                var_expr("value"),
+                            ],
+                        ),
+                        BinOp::Lt,
+                        int_expr(0),
+                    ),
+                    vec![
+                        array_assign_stmt(
+                            "heapValues",
+                            var_expr("position"),
+                            array_access(var_expr("heapValues"), var_expr("parent")),
+                        ),
+                        assign_stmt("position", var_expr("parent")),
+                    ],
+                    Some(vec![assign_stmt("sifting", bool_expr(false))]),
+                ),
+            ],
+        ),
+        array_assign_stmt("heapValues", var_expr("position"), var_expr("value")),
+        property_assign_stmt(this_expr(), "values", var_expr("heapValues")),
         return_stmt(bool_expr(true)),
     ]
 }
@@ -348,65 +387,178 @@ fn heap_valid_body() -> Vec<Stmt> {
     return_body(not_expr(method_call(this_expr(), "isEmpty", Vec::new())))
 }
 
-/// Returns a small debug array exposing heap values.
-fn heap_debug_info_body() -> Vec<Stmt> {
-    return_body(expr(crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![(
-        string_expr("data"),
-        heap_values_expr(),
-    )])))
-}
-
-/// Finds the index whose value wins according to the virtual `compare()` method.
-fn heap_best_index_body() -> Vec<Stmt> {
+/// Copies the persistent physical heap without invoking the virtual comparator.
+fn heap_debug_snapshot_statements() -> Vec<Stmt> {
     vec![
-        assign_stmt("best", int_expr(0)),
-        assign_stmt("i", int_expr(1)),
-        assign_stmt("limit", count_expr(heap_values_expr())),
+        typed_assign_stmt("debugHeap", array_type(), empty_array_expr()),
+        assign_stmt("debugIndex", int_expr(0)),
+        assign_stmt("debugLimit", count_expr(heap_values_expr())),
         while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+            binary_expr(var_expr("debugIndex"), BinOp::Lt, var_expr("debugLimit")),
             vec![
-                if_stmt(
-                    binary_expr(
-                        method_call(
-                            this_expr(),
-                            "compare",
-                            vec![heap_value_at(var_expr("i")), heap_value_at(var_expr("best"))],
-                        ),
-                        BinOp::Gt,
-                        int_expr(0),
-                    ),
-                    vec![assign_stmt("best", var_expr("i"))],
-                    None,
-                ),
-                increment_stmt("i"),
+                assign_stmt("debugValue", heap_value_at(var_expr("debugIndex"))),
+                array_push_stmt("debugHeap", var_expr("debugValue")),
+                increment_stmt("debugIndex"),
             ],
         ),
-        return_stmt(var_expr("best")),
     ]
 }
 
-/// Rebuilds heap storage without the element at `removeIndex`.
+/// Returns php-src's private debug fields and a non-mutating heap snapshot.
+fn heap_debug_info_body() -> Vec<Stmt> {
+    let mut body = heap_debug_snapshot_statements();
+    body.push(return_stmt(expr(
+        crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![
+            (private_debug_key("SplHeap", "flags"), int_expr(0)),
+            (
+                private_debug_key("SplHeap", "isCorrupted"),
+                bool_expr(false),
+            ),
+            (
+                private_debug_key("SplHeap", "heap"),
+                var_expr("debugHeap"),
+            ),
+        ]),
+    )));
+    body
+}
+
+/// Returns the root index of the persistent physical heap.
+fn heap_best_index_body() -> Vec<Stmt> {
+    return_body(int_expr(0))
+}
+
+/// Deletes the physical root and restores php-src's heap invariant by sift-down.
 fn heap_remove_at_body() -> Vec<Stmt> {
     vec![
+        typed_assign_stmt("heapValues", array_type(), heap_values_expr()),
         typed_assign_stmt("newValues", array_type(), empty_array_expr()),
-        assign_stmt("i", int_expr(0)),
-        assign_stmt("limit", count_expr(heap_values_expr())),
-        while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+        assign_stmt(
+            "limit",
+            binary_expr(count_expr(var_expr("heapValues")), BinOp::Sub, int_expr(1)),
+        ),
+        if_stmt(
+            binary_expr(var_expr("limit"), BinOp::Gt, int_expr(0)),
             vec![
-                if_stmt(
-                    not_expr(binary_expr(var_expr("i"), BinOp::StrictEq, var_expr("removeIndex"))),
-                    vec![
-                        assign_stmt("item", heap_value_at(var_expr("i"))),
-                        array_push_stmt("newValues", var_expr("item")),
-                    ],
-                    None,
+                assign_stmt(
+                    "bottom",
+                    array_access(var_expr("heapValues"), var_expr("limit")),
                 ),
-                increment_stmt("i"),
+                assign_stmt("i", int_expr(0)),
+                while_stmt(
+                    binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+                    vec![
+                        if_stmt(
+                            binary_expr(var_expr("i"), BinOp::StrictEq, int_expr(0)),
+                            vec![array_push_stmt("newValues", var_expr("bottom"))],
+                            Some(vec![array_push_stmt(
+                                "newValues",
+                                array_access(var_expr("heapValues"), var_expr("i")),
+                            )]),
+                        ),
+                        increment_stmt("i"),
+                    ],
+                ),
+                assign_stmt("parent", int_expr(0)),
+                assign_stmt("sifting", bool_expr(true)),
+                while_stmt(
+                    binary_expr(
+                        binary_expr(
+                            var_expr("parent"),
+                            BinOp::Lt,
+                            function_call("intdiv", vec![var_expr("limit"), int_expr(2)]),
+                        ),
+                        BinOp::And,
+                        var_expr("sifting"),
+                    ),
+                    vec![
+                        assign_stmt(
+                            "child",
+                            binary_expr(
+                                binary_expr(var_expr("parent"), BinOp::Mul, int_expr(2)),
+                                BinOp::Add,
+                                int_expr(1),
+                            ),
+                        ),
+                        if_stmt(
+                            binary_expr(
+                                binary_expr(
+                                    binary_expr(var_expr("child"), BinOp::Add, int_expr(1)),
+                                    BinOp::Lt,
+                                    var_expr("limit"),
+                                ),
+                                BinOp::And,
+                                binary_expr(
+                                    method_call(
+                                        this_expr(),
+                                        "compare",
+                                        vec![
+                                            array_access(
+                                                var_expr("newValues"),
+                                                binary_expr(
+                                                    var_expr("child"),
+                                                    BinOp::Add,
+                                                    int_expr(1),
+                                                ),
+                                            ),
+                                            array_access(
+                                                var_expr("newValues"),
+                                                var_expr("child"),
+                                            ),
+                                        ],
+                                    ),
+                                    BinOp::Gt,
+                                    int_expr(0),
+                                ),
+                            ),
+                            vec![increment_stmt("child")],
+                            None,
+                        ),
+                        if_stmt(
+                            binary_expr(
+                                method_call(
+                                    this_expr(),
+                                    "compare",
+                                    vec![
+                                        var_expr("bottom"),
+                                        array_access(
+                                            var_expr("newValues"),
+                                            var_expr("child"),
+                                        ),
+                                    ],
+                                ),
+                                BinOp::Lt,
+                                int_expr(0),
+                            ),
+                            vec![
+                                array_assign_stmt(
+                                    "newValues",
+                                    var_expr("parent"),
+                                    array_access(
+                                        var_expr("newValues"),
+                                        var_expr("child"),
+                                    ),
+                                ),
+                                assign_stmt("parent", var_expr("child")),
+                            ],
+                            Some(vec![assign_stmt("sifting", bool_expr(false))]),
+                        ),
+                    ],
+                ),
+                array_assign_stmt("newValues", var_expr("parent"), var_expr("bottom")),
             ],
+            None,
         ),
         property_assign_stmt(this_expr(), "values", var_expr("newValues")),
     ]
+}
+
+/// Computes the parent slot for a positive binary-heap index.
+fn heap_parent_index_expr(index: Expr) -> Expr {
+    function_call(
+        "intdiv",
+        vec![binary_expr(index, BinOp::Sub, int_expr(1)), int_expr(2)],
+    )
 }
 
 /// Returns `$this->priorities`.
@@ -438,11 +590,64 @@ fn priority_construct_body() -> Vec<Stmt> {
     ]
 }
 
-/// Appends a data/priority pair and returns true like PHP.
+/// Inserts a data/priority pair into the persistent physical priority heap.
 fn priority_insert_body() -> Vec<Stmt> {
     vec![
-        property_array_push_stmt(this_expr(), "values", var_expr("value")),
-        property_array_push_stmt(this_expr(), "priorities", var_expr("priority")),
+        typed_assign_stmt("heapValues", array_type(), heap_values_expr()),
+        typed_assign_stmt("heapPriorities", array_type(), priority_priorities_expr()),
+        assign_stmt("position", count_expr(var_expr("heapValues"))),
+        array_push_stmt("heapValues", var_expr("value")),
+        array_push_stmt("heapPriorities", var_expr("priority")),
+        assign_stmt("sifting", bool_expr(true)),
+        while_stmt(
+            binary_expr(
+                binary_expr(var_expr("position"), BinOp::Gt, int_expr(0)),
+                BinOp::And,
+                var_expr("sifting"),
+            ),
+            vec![
+                assign_stmt("parent", heap_parent_index_expr(var_expr("position"))),
+                if_stmt(
+                    binary_expr(
+                        method_call(
+                            this_expr(),
+                            "compare",
+                            vec![
+                                array_access(
+                                    var_expr("heapPriorities"),
+                                    var_expr("parent"),
+                                ),
+                                var_expr("priority"),
+                            ],
+                        ),
+                        BinOp::Lt,
+                        int_expr(0),
+                    ),
+                    vec![
+                        array_assign_stmt(
+                            "heapValues",
+                            var_expr("position"),
+                            array_access(var_expr("heapValues"), var_expr("parent")),
+                        ),
+                        array_assign_stmt(
+                            "heapPriorities",
+                            var_expr("position"),
+                            array_access(var_expr("heapPriorities"), var_expr("parent")),
+                        ),
+                        assign_stmt("position", var_expr("parent")),
+                    ],
+                    Some(vec![assign_stmt("sifting", bool_expr(false))]),
+                ),
+            ],
+        ),
+        array_assign_stmt("heapValues", var_expr("position"), var_expr("value")),
+        array_assign_stmt(
+            "heapPriorities",
+            var_expr("position"),
+            var_expr("priority"),
+        ),
+        property_assign_stmt(this_expr(), "values", var_expr("heapValues")),
+        property_assign_stmt(this_expr(), "priorities", var_expr("heapPriorities")),
         return_stmt(bool_expr(true)),
     ]
 }
@@ -533,42 +738,64 @@ fn priority_valid_body() -> Vec<Stmt> {
     return_body(not_expr(method_call(this_expr(), "isEmpty", Vec::new())))
 }
 
-/// Returns a small debug array with priorities and data.
-fn priority_debug_info_body() -> Vec<Stmt> {
-    return_body(expr(crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![
-        (string_expr("flags"), priority_flags_expr()),
-        (string_expr("data"), heap_values_expr()),
-        (string_expr("priorities"), priority_priorities_expr()),
-    ])))
-}
-
-/// Finds the index whose priority wins according to `compare()`.
-fn priority_best_index_body() -> Vec<Stmt> {
+/// Copies physical heap slots into php-src's nested `{data, priority}` rows.
+fn priority_debug_pair_snapshot_statements() -> Vec<Stmt> {
     vec![
-        assign_stmt("best", int_expr(0)),
-        assign_stmt("i", int_expr(1)),
-        assign_stmt("limit", count_expr(heap_values_expr())),
+        typed_assign_stmt("debugHeap", array_type(), empty_array_expr()),
+        assign_stmt("debugIndex", int_expr(0)),
+        assign_stmt("debugLimit", count_expr(heap_values_expr())),
         while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+            binary_expr(var_expr("debugIndex"), BinOp::Lt, var_expr("debugLimit")),
             vec![
-                if_stmt(
-                    binary_expr(
-                        method_call(
-                            this_expr(),
-                            "compare",
-                            vec![priority_at(var_expr("i")), priority_at(var_expr("best"))],
+                array_push_stmt(
+                    "debugHeap",
+                    expr(crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![
+                        (
+                            string_expr("data"),
+                            heap_value_at(var_expr("debugIndex")),
                         ),
-                        BinOp::Gt,
-                        int_expr(0),
-                    ),
-                    vec![assign_stmt("best", var_expr("i"))],
-                    None,
+                        (
+                            string_expr("priority"),
+                            priority_at(var_expr("debugIndex")),
+                        ),
+                    ])),
                 ),
-                increment_stmt("i"),
+                increment_stmt("debugIndex"),
             ],
         ),
-        return_stmt(var_expr("best")),
     ]
+}
+
+/// Returns php-src's private queue fields and a non-mutating pair snapshot.
+fn priority_debug_info_body() -> Vec<Stmt> {
+    let mut body = priority_debug_pair_snapshot_statements();
+    body.push(return_stmt(expr(
+        crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![
+            (
+                private_debug_key("SplPriorityQueue", "flags"),
+                priority_flags_expr(),
+            ),
+            (
+                private_debug_key("SplPriorityQueue", "isCorrupted"),
+                bool_expr(false),
+            ),
+            (
+                private_debug_key("SplPriorityQueue", "heap"),
+                var_expr("debugHeap"),
+            ),
+        ]),
+    )));
+    body
+}
+
+/// Builds php-src's NUL-mangled key for one private debug field.
+fn private_debug_key(scope: &str, property: &str) -> Expr {
+    string_expr(&format!("\0{scope}\0{property}"))
+}
+
+/// Returns the root index of the persistent physical priority heap.
+fn priority_best_index_body() -> Vec<Stmt> {
+    return_body(int_expr(0))
 }
 
 /// Builds the visible output for one queue index based on extraction flags.
@@ -591,28 +818,151 @@ fn priority_output_at_body() -> Vec<Stmt> {
     ]
 }
 
-/// Rebuilds data and priority storage without `removeIndex`.
+/// Deletes the physical root pair and restores php-src's priority-heap invariant.
 fn priority_remove_at_body() -> Vec<Stmt> {
     vec![
+        typed_assign_stmt("heapValues", array_type(), heap_values_expr()),
+        typed_assign_stmt("heapPriorities", array_type(), priority_priorities_expr()),
         typed_assign_stmt("newValues", array_type(), empty_array_expr()),
         typed_assign_stmt("newPriorities", array_type(), empty_array_expr()),
-        assign_stmt("i", int_expr(0)),
-        assign_stmt("limit", count_expr(heap_values_expr())),
-        while_stmt(
-            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+        assign_stmt(
+            "limit",
+            binary_expr(count_expr(var_expr("heapValues")), BinOp::Sub, int_expr(1)),
+        ),
+        if_stmt(
+            binary_expr(var_expr("limit"), BinOp::Gt, int_expr(0)),
             vec![
-                if_stmt(
-                    not_expr(binary_expr(var_expr("i"), BinOp::StrictEq, var_expr("removeIndex"))),
-                    vec![
-                        assign_stmt("item", heap_value_at(var_expr("i"))),
-                        assign_stmt("priority", priority_at(var_expr("i"))),
-                        array_push_stmt("newValues", var_expr("item")),
-                        array_push_stmt("newPriorities", var_expr("priority")),
-                    ],
-                    None,
+                assign_stmt(
+                    "bottomValue",
+                    array_access(var_expr("heapValues"), var_expr("limit")),
                 ),
-                increment_stmt("i"),
+                assign_stmt(
+                    "bottomPriority",
+                    array_access(var_expr("heapPriorities"), var_expr("limit")),
+                ),
+                assign_stmt("i", int_expr(0)),
+                while_stmt(
+                    binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+                    vec![
+                        if_stmt(
+                            binary_expr(var_expr("i"), BinOp::StrictEq, int_expr(0)),
+                            vec![
+                                array_push_stmt("newValues", var_expr("bottomValue")),
+                                array_push_stmt("newPriorities", var_expr("bottomPriority")),
+                            ],
+                            Some(vec![
+                                array_push_stmt(
+                                    "newValues",
+                                    array_access(var_expr("heapValues"), var_expr("i")),
+                                ),
+                                array_push_stmt(
+                                    "newPriorities",
+                                    array_access(var_expr("heapPriorities"), var_expr("i")),
+                                ),
+                            ]),
+                        ),
+                        increment_stmt("i"),
+                    ],
+                ),
+                assign_stmt("parent", int_expr(0)),
+                assign_stmt("sifting", bool_expr(true)),
+                while_stmt(
+                    binary_expr(
+                        binary_expr(
+                            var_expr("parent"),
+                            BinOp::Lt,
+                            function_call("intdiv", vec![var_expr("limit"), int_expr(2)]),
+                        ),
+                        BinOp::And,
+                        var_expr("sifting"),
+                    ),
+                    vec![
+                        assign_stmt(
+                            "child",
+                            binary_expr(
+                                binary_expr(var_expr("parent"), BinOp::Mul, int_expr(2)),
+                                BinOp::Add,
+                                int_expr(1),
+                            ),
+                        ),
+                        if_stmt(
+                            binary_expr(
+                                binary_expr(
+                                    binary_expr(var_expr("child"), BinOp::Add, int_expr(1)),
+                                    BinOp::Lt,
+                                    var_expr("limit"),
+                                ),
+                                BinOp::And,
+                                binary_expr(
+                                    method_call(
+                                        this_expr(),
+                                        "compare",
+                                        vec![
+                                            array_access(
+                                                var_expr("newPriorities"),
+                                                binary_expr(
+                                                    var_expr("child"),
+                                                    BinOp::Add,
+                                                    int_expr(1),
+                                                ),
+                                            ),
+                                            array_access(
+                                                var_expr("newPriorities"),
+                                                var_expr("child"),
+                                            ),
+                                        ],
+                                    ),
+                                    BinOp::Gt,
+                                    int_expr(0),
+                                ),
+                            ),
+                            vec![increment_stmt("child")],
+                            None,
+                        ),
+                        if_stmt(
+                            binary_expr(
+                                method_call(
+                                    this_expr(),
+                                    "compare",
+                                    vec![
+                                        var_expr("bottomPriority"),
+                                        array_access(
+                                            var_expr("newPriorities"),
+                                            var_expr("child"),
+                                        ),
+                                    ],
+                                ),
+                                BinOp::Lt,
+                                int_expr(0),
+                            ),
+                            vec![
+                                array_assign_stmt(
+                                    "newValues",
+                                    var_expr("parent"),
+                                    array_access(var_expr("newValues"), var_expr("child")),
+                                ),
+                                array_assign_stmt(
+                                    "newPriorities",
+                                    var_expr("parent"),
+                                    array_access(
+                                        var_expr("newPriorities"),
+                                        var_expr("child"),
+                                    ),
+                                ),
+                                assign_stmt("parent", var_expr("child")),
+                            ],
+                            Some(vec![assign_stmt("sifting", bool_expr(false))]),
+                        ),
+                    ],
+                ),
+                array_assign_stmt("newValues", var_expr("parent"), var_expr("bottomValue")),
+                array_assign_stmt(
+                    "newPriorities",
+                    var_expr("parent"),
+                    var_expr("bottomPriority"),
+                ),
             ],
+            None,
         ),
         property_assign_stmt(this_expr(), "values", var_expr("newValues")),
         property_assign_stmt(this_expr(), "priorities", var_expr("newPriorities")),

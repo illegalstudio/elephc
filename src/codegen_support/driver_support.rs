@@ -104,7 +104,7 @@ pub fn generate_runtime_with_features_pic(
         emitter.output()
     };
     output.push('\n');
-    output.push_str(&runtime::emit_runtime_data_fixed(heap_size, target));
+    output.push_str(&runtime::emit_runtime_data_fixed(heap_size, target, features));
     // The PIC runtime object only ever links into an ELF cdylib, where every
     // runtime global must bind locally: hidden visibility prevents dynamic
     // preemption (two loaded elephc modules aliasing one runtime state) and

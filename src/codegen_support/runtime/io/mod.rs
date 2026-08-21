@@ -43,6 +43,7 @@ mod stdout_write;
 mod ob_buffer;
 mod ob_handler;
 mod ob_status;
+mod object_debug_info;
 mod phar_read;
 mod phar_write;
 mod fs;
@@ -92,6 +93,7 @@ mod stream_context_get_ssl_peer_name;
 mod apply_socket_opts;
 mod stream_context_get_int_option;
 mod stream_context_get_string_option;
+mod stream_context_registry;
 mod stream_context_set_option_4;
 mod stream_copy_to_stream;
 mod stream_get_contents;
@@ -214,6 +216,7 @@ pub(crate) use apply_socket_opts::{
 };
 pub(crate) use stream_context_get_int_option::emit_get_int_context_option;
 pub(crate) use stream_context_get_string_option::emit_get_string_context_option;
+pub(crate) use stream_context_registry::emit_stream_context_registry;
 pub(crate) use stream_context_set_option_4::emit_stream_context_set_option_4;
 pub(crate) use stream_copy_to_stream::emit_stream_copy_to_stream;
 pub(crate) use stream_get_contents::emit_stream_get_contents;
@@ -250,10 +253,11 @@ pub(crate) use user_filter::{
 };
 pub(crate) use user_filter_brigade::emit_user_filter_brigade_invoke;
 pub(crate) use user_wrapper::{
-    emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,
-    emit_user_wrapper_fflush, emit_user_wrapper_flock, emit_user_wrapper_fread,
-    emit_user_wrapper_fseek, emit_user_wrapper_fstat, emit_user_wrapper_ftell,
-    emit_user_wrapper_ftruncate, emit_user_wrapper_fwrite,
+    emit_box_wrapper_stat_result, emit_user_wrapper_apply_context,
+    emit_user_wrapper_fclose, emit_user_wrapper_feof, emit_user_wrapper_fflush,
+    emit_user_wrapper_flock, emit_user_wrapper_fread, emit_user_wrapper_fseek,
+    emit_user_wrapper_fstat, emit_user_wrapper_ftell, emit_user_wrapper_ftruncate,
+    emit_user_wrapper_fwrite,
 };
 pub(crate) use user_wrapper_unbox::emit_wrapper_unbox_int;
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;
@@ -285,6 +289,7 @@ pub(crate) use ob_handler::{
     emit_ob_notice_named, emit_ob_result_to_bytes,
 };
 pub(crate) use ob_status::{emit_ob_get_status, emit_ob_list_handlers, emit_ob_status_entry};
+pub(crate) use object_debug_info::{emit_object_debug_info, emit_print_r_object};
 pub(crate) use var_dump_object::{
     emit_var_dump_emit_object_key, emit_var_dump_emit_recursion_line,
     emit_var_dump_emit_uninit_line, emit_var_dump_object, emit_var_dump_open_object,

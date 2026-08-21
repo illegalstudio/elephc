@@ -311,6 +311,26 @@ echo Labels::$name;
     assert_eq!(out, "abc");
 }
 
+/// Verifies a concat result stored statically survives later concat-buffer reuse.
+#[test]
+fn test_static_string_property_concat_persists_scratch_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+class Collector {
+    public static string $written = "";
+
+    public static function append(string $data): void {
+        self::$written .= $data;
+    }
+}
+
+Collector::append("</root>");
+echo "26:", Collector::$written;
+"#,
+    );
+    assert_eq!(out, "26:</root>");
+}
+
 /// Tests post-increment `A::$x++` on a static property (regression for #372).
 #[test]
 fn test_static_property_post_increment() {

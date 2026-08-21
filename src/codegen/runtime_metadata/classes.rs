@@ -41,6 +41,23 @@ pub(in crate::codegen) fn runtime_class_infos(module: &Module) -> HashMap<String
 /// Returns classes that EIR object allocation or named `instanceof` can reference at runtime.
 pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> HashSet<String> {
     let mut names = HashSet::new();
+    if module.required_runtime_features.dom_bridge {
+        names.insert("DOMException".to_string());
+        names.extend(
+            module
+                .class_infos
+                .keys()
+                .filter(|class_name| {
+                    crate::internal_extensions::is_native_wrapper_class(class_name)
+                        || crate::internal_extensions::is_native_wrapper_descendant(
+                            &module.class_infos,
+                            class_name,
+                        )
+                        || crate::internal_extensions::is_native_value_object_class(class_name)
+                })
+                .cloned(),
+        );
+    }
     if module_contains_generator(module) {
         names.insert("Generator".to_string());
     }

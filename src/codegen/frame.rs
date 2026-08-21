@@ -364,6 +364,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_cleanup");
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {
@@ -492,6 +493,7 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
     emit_main_local_epilogue_cleanup(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_cleanup");
     // Under `--web` the handler returns to the bridge server loop instead of
     // exiting, so the exit-based main epilogue (where `--gc-stats` normally
     // prints) is never reached. Emitting the counters here, once per request,

@@ -54,13 +54,13 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
     }
 }
 
-/// Returns true when an array-access unset receiver is a plain array/hash local whose element the
-/// EIR backend can remove.
+/// Returns true when an array-access unset receiver is a plain array/hash/null local whose element
+/// the EIR backend can handle directly.
 ///
 /// Associative arrays remove the element directly; packed indexed arrays are converted to a hash at
 /// the unset site (PHP `unset()` leaves a sparse array). By-reference locals are excluded: their
 /// storage is aliased to a caller whose static type would no longer match after a representation
-/// change.
+/// change. Null receivers still evaluate the key and then perform PHP's no-op.
 pub(super) fn unset_array_access_has_local_array_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
@@ -73,7 +73,7 @@ pub(super) fn unset_array_access_has_local_array_receiver(
     }
     matches!(
         ctx.local_type(name).codegen_repr(),
-        PhpType::AssocArray { .. } | PhpType::Array(_)
+        PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Void
     )
 }
 
@@ -82,15 +82,22 @@ pub(super) fn unset_array_access_has_object_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
 ) -> bool {
+    if simplexml_object_expr_class(ctx, array).is_some() {
+        return true;
+    }
     let ty = match &array.kind {
         ExprKind::Variable(name) => ctx
             .local_types
             .get(name)
             .cloned()
             .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
         _ => infer_expr_type_syntactic(array),
     };
-    type_satisfies_array_access_for_ir(ctx, &ty)
+    type_satisfies_array_access_for_ir(ctx, &ty) || dom_named_node_map_receiver(&ty).is_some()
 }
 
 /// Lowers `unset($array[$key])`, dispatching on the receiver kind.
@@ -105,6 +112,14 @@ pub(super) fn lower_unset_array_access(
     index: &Expr,
     expr: &Expr,
 ) {
+    if simplexml_object_expr_class(ctx, array).is_some() {
+        lower_simplexml_unset_dimension(ctx, array, index, expr);
+        return;
+    }
+    if let Some((class_name, nullable)) = dom_named_node_map_dimension_receiver(ctx, array) {
+        lower_dom_named_node_map_unset(ctx, array, index, &class_name, nullable, expr.span);
+        return;
+    }
     if let ExprKind::Variable(name) = &array.kind {
         if !ctx.is_ref_bound_local(name) {
             match ctx.local_type(name).codegen_repr() {
@@ -121,6 +136,11 @@ pub(super) fn lower_unset_array_access(
                     lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
                     return;
                 }
+                PhpType::Void => {
+                    let index = lower_expr(ctx, index);
+                    release_coerced_source_if_owned(ctx, index, Some(expr.span));
+                    return;
+                }
                 _ => {}
             }
         }
@@ -134,6 +154,130 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Lowers a SimpleXML dimension unset through php-src's object handler.
+fn lower_simplexml_unset_dimension(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let may_be_failure = simplexml_object_expr_class(ctx, array)
+        .is_some_and(|(_, may_be_failure)| may_be_failure);
+    let receiver = lower_expr(ctx, array);
+    if may_be_failure || value_is_nullable(ctx, receiver.value) {
+        lower_nullable_simplexml_unset_dimension(ctx, receiver, index, expr);
+        return;
+    }
+    lower_simplexml_unset_dimension_from_value(ctx, receiver, index, expr);
+}
+
+/// Emits a non-failing SimpleXML dimension unset and releases temporary operands.
+fn lower_simplexml_unset_dimension_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &receiver_type,
+        "unset_dimension",
+    )
+    .expect("SimpleXML dimension unset requires the locked handler");
+    let index_value = lower_simplexml_offset(ctx, index);
+    crate::ir_lower::internal_extensions::emit_void_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER,
+        vec![receiver.value, index_value.value],
+        expr.span,
+    );
+    if ctx.value_is_owning_temporary(index_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+    }
+    release_owning_receiver_temporary(ctx, receiver, expr.span);
+}
+
+/// Treats unsetting a dimension through a failed SimpleXML receiver as a no-op.
+fn lower_nullable_simplexml_unset_dimension(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let null_block = ctx
+        .builder
+        .create_named_block("simplexml.unset_dimension.null", Vec::new());
+    let unset_block = ctx
+        .builder
+        .create_named_block("simplexml.unset_dimension.live", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("simplexml.unset_dimension.merge", Vec::new());
+    let is_failure = simplexml_receiver_is_failure(ctx, receiver.value, expr.span);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_failure.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: unset_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(null_block);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(unset_block);
+    lower_simplexml_unset_dimension_from_value(ctx, receiver, index, expr);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+}
+
+/// Lowers `unset()` on a read-only DOM map while preserving key evaluation.
+///
+/// php-src silently accepts an unset through a null receiver, but raises the
+/// standard read-only-object `Error` for an actual named map.
+fn lower_dom_named_node_map_unset(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    class_name: &str,
+    nullable: bool,
+    span: Span,
+) {
+    let receiver = lower_expr(ctx, array);
+    let index = lower_expr(ctx, index);
+    if !nullable {
+        lower_dom_named_node_map_dimension_error(ctx, class_name, span);
+        return;
+    }
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(span),
+    );
+    let null_block = ctx.builder.create_named_block("dom.map_unset.null", Vec::new());
+    let map_block = ctx.builder.create_named_block("dom.map_unset.error", Vec::new());
+    let merge = ctx.builder.create_named_block("dom.map_unset.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: map_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    release_coerced_source_if_owned(ctx, index, Some(span));
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(map_block);
+    lower_dom_named_node_map_dimension_error(ctx, class_name, span);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
 }
 
 /// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.
@@ -199,7 +343,8 @@ pub(super) fn unset_property_access_has_direct_lowering(
     matches!(
         property_unset_action(ctx, object, property),
         Some(
-            UnsetPropertyAction::Magic
+            UnsetPropertyAction::SimpleXml
+                | UnsetPropertyAction::Magic
                 | UnsetPropertyAction::Noop
                 | UnsetPropertyAction::ClearTyped
                 | UnsetPropertyAction::RemoveDynamic
@@ -216,6 +361,9 @@ pub(super) fn lower_unset_property_access(
     expr: &Expr,
 ) {
     match property_unset_action(ctx, object, property) {
+        Some(UnsetPropertyAction::SimpleXml) => {
+            lower_simplexml_unset_property(ctx, object, property, expr);
+        }
         Some(UnsetPropertyAction::Magic) => {
             let object = lower_expr(ctx, object);
             lower_magic_property_unset(ctx, object, property, expr);
@@ -244,6 +392,7 @@ pub(super) fn lower_unset_property_access(
 /// Describes how `unset($object->property)` should be lowered for a known receiver class.
 pub(super) enum UnsetPropertyAction {
     Fallback,
+    SimpleXml,
     Magic,
     Noop,
     /// The property has a DECLARED type, so PHP's `unset()` leaves it uninitialized —
@@ -261,6 +410,9 @@ pub(super) fn property_unset_action(
     object: &Expr,
     property: &str,
 ) -> Option<UnsetPropertyAction> {
+    if simplexml_object_expr_class(ctx, object).is_some() {
+        return Some(UnsetPropertyAction::SimpleXml);
+    }
     let (class_name, _) = isset_object_expr_class(ctx, object)?;
     // Every `stdClass` property is a hash entry, so `unset()` is a plain key removal and
     // `stdClass` declares no magic methods that could intercept it.
@@ -289,6 +441,80 @@ pub(super) fn property_unset_action(
     } else {
         Some(UnsetPropertyAction::Noop)
     }
+}
+
+/// Lowers a SimpleXML named-property unset through the native handler.
+fn lower_simplexml_unset_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    expr: &Expr,
+) {
+    let may_be_failure = simplexml_object_expr_class(ctx, object)
+        .is_some_and(|(_, may_be_failure)| may_be_failure);
+    let receiver = lower_expr(ctx, object);
+    if may_be_failure || value_is_nullable(ctx, receiver.value) {
+        lower_nullable_simplexml_unset_property(ctx, receiver, property, expr);
+        return;
+    }
+    lower_simplexml_unset_property_from_value(ctx, receiver, property, expr);
+}
+
+/// Emits a non-failing SimpleXML property unset and releases its receiver temporary.
+fn lower_simplexml_unset_property_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) {
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &receiver_type,
+        "unset_property",
+    )
+    .expect("SimpleXML property unset requires the locked handler");
+    let name = lower_string_literal(ctx, property, expr);
+    crate::ir_lower::internal_extensions::emit_void_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER,
+        vec![receiver.value, name.value],
+        expr.span,
+    );
+    release_owning_receiver_temporary(ctx, receiver, expr.span);
+}
+
+/// Treats unsetting a property through a failed SimpleXML receiver as a no-op.
+fn lower_nullable_simplexml_unset_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) {
+    let null_block = ctx
+        .builder
+        .create_named_block("simplexml.unset_property.null", Vec::new());
+    let unset_block = ctx
+        .builder
+        .create_named_block("simplexml.unset_property.live", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("simplexml.unset_property.merge", Vec::new());
+    let is_failure = simplexml_receiver_is_failure(ctx, receiver.value, expr.span);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_failure.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: unset_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(null_block);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(unset_block);
+    lower_simplexml_unset_property_from_value(ctx, receiver, property, expr);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
 }
 
 /// Lowers a magic `__unset($name)` call, guarding nullable receivers as a no-op.
@@ -354,4 +580,3 @@ pub(super) fn lower_nullable_magic_property_unset(
 
     ctx.builder.position_at_end(merge);
 }
-

@@ -9,6 +9,226 @@
 
 use super::*;
 
+/// Verifies every PHP 8.5 DOM list/map dimension handler crosses the checker boundary.
+#[test]
+fn dom_collection_dimension_reads_pass_checker() {
+    expect_no_error(
+        r#"<?php
+function legacy(DOMNodeList $nodes, DOMNamedNodeMap $attributes): void {
+    var_dump($nodes[0]);
+    var_dump($attributes[0]);
+    var_dump($attributes['id']);
+}
+function modern(
+    Dom\NodeList $nodes,
+    Dom\HTMLCollection $elements,
+    Dom\NamedNodeMap $attributes,
+    Dom\DtdNamedNodeMap $declarations,
+): void {
+    var_dump($nodes[0]);
+    var_dump($elements[0]);
+    var_dump($elements['id']);
+    var_dump($attributes[0]);
+    var_dump($attributes['id']);
+    var_dump($declarations[0]);
+    var_dump($declarations['entity']);
+}
+"#,
+    );
+}
+
+/// Verifies PHPT 007's direct root and selected-property dimension writes pass the
+/// checker while the loader still carries its literal-false failure alternative.
+#[test]
+fn simplexml_phpt_007_dimension_writes_pass_checker() {
+    expect_no_error(
+        r#"<?php
+$sxe = simplexml_load_string('<sxe id="elem1"><elem1 attr1="first"/></sxe>');
+$sxe['id'] = 'Changed1';
+$sxe->elem1['attr1'] = 12;
+"#,
+    );
+}
+
+/// Verifies PHPT 016's property dimension and nested numeric-selection writes both
+/// cross the checker boundary without manually narrowing loader failure.
+#[test]
+fn simplexml_phpt_016_nested_dimension_writes_pass_checker() {
+    expect_no_error(
+        r#"<?php
+$people = simplexml_load_string('<people><person name="Joe"/></people>');
+$people->person['name'] = 'JoeFoo';
+$people->person[0]['name'] = 'JoeFooBar';
+"#,
+    );
+}
+
+/// Verifies PHPT 028's write through a missing selected property passes the checker;
+/// runtime autovivification remains a separate implementation gate.
+#[test]
+fn simplexml_phpt_028_missing_property_dimension_write_passes_checker() {
+    expect_no_error(
+        r#"<?php
+$people = simplexml_load_string('<people/>');
+$people->person['name'] = 'John';
+"#,
+    );
+}
+
+/// Verifies PHPT 034 can replace a selected SimpleXML wrapper with its PHP array cast.
+#[test]
+fn simplexml_phpt_034_object_to_array_reassignment_passes_checker() {
+    expect_no_error(
+        r#"<?php
+$foo = simplexml_load_string('<foo><bar><p>one</p><p>two</p><p>three</p></bar></foo>');
+$p = $foo->bar->p;
+$p = (array) $foo->bar->p;
+echo count($p);
+"#,
+    );
+}
+
+/// Verifies XPath's `array|null|false` result remains admissible to `count()`.
+#[test]
+fn simplexml_xpath_fallible_array_count_passes_checker() {
+    expect_no_error(
+        r#"<?php
+$xml = simplexml_load_string('<root><child/></root>');
+$nodes = $xml->xpath('/root/child');
+echo count($nodes);
+"#,
+    );
+}
+
+/// Verifies the XPath exception does not admit unrelated scalar union arms.
+#[test]
+fn simplexml_xpath_count_does_not_widen_unrelated_unions() {
+    expect_error(
+        r#"<?php
+function count_nodes(array|bool|null $nodes): int {
+    return count($nodes);
+}
+"#,
+        "count() argument must be array or Countable object",
+    );
+}
+
+/// Verifies a union containing broad `bool` does not inherit the strict SimpleXML
+/// dimension-write exemption from its object member.
+#[test]
+fn simplexml_dimension_write_rejects_bool_union() {
+    expect_error(
+        r#"<?php
+function write_name(SimpleXMLElement|bool $xml): void {
+    $xml->person['name'] = 'John';
+}
+"#,
+        "Array index assignment requires an object or typed pointer",
+    );
+}
+
+/// Verifies a union containing a second object class does not inherit the strict
+/// SimpleXML dimension-write exemption from one eligible member.
+#[test]
+fn simplexml_dimension_write_rejects_multiple_object_union() {
+    expect_error(
+        r#"<?php
+function write_name(SimpleXMLElement|stdClass|false $xml): void {
+    $xml->person['name'] = 'John';
+}
+"#,
+        "Array index assignment requires an object or typed pointer",
+    );
+}
+
+/// Verifies bug55098's untyped closure stays checker-admissible for every
+/// SimpleXML handler operation; runtime routing is covered by the codegen fixture.
+#[test]
+fn simplexml_bug55098_untyped_closure_handlers_pass_checker() {
+    expect_no_error(
+        r#"<?php
+$xml = simplexml_load_string('<root><a><b>1</b><b>2</b><b>3</b></a></root>');
+$nodes = $xml->a->b;
+$callback = function ($n): void {
+    $n->asXml();
+    $n->attributes();
+    $n->children();
+    $n->getNamespaces();
+    $n->xpath('/root/a/b');
+    $n->addAttribute('attr', 'value');
+    (bool) $n['attr'];
+    $n->addChild('child', 'value');
+    $n->outer[]->inner = 'foo';
+    (bool) $n->outer;
+    (bool) $n;
+    isset($n->outer);
+    isset($n['attr']);
+    unset($n->outer);
+    unset($n['attr']);
+    unset($n->child);
+};
+$callback($nodes);
+"#,
+    );
+}
+
+/// Verifies the untyped-closure change does not erase explicit scalar constraints:
+/// a typed integer parameter is still not an indexable PHP value.
+#[test]
+fn simplexml_untyped_closure_support_does_not_widen_explicit_scalar_parameters() {
+    expect_error(
+        r#"<?php
+$callback = function (int $value): mixed {
+    return $value['name'];
+};
+"#,
+        "Cannot index non-array",
+    );
+}
+
+/// Verifies callback-specific parameter hints remain authoritative instead of being
+/// replaced by the default Mixed type adopted for a genuinely untyped closure.
+#[test]
+fn simplexml_untyped_closure_support_preserves_contextual_callback_hints() {
+    expect_error(
+        r#"<?php
+array_map(function ($value): mixed {
+    return $value['name'];
+}, [1, 2, 3]);
+"#,
+        "Cannot index non-array",
+    );
+}
+
+/// Verifies a SimpleXML debug override cannot declare a scalar return type;
+/// php-src permits only `?array` when that return type is explicit.
+#[test]
+fn simplexml_debug_info_rejects_declared_scalar_return_type() {
+    expect_error(
+        r#"<?php
+class InvalidDebugXml extends SimpleXMLElement {
+    public function __debugInfo(): int { return 1; }
+}
+"#,
+        "InvalidDebugXml::__debugInfo(): Return type must be ?array when declared",
+    );
+}
+
+/// Verifies `ReturnTypeWillChange` applies to SimpleXML's tentative iterator
+/// methods only and cannot waive the explicit `?array` debug-info contract.
+#[test]
+fn simplexml_debug_info_return_type_will_change_does_not_bypass_array_contract() {
+    expect_error(
+        r#"<?php
+class InvalidAttributedDebugXml extends SimpleXMLElement {
+    #[\ReturnTypeWillChange]
+    public function __debugInfo(): int { return 1; }
+}
+"#,
+        "InvalidAttributedDebugXml::__debugInfo(): Return type must be ?array when declared",
+    );
+}
+
 /// Verifies that a packed class with a non-POD field (string) is rejected with a specific error message.
 #[test]
 fn test_error_packed_class_rejects_non_pod_field() {

@@ -52,11 +52,12 @@ impl Checker {
             | ExprKind::ArrayLiteralAssoc(_)
             | ExprKind::Match { .. }
             | ExprKind::ArrayLiteral(_)
-            | ExprKind::ArrayAccess { .. }
             | ExprKind::Ternary { .. }
             | ExprKind::ShortTernary { .. }
-            | ExprKind::Throw(_)
-            | ExprKind::Cast { .. } => self.infer_basic_expr_type(expr, env),
+            | ExprKind::Throw(_) => self.infer_basic_expr_type(expr, env),
+            ExprKind::ArrayAppend => Ok(PhpType::Void),
+            ExprKind::ArrayAccess { .. } => self.infer_dom_aware_array_access(expr, env),
+            ExprKind::Cast { .. } => self.infer_dom_aware_cast(expr, env),
             ExprKind::FunctionCall { .. }
             | ExprKind::BufferNew { .. }
             | ExprKind::BitNot(_)
@@ -73,7 +74,6 @@ impl Checker {
             | ExprKind::BinaryOp { .. }
             | ExprKind::InstanceOf { .. }
             | ExprKind::NewObject { .. }
-            | ExprKind::Clone(_)
             | ExprKind::NewDynamic { .. }
             | ExprKind::NewDynamicObject { .. }
             | ExprKind::PropertyAccess { .. }
@@ -95,7 +95,177 @@ impl Checker {
             | ExprKind::YieldFrom(_)
             | ExprKind::MagicConstant(_) =>
                 self.infer_call_or_object_expr_type(expr, env),
+            ExprKind::Clone(inner) => self.infer_dom_aware_clone(inner, expr, env),
         }
+    }
+
+    /// Infers collection dimensions with the native DOM/SimpleXML handlers in addition to
+    /// the ordinary indexed-array, hash, string, buffer, and ArrayAccess contracts.
+    fn infer_dom_aware_array_access(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let ExprKind::ArrayAccess { array, index } = &expr.kind else {
+            unreachable!("array-access inference must receive ArrayAccess")
+        };
+        let array_type = self.infer_type(array, env)?;
+        let index_type = self.infer_type(index, env)?;
+        let normalized_index_type = crate::types::normalized_array_key_type(index, index_type.clone());
+        match &array_type {
+            PhpType::Str => {
+                if !is_valid_string_offset_index(index, &index_type) {
+                    return Err(CompileError::new(expr.span, "String index must be integer"));
+                }
+                Ok(PhpType::Str)
+            }
+            PhpType::Array(element) => {
+                if normalized_index_type == PhpType::Int {
+                    Ok(*element.clone())
+                } else {
+                    Ok(PhpType::Mixed)
+                }
+            }
+            PhpType::AssocArray { value, .. } => Ok(*value.clone()),
+            PhpType::Object(class_name) => {
+                if self.object_type_implements_interface(class_name, "ArrayAccess") {
+                    Ok(self.array_access_offset_get_type(class_name))
+                } else if is_simplexml_element_class(self, class_name) {
+                    Ok(PhpType::Union(vec![
+                        PhpType::Object(class_name.clone()),
+                        PhpType::Void,
+                    ]))
+                } else if let Some(members) = dom_collection_dimension_result_members(class_name) {
+                    Ok(self.normalize_union_type(members))
+                } else {
+                    Err(CompileError::new(expr.span, "Cannot index non-array"))
+                }
+            }
+            PhpType::Union(members) => {
+                let mut results = Vec::new();
+                let mut saw_indexable = false;
+                let mut first_error = None;
+                for member in members {
+                    match member {
+                        PhpType::Void => results.push(PhpType::Void),
+                        PhpType::Str => {
+                            saw_indexable = true;
+                            if is_valid_string_offset_index(index, &index_type) {
+                                results.push(PhpType::Str);
+                            } else {
+                                first_error.get_or_insert("String index must be integer");
+                            }
+                        }
+                        PhpType::Array(element) => {
+                            saw_indexable = true;
+                            results.push(if normalized_index_type == PhpType::Int {
+                                *element.clone()
+                            } else {
+                                PhpType::Mixed
+                            });
+                        }
+                        PhpType::AssocArray { value, .. } => {
+                            saw_indexable = true;
+                            results.push(*value.clone());
+                        }
+                        PhpType::Object(class_name) => {
+                            if self.object_type_implements_interface(class_name, "ArrayAccess") {
+                                saw_indexable = true;
+                                results.push(self.array_access_offset_get_type(class_name));
+                            } else if is_simplexml_element_class(self, class_name) {
+                                saw_indexable = true;
+                                results.push(PhpType::Object(class_name.clone()));
+                                results.push(PhpType::Void);
+                            } else if let Some(collection_members) =
+                                dom_collection_dimension_result_members(class_name)
+                            {
+                                saw_indexable = true;
+                                results.extend(collection_members);
+                            }
+                        }
+                        PhpType::Buffer(element) => {
+                            saw_indexable = true;
+                            if matches!(index_type, PhpType::Int | PhpType::Mixed) {
+                                match element.as_ref() {
+                                    PhpType::Packed(name) => {
+                                        results.push(PhpType::Pointer(Some(name.clone())));
+                                    }
+                                    _ => results.push(*element.clone()),
+                                }
+                            } else {
+                                first_error.get_or_insert("Buffer index must be integer");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let has_concrete_result = results.iter().any(|member| *member != PhpType::Void);
+                if !has_concrete_result && saw_indexable {
+                    Err(CompileError::new(
+                        expr.span,
+                        first_error.unwrap_or("Cannot index non-array"),
+                    ))
+                } else if results.is_empty() {
+                    Err(CompileError::new(expr.span, "Cannot index non-array"))
+                } else {
+                    Ok(self.normalize_union_type(results))
+                }
+            }
+            PhpType::Buffer(element) => {
+                if !matches!(index_type, PhpType::Int | PhpType::Mixed) {
+                    return Err(CompileError::new(expr.span, "Buffer index must be integer"));
+                }
+                match element.as_ref() {
+                    PhpType::Packed(name) => Ok(PhpType::Pointer(Some(name.clone()))),
+                    _ => Ok(*element.clone()),
+                }
+            }
+            PhpType::Mixed => Ok(PhpType::Mixed),
+            PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
+            _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
+        }
+    }
+
+    /// Preserves SimpleXML wrapper identity for PHP's `(object)` cast.
+    fn infer_dom_aware_cast(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let ExprKind::Cast { target, expr: inner } = &expr.kind else {
+            unreachable!("cast inference must receive Cast")
+        };
+        let source_type = self.infer_type(inner, env)?;
+        use crate::parser::ast::CastType;
+        Ok(match target {
+            CastType::Int => PhpType::Int,
+            CastType::Float => PhpType::Float,
+            CastType::String => PhpType::Str,
+            CastType::Bool => PhpType::Bool,
+            CastType::Array => PhpType::Array(Box::new(PhpType::Int)),
+            CastType::Object if simplexml_object_cast_preserves_type(self, &source_type) => {
+                source_type
+            }
+            CastType::Object => PhpType::Object("stdClass".to_string()),
+        })
+    }
+
+    /// Accepts documented loader-failure SimpleXML unions for clone checks.
+    fn infer_dom_aware_clone(
+        &mut self,
+        inner: &Expr,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let source_type = self.infer_type(inner, env)?;
+        let class_name = match source_type {
+            PhpType::Object(class_name) => class_name,
+            PhpType::Union(members) => simplexml_clone_union_class(self, &members)
+                .ok_or_else(|| CompileError::new(expr.span, "clone requires an object value"))?,
+            _ => return Err(CompileError::new(expr.span, "clone requires an object value")),
+        };
+        self.check_clone_visibility(&class_name, expr.span)?;
+        Ok(PhpType::Object(class_name))
     }
     /// Returns a variable type, allowing dynamic eval-created locals after an eval barrier.
     fn variable_type_or_eval_dynamic(
@@ -222,6 +392,65 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
             ExprKind::StringLiteral(value)
                 if crate::types::parse_php_string_offset_literal(value).is_some()
         )
+}
+
+/// Returns php-src's nullable item alternatives for one DOM collection dimension read.
+///
+/// DOM collection classes expose native dimensions without implementing userland
+/// `ArrayAccess`, so their contracts stay independent from the userland interface.
+fn dom_collection_dimension_result_members(class_name: &str) -> Option<Vec<PhpType>> {
+    Some(match class_name.trim_start_matches('\\') {
+        "DOMNodeList" => vec![
+            PhpType::Object("DOMElement".to_string()),
+            PhpType::Object("DOMNode".to_string()),
+            PhpType::Object("DOMNameSpaceNode".to_string()),
+            PhpType::Void,
+        ],
+        "DOMNamedNodeMap" => vec![PhpType::Object("DOMNode".to_string()), PhpType::Void],
+        "Dom\\NodeList" => vec![PhpType::Object("Dom\\Node".to_string()), PhpType::Void],
+        "Dom\\NamedNodeMap" => vec![PhpType::Object("Dom\\Attr".to_string()), PhpType::Void],
+        "Dom\\DtdNamedNodeMap" => vec![
+            PhpType::Object("Dom\\Entity".to_string()),
+            PhpType::Object("Dom\\Notation".to_string()),
+            PhpType::Void,
+        ],
+        "Dom\\HTMLCollection" => vec![PhpType::Object("Dom\\Element".to_string()), PhpType::Void],
+        _ => return None,
+    })
+}
+
+/// Returns whether a class is `SimpleXMLElement` or one of its userland descendants.
+fn is_simplexml_element_class(checker: &Checker, class_name: &str) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    class_name.eq_ignore_ascii_case("SimpleXMLElement")
+        || checker.is_subclass_of(class_name, "SimpleXMLElement")
+}
+
+/// Reports whether `(object)` preserves a direct or fallible SimpleXML wrapper identity.
+fn simplexml_object_cast_preserves_type(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class_name) => is_simplexml_element_class(checker, class_name),
+        PhpType::Union(members) => simplexml_clone_union_class(checker, members).is_some(),
+        _ => false,
+    }
+}
+
+/// Extracts one exact SimpleXML class from the documented loader-failure union shape.
+fn simplexml_clone_union_class(checker: &Checker, members: &[PhpType]) -> Option<String> {
+    let mut class_name = None;
+    for member in members {
+        match member {
+            PhpType::Void | PhpType::Never | PhpType::False => {}
+            PhpType::Object(candidate) if is_simplexml_element_class(checker, candidate) => {
+                if class_name.as_ref().is_some_and(|existing| existing != candidate) {
+                    return None;
+                }
+                class_name.get_or_insert_with(|| candidate.clone());
+            }
+            _ => return None,
+        }
+    }
+    class_name
 }
 
 /// Merges two match arm result types: identical arms keep their type,

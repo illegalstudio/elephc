@@ -415,6 +415,7 @@ fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::This
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)

@@ -230,6 +230,24 @@ fn test_cast_keywords_are_case_insensitive() {
     }
 }
 
+/// Verifies PHP's `(object)` cast is recognized case-insensitively as an object cast.
+#[test]
+fn test_cast_object_parses_case_insensitively() {
+    let stmts = parse_source("<?php var_dump((OBJECT)$value);");
+    match &stmts[0].kind {
+        StmtKind::ExprStmt(expr) => match &expr.kind {
+            ExprKind::FunctionCall { args, .. } => match &args[0].kind {
+                ExprKind::Cast { target, .. } => {
+                    assert_eq!(*target, elephc::parser::ast::CastType::Object);
+                }
+                other => panic!("expected object cast expression, got {:?}", other),
+            },
+            other => panic!("expected var_dump call, got {:?}", other),
+        },
+        other => panic!("expected expression statement, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php echo (1 + 2);` parses as a parenthesized expression, NOT as a cast.
 /// Parentheses around an arithmetic expression must not be interpreted as cast syntax.
 #[test]

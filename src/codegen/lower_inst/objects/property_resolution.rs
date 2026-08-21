@@ -67,7 +67,11 @@ pub(super) fn dynamic_property_hash_offset_for_class(
     }
     if class_info.allow_dynamic_properties {
         return Ok(Some(dynamic_property_hash_offset(
-            class_info.properties.len(),
+            class_info.properties.len()
+                + crate::internal_extensions::hidden_slot_count_for(
+                    &ctx.module.class_infos,
+                    normalized,
+                ),
         )));
     }
     Ok(None)

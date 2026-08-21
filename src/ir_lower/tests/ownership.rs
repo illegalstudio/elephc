@@ -9,6 +9,8 @@
 //!   markers for refcounted local values before the future EIR backend exists.
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
+use crate::ir_lower::context::php_types_can_alias_storage;
+use crate::types::PhpType;
 
 /// Returns the printed EIR for `main`, excluding built-in helper and property-init functions.
 fn main_function_text(text: &str) -> &str {
@@ -114,6 +116,37 @@ fn overwriting_string_local_emits_release() {
     let text = print_module(&module);
     assert!(text.contains("acquire"), "expected acquire in {text}");
     assert!(text.contains("release"), "expected release in {text}");
+}
+
+/// Verifies static-property stores persist concat scratch bytes before later reuse.
+#[test]
+fn static_string_property_concat_store_acquires_persistent_storage() {
+    let module = super::lower_source(
+        r#"<?php
+class Collector {
+    public static string $written = "";
+
+    public static function append(string $data): void {
+        self::$written .= $data;
+    }
+}
+"#,
+    );
+    let text = print_module(&module);
+    let concat = text
+        .find("str_concat")
+        .expect("expected static-property string concat");
+    let assignment = &text[concat..];
+    let acquire = assignment
+        .find("acquire")
+        .expect("expected concat storage acquire");
+    let store = assignment
+        .find("store_static_property")
+        .expect("expected static-property store");
+    assert!(
+        acquire < store,
+        "expected concat acquire before static-property store in {text}"
+    );
 }
 
 /// Verifies a borrowed string result is retained before its aliased source slot is released.
@@ -381,5 +414,170 @@ run(5);
             .iter()
             .all(|inst| inst.op != Op::Release || inst.operands.first().copied() != Some(argument)),
         "a fresh owned Mixed argument returned by the callee must not also be released as an arg temporary"
+    );
+}
+
+/// Verifies disjoint nullable unions do not suppress an owned argument release.
+#[test]
+fn disjoint_refcounted_unions_do_not_alias_storage() {
+    let object_or_null = PhpType::Union(vec![
+        PhpType::Object("DOMElement".to_string()),
+        PhpType::Void,
+    ]);
+    let string_or_false = PhpType::Union(vec![PhpType::Str, PhpType::False]);
+    assert!(!php_types_can_alias_storage(
+        &object_or_null,
+        &string_or_false,
+    ));
+}
+
+/// Verifies recursive union comparison keeps every genuine shared-storage family.
+#[test]
+fn overlapping_refcounted_unions_still_alias_storage() {
+    let node_or_null = PhpType::Union(vec![
+        PhpType::Object("DOMNode".to_string()),
+        PhpType::Void,
+    ]);
+    let element_or_false = PhpType::Union(vec![
+        PhpType::Object("DOMElement".to_string()),
+        PhpType::False,
+    ]);
+    let mixed_or_null = PhpType::Union(vec![PhpType::Mixed, PhpType::Void]);
+    let indexed_array_or_null = PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Int)),
+        PhpType::Void,
+    ]);
+    let associative_array_or_false = PhpType::Union(vec![
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Str),
+        },
+        PhpType::False,
+    ]);
+    let iterable_or_false = PhpType::Union(vec![PhpType::Iterable, PhpType::False]);
+    let callable_or_null = PhpType::Union(vec![PhpType::Callable, PhpType::Void]);
+    let buffer_or_null = PhpType::Union(vec![
+        PhpType::Buffer(Box::new(PhpType::Int)),
+        PhpType::Void,
+    ]);
+
+    assert!(php_types_can_alias_storage(
+        &node_or_null,
+        &element_or_false,
+    ));
+    assert!(php_types_can_alias_storage(
+        &mixed_or_null,
+        &PhpType::Str,
+    ));
+    assert!(php_types_can_alias_storage(
+        &associative_array_or_false,
+        &indexed_array_or_null,
+    ));
+    assert!(php_types_can_alias_storage(
+        &indexed_array_or_null,
+        &PhpType::Array(Box::new(PhpType::Str)),
+    ));
+    assert!(php_types_can_alias_storage(
+        &iterable_or_false,
+        &PhpType::Object("IteratorAggregate".to_string()),
+    ));
+    assert!(php_types_can_alias_storage(
+        &callable_or_null,
+        &PhpType::Callable,
+    ));
+    assert!(php_types_can_alias_storage(
+        &buffer_or_null,
+        &PhpType::Buffer(Box::new(PhpType::Str)),
+    ));
+}
+
+/// Verifies an internal DOM call releases a disjoint nullable node argument.
+///
+/// `DOMDocument::saveXML()` returns `string|false` while its optional node
+/// argument is `DOMElement|null`. Both are lowered as boxed runtime values, but
+/// they cannot share a payload; suppressing the release keeps a temporary DOM
+/// wrapper alive and changes later php-src object-handle reuse.
+#[test]
+fn dom_save_xml_releases_disjoint_nullable_node_argument() {
+    let module = super::lower_source(
+        r#"<?php
+$document = new DOMDocument();
+$document->loadXML('<root/>');
+echo $document->saveXML($document->documentElement);
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("expected main EIR function");
+    let save_xml_argument = function
+        .instructions
+        .iter()
+        .find(|instruction| {
+            instruction.op == Op::InternalExtensionCall
+                && instruction.result.is_some_and(|result| {
+                    matches!(
+                        function.value(result).map(|value| &value.php_type),
+                        Some(PhpType::Union(members))
+                            if members.contains(&PhpType::Str)
+                                && members.contains(&PhpType::False)
+                    )
+                })
+                && instruction.operands.iter().any(|operand| {
+                    matches!(
+                        function.value(*operand).map(|value| &value.php_type),
+                        Some(PhpType::Union(members))
+                            if members.iter().any(|member| matches!(member, PhpType::Object(_)))
+                                && members.contains(&PhpType::Void)
+                    )
+                })
+        })
+        .and_then(|instruction| {
+            instruction.operands.iter().copied().find(|operand| {
+                matches!(
+                    function.value(*operand).map(|value| &value.php_type),
+                    Some(PhpType::Union(members))
+                        if members.iter().any(|member| matches!(member, PhpType::Object(_)))
+                            && members.contains(&PhpType::Void)
+                )
+            })
+        })
+        .expect("expected DOMDocument::saveXML nullable node argument");
+    assert!(
+        function.instructions.iter().any(|instruction| {
+            instruction.op == Op::Release
+                && instruction.operands.first().copied() == Some(save_xml_argument)
+        }),
+        "saveXML must release a disjoint nullable node argument"
+    );
+}
+
+/// Verifies `get_class()` releases an owned Mixed container read after class lookup.
+#[test]
+fn get_class_releases_owned_mixed_argument() {
+    let module = super::lower_source(
+        r#"<?php
+$values = ["object" => new stdClass(), "number" => 1];
+echo get_class($values["object"]);
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("expected main EIR function");
+    let argument = function
+        .instructions
+        .iter()
+        .find(|instruction| instruction.op == Op::RuntimeCall)
+        .and_then(|instruction| instruction.operands.first().copied())
+        .expect("expected get_class runtime argument");
+    assert!(
+        function.instructions.iter().any(|instruction| {
+            instruction.op == Op::Release
+                && instruction.operands.first().copied() == Some(argument)
+        }),
+        "get_class must release its owned Mixed argument after reading object metadata"
     );
 }

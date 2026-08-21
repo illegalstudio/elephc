@@ -361,8 +361,9 @@ pub(super) fn emit_dynamic_new_candidate(
     constructor_args: &[ValueId],
     result: ValueId,
 ) -> Result<()> {
-    emit_object_allocation(
+    emit_named_class_object_allocation(
         ctx,
+        &candidate.class_name,
         candidate.class_id,
         candidate.property_count,
         candidate.allow_dynamic_properties,

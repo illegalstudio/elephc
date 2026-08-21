@@ -109,6 +109,32 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    if op == Op::PropGet {
+        let object_type = ctx.builder.value_php_type(object.value);
+        if let Some(wrapper_result_type) =
+            crate::ir_lower::internal_extensions::simplexml_object_result_type(ctx, &object_type)
+        {
+            let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+                ctx,
+                &object_type,
+                "read_property",
+            )
+            .expect("SimpleXML wrapper types have a locked read_property handler");
+            let name = lower_string_literal(ctx, property, expr);
+            let read_mode = lower_int_literal(ctx, 0, expr);
+            let property_address = lower_bool_literal(ctx, false, expr);
+            let result = crate::ir_lower::internal_extensions::emit_call(
+                ctx,
+                opcode,
+                crate::ir_lower::internal_extensions::FLAG_RECEIVER
+                    | crate::ir_lower::internal_extensions::FLAG_WRAPPER_RESULT,
+                vec![object.value, name.value, read_mode.value, property_address.value],
+                wrapper_result_type,
+                expr.span,
+            );
+            return stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span);
+        }
+    }
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
@@ -124,6 +150,27 @@ pub(super) fn lower_property_get_from_value(
         };
         return lower_method_call_with_receiver(ctx, object, &accessor, &[], call_op, expr);
     }
+    if op == Op::PropGet {
+        let object_type = ctx.builder.value_php_type(object.value);
+        if let Some(opcode) = crate::ir_lower::internal_extensions::property_opcode_for_type(
+            ctx,
+            &object_type,
+            property,
+            false,
+        ) {
+            let result_type = property_get_result_type(ctx, object.value, property, op, expr);
+            let result = crate::ir_lower::internal_extensions::emit_call(
+                ctx,
+                opcode,
+                crate::ir_lower::internal_extensions::FLAG_RECEIVER
+                    | internal_extension_result_flags(&result_type),
+                vec![object.value],
+                result_type,
+                expr.span,
+            );
+            return stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span);
+        }
+    }
     let data = ctx.intern_string(property);
     let result_type = property_get_result_type(ctx, object.value, property, op, expr);
     let result = ctx.emit_value(
@@ -135,6 +182,52 @@ pub(super) fn lower_property_get_from_value(
         Some(expr.span),
     );
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Reads one SimpleXML property as an addressable nested-assignment parent.
+///
+/// The object handler's third operand asks the bridge to materialize a missing
+/// named child before a following dimension or property write. This is distinct
+/// from an ordinary property read, which deliberately preserves an empty view.
+pub(crate) fn lower_simplexml_property_read_for_write_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    property: &str,
+    expr: &Expr,
+    append_target: bool,
+) -> LoweredValue {
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &receiver_type,
+        "read_property",
+    )
+    .expect("SimpleXML property write lowering requires the locked read handler");
+    let wrapper_type = crate::ir_lower::internal_extensions::simplexml_object_result_type(
+        ctx,
+        &receiver_type,
+    )
+    .expect("SimpleXML property write lowering requires one exact wrapper class");
+    let name = lower_string_literal(ctx, property, expr);
+    let read_mode = lower_int_literal(ctx, 1, expr);
+    let property_address = lower_bool_literal(ctx, true, expr);
+    let append_target = lower_bool_literal(ctx, append_target, expr);
+    let result = crate::ir_lower::internal_extensions::emit_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER
+            | crate::ir_lower::internal_extensions::FLAG_WRAPPER_RESULT,
+        vec![
+            receiver.value,
+            name.value,
+            read_mode.value,
+            property_address.value,
+            append_target.value,
+        ],
+        wrapper_type,
+        expr.span,
+    );
+    stabilize_borrowed_result_and_release_receiver(ctx, receiver, result, expr.span)
 }
 
 /// Returns true when value metadata proves the runtime value is PHP null.
@@ -181,6 +274,14 @@ pub(super) fn property_get_result_type(
     };
     let nullable = nullable || value_may_carry_container_miss(ctx, object);
     let normalized = class_name.trim_start_matches('\\');
+    if crate::ir_lower::internal_extensions::is_simplexml_element_class(ctx, normalized) {
+        let property_ty = PhpType::Object(class_name.to_string());
+        return if nullable {
+            nullable_result_type(property_ty)
+        } else {
+            property_ty
+        };
+    }
     if is_builtin_stdclass_name(normalized) {
         return if nullable {
             nullable_result_type(PhpType::Mixed)
@@ -739,4 +840,3 @@ pub(super) fn static_property_result_type(
     };
     normalize_value_php_type(property_ty.codegen_repr())
 }
-

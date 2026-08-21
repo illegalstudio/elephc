@@ -740,6 +740,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::Variable(_)
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)

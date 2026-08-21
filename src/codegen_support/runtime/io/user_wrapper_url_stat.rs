@@ -63,6 +63,12 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the path pointer across the helper calls
     emitter.instruction("str x1, [sp, #24]");                                   // save the path length across the helper calls
     emitter.instruction("str x2, [sp, #32]");                                   // save the url_stat flags across the helper calls
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_url_stat_failure_kind");
+    emitter.instruction("str xzr, [x9]");                                       // clear the prior url_stat failure discriminator
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_url_stat_class_ptr");
+    emitter.instruction("str xzr, [x9]");                                       // clear stale wrapper-class bytes
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_url_stat_class_len");
+    emitter.instruction("str xzr, [x9]");                                       // clear the stale wrapper-class byte count
 
     // -- scan the path for the "://" scheme separator (x0=ptr, x1=len) --
     emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
@@ -118,18 +124,26 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_url_stat_matched");
     emitter.instruction("mov w9, #1");                                          // record that a registered wrapper scheme matched
     emitter.instruction("strb w9, [x10]");                                      // set _url_stat_matched = 1 (do not fall back to the filesystem)
+    emitter.instruction("ldr x13, [x12, #16]");                                 // load the matched wrapper class-name pointer
+    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_url_stat_class_ptr");
+    emitter.instruction("str x13, [x10]");                                      // publish class bytes for a later DOM warning
+    emitter.instruction("ldr x13, [x12, #24]");                                 // load the matched wrapper class-name length
+    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_url_stat_class_len");
+    emitter.instruction("str x13, [x10]");                                      // publish the class byte count for a later DOM warning
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
     emitter.instruction("cbz x0, __rt_uus_false");                              // unknown class → boxed false
     emitter.instruction("str x0, [sp, #48]");                                   // save the throwaway wrapper instance
+    emitter.instruction("bl __rt_user_wrapper_apply_context");                  // expose libxml's selected context before url_stat()
+    emitter.instruction("ldr x0, [sp, #48]");                                   // reload the wrapper after context-property injection
 
     // -- look up url_stat in the per-class user-wrapper vtable (slot 9) --
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("ldr x11, [x10, #{}]", VTABLE_URL_STAT_OFFSET)); // load the url_stat method pointer (slot 9)
-    emitter.instruction("cbz x11, __rt_uus_false_obj");                         // class did not implement url_stat → boxed false
+    emitter.instruction("cbz x11, __rt_uus_missing_obj");                       // class did not implement url_stat → classified boxed false
 
     // -- call url_stat($this, $path, $flags) → x0 = raw return --
     emitter.instruction("ldr x0, [sp, #48]");                                   // $this = wrapper object
@@ -137,6 +151,8 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #24]");                                   // path len → string-arg pair
     emitter.instruction("ldr x3, [sp, #32]");                                   // url_stat flags
     emitter.instruction("blr x11");                                             // invoke url_stat on the throwaway wrapper object
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_url_stat_failure_kind");
+    emitter.instruction("str xzr, [x9]");                                       // an implemented url_stat result is never a missing-method failure
     emitter.instruction("bl __rt_box_wrapper_stat_result");                     // normalize the type-erased return into a boxed Mixed
     emitter.instruction("str x0, [sp, #56]");                                   // save the boxed result across the wrapper-instance release
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the throwaway wrapper object
@@ -144,9 +160,24 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload the boxed result for return
     emitter.instruction("b __rt_uus_ret");                                      // share the common return path
 
-    emitter.label("__rt_uus_false_obj");
+    emitter.label("__rt_uus_missing_obj");
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the throwaway wrapper object
-    emitter.instruction("bl __rt_decref_any");                                  // free it before falling through to boxed false
+    emitter.instruction("ldr x9, [x0]");                                        // preserve its class id across destructor re-entry
+    emitter.instruction("str x9, [sp, #40]");                                   // keep the class identity in the unused frame slot
+    emitter.instruction("bl __rt_decref_any");                                  // release it before publishing stable failure metadata
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the stable wrapper class id
+    abi::emit_symbol_address(emitter, "x10", "_class_name_entries");
+    emitter.instruction("add x10, x10, x9, lsl #4");                            // address the class's immutable name metadata
+    emitter.instruction("ldr x11, [x10]");                                      // load the wrapper class-name pointer
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_url_stat_class_ptr");
+    emitter.instruction("str x11, [x9]");                                       // restore class bytes after destructor re-entry
+    emitter.instruction("ldr x11, [x10, #8]");                                  // load the wrapper class-name length
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_url_stat_class_len");
+    emitter.instruction("str x11, [x9]");                                       // restore the class byte count after destructor re-entry
+    abi::emit_symbol_address(emitter, "x9", "_user_wrapper_url_stat_failure_kind");
+    emitter.instruction("mov x10, #1");                                         // failure kind one means url_stat is missing
+    emitter.instruction("str x10, [x9]");                                       // publish the exact missing-method failure
+    emitter.instruction("b __rt_uus_false");                                    // box false without releasing the object twice
     emitter.label("__rt_uus_false");
     emitter.instruction("mov x0, #0");                                          // null sentinel → boxed false (scheme matched, stat unavailable)
     emitter.instruction("bl __rt_box_wrapper_stat_result");                     // produce boxed false; _url_stat_matched stays 1
@@ -180,6 +211,9 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the path pointer across the helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the path length across the helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the url_stat flags across the helper calls
+    abi::emit_store_zero_to_symbol(emitter, "_user_wrapper_url_stat_failure_kind", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_user_wrapper_url_stat_class_ptr", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_user_wrapper_url_stat_class_len", 0);
     emitter.instruction("mov rax, rdi");                                        // path pointer → scan base register
     emitter.instruction("mov rdx, rsi");                                        // path length → scan bound register
 
@@ -239,12 +273,19 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uus_match_x86");
     abi::emit_symbol_address(emitter, "r10", "_url_stat_matched");              // out-flag address
     emitter.instruction("mov BYTE PTR [r10], 1");                               // set _url_stat_matched = 1 (do not fall back to the filesystem)
+    emitter.instruction("mov r13, QWORD PTR [r12 + 16]");                       // load the matched wrapper class-name pointer
+    abi::emit_store_reg_to_symbol(emitter, "r13", "_user_wrapper_url_stat_class_ptr", 0);
+    emitter.instruction("mov r13, QWORD PTR [r12 + 24]");                       // load the matched wrapper class-name length
+    abi::emit_store_reg_to_symbol(emitter, "r13", "_user_wrapper_url_stat_class_len", 0);
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length (new_by_name reads rax/rdx)
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uus_false_x86");                               // unknown class → boxed false
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the throwaway wrapper instance
+    emitter.instruction("mov rdi, rax");                                        // pass the throwaway wrapper to context injection
+    emitter.instruction("call __rt_user_wrapper_apply_context");                // expose libxml's selected context before url_stat()
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the wrapper after context-property injection
 
     // -- look up url_stat in the per-class user-wrapper vtable (slot 9) --
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
@@ -252,7 +293,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // per-class user-wrapper vtable for the resolved class
     emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {}]", VTABLE_URL_STAT_OFFSET)); // load the url_stat method pointer (slot 9)
     emitter.instruction("test r11, r11");                                       // class did not implement url_stat?
-    emitter.instruction("jz __rt_uus_false_obj_x86");                           // no url_stat → boxed false
+    emitter.instruction("jz __rt_uus_missing_obj_x86");                         // no url_stat → classified boxed false
 
     // -- call url_stat($this, $path, $flags) → rax = raw return --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // $this = wrapper object
@@ -260,6 +301,7 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // path len → string-arg pair
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // url_stat flags
     emitter.instruction("call r11");                                            // invoke url_stat on the throwaway wrapper object
+    abi::emit_store_zero_to_symbol(emitter, "_user_wrapper_url_stat_failure_kind", 0);
     emitter.instruction("call __rt_box_wrapper_stat_result");                   // normalize the type-erased return into a boxed Mixed
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the boxed result across the wrapper-instance release
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the throwaway wrapper object
@@ -267,9 +309,22 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed result for return
     emitter.instruction("jmp __rt_uus_ret_x86");                                // share the common return path
 
-    emitter.label("__rt_uus_false_obj_x86");
+    emitter.label("__rt_uus_missing_obj_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the throwaway wrapper object
-    emitter.instruction("call __rt_decref_any");                                // free it before falling through to boxed false
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // preserve its class id across destructor re-entry
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // keep the class identity in an unused frame slot
+    emitter.instruction("call __rt_decref_any");                                // release it before publishing stable failure metadata
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the stable wrapper class id
+    abi::emit_symbol_address(emitter, "r11", "_class_name_entries");
+    emitter.instruction("shl r10, 4");                                          // scale the class id to a 16-byte metadata row
+    emitter.instruction("add r11, r10");                                        // address the class's immutable name metadata
+    emitter.instruction("mov r10, QWORD PTR [r11]");                            // load the wrapper class-name pointer
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_user_wrapper_url_stat_class_ptr", 0);
+    emitter.instruction("mov r10, QWORD PTR [r11 + 8]");                        // load the wrapper class-name length
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_user_wrapper_url_stat_class_len", 0);
+    emitter.instruction("mov r10, 1");                                          // failure kind one means url_stat is missing
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_user_wrapper_url_stat_failure_kind", 0);
+    emitter.instruction("jmp __rt_uus_false_x86");                              // box false without releasing the object twice
     emitter.label("__rt_uus_false_x86");
     emitter.instruction("xor eax, eax");                                        // null sentinel → boxed false (scheme matched, stat unavailable)
     emitter.instruction("call __rt_box_wrapper_stat_result");                   // produce boxed false; _url_stat_matched stays 1

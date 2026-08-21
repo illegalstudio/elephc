@@ -275,9 +275,167 @@ fn emit_print_r_str_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits a PHP object-projection key, demangling protected/private NUL keys.
+/// Input matches `__rt_print_r_str_key` and ordinary keys delegate to it.
+fn emit_print_r_debug_str_key(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_print_r_debug_str_key_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: print_r_debug_str_key ---");
+    emitter.label_global("__rt_print_r_debug_str_key");
+    emitter.instruction("sub sp, sp, #64");                                     // allocate the mangled-key frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the mangled-key frame pointer
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // save the raw key pointer and length
+    emitter.instruction("str x2, [sp, #16]");                                   // save the requested entry indentation
+    emitter.instruction("cmp x1, #3");                                          // can this contain two NUL separators and a name?
+    emitter.instruction("b.lo __rt_pr_debug_key_plain");                        // short keys are ordinary public keys
+    emitter.instruction("ldrb w9, [x0]");                                       // inspect the first key byte
+    emitter.instruction("cbnz w9, __rt_pr_debug_key_plain");                    // public keys do not start with a NUL separator
+    emitter.instruction("mov x9, #1");                                          // scan after the leading NUL
+    emitter.label("__rt_pr_debug_key_scan");
+    emitter.instruction("cmp x9, x1");                                          // reached the end without a second separator?
+    emitter.instruction("b.hs __rt_pr_debug_key_plain");                        // malformed mangling remains an ordinary raw key
+    emitter.instruction("ldrb w10, [x0, x9]");                                  // inspect the next class/visibility byte
+    emitter.instruction("cbz w10, __rt_pr_debug_key_mangled");                  // the second NUL terminates the visibility component
+    emitter.instruction("add x9, x9, #1");                                      // advance through the visibility component
+    emitter.instruction("b __rt_pr_debug_key_scan");                            // continue looking for its terminator
+
+    emitter.label("__rt_pr_debug_key_mangled");
+    emitter.instruction("str x9, [sp, #24]");                                   // save the second-NUL index
+    emitter.instruction("add x10, x0, x9");                                     // address the second separator
+    emitter.instruction("add x10, x10, #1");                                    // advance to the public property name
+    emitter.instruction("str x10, [sp, #32]");                                  // save the demangled property-name pointer
+    emitter.instruction("sub x11, x1, x9");                                     // bytes from the separator through the end
+    emitter.instruction("sub x11, x11, #1");                                    // exclude the second separator itself
+    emitter.instruction("str x11, [sp, #40]");                                  // save the demangled property-name length
+    emitter.instruction("ldr x0, [sp, #16]");                                   // load the requested entry indentation
+    emitter.instruction("bl __rt_print_r_spaces");                              // indent the projected property entry
+    abi::emit_symbol_address(emitter, "x1", "_pr_lbrack");                    // load the opening bracket
+    emitter.instruction("mov x2, #1");                                          // len("[") = 1
+    emitter.instruction("bl __rt_pr_write");                                    // write the opening bracket
+    emitter.instruction("ldr x1, [sp, #32]");                                   // reload the demangled property-name pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                   // reload the demangled property-name length
+    emitter.instruction("bl __rt_pr_write");                                    // write the public property-name portion
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the visibility-component terminator
+    emitter.instruction("cmp x9, #2");                                          // protected mangling is exactly `\0*\0`
+    emitter.instruction("b.ne __rt_pr_debug_key_private");                      // every other valid component names a private scope
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the raw key pointer
+    emitter.instruction("ldrb w10, [x10, #1]");                                 // inspect the one-byte visibility component
+    emitter.instruction("cmp w10, #42");                                        // is the component `*`?
+    emitter.instruction("b.ne __rt_pr_debug_key_private");                      // a different one-byte scope remains private
+    abi::emit_symbol_address(emitter, "x1", "_pr_debug_protected_suffix");     // load `:protected] => `
+    emitter.instruction("mov x2, #15");                                         // len(":protected] => ") = 15
+    emitter.instruction("bl __rt_pr_write");                                    // finish the protected projected key
+    emitter.instruction("b __rt_pr_debug_key_done");                            // skip the private-scope formatter
+
+    emitter.label("__rt_pr_debug_key_private");
+    abi::emit_symbol_address(emitter, "x1", "_pr_debug_private_sep");          // load the name/scope separator
+    emitter.instruction("mov x2, #1");                                          // len(":") = 1
+    emitter.instruction("bl __rt_pr_write");                                    // separate the property name from its scope
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the raw key pointer
+    emitter.instruction("add x1, x9, #1");                                      // private scope starts after the leading NUL
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload the second-NUL index
+    emitter.instruction("sub x2, x2, #1");                                      // exclude both NUL separators from the scope length
+    emitter.instruction("bl __rt_pr_write");                                    // write the private declaring scope
+    abi::emit_symbol_address(emitter, "x1", "_pr_debug_private_suffix");       // load `:private] => `
+    emitter.instruction("mov x2, #13");                                         // len(":private] => ") = 13
+    emitter.instruction("bl __rt_pr_write");                                    // finish the private projected key
+    emitter.instruction("b __rt_pr_debug_key_done");                            // return after the mangled-key path
+
+    emitter.label("__rt_pr_debug_key_plain");
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // restore the ordinary key pointer and length
+    emitter.instruction("ldr x2, [sp, #16]");                                   // restore its requested indentation
+    emitter.instruction("bl __rt_print_r_str_key");                             // render the ordinary public key unchanged
+    emitter.label("__rt_pr_debug_key_done");
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the mangled-key frame
+    emitter.instruction("ret");                                                 // return to the projection walker
+}
+
+/// Emits the Linux x86_64 object-projection key demangler.
+fn emit_print_r_debug_str_key_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: print_r_debug_str_key ---");
+    emitter.label_global("__rt_print_r_debug_str_key");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the mangled-key frame pointer
+    emitter.instruction("sub rsp, 64");                                         // allocate the mangled-key frame
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the raw key pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the raw key length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the requested entry indentation
+    emitter.instruction("cmp rsi, 3");                                          // can this contain two NUL separators and a name?
+    emitter.instruction("jb __rt_pr_debug_key_plain_x86");                      // short keys are ordinary public keys
+    emitter.instruction("cmp BYTE PTR [rdi], 0");                               // inspect the first key byte
+    emitter.instruction("jne __rt_pr_debug_key_plain_x86");                     // public keys do not start with a NUL separator
+    emitter.instruction("mov r9, 1");                                           // scan after the leading NUL
+    emitter.label("__rt_pr_debug_key_scan_x86");
+    emitter.instruction("cmp r9, QWORD PTR [rbp - 16]");                        // reached the end without a second separator?
+    emitter.instruction("jae __rt_pr_debug_key_plain_x86");                     // malformed mangling remains an ordinary raw key
+    emitter.instruction("cmp BYTE PTR [rdi + r9], 0");                          // inspect the next class/visibility byte
+    emitter.instruction("je __rt_pr_debug_key_mangled_x86");                    // the second NUL terminates the visibility component
+    emitter.instruction("add r9, 1");                                           // advance through the visibility component
+    emitter.instruction("jmp __rt_pr_debug_key_scan_x86");                      // continue looking for its terminator
+
+    emitter.label("__rt_pr_debug_key_mangled_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // save the second-NUL index
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the raw key pointer
+    emitter.instruction("lea r10, [r10 + r9 + 1]");                             // address the public property name
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // save the demangled property-name pointer
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the raw key length
+    emitter.instruction("sub r11, r9");                                         // bytes from the separator through the end
+    emitter.instruction("sub r11, 1");                                          // exclude the second separator itself
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // save the demangled property-name length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // load the requested entry indentation
+    emitter.instruction("call __rt_print_r_spaces");                            // indent the projected property entry
+    abi::emit_symbol_address(emitter, "rsi", "_pr_lbrack");                   // load the opening bracket
+    emitter.instruction("mov edx, 1");                                          // len("[") = 1
+    emitter.instruction("call __rt_pr_write");                                  // write the opening bracket
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the demangled property-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the demangled property-name length
+    emitter.instruction("call __rt_pr_write");                                  // write the public property-name portion
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 2");                         // protected mangling is exactly `\0*\0`
+    emitter.instruction("jne __rt_pr_debug_key_private_x86");                   // every other valid component names a private scope
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the raw key pointer
+    emitter.instruction("cmp BYTE PTR [r10 + 1], 42");                          // is the component `*`?
+    emitter.instruction("jne __rt_pr_debug_key_private_x86");                   // a different one-byte scope remains private
+    abi::emit_symbol_address(emitter, "rsi", "_pr_debug_protected_suffix");    // load `:protected] => `
+    emitter.instruction("mov edx, 15");                                         // len(":protected] => ") = 15
+    emitter.instruction("call __rt_pr_write");                                  // finish the protected projected key
+    emitter.instruction("jmp __rt_pr_debug_key_done_x86");                      // skip the private-scope formatter
+
+    emitter.label("__rt_pr_debug_key_private_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_pr_debug_private_sep");         // load the name/scope separator
+    emitter.instruction("mov edx, 1");                                          // len(":") = 1
+    emitter.instruction("call __rt_pr_write");                                  // separate the property name from its scope
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the raw key pointer
+    emitter.instruction("add rsi, 1");                                          // private scope starts after the leading NUL
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload the second-NUL index
+    emitter.instruction("sub rdx, 1");                                          // exclude both NUL separators from the scope length
+    emitter.instruction("call __rt_pr_write");                                  // write the private declaring scope
+    abi::emit_symbol_address(emitter, "rsi", "_pr_debug_private_suffix");      // load `:private] => `
+    emitter.instruction("mov edx, 13");                                         // len(":private] => ") = 13
+    emitter.instruction("call __rt_pr_write");                                  // finish the private projected key
+    emitter.instruction("jmp __rt_pr_debug_key_done_x86");                      // return after the mangled-key path
+
+    emitter.label("__rt_pr_debug_key_plain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the ordinary key pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // restore the ordinary key length
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore its requested indentation
+    emitter.instruction("call __rt_print_r_str_key");                           // render the ordinary public key unchanged
+    emitter.label("__rt_pr_debug_key_done_x86");
+    emitter.instruction("add rsp, 64");                                         // release the mangled-key frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the projection walker
+}
+
 /// `__rt_print_r_value`: render one PHP value (no type wrapper). Tags 4/5 recurse
-/// into the array walkers, tag 7 unboxes a Mixed cell and redispatches, scalars
-/// render directly, null/object render nothing/Array-header only.
+/// into the array walkers, tag 6 dynamically renders an object through its
+/// concrete `__debugInfo()` implementation, tag 7 unboxes a Mixed cell and
+/// redispatches, scalars render directly, and null renders nothing.
 /// Input: AArch64 x0=tag x1=lo x2=hi x3=nested_base / x86_64 rdi=tag rsi=lo rdx=hi rcx=nested_base.
 pub fn emit_print_r_value(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -311,7 +469,7 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #5");                                          // tag 5 = hash
     emitter.instruction("b.eq __rt_pr_val_hash");                               // recurse into the hash walker
     emitter.instruction("cmp x0, #6");                                          // tag 6 = object
-    emitter.instruction("b.eq __rt_pr_val_obj");                                // recurse into the object walker
+    emitter.instruction("b.eq __rt_pr_val_object");                             // render the concrete object's dynamic projection
     emitter.instruction("b __rt_pr_val_done");                                  // tag 8 null → render nothing
 
     emitter.label("__rt_pr_val_int");
@@ -358,11 +516,10 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_print_r_hash");                                // recurse into the hash walker
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
-    emitter.label("__rt_pr_val_obj");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // nested object pointer
-    emitter.instruction("cbz x0, __rt_pr_val_done");                            // defensive: a null instance renders nothing
-    emitter.instruction("ldr x1, [sp, #16]");                                   // base = the nested paren indent
-    emitter.instruction("bl __rt_print_r_object");                              // recurse into the object walker
+    emitter.label("__rt_pr_val_object");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the concrete object pointer
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the nested parenthesis base indent
+    emitter.instruction("bl __rt_print_r_object");                              // render `<Class> Object\n(...)` through runtime __debugInfo dispatch
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
     emitter.label("__rt_pr_val_mixed");
@@ -406,7 +563,7 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 5");                                          // tag 5 = hash
     emitter.instruction("je __rt_pr_val_hash_x86");                             // recurse into the hash walker
     emitter.instruction("cmp rax, 6");                                          // tag 6 = object
-    emitter.instruction("je __rt_pr_val_obj_x86");                              // recurse into the object walker
+    emitter.instruction("je __rt_pr_val_object_x86");                           // render the concrete object's dynamic projection
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // tag 8 null → render nothing
 
     emitter.label("__rt_pr_val_int_x86");
@@ -456,12 +613,10 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_print_r_hash");                              // recurse into the hash walker
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
-    emitter.label("__rt_pr_val_obj_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested object pointer
-    emitter.instruction("test rdi, rdi");                                       // defensive null-instance check
-    emitter.instruction("jz __rt_pr_val_done_x86");                             // a null instance renders nothing
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // base = the nested paren indent
-    emitter.instruction("call __rt_print_r_object");                            // recurse into the object walker
+    emitter.label("__rt_pr_val_object_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the concrete object pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the nested parenthesis base indent
+    emitter.instruction("call __rt_print_r_object");                            // render `<Class> Object\n(...)` through runtime __debugInfo dispatch
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
     emitter.label("__rt_pr_val_mixed_x86");
@@ -679,6 +834,7 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
 /// iterating entries and rendering unquoted keys (int as `[N]`, string as `[KEY]`).
 /// Input: AArch64 x0=hash x1=base / x86_64 rdi=hash rsi=base.
 pub fn emit_print_r_hash(emitter: &mut Emitter) {
+    emit_print_r_debug_str_key(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_print_r_hash_linux_x86_64(emitter);
         return;
@@ -687,6 +843,11 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_hash ---");
     emitter.label_global("__rt_print_r_hash");
+    emitter.instruction("mov x2, #0");                                          // ordinary hashes preserve raw string keys
+    emitter.instruction("b __rt_pr_hash_common");                               // enter the shared associative walker
+    emitter.label_global("__rt_print_r_debug_hash");
+    emitter.instruction("mov x2, #1");                                          // object projections demangle visibility keys
+    emitter.label("__rt_pr_hash_common");
 
     // Frame (112 bytes): [0]hash [8]base [16]entry_indent [24]count [32]cursor
     //   [40]items [48]key_ptr [56]key_len [64]val_lo [72]val_hi [80]val_tag
@@ -696,6 +857,7 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #96");                                    // establish the walk frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the paren base indent
+    emitter.instruction("str x2, [sp, #88]");                                   // save whether this is an object debug projection
     emitter.instruction("add x9, x1, #4");                                      // entry indent = base + 4
     emitter.instruction("str x9, [sp, #16]");                                   // save the entry indent
     emitter.instruction("ldr x0, [sp, #0]");                                    // hash → count helper argument
@@ -729,7 +891,12 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the key ptr
     emitter.instruction("ldr x1, [sp, #56]");                                   // reload the key len
     emitter.instruction("ldr x2, [sp, #16]");                                   // entry indent
+    emitter.instruction("ldr x9, [sp, #88]");                                   // reload the object-projection mode
+    emitter.instruction("cbnz x9, __rt_pr_hash_debug_key");                     // demangle protected/private property keys only here
     emitter.instruction("bl __rt_print_r_str_key");                             // write `<indent>[KEY] => `
+    emitter.instruction("b __rt_pr_hash_after_key");                            // continue to the value
+    emitter.label("__rt_pr_hash_debug_key");
+    emitter.instruction("bl __rt_print_r_debug_str_key");                       // write the PHP-visible projected property key
     emitter.instruction("b __rt_pr_hash_after_key");                            // continue to the value
     emitter.label("__rt_pr_hash_int_key");
     emitter.instruction("ldr x0, [sp, #48]");                                   // integer key payload → integer key
@@ -765,6 +932,11 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_hash ---");
     emitter.label_global("__rt_print_r_hash");
+    emitter.instruction("xor edx, edx");                                        // ordinary hashes preserve raw string keys
+    emitter.instruction("jmp __rt_pr_hash_common_x86");                         // enter the shared associative walker
+    emitter.label_global("__rt_print_r_debug_hash");
+    emitter.instruction("mov edx, 1");                                          // object projections demangle visibility keys
+    emitter.label("__rt_pr_hash_common_x86");
 
     // rbp-relative frame: [-8]hash [-16]base [-24]entry_indent [-32]count
     //   [-40]cursor [-48]items [-56]key_ptr [-64]key_len [-72]val_lo
@@ -774,6 +946,7 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 112");                                        // allocate the hash-walk frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the paren base indent
+    emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // save whether this is an object debug projection
     emitter.instruction("mov rax, rsi");                                        // copy the base indent
     emitter.instruction("add rax, 4");                                          // entry indent = base + 4
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the entry indent
@@ -808,7 +981,12 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the key ptr
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the key len
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // entry indent
+    emitter.instruction("cmp QWORD PTR [rbp - 96], 0");                         // is this an object debug projection?
+    emitter.instruction("jne __rt_pr_hash_debug_key_x86");                      // demangle protected/private property keys only here
     emitter.instruction("call __rt_print_r_str_key");                           // write `<indent>[KEY] => `
+    emitter.instruction("jmp __rt_pr_hash_after_key_x86");                      // continue to the value
+    emitter.label("__rt_pr_hash_debug_key_x86");
+    emitter.instruction("call __rt_print_r_debug_str_key");                     // write the PHP-visible projected property key
     emitter.instruction("jmp __rt_pr_hash_after_key_x86");                      // continue to the value
     emitter.label("__rt_pr_hash_int_key_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // integer key payload → integer key

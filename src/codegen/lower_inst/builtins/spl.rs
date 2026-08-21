@@ -91,6 +91,7 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "Throwable",
     "Traversable",
     "TypeError",
+    "ArgumentCountError",
     "UnderflowException",
     "UnexpectedValueException",
     "ValueError",

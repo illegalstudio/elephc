@@ -78,6 +78,32 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     }
     let extension_builtin = source_prefers_extension_builtin(canonical);
     let sig = call_signature(ctx, canonical, extension_builtin);
+    if let Some(opcode) = crate::ir_lower::internal_extensions::function_opcode(canonical) {
+        let operands = lower_internal_extension_args(ctx, sig.as_ref(), args, false);
+        let (operands, argument_guards) =
+            prepare_internal_extension_arguments_for_throw(ctx, sig.as_ref(), operands, expr.span);
+        let php_type = sig
+            .as_ref()
+            .map(|signature| normalize_value_php_type(signature.return_type.clone()))
+            .unwrap_or_else(|| fallback_expr_type(expr));
+        let call = crate::ir_lower::internal_extensions::emit_call(
+            ctx,
+            opcode,
+            internal_extension_result_flags(&php_type),
+            operands.clone(),
+            php_type,
+            expr.span,
+        );
+        clear_owning_call_arg_temporary_guards(ctx, &argument_guards, expr.span);
+        release_owned_call_arg_temporaries(
+            ctx,
+            &operands,
+            Some(call.value),
+            &internal_extension_function_return_arg_alias(canonical),
+            expr.span,
+        );
+        return call;
+    }
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
     let operands = if is_extern || is_user_function {
@@ -161,6 +187,171 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
+}
+
+/// Lowers bridge arguments while retaining PHP's named, variadic, and stringable contracts.
+pub(super) fn lower_internal_extension_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    preserve_omitted_defaults: bool,
+) -> Vec<crate::ir::ValueId> {
+    let lowering_signature = sig.map(internal_extension_argument_lowering_signature);
+    let sig = lowering_signature.as_ref();
+    if preserve_omitted_defaults && has_static_call_spread_args(args) {
+        let expanded = expand_static_call_spread_args(args);
+        return lower_internal_extension_args(ctx, sig, &expanded, true);
+    }
+    if preserve_omitted_defaults && !args.iter().any(is_spread_arg) {
+        if crate::types::call_args::has_named_args(args) {
+            let Some(signature) = sig else {
+                return lower_args(ctx, args);
+            };
+            return coerce_operands_to_params(
+                ctx,
+                signature,
+                lower_named_args_with_signature(ctx, signature, args),
+            );
+        }
+        let operands = args
+            .iter()
+            .enumerate()
+            .map(|(index, argument)| match sig {
+                Some(signature) => lower_arg_with_signature(ctx, signature, index, argument),
+                None => lower_expr(ctx, argument).value,
+            })
+            .collect::<Vec<_>>();
+        return match sig {
+            Some(signature) => coerce_operands_to_params(ctx, signature, operands),
+            None => operands,
+        };
+    }
+    if sig.is_some_and(|signature| {
+        signature.variadic.is_some()
+            && crate::types::call_args::regular_param_count(signature) == 0
+    }) && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        return args.iter().map(|argument| lower_expr(ctx, argument).value).collect();
+    }
+    lower_args_with_signature(ctx, sig, args)
+}
+
+/// Defers stringable conversion to native preflight so bridge calls share one cleanup boundary.
+fn internal_extension_argument_lowering_signature(signature: &FunctionSig) -> FunctionSig {
+    let mut lowering_signature = signature.clone();
+    for (_, parameter_type) in &mut lowering_signature.params {
+        if parameter_type.codegen_repr() == PhpType::Str {
+            *parameter_type = PhpType::Mixed;
+        }
+    }
+    lowering_signature
+}
+
+/// Moves owned bridge arguments into cleanup-visible slots before native work can throw.
+pub(super) fn prepare_internal_extension_arguments_for_throw(
+    ctx: &mut LoweringContext<'_, '_>,
+    _signature: Option<&FunctionSig>,
+    args: Vec<crate::ir::ValueId>,
+    span: Span,
+) -> (Vec<crate::ir::ValueId>, Vec<(crate::ir::ValueId, String)>) {
+    let mut guarded_values = Vec::new();
+    let mut guards = Vec::new();
+    for value in args.iter().copied() {
+        if guarded_values.contains(&value) {
+            continue;
+        }
+        let php_type = ctx.builder.value_php_type(value);
+        let lowered = LoweredValue { value, ir_type: value_ir_type(&php_type) };
+        let provisional_local_load = matches!(
+            ctx.builder.value_defining_op(value),
+            Some(Op::LoadLocal | Op::LoadStaticLocal)
+        ) && !ctx.value_is_owned_temp_load(value);
+        if provisional_local_load || !ctx.value_is_owning_temporary(lowered) {
+            continue;
+        }
+        let guard = ctx.declare_owned_hidden_temp(php_type.clone());
+        ctx.store_local(&guard, lowered, php_type, Some(span));
+        guarded_values.push(value);
+        guards.push((value, guard));
+    }
+    (args, guards)
+}
+
+/// Moves an owning bridge receiver into an unwind-visible slot before native work can throw.
+pub(super) fn guard_owning_receiver_temporary_for_throw(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    span: Span,
+) -> Option<String> {
+    let provisional_local_load = matches!(
+        ctx.builder.value_defining_op(receiver.value),
+        Some(Op::LoadLocal | Op::LoadStaticLocal)
+    ) && !ctx.value_is_owned_temp_load(receiver.value);
+    if provisional_local_load || !ctx.value_is_owning_temporary(receiver) {
+        return None;
+    }
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    let guard = ctx.declare_owned_hidden_temp(receiver_type.clone());
+    ctx.store_local(&guard, receiver, receiver_type, Some(span));
+    Some(guard)
+}
+
+/// Clears bridge-argument unwind guards after a successful native call.
+pub(super) fn clear_owning_call_arg_temporary_guards(
+    ctx: &mut LoweringContext<'_, '_>,
+    guards: &[(crate::ir::ValueId, String)],
+    span: Span,
+) {
+    for (_, guard) in guards {
+        ctx.clear_owned_hidden_temp(guard, Some(span));
+    }
+}
+
+/// Clears an owning receiver guard and releases the consumed temporary after native dispatch.
+pub(super) fn release_guarded_owning_receiver_temporary(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    guard: Option<&str>,
+    span: Span,
+) {
+    if let Some(guard) = guard {
+        ctx.clear_owned_hidden_temp(guard, Some(span));
+    }
+    release_owning_receiver_temporary(ctx, receiver, span);
+}
+
+/// Returns bridge result flags inferred from the exact PHP result shape.
+pub(super) fn internal_extension_result_flags(result_type: &PhpType) -> u32 {
+    let mut flags = 0;
+    let mut classify = |class_name: &str| {
+        if crate::internal_extensions::is_native_wrapper_class(class_name) {
+            flags |= crate::ir_lower::internal_extensions::FLAG_WRAPPER_RESULT;
+        }
+        if crate::internal_extensions::is_native_value_object_class(class_name) {
+            flags |= crate::ir_lower::internal_extensions::FLAG_VALUE_OBJECT_RESULT;
+        }
+    };
+    match result_type {
+        PhpType::Object(class_name) => classify(class_name),
+        PhpType::Union(members) => {
+            for member in members {
+                if let PhpType::Object(class_name) = member {
+                    classify(class_name);
+                }
+            }
+        }
+        _ => {}
+    }
+    flags
+}
+
+/// Returns the bridge's proven return-to-argument alias contract for native functions.
+fn internal_extension_function_return_arg_alias(name: &str) -> ReturnArgAlias {
+    match php_symbol_key(name.trim_start_matches('\\')) .as_str() {
+        "simplexml_import_dom" => ReturnArgAlias::None,
+        _ => ReturnArgAlias::Unknown,
+    }
 }
 
 /// Emits a builtin call and releases owned temporary arguments after the call consumes them.

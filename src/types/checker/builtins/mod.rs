@@ -239,6 +239,27 @@ impl Checker {
             return Ok(Some(ret));
         }
 
+        if let Some(function) = crate::internal_extensions::registry().function(name) {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            self.require_builtin_library("elephc_dom");
+            let signature = crate::internal_extensions::function_signature_for(
+                &function.exported_name,
+                &function.signature,
+            )
+            .map_err(|error| {
+                CompileError::new(
+                    span,
+                    &format!(
+                        "Invalid internal function metadata for {}: {}",
+                        function.exported_name, error
+                    ),
+                )
+            })?;
+            return Ok(Some(signature.return_type));
+        }
+
         if matches!(builtin_key.as_str(), "exit" | "die" | "empty" | "unset" | "isset") {
             return language_constructs::check(self, &builtin_key, args, span, env).map(Some);
         }

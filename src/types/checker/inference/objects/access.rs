@@ -36,6 +36,7 @@ impl Checker {
             }
         }
         let obj_ty = self.infer_type(object, env)?;
+        require_internal_extension_for_type(self, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             return self.infer_property_on_class_type(class_name, property, expr);
         }
@@ -130,6 +131,7 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        require_internal_extension_for_type(self, &obj_ty);
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
@@ -161,6 +163,7 @@ impl Checker {
         nullsafe: bool,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        require_internal_extension_for_type(self, &obj_ty);
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);
         }
@@ -208,6 +211,12 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             return Ok(PhpType::Mixed);
+        }
+        if is_simplexml_element_class(self, class_name) {
+            // SimpleXML properties are selectors, not declared object slots. php-src
+            // returns another wrapper of the receiver's exact runtime class, including
+            // for a missing selector (the empty view remains live for later writes).
+            return Ok(PhpType::Object(class_name.to_string()));
         }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
@@ -520,5 +529,32 @@ impl Checker {
                 )
             })?;
         Ok(PhpType::Pointer(Some(normalized)))
+    }
+}
+
+/// Returns whether a class is `SimpleXMLElement` or one of its userland descendants.
+fn is_simplexml_element_class(checker: &Checker, class_name: &str) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    class_name.eq_ignore_ascii_case("SimpleXMLElement")
+        || checker.is_subclass_of(class_name, "SimpleXMLElement")
+}
+
+/// Records the DOM bridge when property access observes a native internal wrapper type.
+fn require_internal_extension_for_type(checker: &mut Checker, php_type: &PhpType) {
+    let required = match php_type {
+        PhpType::Object(class_name) => {
+            crate::internal_extensions::is_native_wrapper_class(class_name)
+        }
+        PhpType::Union(members) => members.iter().any(|member| {
+            matches!(
+                member,
+                PhpType::Object(class_name)
+                    if crate::internal_extensions::is_native_wrapper_class(class_name)
+            )
+        }),
+        _ => false,
+    };
+    if required {
+        checker.require_builtin_library("elephc_dom");
     }
 }

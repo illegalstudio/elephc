@@ -85,6 +85,20 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
             if !matches!(ty, PhpType::Array(_)) {
                 *ty = PhpType::Array(Box::new(PhpType::Mixed));
             }
+            if wrapper_sig.defaults.len() < wrapper_sig.params.len() {
+                wrapper_sig.defaults.push(Some(Expr::new(
+                    ExprKind::ArrayLiteral(Vec::new()),
+                    Span::dummy(),
+                )));
+            } else if wrapper_sig.defaults.last().is_some_and(Option::is_none) {
+                *wrapper_sig
+                    .defaults
+                    .last_mut()
+                    .expect("variadic default slot exists") = Some(Expr::new(
+                    ExprKind::ArrayLiteral(Vec::new()),
+                    Span::dummy(),
+                ));
+            }
             return wrapper_sig;
         }
     }
@@ -115,7 +129,10 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         variadic_name.clone(),
         PhpType::Array(Box::new(PhpType::Mixed)),
     ));
-    wrapper_sig.defaults.push(None);
+    wrapper_sig.defaults.push(Some(Expr::new(
+        ExprKind::ArrayLiteral(Vec::new()),
+        Span::dummy(),
+    )));
     wrapper_sig.ref_params.push(variadic_ref);
     wrapper_sig.declared_params.push(variadic_declared);
     wrapper_sig.param_type_exprs.push(variadic_type_expr);
@@ -136,6 +153,17 @@ pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
     crate::builtins::registry::function_sig(name)
         .or_else(|| compiler_resident_builtin_call_sig(name))
+        .or_else(|| {
+            crate::internal_extensions::registry()
+                .function(name)
+                .and_then(|function| {
+                    crate::internal_extensions::function_signature_for(
+                        &function.exported_name,
+                        &function.signature,
+                    )
+                    .ok()
+                })
+        })
 }
 
 /// Returns call signatures for compiler-resident language constructs.
@@ -175,6 +203,18 @@ fn with_return_type(mut signature: FunctionSig, return_type: PhpType) -> Functio
 /// - first-class callable lowering for builtin references
 pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     crate::builtins::registry::first_class_callable_sig(name)
+        .or_else(|| {
+            crate::internal_extensions::registry()
+                .function(name)
+                .and_then(|function| {
+                    crate::internal_extensions::function_signature_for(
+                        &function.exported_name,
+                        &function.signature,
+                    )
+                    .ok()
+                })
+                .map(|signature| callable_wrapper_sig(&signature))
+        })
 }
 
 /// Constructs a signature with all parameters required (no defaults).
@@ -276,6 +316,13 @@ mod tests {
             )
         );
         assert_eq!(wrapper_sig.defaults.len(), 2);
+        assert!(matches!(
+            wrapper_sig.defaults[1].as_ref(),
+            Some(Expr {
+                kind: ExprKind::ArrayLiteral(items),
+                ..
+            }) if items.is_empty()
+        ));
         assert_eq!(wrapper_sig.ref_params.len(), 2);
         assert_eq!(wrapper_sig.declared_params.len(), 2);
     }
@@ -296,6 +343,13 @@ mod tests {
             )
         );
         assert_eq!(wrapper_sig.defaults.len(), 2);
+        assert!(matches!(
+            wrapper_sig.defaults[1].as_ref(),
+            Some(Expr {
+                kind: ExprKind::ArrayLiteral(items),
+                ..
+            }) if items.is_empty()
+        ));
         assert_eq!(wrapper_sig.ref_params.len(), 2);
         assert_eq!(wrapper_sig.declared_params.len(), 2);
     }

@@ -104,6 +104,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "Throwable",
     "Traversable",
     "TypeError",
+    "ArgumentCountError",
     "UnderflowException",
     "UnexpectedValueException",
     "ValueError",
@@ -265,7 +266,7 @@ fn load_autoloaded_file(
     base_dir: &Path,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
+    let content = std::fs::read(path).map_err(|e| {
         CompileError::new(
             Span::dummy(),
             &format!("Autoload: cannot read '{}': {}", path.display(), e),
@@ -273,7 +274,7 @@ fn load_autoloaded_file(
     })?;
     let file_label = path.display().to_string();
     let source_mode = crate::source::SourceMode::from_path(path);
-    let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
+    let tokens = crate::lexer::tokenize_bytes_with_mode(&content, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;

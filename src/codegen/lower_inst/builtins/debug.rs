@@ -273,6 +273,10 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
             emit_print_r_mixed(ctx);
             Ok(())
         }
+        PhpType::Object(_) => {
+            emit_print_r_object(ctx);
+            Ok(())
+        }
         PhpType::TaggedScalar => emit_print_r_tagged_scalar(ctx),
         PhpType::Int
         | PhpType::Float
@@ -289,6 +293,21 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
             other
         ))),
     }
+}
+
+/// Emits `print_r()` output for the current object result through concrete
+/// runtime `__debugInfo()` dispatch, with a top-level parenthesis indent of zero.
+fn emit_print_r_object(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #0");                              // top-level object parentheses start at column zero
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // object pointer → SysV first argument register
+            ctx.emitter.instruction("mov esi, 0");                              // top-level object parentheses start at column zero
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_print_r_object");
 }
 
 /// Emits `print_r` output for a tagged scalar, matching PHP's empty output for null.

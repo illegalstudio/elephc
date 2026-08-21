@@ -48,6 +48,32 @@ pub(super) fn lower_property_assign(
         value_expr,
         span,
     );
+    let object_type = ctx.builder.value_php_type(object.value);
+    if let Some(opcode) = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &object_type,
+        "write_property",
+    ) {
+        let property_data = ctx.intern_string(property);
+        let property_name = ctx.emit_value(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(property_data)),
+            PhpType::Str,
+            Op::ConstStr.default_effects(),
+            Some(span),
+        );
+        crate::ir_lower::internal_extensions::emit_void_call(
+            ctx,
+            opcode,
+            crate::ir_lower::internal_extensions::FLAG_RECEIVER,
+            vec![object.value, property_name.value, value.value],
+            span,
+        );
+        release_magic_set_value_after_call(ctx, value, span);
+        release_owning_receiver_temporary(ctx, object, span);
+        return;
+    }
     // Property slots use their declared/inferred storage representation. In particular, an
     // untyped property widened to Mixed needs a boxed cell even when this assignment is scalar.
     let property_ty = object_property_type(ctx, object.value, property);
@@ -65,6 +91,25 @@ pub(super) fn lower_property_assign(
         && !ctx.in_own_property_accessor(property)
     {
         lower_property_hook_set(ctx, object.value, property, value, span);
+        return;
+    }
+    if let Some(opcode) = crate::ir_lower::internal_extensions::property_opcode_for_type(
+        ctx,
+        &object_type,
+        property,
+        true,
+    ) {
+        crate::ir_lower::internal_extensions::emit_void_call(
+            ctx,
+            opcode,
+            crate::ir_lower::internal_extensions::FLAG_RECEIVER,
+            vec![object.value, value.value],
+            span,
+        );
+        if let Some(property_ty) = object_property_type(ctx, object.value, property) {
+            release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+        }
+        release_owning_receiver_temporary(ctx, object, span);
         return;
     }
     let data = ctx.intern_string(property);

@@ -190,7 +190,13 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
 ) -> Result<()> {
     ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
     ensure_dynamic_property_miss_supported(inst)?;
-    let candidates = declared_mixed_property_get_candidates(ctx, inst)?;
+    let virtual_properties = dynamic_internal_extension_properties(ctx, object, inst)?;
+    let mut candidates = declared_mixed_property_get_candidates(ctx, object, inst)?;
+    candidates.retain(|candidate| {
+        !virtual_properties
+            .iter()
+            .any(|(slot, _)| slot.property == candidate.slot.property)
+    });
     let done_label = ctx.next_label("mixed_dyn_prop_get_done");
     let miss_label = ctx.next_label("mixed_dyn_prop_get_miss");
     let miss_no_stack_label = ctx.next_label("mixed_dyn_prop_get_miss_no_stack");
@@ -204,6 +210,15 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
             ))
         })
         .collect::<Vec<_>>();
+    let virtual_labels = virtual_properties
+        .iter()
+        .map(|(slot, _)| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_get_virtual_{}",
+                label_fragment(&slot.property)
+            ))
+        })
+        .collect::<Vec<_>>();
 
     ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -213,22 +228,61 @@ pub(super) fn lower_runtime_dynamic_mixed_prop_get(
     ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
+    for ((slot, _), label) in virtual_properties.iter().zip(virtual_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    }
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
     }
     emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
     abi::emit_jump(ctx.emitter, &miss_label);
 
+    for ((slot, opcode), label) in virtual_properties.iter().zip(virtual_labels.iter()) {
+        ctx.emitter.label(label);
+        let receiver_reg = abi::int_result_reg(ctx.emitter).to_string();
+        abi::emit_load_temporary_stack_slot(ctx.emitter, &receiver_reg, 16);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        let property_inst = Instruction {
+            operands: vec![inst.operands[0]],
+            ..inst.clone()
+        };
+        super::super::internal_extensions::lower_mixed_receiver_internal_extension_call(
+            ctx,
+            &property_inst,
+            &receiver_reg,
+            *opcode,
+            &slot.php_type,
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        if candidate.slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        if let Some(opcode) = runtime_dom_property_opcode_for_slot(ctx, &candidate.slot) {
+            let receiver_reg = abi::int_result_reg(ctx.emitter).to_string();
+            abi::emit_load_temporary_stack_slot(ctx.emitter, &receiver_reg, 16);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            let property_inst = Instruction {
+                operands: vec![inst.operands[0]],
+                ..inst.clone()
+            };
+            super::super::internal_extensions::lower_mixed_receiver_internal_extension_call(
+                ctx,
+                &property_inst,
+                &receiver_reg,
+                opcode,
+                &candidate.slot.php_type,
+            )?;
+        } else {
+            if candidate.slot.is_declared {
+                emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+            }
+            emit_property_load(ctx, &candidate.slot, base_reg)?;
+            materialize_loaded_property_result(ctx, inst, &candidate.slot.php_type)?;
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
-        emit_property_load(ctx, &candidate.slot, base_reg)?;
-        materialize_loaded_property_result(ctx, inst, &candidate.slot.php_type)?;
-        abi::emit_release_temporary_stack(ctx.emitter, 32);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 

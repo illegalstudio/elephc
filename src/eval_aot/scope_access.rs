@@ -223,7 +223,8 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
         | ExprKind::ConstRef(_)
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
-        | ExprKind::MagicConstant(_) => {}
+        | ExprKind::MagicConstant(_)
+        | ExprKind::ArrayAppend => {}
         ExprKind::ObjectClassName { object } => collect_expr_scope_access(object, access),
         ExprKind::Variable(name)
         | ExprKind::PreIncrement(name)

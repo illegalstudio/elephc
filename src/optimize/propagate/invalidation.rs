@@ -90,6 +90,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::ConstRef(_)
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::This

@@ -1071,6 +1071,7 @@ impl<'a> FunctionContext<'a> {
                 | Op::Call
                 | Op::FunctionVariantCall
                 | Op::ExternCall
+                | Op::InternalExtensionCall
                 | Op::MethodCall
                 | Op::NullsafeMethodCall
                 | Op::StaticMethodCall

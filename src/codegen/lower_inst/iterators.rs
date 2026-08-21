@@ -1,6 +1,6 @@
 //! Purpose:
 //! Lowers high-level EIR iterator opcodes for the Phase 04 backend.
-//! Handles stack-resident iteration over indexed and associative arrays.
+//! Handles stack-resident iteration over arrays and object-backed iterators.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
@@ -8,6 +8,8 @@
 //! Key details:
 //! - `IterStart` values reserve a fixed stack state for source, cursor, and current hash payload.
 //! - Current values are boxed into `Mixed` unless EIR preserves a concrete indexed-array element type.
+//! - Static object/interface states retain their receiver until `IterEnd`; dynamic aggregate
+//!   dispatch records and releases only the owned iterator returned by `getIterator()`.
 //! - A source that is not iterable does NOT abort. Every dispatch that misses the
 //!   indexed/hash/object cases — the static `NonIterable` kind, the `__rt_mixed_unbox` tag
 //!   dispatch, and the `__rt_heap_kind` dispatch — calls `__rt_warn_foreach_non_iterable`
@@ -905,12 +907,18 @@ fn resolve_dynamic_object_iterator_source(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
 ) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::store_at_offset(
+        ctx.emitter,
+        result_reg,
+        offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA,
+    );
     if !ctx.module.interface_infos.contains_key("IteratorAggregate") {
         return Ok(());
     }
     let keep_original = ctx.next_label("iter_dynamic_keep_original_object");
     emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
-    let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(
@@ -925,6 +933,12 @@ fn resolve_dynamic_object_iterator_source(
         }
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 1);
+    abi::store_at_offset(
+        ctx.emitter,
+        result_reg,
+        offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA,
+    );
     ctx.emitter.label(&keep_original);
     Ok(())
 }
@@ -1431,14 +1445,85 @@ fn class_method_body_exists(ctx: &FunctionContext<'_>, class_name: &str, method_
     })
 }
 
-/// Lowers iterator cleanup; Phase 04 array iterator state is stack-resident.
-pub(super) fn lower_iter_end(_ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+/// Releases an object retained or created for a stack-resident iterator state.
+pub(super) fn lower_iter_end(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.result.is_some() {
         return Err(CodegenIrError::invalid_module(
             "iter_end must not produce a result".to_string(),
         ));
     }
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "iter_end expects one iterator operand, got {}",
+            inst.operands.len()
+        )));
+    }
+    let iterator = expect_operand(inst, 0)?;
+    let offset = ctx.value_frame_offset(iterator)?;
+    let source_kind = iterator_source_kind(ctx, iterator, inst)?;
+    let retained_object_type = match &source_kind {
+        IteratorSourceKind::Object { class_name, .. } => {
+            Some(PhpType::Object(class_name.clone()))
+        }
+        IteratorSourceKind::Interface { interface_name, .. } => {
+            Some(PhpType::Object(interface_name.clone()))
+        }
+        IteratorSourceKind::Indexed { .. }
+        | IteratorSourceKind::Hash
+        | IteratorSourceKind::DynamicIterable
+        | IteratorSourceKind::DynamicMixed
+        | IteratorSourceKind::NonIterable { .. } => None,
+    };
+    if let Some(retained_object_type) = retained_object_type {
+        abi::load_at_offset(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            offset - ITER_SOURCE_OFFSET_DELTA,
+        );
+        abi::emit_decref_if_refcounted(ctx.emitter, &retained_object_type);
+    }
+    if matches!(
+        source_kind,
+        IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed
+    ) {
+        release_owned_dynamic_object_iterator_source(ctx, offset);
+    }
     Ok(())
+}
+
+/// Releases a dynamic `IteratorAggregate` result while preserving its borrowed original source.
+fn release_owned_dynamic_object_iterator_source(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let done = ctx.next_label("iter_end_dynamic_owned_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // release ownership flags only for object iterator sources
+            ctx.emitter.instruction(&format!("b.ne {}", done));                 // arrays reuse this state slot for snapshot length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // release ownership flags only for object iterator sources
+            ctx.emitter.instruction(&format!("jne {}", done));                  // arrays reuse this state slot for snapshot length
+        }
+    }
+    abi::load_at_offset(
+        ctx.emitter,
+        result_reg,
+        offset - ITER_SNAPSHOT_LEN_OFFSET_DELTA,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));              // keep borrowed direct Iterator objects alive
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // check whether getIterator replaced the source
+            ctx.emitter.instruction(&format!("je {}", done));                   // keep borrowed direct Iterator objects alive
+        }
+    }
+    abi::load_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Object("Iterator".to_string()));
+    ctx.emitter.label(&done);
 }
 
 /// Emits AArch64 cursor advancement for a stack-resident indexed-array iterator.

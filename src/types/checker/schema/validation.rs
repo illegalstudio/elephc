@@ -16,15 +16,19 @@ use crate::types::{FunctionSig, PhpType};
 use super::super::Checker;
 
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
-/// annotations through the checker. Parameters without type hints default to `PhpType::Int`.
-/// Validates that each declared parameter's default value is compatible with its resolved type.
-/// Infers return type from method body when no return annotation is present.
+/// annotations through the checker. Parameters without type hints default to `PhpType::Int`,
+/// except fixed userspace-wrapper callbacks, whose runtime inputs remain dynamic PHP values.
+/// Validates declared defaults and infers a return type when no annotation is present.
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
     declaring_type: &str,
 ) -> Result<FunctionSig, CompileError> {
     let method_key = php_symbol_key(&method.name);
+    let is_user_stream_wrapper_callback = !method.is_static
+        && matches!(method.visibility, Visibility::Public)
+        && crate::codegen_support::runtime::USER_WRAPPER_METHOD_NAMES
+            .contains(&method_key.as_str());
     let params: Vec<(String, PhpType)> = method
         .params
         .iter()
@@ -52,6 +56,7 @@ pub(crate) fn build_method_sig(
                     method.span,
                     &format!("Method parameter ${}", n),
                 )?,
+                None if is_user_stream_wrapper_callback => PhpType::Mixed,
                 None => PhpType::Int,
             };
             Ok((n.clone(), ty))
@@ -397,6 +402,11 @@ pub(crate) fn validate_override_signature(
         kind,
         "overriding",
     )?;
+    if allows_untyped_tostring_override(method, is_static, parent_sig)
+        || allows_simplexml_current_tentative_return_override(checker, class, method, is_static)
+    {
+        return Ok(());
+    }
     if parent_sig.declared_return && !child_sig.declared_return {
         return Err(CompileError::new(
             method.span,
@@ -444,6 +454,75 @@ pub(crate) fn validate_override_signature(
     Ok(())
 }
 
+/// Returns whether PHP permits this untyped `__toString` override.
+///
+/// Unlike ordinary methods, PHP permits omitting the return declaration for
+/// `__toString` when the inherited contract is `string` (or is itself
+/// undeclared). A declared `never` return remains a narrower contract that an
+/// untyped override cannot satisfy.
+pub(super) fn allows_untyped_tostring_override(
+    method: &ClassMethod,
+    is_static: bool,
+    parent_sig: &FunctionSig,
+) -> bool {
+    !is_static
+        && method.return_type.is_none()
+        && php_symbol_key(&method.name) == "__tostring"
+        && (!parent_sig.declared_return || parent_sig.return_type == PhpType::Str)
+}
+
+/// Returns whether `#[ReturnTypeWillChange]` suppresses SimpleXML's tentative
+/// `Iterator::current()` return contract for this direct native override.
+///
+/// PHP applies this transitional attribute only while the inherited declaration
+/// is the internal `SimpleXMLElement::current()` method. Once a userland
+/// ancestor declares `current()`, ordinary covariance rules resume even if both
+/// child and parent carry the attribute.
+fn allows_simplexml_current_tentative_return_override(
+    checker: &Checker,
+    class: &crate::types::traits::FlattenedClass,
+    method: &ClassMethod,
+    is_static: bool,
+) -> bool {
+    !is_static
+        && php_symbol_key(&method.name) == "current"
+        && method.attributes.iter().any(|group| {
+            group.attributes.iter().any(|attribute| {
+                matches_global_builtin_attribute(attribute, "ReturnTypeWillChange")
+            })
+        })
+        && inherits_unoverridden_simplexml_current(checker, class)
+}
+
+/// Returns whether `class` reaches the native `SimpleXMLElement::current()`
+/// declaration without a userland `current()` override in between.
+fn inherits_unoverridden_simplexml_current(
+    checker: &Checker,
+    class: &crate::types::traits::FlattenedClass,
+) -> bool {
+    let mut current = class.extends.as_deref();
+    while let Some(parent_name) = current {
+        if parent_name
+            .trim_start_matches('\\')
+            .eq_ignore_ascii_case("SimpleXMLElement")
+        {
+            return true;
+        }
+        let Some(parent) = checker.classes.get(parent_name) else {
+            return false;
+        };
+        if parent
+            .method_decls
+            .iter()
+            .any(|declaration| php_symbol_key(&declaration.name) == "current")
+        {
+            return false;
+        }
+        current = parent.parent.as_deref();
+    }
+    false
+}
+
 /// Returns true when a child method may return the child class itself against a wider parent return.
 ///
 /// Covers PHP covariant returns (`parent::w(): Base` overridden as `w(): static` / `w(): Child`)
@@ -457,26 +536,65 @@ fn covariant_self_return_compatible(
     parent_sig: &FunctionSig,
     child_sig: &FunctionSig,
 ) -> bool {
-    match (&parent_sig.return_type, &child_sig.return_type) {
-        (PhpType::Object(expected_name), PhpType::Object(actual_name))
-            if actual_name == class_name =>
-        {
-            if expected_name == class_name {
-                return true;
-            }
-            if let Some(parent) = extends {
-                if parent == expected_name
-                    || checker.is_subclass_of(parent, expected_name)
-                    || checker.class_implements_interface(parent, expected_name)
-                {
-                    return true;
-                }
-            }
-            implements.iter().any(|iface| {
-                iface == expected_name
-                    || checker.interface_extends_interface(iface, expected_name)
-            })
-        }
-        _ => false,
+    covariant_self_type_compatible(
+        checker,
+        class_name,
+        extends,
+        implements,
+        &parent_sig.return_type,
+        &child_sig.return_type,
+    )
+}
+
+/// Checks one return type, including nullable/union members, while a class schema is in flight.
+pub(crate) fn covariant_self_type_compatible(
+    checker: &Checker,
+    class_name: &str,
+    extends: Option<&str>,
+    implements: &[String],
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    if checker.type_accepts(expected, actual) {
+        return true;
     }
+    if let PhpType::Union(actual_members) = actual {
+        let expected_members = match expected {
+            PhpType::Union(members) => members.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        return actual_members.iter().all(|actual_member| {
+            expected_members.iter().any(|expected_member| {
+                covariant_self_type_compatible(
+                    checker,
+                    class_name,
+                    extends,
+                    implements,
+                    expected_member,
+                    actual_member,
+                )
+            })
+        });
+    }
+    let (PhpType::Object(expected_name), PhpType::Object(actual_name)) = (expected, actual) else {
+        return false;
+    };
+    if actual_name != class_name {
+        return false;
+    }
+    if expected_name == class_name {
+        return true;
+    }
+    if let Some(parent) = extends {
+        if parent == expected_name
+            || checker.is_subclass_of(parent, expected_name)
+            || checker.class_implements_interface(parent, expected_name)
+        {
+            return true;
+        }
+    }
+    implements.iter().any(|interface| {
+        interface == expected_name
+            || checker.interface_extends_interface(interface, expected_name)
+    })
 }

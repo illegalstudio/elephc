@@ -61,6 +61,9 @@ pub(super) fn lower_ternary(
 /// Lowers a cast expression.
 pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    if let Some(result) = lower_simplexml_scalar_cast(ctx, target, value, expr) {
+        return result;
+    }
     // Keep the original producer visible for a no-op string cast. Wrapping an
     // owned string temporary in `Cast(Str)` would hide its ownership from the
     // retaining store/call cleanup and leak the detached string allocation.
@@ -85,6 +88,92 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
+}
+
+/// Routes SimpleXML scalar casts through the native object handler.
+fn lower_simplexml_scalar_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &CastType,
+    value: LoweredValue,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    lower_simplexml_scalar_cast_at_span(ctx, target, value, expr.span)
+}
+
+/// Routes one already-lowered SimpleXML cast through identity or its native handler.
+pub(super) fn lower_simplexml_scalar_cast_at_span(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &CastType,
+    value: LoweredValue,
+    span: Span,
+) -> Option<LoweredValue> {
+    let source_type = ctx.builder.value_php_type(value.value);
+    let PhpType::Object(class_name) =
+        crate::ir_lower::internal_extensions::simplexml_object_result_type(ctx, &source_type)?
+    else {
+        return None;
+    };
+    if matches!(target, CastType::Object) {
+        return Some(value);
+    }
+    let (kind, result_type) = match target {
+        CastType::Bool => (0, PhpType::Bool),
+        CastType::Int => (1, PhpType::Int),
+        CastType::Float => (2, PhpType::Float),
+        CastType::String if !simplexml_descendant_declares_method(ctx, &class_name, "__toString") => {
+            (3, PhpType::Str)
+        }
+        CastType::Array => (
+            5,
+            PhpType::AssocArray { key: Box::new(PhpType::Mixed), value: Box::new(PhpType::Mixed) },
+        ),
+        CastType::String | CastType::Object => return None,
+    };
+    let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &source_type,
+        "cast",
+    )?;
+    let discriminator = emit_i64_at_span(ctx, kind, span);
+    let result = crate::ir_lower::internal_extensions::emit_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER,
+        vec![value.value, discriminator.value],
+        result_type,
+        span,
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    Some(result)
+}
+
+/// Reports whether a userland SimpleXML descendant overrides one native conversion method.
+fn simplexml_descendant_declares_method(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+) -> bool {
+    let method = php_symbol_key(method);
+    let mut current = class_name.trim_start_matches('\\').to_string();
+    loop {
+        if current.eq_ignore_ascii_case("SimpleXMLElement") {
+            return false;
+        }
+        let Some(class_info) = ctx.classes.get(&current) else {
+            return false;
+        };
+        if class_info.method_decls.iter().any(|declaration| {
+            declaration.has_body && php_symbol_key(&declaration.name) == method
+        }) {
+            return true;
+        }
+        let Some(parent) = class_info.parent.as_deref() else {
+            return false;
+        };
+        current = parent.trim_start_matches('\\').to_string();
+    }
 }
 
 /// Releases an owning temporary when a scalar coercion cannot alias its source storage.

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration tests for flow-sensitive type narrowing on `is_*` / `instanceof` guards.
+//! Integration tests for flow-sensitive type narrowing and branch-type merges.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -7,9 +7,10 @@
 //! Key details:
 //! - Fixtures exercise scalar narrowing (functions and methods), negated guards, the early-return
 //!   idiom, `instanceof` narrowing with method dispatch on a runtime-Mixed receiver, `if`/`elseif`
-//!   chains, and `: never`-function divergence that keeps the complement after an exhaustive chain.
-//!   The guarded variables are untyped parameters that are unions at runtime (heterogeneous calls),
-//!   so these tests depend on both the union parameter inference and the narrowing. Outputs match PHP.
+//!   chains, branch assignments, and `: never`-function divergence that keeps the complement after
+//!   an exhaustive chain. The guarded variables are untyped parameters that are unions at runtime
+//!   (heterogeneous calls), so these tests depend on union inference, merging, and narrowing.
+//!   Outputs match PHP.
 
 use super::*;
 
@@ -291,6 +292,81 @@ fn test_narrowing_restores_all_narrowed_variables() {
         "#,
     );
     assert_eq!(out, "8");
+}
+
+/// Verifies a conditional assignment contributes its type to the reachable merge state.
+#[test]
+fn test_branch_assignment_type_survives_reachable_merge() {
+    let out = compile_and_run(
+        r#"<?php
+        function selected(bool $enabled): mixed {
+            $value = null;
+            if ($enabled) {
+                $value = "set";
+            }
+            return $value === null ? "null" : $value;
+        }
+        echo selected(false), "|", selected(true);
+        "#,
+    );
+    assert_eq!(out, "null|set");
+}
+
+/// Verifies a nullable integer branch widens scalar storage before the merge load.
+#[test]
+fn test_nullable_int_branch_assignment_widens_merge_storage() {
+    let out = compile_and_run(
+        r#"<?php
+        function selected(bool $enabled): string {
+            $value = null;
+            if ($enabled) {
+                $value = 7;
+            }
+            return gettype($value) . ":" . ($value === null ? "null" : $value);
+        }
+        echo selected(false), "|", selected(true);
+        "#,
+    );
+    assert_eq!(out, "NULL:null|integer:7");
+}
+
+/// Verifies an integer-or-false branch merge retains PHP's distinct runtime values.
+#[test]
+fn test_int_false_branch_assignment_preserves_runtime_union() {
+    let out = compile_and_run(
+        r#"<?php
+        function selected(bool $enabled): string {
+            $value = false;
+            if ($enabled) {
+                $value = 0;
+            }
+            return gettype($value) . ":" . ($value === false ? "false" : $value);
+        }
+        echo selected(false), "|", selected(true);
+        "#,
+    );
+    assert_eq!(out, "boolean:false|integer:0");
+}
+
+/// Verifies recursive `if`/`elseif`/`else` joins retain all three reachable leaf types.
+#[test]
+fn test_three_leaf_branch_assignment_merges_all_reachable_types() {
+    let out = compile_and_run(
+        r#"<?php
+        function selected(int $mode, int|string|false $value): string {
+            if ($mode === 1) {
+                $value = 7;
+            } elseif ($mode === 2) {
+                $value = "two";
+            } else {
+                $value = false;
+            }
+            return gettype($value);
+        }
+        echo selected(1, false), "|", selected(2, false), "|", selected(3, 0);
+        "#,
+    );
+    assert_eq!(out, "integer|string|boolean");
 }
 
 /// Verifies a null guard whose body returns before unreachable trailing code still narrows the

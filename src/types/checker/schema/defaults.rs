@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - The initial schema pass cannot reliably resolve inheritance or interface relationships.
-//! - Direct scoped-constant method defaults and Object-to-Object pairs are revisited.
+//! - Global/scoped constant method defaults and Object-to-Object pairs are revisited.
 //! - Plain property scoped-constant defaults stay outside this pass until EIR lowering supports them.
 
 use crate::errors::CompileError;
@@ -285,7 +285,7 @@ fn validate_signature_deferred_defaults(
     checker.current_class = previous_class;
 }
 
-/// Resolves a direct scoped-constant default semantically, or rechecks a deferred object pair.
+/// Resolves a direct global/scoped-constant default semantically, or rechecks an object pair.
 fn validate_deferred_parameter_default(
     checker: &mut Checker,
     expected_ty: &PhpType,
@@ -293,7 +293,10 @@ fn validate_deferred_parameter_default(
     context: &str,
     errors: &mut Vec<CompileError>,
 ) {
-    if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
+    if matches!(
+        default.kind,
+        ExprKind::ConstRef(_) | ExprKind::ScopedConstantAccess { .. }
+    ) {
         if let Err(error) = checker.validate_resolved_declared_default_type(
             expected_ty,
             Some(default),

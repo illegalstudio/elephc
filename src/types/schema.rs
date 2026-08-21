@@ -309,8 +309,12 @@ pub struct ClassInfo {
     pub properties: Vec<(String, PhpType)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
+    /// Declaring class for each physical property slot in `properties` order.
+    pub property_declaring_class_slots: Vec<String>,
     pub defaults: Vec<Option<Expr>>,
     pub property_visibilities: HashMap<String, Visibility>,
+    /// Read visibility for each physical property slot in `properties` order.
+    pub property_visibility_slots: Vec<Visibility>,
     /// PHP 8.4 asymmetric write (`set`) visibility, only for properties whose write visibility
     /// differs from their read visibility (e.g. `public private(set)`). Properties absent here
     /// use their `property_visibilities` entry for writes too.
@@ -421,6 +425,33 @@ impl ClassInfo {
             .get(index)
             .copied()
             .unwrap_or_else(|| self.reference_properties.contains(property))
+    }
+
+    /// Returns the class that declared one physical property slot.
+    pub fn property_slot_declaring_class<'a>(
+        &'a self,
+        index: usize,
+        property: &str,
+        fallback_class: &'a str,
+    ) -> &'a str {
+        self.property_declaring_class_slots
+            .get(index)
+            .map(String::as_str)
+            .or_else(|| {
+                self.property_declaring_classes
+                    .get(property)
+                    .map(String::as_str)
+            })
+            .unwrap_or(fallback_class)
+    }
+
+    /// Returns the read visibility attached to one physical property slot.
+    pub fn property_slot_visibility(&self, index: usize, property: &str) -> Visibility {
+        self.property_visibility_slots
+            .get(index)
+            .cloned()
+            .or_else(|| self.property_visibilities.get(property).cloned())
+            .unwrap_or(Visibility::Public)
     }
 
 }

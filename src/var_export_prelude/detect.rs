@@ -132,6 +132,7 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::This
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)

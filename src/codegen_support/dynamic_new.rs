@@ -50,6 +50,7 @@ pub(crate) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static 
         "SplQueue",
         "SplStack",
         "TypeError",
+        "ArgumentCountError",
         "UnderflowException",
         "UnexpectedValueException",
         "ValueError",

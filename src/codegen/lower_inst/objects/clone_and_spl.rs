@@ -52,8 +52,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
     let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(source, result_reg)?;
     abi::emit_push_reg(ctx.emitter, result_reg);
-    emit_object_allocation(
+    emit_named_class_object_allocation(
         ctx,
+        &class_name,
         class_id,
         property_count,
         allow_dynamic_properties,
@@ -71,7 +72,13 @@ pub(in crate::codegen::lower_inst) fn lower_object_clone_shallow(
             ctx,
             source_reg,
             dest_reg,
-            dynamic_property_hash_offset(property_count),
+            dynamic_property_hash_offset(
+                property_count
+                    + crate::internal_extensions::hidden_slot_count_for(
+                        &ctx.module.class_infos,
+                        &class_name,
+                    ),
+            ),
         );
     }
     Ok(())

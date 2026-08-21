@@ -168,4 +168,42 @@ enum EnumMetaTarget {
             )]
         );
     }
+
+    /// Verifies nullable self returns satisfy an interface during in-flight class construction.
+    #[test]
+    fn test_nullable_self_return_is_covariant_for_interface_implementation() {
+        let program = parse_program(
+            r#"<?php
+interface FamilyNode {
+    public function child(): ?FamilyNode;
+}
+class ConcreteNode implements FamilyNode {
+    public function child(): ?ConcreteNode {
+        return null;
+    }
+}
+"#,
+        );
+
+        check(&program).expect("nullable covariant self return must type check");
+    }
+
+    /// Verifies locked internal functions resolve through namespaces and require the DOM bridge.
+    #[test]
+    fn test_internal_dom_function_uses_locked_signature_and_bridge_requirement() {
+        let program = parse_program(
+            r#"<?php
+namespace App;
+function import_node(object $node): \Dom\Attr|\Dom\Element {
+    return \Dom\import_simplexml($node);
+}
+"#,
+        );
+        let program = crate::name_resolver::resolve(program).expect("name resolution failed");
+        let result = check(&program).expect("DOM internal function must type check");
+
+        assert_eq!(result.required_libraries, vec!["elephc_dom"]);
+        assert!(result.classes.contains_key("Dom\\Element"));
+        assert!(result.enums.contains_key("Dom\\AdjacentPosition"));
+    }
 }

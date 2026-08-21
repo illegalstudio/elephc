@@ -52,6 +52,8 @@ const STRING_SELECTOR_BYTES: usize = 32;
 const MIXED_TAG_CALLABLE: i64 = 10;
 /// Runtime Mixed tag for a boxed indexed (list) array; payload-low holds the array pointer.
 const MIXED_TAG_INDEXED_ARRAY: i64 = 4;
+const DOM_XPATH_CALLABLE_ARRAY_RESOLVER_FRAME_SIZE: usize = 32;
+const DOM_XPATH_CALLABLE_ARRAY_POINTER_FRAME_OFFSET: usize = 16;
 
 /// Resolved user function candidate for a runtime string callable.
 struct RuntimeStringFunctionTarget {
@@ -80,6 +82,18 @@ enum CallableArraySource {
     RawArray(ValueId),
     /// The value's local slot holds a boxed `Mixed` indexed array; unbox to reach it.
     BoxedArray(ValueId),
+    /// A fixed-frame slot holds a raw indexed-array pointer supplied through a runtime ABI.
+    FrameSlot(usize),
+}
+
+/// Describes how an associative callable-array hash pointer is materialized.
+enum CallableAssocArraySource {
+    /// The value's local slot already holds the raw associative-array pointer.
+    RawAssoc(ValueId),
+    /// The value's local slot holds a boxed `Mixed` associative array.
+    BoxedAssoc(ValueId),
+    /// A fixed-frame slot holds a raw associative-array pointer supplied through a runtime ABI.
+    FrameSlot(usize),
 }
 
 /// Lowers `$callable(...)` calls when the callable is a runtime string function name.
@@ -864,7 +878,16 @@ pub(super) fn emit_runtime_string_descriptor_value(
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(callable, ptr_reg, len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_string_name_descriptor_value_cases_loop(ctx, &cases, dest_reg, op_name)
+}
 
+/// Selects one callable descriptor from a string name saved at the top of the stack.
+fn emit_string_name_descriptor_value_cases_loop(
+    ctx: &mut FunctionContext<'_>,
+    cases: &[callable_dispatch::RuntimeCallableCase],
+    dest_reg: &str,
+    op_name: &str,
+) -> Result<()> {
     let done_label = ctx.next_label(&format!("{}_runtime_string_descriptor_done", op_name));
     let miss_label = ctx.next_label(&format!("{}_runtime_string_descriptor_missing", op_name));
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
@@ -872,7 +895,7 @@ pub(super) fn emit_runtime_string_descriptor_value(
         len_offset: 8,
         call_reg: dest_reg,
     };
-    for case in &cases {
+    for case in cases {
         let next_case = ctx.next_label("runtime_string_descriptor_next");
         let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
@@ -947,6 +970,170 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     emit_undefined_runtime_string_call_fatal(ctx);
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Materializes a descriptor from any callable shape stored in one boxed Mixed value.
+///
+/// The selected descriptor is returned through the ordinary integer result
+/// register. `owned_descriptor_reg` is zero for persistent descriptors and
+/// contains the same descriptor pointer for receiver-bound runtime copies that
+/// the caller must release after its borrowed use.
+pub(super) fn emit_boxed_callable_descriptor_value(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    owned_descriptor_reg: &str,
+    op_name: &str,
+) -> Result<()> {
+    let candidate_names = ctx.runtime_callable_candidates(callable);
+    let string_cases =
+        runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), false)?;
+    let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
+    let invokable_targets = instance_targets
+        .iter()
+        .filter(|target| target.method_key == "__invoke")
+        .cloned()
+        .collect::<Vec<_>>();
+    let has_array_targets = !instance_targets.is_empty()
+        || !runtime_static_method_descriptor_cases(ctx, None).is_empty();
+    let string_label = ctx.next_label("boxed_callable_string");
+    let descriptor_label = ctx.next_label("boxed_callable_descriptor");
+    let array_label =
+        has_array_targets.then(|| ctx.next_label("boxed_callable_array"));
+    let assoc_label =
+        has_array_targets.then(|| ctx.next_label("boxed_callable_assoc"));
+    let object_label =
+        (!invokable_targets.is_empty()).then(|| ctx.next_label("boxed_callable_object"));
+    let fatal_label = ctx.next_label("boxed_callable_invalid");
+    let done_label = ctx.next_label("boxed_callable_done");
+
+    ctx.load_value_to_result(callable)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #1");                              // is the boxed callable a function-name string?
+            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // select a descriptor from runtime string candidates
+            ctx.emitter.instruction("cmp x0, #10");                             // is the boxed callable already a descriptor?
+            ctx.emitter
+                .instruction(&format!("b.eq {}", descriptor_label));            // reuse the borrowed callable descriptor payload
+            if let Some(array_label) = &array_label {
+                ctx.emitter.instruction("cmp x0, #4");                          // is the boxed callable a two-element indexed array?
+                ctx.emitter.instruction(&format!("b.eq {}", array_label));      // select its instance or static method descriptor
+            }
+            if let Some(assoc_label) = &assoc_label {
+                ctx.emitter.instruction("cmp x0, #5");                          // is the boxed callable an associative array with keys zero and one?
+                ctx.emitter.instruction(&format!("b.eq {}", assoc_label));      // select its instance or static method descriptor
+            }
+            if let Some(object_label) = &object_label {
+                ctx.emitter.instruction("cmp x0, #6");                          // is the boxed callable an invokable object?
+                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // capture its public __invoke receiver
+            }
+            abi::emit_jump(ctx.emitter, &fatal_label);
+            ctx.emitter.label(&descriptor_label);
+            abi::emit_load_int_immediate(ctx.emitter, owned_descriptor_reg, 0);
+            ctx.emitter.instruction("mov x0, x1");                              // return the unboxed borrowed descriptor
+            abi::emit_jump(ctx.emitter, &done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 1");                              // is the boxed callable a function-name string?
+            ctx.emitter.instruction(&format!("je {}", string_label));           // select a descriptor from runtime string candidates
+            ctx.emitter.instruction("cmp rax, 10");                             // is the boxed callable already a descriptor?
+            ctx.emitter
+                .instruction(&format!("je {}", descriptor_label));              // reuse the borrowed callable descriptor payload
+            if let Some(array_label) = &array_label {
+                ctx.emitter.instruction("cmp rax, 4");                          // is the boxed callable a two-element indexed array?
+                ctx.emitter.instruction(&format!("je {}", array_label));        // select its instance or static method descriptor
+            }
+            if let Some(assoc_label) = &assoc_label {
+                ctx.emitter.instruction("cmp rax, 5");                          // is the boxed callable an associative array with keys zero and one?
+                ctx.emitter.instruction(&format!("je {}", assoc_label));        // select its instance or static method descriptor
+            }
+            if let Some(object_label) = &object_label {
+                ctx.emitter.instruction("cmp rax, 6");                          // is the boxed callable an invokable object?
+                ctx.emitter.instruction(&format!("je {}", object_label));       // capture its public __invoke receiver
+            }
+            abi::emit_jump(ctx.emitter, &fatal_label);
+            ctx.emitter.label(&descriptor_label);
+            abi::emit_load_int_immediate(ctx.emitter, owned_descriptor_reg, 0);
+            ctx.emitter.instruction("mov rax, rdi");                            // return the unboxed borrowed descriptor
+            abi::emit_jump(ctx.emitter, &done_label);
+        }
+    }
+
+    ctx.emitter.label(&string_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+        Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rdi", "rdx"),
+    }
+    if string_cases.is_empty() {
+        emit_undefined_runtime_string_call_fatal(ctx);
+    } else {
+        emit_string_name_descriptor_value_cases_loop(
+            ctx,
+            &string_cases,
+            abi::int_result_reg(ctx.emitter),
+            op_name,
+        )?;
+    }
+    abi::emit_load_int_immediate(ctx.emitter, owned_descriptor_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    if let Some(array_label) = &array_label {
+        ctx.emitter.label(array_label);
+        emit_mixed_callable_array_descriptor_value_from_source(
+            ctx,
+            &CallableArraySource::BoxedArray(callable),
+            op_name,
+            Some(owned_descriptor_reg),
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    if let Some(assoc_label) = &assoc_label {
+        ctx.emitter.label(assoc_label);
+        emit_assoc_callable_array_descriptor_value_from_source(
+            ctx,
+            &CallableAssocArraySource::BoxedAssoc(callable),
+            op_name,
+            Some(owned_descriptor_reg),
+        )?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    if let Some(object_label) = &object_label {
+        ctx.emitter.label(object_label);
+        emit_push_mixed_unbox_payload(ctx);
+        let object_done_label = ctx.next_label("boxed_callable_object_done");
+        for target in &invokable_targets {
+            let next_label = ctx.next_label("boxed_callable_object_next");
+            emit_branch_if_saved_receiver_class_id_mismatch(
+                ctx,
+                target.class_id,
+                MIXED_VALUE_PAYLOAD_OFFSET,
+                &next_label,
+            );
+            emit_runtime_array_instance_descriptor_value_at_offset(
+                ctx,
+                target,
+                MIXED_VALUE_PAYLOAD_OFFSET,
+            )?;
+            ctx.emitter.instruction(&format!(
+                "mov {}, {}",
+                owned_descriptor_reg,
+                abi::int_result_reg(ctx.emitter)
+            )); // mark the receiver-bound descriptor for post-call release
+            abi::emit_jump(ctx.emitter, &object_done_label);
+            ctx.emitter.label(&next_label);
+        }
+        emit_mixed_callable_not_callable_fatal(ctx, op_name);
+        ctx.emitter.label(&object_done_label);
+        abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&fatal_label);
+    emit_mixed_callable_not_callable_fatal(ctx, op_name);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 
@@ -1272,6 +1459,209 @@ pub(super) fn emit_runtime_callable_array_descriptor_value(
     }
 }
 
+/// Materializes a callable-array descriptor and reports whether it is caller-owned.
+pub(super) fn emit_runtime_callable_array_descriptor_value_with_ownership(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    owned_descriptor_reg: &str,
+    op_name: &str,
+) -> Result<()> {
+    match ctx.value_php_type(callable)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            emit_mixed_callable_array_descriptor_value_from_source(
+                ctx,
+                &CallableArraySource::RawArray(callable),
+                op_name,
+                Some(owned_descriptor_reg),
+            )
+        }
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
+            emit_string_callable_array_descriptor_value(ctx, callable, op_name)?;
+            abi::emit_load_int_immediate(ctx.emitter, owned_descriptor_reg, 0);
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for callable-array PHP type {:?}",
+            op_name, other
+        ))),
+    }
+}
+
+/// Materializes a numerically keyed associative callable-array descriptor.
+pub(super) fn emit_runtime_assoc_callable_array_descriptor_value_with_ownership(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    owned_descriptor_reg: &str,
+    op_name: &str,
+) -> Result<()> {
+    match ctx.value_php_type(callable)?.codegen_repr() {
+        PhpType::AssocArray { .. } => emit_assoc_callable_array_descriptor_value_from_source(
+            ctx,
+            &CallableAssocArraySource::RawAssoc(callable),
+            op_name,
+            Some(owned_descriptor_reg),
+        ),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for associative callable-array PHP type {:?}",
+            op_name, other
+        ))),
+    }
+}
+
+/// Emits the runtime resolver used while preparing nested XPath PHP callback arrays.
+pub(super) fn emit_dom_xpath_callable_array_resolver(
+    ctx: &mut FunctionContext<'_>,
+) -> Result<()> {
+    ctx.emitter.blank();
+    ctx.emitter
+        .comment("--- runtime: DOM XPath callable-array resolver ---");
+    let resolver_symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__rt_dom_xpath_resolve_callable_array");
+    ctx.emitter.label_global(&resolver_symbol);
+    abi::emit_frame_prologue(
+        ctx.emitter,
+        DOM_XPATH_CALLABLE_ARRAY_RESOLVER_FRAME_SIZE,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x0", 0);
+            abi::emit_store_to_sp(ctx.emitter, "x1", 8);
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rdi", 0);
+            abi::emit_store_to_sp(ctx.emitter, "rsi", 8);
+        }
+    }
+
+    let indexed = ctx.next_label("dom_xpath_callable_array_indexed");
+    let associative = ctx.next_label("dom_xpath_callable_array_associative");
+    let invalid = ctx.next_label("dom_xpath_callable_array_invalid");
+    let done = ctx.next_label("dom_xpath_callable_array_done");
+    let kind = abi::secondary_scratch_reg(ctx.emitter).to_string();
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &kind, 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #4", kind));              // is the borrowed callback container an indexed array?
+            ctx.emitter
+                .instruction(&format!("b.eq {}", indexed));                     // resolve an indexed callable pair
+            ctx.emitter.instruction(&format!("cmp {}, #5", kind));              // is the borrowed callback container an associative hash?
+            ctx.emitter
+                .instruction(&format!("b.eq {}", associative));                 // resolve numeric keys zero and one as a callable pair
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, 4", kind));               // is the borrowed callback container an indexed array?
+            ctx.emitter
+                .instruction(&format!("je {}", indexed));                       // resolve an indexed callable pair
+            ctx.emitter.instruction(&format!("cmp {}, 5", kind));               // is the borrowed callback container an associative hash?
+            ctx.emitter
+                .instruction(&format!("je {}", associative));                   // resolve numeric keys zero and one as a callable pair
+        }
+    }
+    abi::emit_jump(ctx.emitter, &invalid);
+
+    ctx.emitter.label(&indexed);
+    let indexed_pointer = abi::symbol_scratch_reg(ctx.emitter).to_string();
+    abi::emit_frame_slot_address(
+        ctx.emitter,
+        &indexed_pointer,
+        DOM_XPATH_CALLABLE_ARRAY_POINTER_FRAME_OFFSET,
+    );
+    abi::emit_load_from_address(
+        ctx.emitter,
+        &indexed_pointer,
+        &indexed_pointer,
+        0,
+    );
+    emit_branch_unless_callable_array_pair_in_reg(ctx, &indexed_pointer, &invalid);
+    emit_mixed_callable_array_selector_slots(
+        ctx,
+        &CallableArraySource::FrameSlot(DOM_XPATH_CALLABLE_ARRAY_POINTER_FRAME_OFFSET),
+    )?;
+    let indexed_miss = ctx.next_label("dom_xpath_callable_array_indexed_miss");
+    let indexed_done = ctx.next_label("dom_xpath_callable_array_indexed_done");
+    emit_descriptor_from_saved_callable_array_slots(ctx, &indexed_miss, &indexed_done)?;
+    ctx.emitter.label(&indexed_miss);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&indexed_done);
+    abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&associative);
+    let associative_pointer = abi::symbol_scratch_reg(ctx.emitter).to_string();
+    abi::emit_frame_slot_address(
+        ctx.emitter,
+        &associative_pointer,
+        DOM_XPATH_CALLABLE_ARRAY_POINTER_FRAME_OFFSET,
+    );
+    abi::emit_load_from_address(
+        ctx.emitter,
+        &associative_pointer,
+        &associative_pointer,
+        0,
+    );
+    emit_branch_unless_callable_array_pair_in_reg(ctx, &associative_pointer, &invalid);
+    emit_assoc_callable_array_selector_slots(
+        ctx,
+        &CallableAssocArraySource::FrameSlot(
+            DOM_XPATH_CALLABLE_ARRAY_POINTER_FRAME_OFFSET,
+        ),
+    )?;
+    let associative_miss =
+        ctx.next_label("dom_xpath_callable_array_associative_miss");
+    let associative_done =
+        ctx.next_label("dom_xpath_callable_array_associative_done");
+    emit_descriptor_from_saved_callable_array_slots(
+        ctx,
+        &associative_miss,
+        &associative_done,
+    )?;
+    ctx.emitter.label(&associative_miss);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&associative_done);
+    abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&invalid);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done);
+    abi::emit_frame_restore(
+        ctx.emitter,
+        DOM_XPATH_CALLABLE_ARRAY_RESOLVER_FRAME_SIZE,
+    );
+    abi::emit_return(ctx.emitter);
+    Ok(())
+}
+
+/// Selects one instance or static descriptor from already saved callable-array slots.
+fn emit_descriptor_from_saved_callable_array_slots(
+    ctx: &mut FunctionContext<'_>,
+    miss_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    for target in runtime_array_instance_method_targets_for_descriptor(ctx) {
+        let next_label = ctx.next_label("dom_xpath_callable_array_instance_next");
+        emit_branch_if_runtime_array_instance_mismatch(ctx, &target, &next_label);
+        emit_runtime_array_instance_descriptor_value(ctx, &target)?;
+        abi::emit_jump(ctx.emitter, done_label);
+        ctx.emitter.label(&next_label);
+    }
+    for case in runtime_static_method_descriptor_cases(ctx, None) {
+        let next_label = ctx.next_label("dom_xpath_callable_array_static_next");
+        emit_branch_if_mixed_static_case_mismatch(ctx, &case, &next_label);
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &case.case.descriptor_label,
+        );
+        abi::emit_jump(ctx.emitter, done_label);
+        ctx.emitter.label(&next_label);
+    }
+    abi::emit_jump(ctx.emitter, miss_label);
+    Ok(())
+}
+
 /// Materializes an instance-method descriptor selected from a mixed callable-array value.
 pub(super) fn emit_runtime_mixed_instance_callable_array_descriptor_value(
     ctx: &mut FunctionContext<'_>,
@@ -1322,6 +1712,25 @@ fn emit_mixed_callable_array_descriptor_value(
     callable: ValueId,
     op_name: &str,
 ) -> Result<()> {
+    emit_mixed_callable_array_descriptor_value_from_source(
+        ctx,
+        &CallableArraySource::RawArray(callable),
+        op_name,
+        None,
+    )
+}
+
+/// Selects a descriptor from one raw or boxed mixed callable-array source.
+///
+/// When `owned_descriptor_reg` is supplied, matched receiver-bound descriptors
+/// are copied there for caller cleanup while persistent static descriptors write
+/// zero. The ordinary result register always contains the selected descriptor.
+fn emit_mixed_callable_array_descriptor_value_from_source(
+    ctx: &mut FunctionContext<'_>,
+    source: &CallableArraySource,
+    op_name: &str,
+    owned_descriptor_reg: Option<&str>,
+) -> Result<()> {
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     if instance_targets.is_empty() && static_cases.is_empty() {
@@ -1331,19 +1740,86 @@ fn emit_mixed_callable_array_descriptor_value(
         )));
     }
 
-    emit_mixed_callable_array_selector_slots(ctx, &CallableArraySource::RawArray(callable))?;
+    emit_mixed_callable_array_selector_slots(ctx, source)?;
     let done_label = ctx.next_label("callable_array_descriptor_done");
     let miss_label = ctx.next_label(&format!("{}_callable_array_missing", op_name));
     for target in &instance_targets {
         let next_label = ctx.next_label("callable_array_instance_next");
         emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
         emit_runtime_array_instance_descriptor_value(ctx, target)?;
+        if let Some(owned_descriptor_reg) = owned_descriptor_reg {
+            ctx.emitter.instruction(&format!(
+                "mov {}, {}",
+                owned_descriptor_reg,
+                abi::int_result_reg(ctx.emitter)
+            )); // mark the receiver-bound descriptor for post-call release
+        }
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&next_label);
     }
     for case in &static_cases {
         let next_label = ctx.next_label("callable_array_static_next");
         emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
+        if let Some(owned_descriptor_reg) = owned_descriptor_reg {
+            abi::emit_load_int_immediate(ctx.emitter, owned_descriptor_reg, 0);
+        }
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &case.case.descriptor_label,
+        );
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    ctx.emitter.label(&miss_label);
+    emit_runtime_callable_array_no_match_abort(ctx);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, MIXED_SELECTOR_BYTES);
+    Ok(())
+}
+
+/// Selects a descriptor from a raw or boxed associative callable-array source.
+fn emit_assoc_callable_array_descriptor_value_from_source(
+    ctx: &mut FunctionContext<'_>,
+    source: &CallableAssocArraySource,
+    op_name: &str,
+    owned_descriptor_reg: Option<&str>,
+) -> Result<()> {
+    let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
+    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    if instance_targets.is_empty() && static_cases.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for associative callable array with no descriptor targets",
+            op_name
+        )));
+    }
+
+    emit_assoc_callable_array_selector_slots(ctx, source)?;
+    let done_label = ctx.next_label("assoc_callable_array_descriptor_done");
+    let miss_label = ctx.next_label(&format!("{}_assoc_callable_array_missing", op_name));
+    for target in &instance_targets {
+        let next_label = ctx.next_label("assoc_callable_array_instance_next");
+        emit_branch_if_runtime_array_instance_mismatch(ctx, target, &next_label);
+        emit_runtime_array_instance_descriptor_value(ctx, target)?;
+        if let Some(owned_descriptor_reg) = owned_descriptor_reg {
+            ctx.emitter.instruction(&format!(
+                "mov {}, {}",
+                owned_descriptor_reg,
+                abi::int_result_reg(ctx.emitter)
+            )); // mark the receiver-bound descriptor for post-call release
+        }
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    for case in &static_cases {
+        let next_label = ctx.next_label("assoc_callable_array_static_next");
+        emit_branch_if_mixed_static_case_mismatch(ctx, case, &next_label);
+        if let Some(owned_descriptor_reg) = owned_descriptor_reg {
+            abi::emit_load_int_immediate(ctx.emitter, owned_descriptor_reg, 0);
+        }
         abi::emit_symbol_address(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
@@ -1609,8 +2085,14 @@ fn emit_mixed_callable_array_selector_slots(
         CallableArraySource::BoxedArray(_) => {
             ctx.emitter.comment("runtime callable-array boxed-mixed selector");
         }
+        CallableArraySource::FrameSlot(_) => {
+            ctx.emitter.comment("runtime callable-array bridge selector");
+        }
     }
-    if matches!(source, CallableArraySource::BoxedArray(_)) {
+    if matches!(
+        source,
+        CallableArraySource::BoxedArray(_) | CallableArraySource::FrameSlot(_)
+    ) {
         return emit_boxed_callable_array_selector_slots(ctx, source);
     }
     emit_unbox_mixed_callable_array_slot(ctx, source, 0)?;
@@ -1677,6 +2159,105 @@ fn emit_boxed_callable_array_selector_slots(
     emit_push_boxed_string_callable_array_slot(ctx, source, 0)?;
     emit_push_boxed_string_callable_array_slot(ctx, source, 1)?;
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Saves selectors from associative numeric keys zero and one.
+fn emit_assoc_callable_array_selector_slots(
+    ctx: &mut FunctionContext<'_>,
+    source: &CallableAssocArraySource,
+) -> Result<()> {
+    let hash_reg = abi::symbol_scratch_reg(ctx.emitter);
+    emit_load_callable_assoc_base(ctx, source, hash_reg)?;
+    emit_require_callable_array_pair_in_reg(ctx, hash_reg);
+    ctx.emitter.comment("runtime associative callable-array selector");
+    emit_push_assoc_callable_array_slot(ctx, source, 0)?;
+    emit_push_assoc_callable_array_slot(ctx, source, 1)?;
+    Ok(())
+}
+
+/// Loads one associative callable-array value and normalizes it as a Mixed selector.
+fn emit_push_assoc_callable_array_slot(
+    ctx: &mut FunctionContext<'_>,
+    source: &CallableAssocArraySource,
+    slot: usize,
+) -> Result<()> {
+    let hash_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    emit_load_callable_assoc_base(ctx, source, hash_reg)?;
+    let found_label = ctx.next_label("assoc_callable_array_slot_found");
+    let mixed_label = ctx.next_label("assoc_callable_array_slot_mixed");
+    let done_label = ctx.next_label("assoc_callable_array_slot_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x1", slot as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");                 // fetch this numeric callable-array selector
+            ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));      // continue only when the numeric key exists
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", slot as i64);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_get");                 // fetch this numeric callable-array selector
+            ctx.emitter.instruction("test rax, rax");                           // did the numeric callable-array key exist?
+            ctx.emitter.instruction(&format!("jnz {}", found_label));           // normalize only an existing selector
+        }
+    }
+    emit_runtime_callable_array_no_match_abort(ctx);
+    ctx.emitter.label(&found_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x3, #7");                              // is the hash value a boxed Mixed cell?
+            ctx.emitter.instruction(&format!("b.eq {}", mixed_label));          // unbox heterogeneous callable-array values
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_push_reg(ctx.emitter, "x3");
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&mixed_label);
+            ctx.emitter.instruction("mov x0, x1");                              // pass the boxed hash value to Mixed unboxing
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rcx, 7");                              // is the hash value a boxed Mixed cell?
+            ctx.emitter.instruction(&format!("je {}", mixed_label));            // unbox heterogeneous callable-array values
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_push_reg(ctx.emitter, "rcx");
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&mixed_label);
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the boxed hash value to Mixed unboxing
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_push_mixed_unbox_payload(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Materializes an associative callable-array hash pointer from raw or boxed storage.
+fn emit_load_callable_assoc_base(
+    ctx: &mut FunctionContext<'_>,
+    source: &CallableAssocArraySource,
+    hash_reg: &str,
+) -> Result<()> {
+    match source {
+        CallableAssocArraySource::RawAssoc(callable) => {
+            ctx.load_value_to_reg(*callable, hash_reg)?;
+        }
+        CallableAssocArraySource::BoxedAssoc(callable) => {
+            let unbox_arg = abi::int_result_reg(ctx.emitter);
+            ctx.load_value_to_reg(*callable, unbox_arg)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("mov {}, x1", hash_reg));  // borrow the unboxed associative-array hash pointer
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("mov {}, rdi", hash_reg)); // borrow the unboxed associative-array hash pointer
+                }
+            }
+        }
+        CallableAssocArraySource::FrameSlot(offset) => {
+            abi::emit_frame_slot_address(ctx.emitter, hash_reg, *offset);
+            abi::emit_load_from_address(ctx.emitter, hash_reg, hash_reg, 0);
+        }
+    }
     Ok(())
 }
 
@@ -1802,6 +2383,11 @@ fn emit_load_callable_array_base(
             }
             Ok(())
         }
+        CallableArraySource::FrameSlot(offset) => {
+            abi::emit_frame_slot_address(ctx.emitter, array_reg, *offset);
+            abi::emit_load_from_address(ctx.emitter, array_reg, array_reg, 0);
+            Ok(())
+        }
     }
 }
 
@@ -1833,6 +2419,24 @@ fn emit_require_string_callable_array_pair(
 fn emit_require_callable_array_pair_in_reg(ctx: &mut FunctionContext<'_>, array_reg: &str) {
     let valid_label = ctx.next_label("callable_array_pair_valid");
     let invalid_label = ctx.next_label("callable_array_pair_invalid");
+    emit_branch_unless_callable_array_pair_in_reg(
+        ctx,
+        array_reg,
+        &invalid_label,
+    );
+    abi::emit_jump(ctx.emitter, &valid_label);
+    ctx.emitter.label(&invalid_label);
+    emit_runtime_callable_array_no_match_abort(ctx);
+    ctx.emitter.label(&valid_label);
+}
+
+/// Branches to `invalid_label` unless a loaded container has exactly two entries.
+fn emit_branch_unless_callable_array_pair_in_reg(
+    ctx: &mut FunctionContext<'_>,
+    array_reg: &str,
+    invalid_label: &str,
+) {
+    let valid_label = ctx.next_label("callable_array_pair_shape_valid");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(
@@ -1854,8 +2458,7 @@ fn emit_require_callable_array_pair_in_reg(ctx: &mut FunctionContext<'_>, array_
             ctx.emitter.instruction(&format!("je {}", valid_label));            // read selectors only for a valid pair
         }
     }
-    ctx.emitter.label(&invalid_label);
-    emit_runtime_callable_array_no_match_abort(ctx);
+    abi::emit_jump(ctx.emitter, invalid_label);
     ctx.emitter.label(&valid_label);
 }
 
@@ -2143,6 +2746,19 @@ fn emit_runtime_array_instance_descriptor_value(
     ctx: &mut FunctionContext<'_>,
     target: &RuntimeArrayInstanceMethodTarget,
 ) -> Result<()> {
+    emit_runtime_array_instance_descriptor_value_at_offset(
+        ctx,
+        target,
+        MIXED_RECEIVER_PAYLOAD_OFFSET,
+    )
+}
+
+/// Builds a receiver-captured descriptor from a caller-selected stack payload offset.
+fn emit_runtime_array_instance_descriptor_value_at_offset(
+    ctx: &mut FunctionContext<'_>,
+    target: &RuntimeArrayInstanceMethodTarget,
+    receiver_payload_offset: usize,
+) -> Result<()> {
     let receiver_ty = PhpType::Object(target.class_name.clone());
     let template = runtime_instance_method_descriptor_template(
         ctx,
@@ -2156,7 +2772,7 @@ fn emit_runtime_array_instance_descriptor_value(
         ctx,
         &template.descriptor_label,
         &receiver_ty,
-        MIXED_RECEIVER_PAYLOAD_OFFSET,
+        receiver_payload_offset,
     );
     Ok(())
 }

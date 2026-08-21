@@ -199,6 +199,44 @@ fn test_parse_nested_array_append_lowers_to_temp_push_writeback() {
     }
 }
 
+/// Verifies that an empty dimension in a chained property assignment remains an append marker.
+#[test]
+fn test_parse_chained_property_append_assignment() {
+    let stmts = parse_source("<?php $xml->posts[]->name = 'Foo';");
+    match &stmts[0].kind {
+        StmtKind::PropertyAssign { object, property, .. } => {
+            assert_eq!(property, "name");
+            match &object.kind {
+                ExprKind::ArrayAccess { array, index } => {
+                    assert!(matches!(index.kind, ExprKind::ArrayAppend));
+                    assert!(matches!(array.kind, ExprKind::PropertyAccess { .. }));
+                }
+                other => panic!("Expected appended property object, got {:?}", other),
+            }
+        }
+        other => panic!("Expected chained PropertyAssign, got {:?}", other),
+    }
+}
+
+/// Verifies a literal null offset stays distinguishable from empty append syntax.
+#[test]
+fn test_parse_chained_property_null_dimension_assignment() {
+    let stmts = parse_source("<?php $xml->posts[null]->name = 'Foo';");
+    match &stmts[0].kind {
+        StmtKind::PropertyAssign { object, property, .. } => {
+            assert_eq!(property, "name");
+            match &object.kind {
+                ExprKind::ArrayAccess { array, index } => {
+                    assert!(matches!(index.kind, ExprKind::Null));
+                    assert!(matches!(array.kind, ExprKind::PropertyAccess { .. }));
+                }
+                other => panic!("Expected null-indexed property object, got {:?}", other),
+            }
+        }
+        other => panic!("Expected PropertyAssign, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php ?int $value = null;` parses to a `TypedAssign` with a nullable `?int`
 /// type expression and a null initializer.
 #[test]

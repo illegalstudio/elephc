@@ -9,6 +9,11 @@
 
 use super::*;
 
+use crate::ir_lower::expr::{
+    dom_named_node_map_class, lower_dom_named_node_map_dimension_error,
+    property_access_expr_type_for_ir, simplexml_object_expr_class,
+};
+
 /// Lowers `$object->prop[] = value`.
 pub(super) fn lower_property_array_push(
     ctx: &mut LoweringContext<'_, '_>,
@@ -17,6 +22,40 @@ pub(super) fn lower_property_array_push(
     value: &Expr,
     span: Span,
 ) {
+    let property_type_is_simplexml =
+        property_access_expr_type_for_ir(ctx, object, property).is_some_and(|property_type| {
+            crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+                ctx,
+                &property_type,
+                "write_dimension",
+            )
+            .is_some()
+        });
+    if property_type_is_simplexml || simplexml_object_expr_class(ctx, object).is_some() {
+        let property_expr = Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(object.clone()),
+                property: property.to_string(),
+            },
+            span,
+        );
+        let receiver = super::nested_array_writes::lower_nested_assign_receiver(
+            ctx,
+            &property_expr,
+            span,
+            true,
+        );
+        super::array_write_core::lower_simplexml_dimension_write(ctx, receiver, None, value, span);
+        return;
+    }
+    if let Some(class_name) = property_access_expr_type_for_ir(ctx, object, property)
+        .and_then(|ty| dom_named_node_map_class(&ty))
+    {
+        let _object = lower_expr(ctx, object);
+        let _value = lower_expr(ctx, value);
+        lower_dom_named_node_map_dimension_error(ctx, &class_name, span);
+        return;
+    }
     let object = lower_expr(ctx, object);
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
@@ -77,6 +116,47 @@ pub(super) fn lower_property_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    let property_type_is_simplexml =
+        property_access_expr_type_for_ir(ctx, object, property).is_some_and(|property_type| {
+            crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+                ctx,
+                &property_type,
+                "write_dimension",
+            )
+            .is_some()
+        });
+    if property_type_is_simplexml || simplexml_object_expr_class(ctx, object).is_some() {
+        let property_expr = Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(object.clone()),
+                property: property.to_string(),
+            },
+            span,
+        );
+        let receiver = super::nested_array_writes::lower_nested_assign_receiver(
+            ctx,
+            &property_expr,
+            span,
+            true,
+        );
+        super::array_write_core::lower_simplexml_dimension_write(
+            ctx,
+            receiver,
+            Some(index),
+            value,
+            span,
+        );
+        return;
+    }
+    if let Some(class_name) = property_access_expr_type_for_ir(ctx, object, property)
+        .and_then(|ty| dom_named_node_map_class(&ty))
+    {
+        let _object = lower_expr(ctx, object);
+        let _index = lower_expr(ctx, index);
+        let _value = lower_expr(ctx, value);
+        lower_dom_named_node_map_dimension_error(ctx, &class_name, span);
+        return;
+    }
     let object = lower_expr(ctx, object);
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
@@ -283,4 +363,3 @@ pub(super) fn indexed_property_array_element_type(property_ty: &PhpType) -> Opti
         _ => None,
     }
 }
-

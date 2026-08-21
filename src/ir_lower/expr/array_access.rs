@@ -178,15 +178,504 @@ pub(super) fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    if let Some((class_name, method, coerce_index, may_be_false)) =
+        dom_collection_dimension_method(ctx, array, index)
+    {
+        if may_be_false {
+            let receiver = if warn_on_missing {
+                lower_expr(ctx, array)
+            } else {
+                lower_subscript_receiver_silently(ctx, array)
+            };
+            return lower_dom_collection_dimension_with_false(
+                ctx,
+                receiver,
+                &class_name,
+                method,
+                index,
+                expr,
+                warn_on_missing,
+                coerce_index,
+            );
+        }
+        let synthetic = Expr::new(
+            ExprKind::MethodCall {
+                object: Box::new(array.clone()),
+                method: method.to_string(),
+                args: vec![dom_collection_dimension_argument(index, coerce_index)],
+            },
+            expr.span,
+        );
+        return lower_expr(ctx, &synthetic);
+    }
     let array_value = if warn_on_missing {
         lower_expr(ctx, array)
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
+    let array_type = ctx.builder.value_php_type(array_value.value);
+    if crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &array_type,
+        "read_dimension",
+    )
+    .is_some()
+    {
+        if value_is_nullable(ctx, array_value.value) {
+            return lower_nullable_simplexml_dimension_read(ctx, array_value, index, expr, 0);
+        }
+        return lower_simplexml_dimension_read_from_value(ctx, array_value, index, expr, 0);
+    }
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_array_access(ctx, array_value, index, expr, warn_on_missing);
     }
     lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Selects php-src's DOM collection lookup method for one dimension read.
+fn dom_collection_dimension_method(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+) -> Option<(String, &'static str, bool, bool)> {
+    let receiver_type = match &array.kind {
+        ExprKind::Variable(name) => ctx
+            .local_types
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            nullsafe_property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
+        _ => infer_expr_type_syntactic(array),
+    };
+    let (class_name, may_be_false) = dom_collection_class_and_failure(&receiver_type)?;
+    let numeric = index_expr_key_type(ctx, index) == PhpType::Int;
+    let method = match class_name.trim_start_matches('\\') {
+        "DOMNodeList" | "Dom\\NodeList" => "item",
+        "Dom\\HTMLCollection" if numeric => "item",
+        "Dom\\HTMLCollection" => "namedItem",
+        "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap" if numeric => "item",
+        "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap" => "getNamedItem",
+        _ => return None,
+    };
+    Some((
+        class_name,
+        method,
+        method == "item" && index_expr_key_type(ctx, index) != PhpType::Int,
+        may_be_false,
+    ))
+}
+
+/// Returns one DOM collection class and whether its result may be the legacy `false` sentinel.
+fn dom_collection_class_and_failure(ty: &PhpType) -> Option<(String, bool)> {
+    const DOM_COLLECTIONS: &[&str] = &[
+        "DOMNodeList",
+        "Dom\\NodeList",
+        "Dom\\HTMLCollection",
+        "DOMNamedNodeMap",
+        "Dom\\NamedNodeMap",
+        "Dom\\DtdNamedNodeMap",
+    ];
+
+    match ty {
+        PhpType::Object(class_name)
+            if DOM_COLLECTIONS.contains(&class_name.trim_start_matches('\\')) =>
+        {
+            Some((class_name.clone(), false))
+        }
+        PhpType::Union(members) => {
+            let mut class_name = None;
+            let mut may_be_false = false;
+            for member in members {
+                match member {
+                    PhpType::Object(name)
+                        if DOM_COLLECTIONS.contains(&name.trim_start_matches('\\')) =>
+                    {
+                        if class_name
+                            .as_deref()
+                            .is_some_and(|existing| existing != name.as_str())
+                        {
+                            return None;
+                        }
+                        class_name = Some(name.clone());
+                    }
+                    PhpType::False => may_be_false = true,
+                    _ => return None,
+                }
+            }
+            class_name.map(|name| (name, may_be_false))
+        }
+        _ => None,
+    }
+}
+
+/// Lowers a legacy DOM collection dimension while preserving its `false` fallback semantics.
+fn lower_dom_collection_dimension_with_false(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    class_name: &str,
+    method: &str,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+    coerce_index: bool,
+) -> LoweredValue {
+    let result_type = dom_collection_method_result_type(ctx, class_name, method)
+        .unwrap_or_else(|| fallback_expr_type(expr));
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let false_value = emit_bool_literal(ctx, false, Some(expr.span));
+    let is_false = ctx.emit_value(
+        Op::StrictEq,
+        vec![receiver.value, false_value.value],
+        None,
+        PhpType::Bool,
+        Op::StrictEq.default_effects(),
+        Some(expr.span),
+    );
+    let false_block = ctx
+        .builder
+        .create_named_block("dom.collection.dimension.false", Vec::new());
+    let object_block = ctx
+        .builder
+        .create_named_block("dom.collection.dimension.object", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("dom.collection.dimension.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_false.value,
+        then_target: false_block,
+        then_args: Vec::new(),
+        else_target: object_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(false_block);
+    let fallback = lower_array_access_from_value(ctx, receiver, index, expr, warn_on_missing);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), fallback, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(object_block);
+    let item = lower_dom_collection_method_from_value(
+        ctx,
+        receiver,
+        class_name,
+        method,
+        index,
+        expr,
+        coerce_index,
+        result_type.clone(),
+    );
+    store_value_into_temp(ctx, &temp_name, result_type, item, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Returns the checked result type of one DOM collection lookup method.
+fn dom_collection_method_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    method: &str,
+) -> Option<PhpType> {
+    class_method_signature(ctx, class_name, &php_symbol_key(method))
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))
+}
+
+/// Lowers a typed DOM collection lookup from an already-evaluated object receiver.
+fn lower_dom_collection_method_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    class_name: &str,
+    method: &str,
+    index: &Expr,
+    expr: &Expr,
+    coerce_index: bool,
+    result_type: PhpType,
+) -> LoweredValue {
+    let opcode = crate::ir_lower::internal_extensions::method_opcode(ctx, class_name, method)
+        .expect("DOM collection dimensions require a registered native method");
+    let signature = class_method_signature(ctx, class_name, &php_symbol_key(method)).cloned();
+    let argument = dom_collection_dimension_argument(index, coerce_index);
+    let arguments = lower_internal_extension_args(ctx, signature.as_ref(), &[argument], false);
+    let mut operands = Vec::with_capacity(arguments.len() + 1);
+    operands.push(receiver.value);
+    operands.extend(arguments.iter().copied());
+    let result = crate::ir_lower::internal_extensions::emit_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER
+            | internal_extension_result_flags(&result_type),
+        operands,
+        result_type,
+        expr.span,
+    );
+    release_owned_call_arg_temporaries_with_signature(
+        ctx,
+        &arguments,
+        Some(result.value),
+        &ReturnArgAlias::Unknown,
+        signature.as_ref(),
+        expr.span,
+    );
+    release_owning_receiver_temporary(ctx, receiver, expr.span);
+    result
+}
+
+/// Builds a synthetic DOM collection lookup argument without duplicating source evaluation.
+fn dom_collection_dimension_argument(index: &Expr, coerce_index: bool) -> Expr {
+    if !coerce_index {
+        return index.clone();
+    }
+    Expr::new(
+        ExprKind::Cast {
+            target: CastType::Int,
+            expr: Box::new(index.clone()),
+        },
+        index.span,
+    )
+}
+
+/// Returns the concrete DOM named-map class carried by `ty`, when known.
+///
+/// The special dimension handler is deliberately limited to concrete classes:
+/// a mixed receiver must continue through generic PHP dispatch rather than
+/// inventing an error message for a runtime class it does not know.
+pub(crate) fn dom_named_node_map_class(ty: &PhpType) -> Option<String> {
+    match ty {
+        PhpType::Object(class_name)
+            if matches!(
+                class_name.trim_start_matches('\\'),
+                "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap"
+            ) => Some(class_name.trim_start_matches('\\').to_string()),
+        _ => None,
+    }
+}
+
+/// Returns the concrete DOM named-map class and whether the receiver may be null.
+///
+/// The declaration registry exposes DTD map properties as `Map|null`, even
+/// though attached document types normally return a map. Writes therefore need
+/// a runtime null branch: PHP autovivifies null but rejects the live map.
+pub(crate) fn dom_named_node_map_receiver(ty: &PhpType) -> Option<(String, bool)> {
+    if let Some(class_name) = dom_named_node_map_class(ty) {
+        return Some((class_name, false));
+    }
+    let PhpType::Union(members) = ty else {
+        return None;
+    };
+    let mut map_class = None;
+    let mut saw_null = false;
+    for member in members {
+        match member {
+            PhpType::Void => saw_null = true,
+            member => {
+                let class_name = dom_named_node_map_class(member)?;
+                if map_class.replace(class_name).is_some() {
+                    return None;
+                }
+            }
+        }
+    }
+    saw_null.then_some((map_class?, true))
+}
+
+/// Returns the known DOM named-map class for a subscript receiver expression.
+pub(crate) fn dom_named_node_map_dimension_class(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> Option<String> {
+    let receiver_type = match &array.kind {
+        ExprKind::Variable(name) => ctx
+            .local_types
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
+        _ => infer_expr_type_syntactic(array),
+    };
+    dom_named_node_map_class(&receiver_type)
+}
+
+/// Returns the DOM named-map class plus nullability for a subscript receiver.
+pub(crate) fn dom_named_node_map_dimension_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> Option<(String, bool)> {
+    let receiver_type = match &array.kind {
+        ExprKind::Variable(name) => ctx
+            .local_types
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
+        _ => infer_expr_type_syntactic(array),
+    };
+    dom_named_node_map_receiver(&receiver_type)
+}
+
+/// Throws PHP's read-only-DOM-map `Error` without exposing a fake ArrayAccess API.
+///
+/// php-src performs this check at the dimension operation itself. Building the
+/// ordinary `Error` object preserves catchability, cleanup, and target-neutral
+/// exception lowering across every supported backend.
+pub(crate) fn lower_dom_named_node_map_dimension_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    span: Span,
+) {
+    let error = Expr::new(
+        ExprKind::NewObject {
+            class_name: Name::unqualified("Error"),
+            args: vec![Expr::new(
+                ExprKind::StringLiteral(format!(
+                    "Cannot use object of type {class_name} as array"
+                )),
+                span,
+            )],
+        },
+        span,
+    );
+    let throwing = Expr::new(ExprKind::Throw(Box::new(error)), span);
+    lower_expr(ctx, &throwing);
+}
+
+/// Lowers a SimpleXML dimension read after its receiver is evaluated exactly once.
+pub(crate) fn lower_simplexml_dimension_read_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    access_mode: i64,
+) -> LoweredValue {
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &receiver_type,
+        "read_dimension",
+    )
+    .expect("SimpleXML dimension lowering requires the locked read handler");
+    let wrapper_type = crate::ir_lower::internal_extensions::simplexml_object_result_type(
+        ctx,
+        &receiver_type,
+    )
+    .expect("SimpleXML dimension lowering requires one exact wrapper class");
+    let append = matches!(index.kind, ExprKind::ArrayAppend);
+    let index_value = lower_simplexml_offset(ctx, index);
+    let read_mode = lower_int_literal(ctx, access_mode, expr);
+    let result_type = if append { wrapper_type.clone() } else { nullable_result_type(wrapper_type) };
+    let result = crate::ir_lower::internal_extensions::emit_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER
+            | crate::ir_lower::internal_extensions::FLAG_WRAPPER_RESULT
+            | if append { crate::ir_lower::internal_extensions::FLAG_ARRAY_APPEND_OFFSET } else { 0 },
+        vec![receiver.value, index_value.value, read_mode.value],
+        result_type,
+        expr.span,
+    );
+    if ctx.value_is_owning_temporary(index_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+    }
+    stabilize_borrowed_result_and_release_receiver(ctx, receiver, result, expr.span)
+}
+
+/// Lowers a nested-assignment SimpleXML parent with `BP_VAR_W` semantics.
+///
+/// A nullable static wrapper result keeps PHP's lazy offset evaluation on the
+/// null branch, while a live wrapper asks the native handler to materialize one
+/// missing numeric element before the subsequent dimension write.
+pub(crate) fn lower_simplexml_dimension_read_for_write_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    if value_is_nullable(ctx, receiver.value) {
+        return lower_nullable_simplexml_dimension_read(ctx, receiver, index, expr, 1);
+    }
+    lower_simplexml_dimension_read_from_value(ctx, receiver, index, expr, 1)
+}
+
+/// Lowers a nullable SimpleXML dimension without evaluating its offset for null receivers.
+fn lower_nullable_simplexml_dimension_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    expr: &Expr,
+    access_mode: i64,
+) -> LoweredValue {
+    let wrapper_type = crate::ir_lower::internal_extensions::simplexml_object_result_type(
+        ctx,
+        &ctx.builder.value_php_type(receiver.value),
+    )
+    .expect("nullable SimpleXML dimension lowering requires one wrapper class");
+    let result_type = nullable_result_type(wrapper_type);
+    let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![receiver.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    let null_block = ctx.builder.create_named_block("simplexml.dimension.null", Vec::new());
+    let read_block = ctx.builder.create_named_block("simplexml.dimension.read", Vec::new());
+    let merge = ctx.builder.create_named_block("simplexml.dimension.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: read_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(null_block);
+    let null = lower_boxed_null(ctx, expr);
+    store_value_into_temp(ctx, &temp_name, result_type.clone(), null, expr.span);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(read_block);
+    let read = lower_simplexml_dimension_read_from_value(ctx, receiver, index, expr, access_mode);
+    store_value_into_temp(ctx, &temp_name, result_type, read, expr.span);
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, expr.span)
+}
+
+/// Evaluates one SimpleXML offset once, preserving integer offsets and stringifying the rest.
+pub(crate) fn lower_simplexml_offset(
+    ctx: &mut LoweringContext<'_, '_>,
+    index: &Expr,
+) -> LoweredValue {
+    if matches!(index.kind, ExprKind::ArrayAppend) {
+        return lower_null(ctx, index);
+    }
+    let index_value = lower_expr(ctx, index);
+    if matches!(ctx.builder.value_php_type(index_value.value).codegen_repr(), PhpType::Void | PhpType::Int) {
+        index_value
+    } else {
+        coerce_to_string_at_span(ctx, index_value, Some(index.span))
+    }
 }
 
 /// Lowers a subscript-chain receiver with undefined-offset warnings suppressed on
@@ -441,7 +930,13 @@ pub(super) fn array_access_runtime_call_result_type(
     array: crate::ir::ValueId,
     expr: &Expr,
 ) -> PhpType {
-    match ctx.builder.value_php_type(array).codegen_repr() {
+    let array_type = ctx.builder.value_php_type(array);
+    if let Some((class_name, true)) = dom_collection_class_and_failure(&array_type) {
+        if let Some(result_type) = dom_collection_method_result_type(ctx, &class_name, "item") {
+            return result_type;
+        }
+    }
+    match array_type.codegen_repr() {
         PhpType::Object(class_name) => array_access_offset_get_return_type(ctx, &class_name)
             .unwrap_or_else(|| fallback_expr_type(expr)),
         PhpType::Mixed => PhpType::Mixed,

@@ -32,6 +32,43 @@ pub(super) fn lower_static_method_call(
         }
     }
 
+    if let Some(class_name) = static_receiver_class_name(ctx, receiver) {
+        if let Some(operation) = crate::internal_extensions::is_native_wrapper_class(&class_name)
+            .then(|| crate::internal_extensions::operation_registry().method(&class_name, method))
+            .flatten()
+            .filter(|operation| operation.static_operation)
+        {
+            let sig = static_method_implementation_signature(ctx, receiver, method)
+                .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
+                .cloned();
+            let operands = lower_internal_extension_args(ctx, sig.as_ref(), args, false);
+            let (operands, argument_guards) =
+                prepare_internal_extension_arguments_for_throw(ctx, sig.as_ref(), operands, expr.span);
+            let result_type = sig
+                .as_ref()
+                .map(|signature| normalize_value_php_type(signature.return_type.clone()))
+                .unwrap_or_else(|| fallback_expr_type(expr));
+            let call = crate::ir_lower::internal_extensions::emit_call(
+                ctx,
+                operation.opcode,
+                internal_extension_result_flags(&result_type),
+                operands.clone(),
+                result_type,
+                expr.span,
+            );
+            clear_owning_call_arg_temporary_guards(ctx, &argument_guards, expr.span);
+            release_owned_call_arg_temporaries_with_signature(
+                ctx,
+                &operands,
+                Some(call.value),
+                &ReturnArgAlias::Unknown,
+                sig.as_ref(),
+                expr.span,
+            );
+            return call;
+        }
+    }
+
     let magic_args;
     let (dispatch_method, call_args) = if let Some(args) =
         magic_static_call_dispatch_args(ctx, receiver, method, args, expr.span)
@@ -422,4 +459,3 @@ pub(super) fn static_receiver_class_name(
         }
     }
 }
-

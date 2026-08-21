@@ -7,7 +7,7 @@
 //! - `crate::cli` and `crate::pipeline` for `--with-<bridge>` validation and forcing.
 //!
 //! Key details:
-//! - The bridge table remains the single source for flags, archives, frameworks, and libdl needs.
+//! - The bridge table remains the single source for flags, archives, macOS ABI inputs, and libdl needs.
 //! - An unresolved, empty, non-file, or symlinked bridge fails before command rendering.
 
 use std::collections::{HashMap, HashSet};
@@ -33,6 +33,8 @@ pub(super) struct BridgeStaticlib {
     pub(super) whole_archive: bool,
     /// macOS frameworks required by this bridge's transitive dependencies.
     pub(super) macos_frameworks: &'static [&'static str],
+    /// macOS ABI libraries required by vendored native objects in this bridge.
+    pub(super) macos_libraries: &'static [&'static str],
     /// Whether the Linux link needs the dynamic loader library.
     pub(super) needs_libdl: bool,
     /// Canonical PHP extension reported when this bridge is linked, if distinct.
@@ -48,6 +50,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "tls",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
         php_extension: Some("openssl"),
@@ -59,9 +62,22 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "pdo",
         whole_archive: false,
         macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
+        macos_libraries: &[],
         needs_libdl: true,
         // The bridge exposes the core PDO database-access surface.
         php_extension: Some("PDO"),
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_dom",
+        env_var: "ELEPHC_DOM_LIB_DIR",
+        crate_name: "elephc-dom",
+        flag_name: "dom",
+        whole_archive: false,
+        macos_frameworks: &[],
+        macos_libraries: &["iconv"],
+        needs_libdl: true,
+        // The bridge implements PHP's DOM, libxml, and SimpleXML surfaces.
+        php_extension: Some("dom"),
     },
     BridgeStaticlib {
         lib_name: "elephc_crypto",
@@ -70,6 +86,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "crypto",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The crypto bridge implements PHP's digest/HMAC `hash` extension.
         php_extension: Some("hash"),
@@ -81,6 +98,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "bcmath",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
         php_extension: Some("bcmath"),
@@ -92,6 +110,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "phar",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The archive reader/writer is exposed by PHP as `Phar`.
         php_extension: Some("Phar"),
@@ -103,6 +122,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "tz",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // Timezone support folds into the always-present `date` extension.
         php_extension: None,
@@ -114,6 +134,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "image",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The image codec/drawing surface maps to PHP's `gd` extension.
         php_extension: Some("gd"),
@@ -125,6 +146,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "web",
         whole_archive: true,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The web bridge owns the PHP `session` extension surface.
         php_extension: Some("session"),
@@ -136,6 +158,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "eval",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extension: None,
@@ -149,6 +172,8 @@ pub(super) struct BridgeResolution {
     pub(super) plan: LinkPlan,
     /// Whether any requested bridge needs `libdl` on Linux.
     pub(super) needs_libdl: bool,
+    /// macOS-only ABI libraries required by the resolved bridge set.
+    pub(super) macos_libraries: Vec<String>,
 }
 
 /// Resolves a `--with-<flag>` name to its bridge linker library name.
@@ -207,6 +232,8 @@ where
     let mut seen_paths = HashSet::new();
     let mut frameworks = Vec::new();
     let mut seen_frameworks = HashSet::new();
+    let mut macos_libraries = Vec::new();
+    let mut seen_macos_libraries = HashSet::new();
     let mut needs_libdl = false;
     let mut ordered = Vec::with_capacity(plan.items().len());
 
@@ -224,6 +251,8 @@ where
                     &mut needs_libdl,
                     &mut frameworks,
                     &mut seen_frameworks,
+                    &mut macos_libraries,
+                    &mut seen_macos_libraries,
                 );
             } else {
                 validate_archive_path(name, path.clone())?;
@@ -245,6 +274,8 @@ where
             &mut needs_libdl,
             &mut frameworks,
             &mut seen_frameworks,
+            &mut macos_libraries,
+            &mut seen_macos_libraries,
         );
 
         let archive = match located.get(bridge.lib_name) {
@@ -274,20 +305,31 @@ where
     ordered.extend(frameworks);
     let mut plan = LinkPlan::from_items(ordered);
     plan.prepend(bridge_paths);
-    Ok(BridgeResolution { plan, needs_libdl })
+    Ok(BridgeResolution {
+        plan,
+        needs_libdl,
+        macos_libraries,
+    })
 }
 
-/// Accumulates table-driven runtime and framework metadata for one requested bridge.
+/// Accumulates table-driven runtime, framework, and macOS ABI-library metadata.
 fn record_bridge_metadata(
     bridge: &BridgeStaticlib,
     needs_libdl: &mut bool,
     frameworks: &mut Vec<LinkItem>,
     seen_frameworks: &mut HashSet<&'static str>,
+    macos_libraries: &mut Vec<String>,
+    seen_macos_libraries: &mut HashSet<&'static str>,
 ) {
     *needs_libdl |= bridge.needs_libdl;
     for framework in bridge.macos_frameworks {
         if seen_frameworks.insert(*framework) {
             frameworks.push(LinkItem::Framework((*framework).to_string()));
+        }
+    }
+    for library in bridge.macos_libraries {
+        if seen_macos_libraries.insert(*library) {
+            macos_libraries.push((*library).to_string());
         }
     }
 }
@@ -632,6 +674,13 @@ mod tests {
             &["CoreFoundation", "SystemConfiguration"]
         );
 
+        let dom = bridge_for_library("elephc_dom").expect("DOM bridge");
+        assert_eq!(dom.crate_name, "elephc-dom");
+        assert_eq!(dom.env_var, "ELEPHC_DOM_LIB_DIR");
+        assert_eq!(dom.archive_filename(), "libelephc_dom.a");
+        assert_eq!(dom.macos_libraries, &["iconv"]);
+        assert!(!dom.whole_archive);
+
         let magician = bridge_for_library("elephc_magician").expect("eval bridge");
         assert_eq!(magician.crate_name, "elephc-magician");
         assert_eq!(magician.env_var, "ELEPHC_MAGICIAN_LIB_DIR");
@@ -673,6 +722,7 @@ mod tests {
         );
         assert_eq!(php_extension_for_lib("elephc_tls"), Some("openssl"));
         assert_eq!(php_extension_for_lib("elephc_pdo"), Some("PDO"));
+        assert_eq!(php_extension_for_lib("elephc_dom"), Some("dom"));
         assert_eq!(php_extension_for_lib("elephc_crypto"), Some("hash"));
         assert_eq!(php_extension_for_lib("elephc_bcmath"), Some("bcmath"));
         assert_eq!(php_extension_for_lib("elephc_phar"), Some("Phar"));

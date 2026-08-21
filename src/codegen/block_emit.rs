@@ -113,6 +113,13 @@ pub(super) fn emit_module(
     // `Emit::Cdylib`, which returns before the main function is emitted.
     super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
     if matches!(emit, Emit::Cdylib) {
+        emit_cdylib_dom_xpath_callable_resolver_fallback(
+            module,
+            emitter,
+            data,
+            &mut shared,
+            regalloc_linear,
+        )?;
         return Ok(());
     }
     let main = module
@@ -140,6 +147,54 @@ pub(super) fn emit_module(
     if web {
         super::web::emit_web_reset(emitter, module, data);
     }
+    Ok(())
+}
+
+/// Publishes the DOM XPath resolver pair when a cdylib has no emitted function body.
+///
+/// Cdylibs intentionally omit `main`, so a main-only module never reaches
+/// `emit_blocks()`. The local anchor supplies the branch-around control flow
+/// expected by the shared resolver emitter without exporting another symbol.
+fn emit_cdylib_dom_xpath_callable_resolver_fallback(
+    module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+    regalloc_linear: bool,
+) -> Result<()> {
+    if !module.required_runtime_features.dom_bridge
+        || shared.dom_xpath_callable_resolver_is_emitted()
+    {
+        return Ok(());
+    }
+    let anchor_function = module
+        .functions
+        .iter()
+        .find(|function| is_main(function))
+        .or_else(|| module.functions.first())
+        .ok_or_else(|| {
+            CodegenIrError::invalid_module(
+                "DOM bridge cdylib has no function available for resolver metadata",
+            )
+        })?;
+    let layout = frame::layout_for_function(anchor_function, emitter.target, regalloc_linear);
+    let mut ctx = FunctionContext::new(
+        module,
+        anchor_function,
+        emitter,
+        data,
+        shared,
+        layout,
+        false,
+        false,
+        false,
+        None,
+    );
+    let anchor = ctx.next_label("dom_xpath_cdylib_anchor");
+    ctx.emitter.raw(".text");
+    ctx.emitter.label(&anchor);
+    lower_inst::ensure_dom_xpath_callable_resolvers(&mut ctx)?;
+    abi::emit_return(ctx.emitter);
     Ok(())
 }
 
@@ -1075,6 +1130,7 @@ fn emit_static_property_default_value(
 
 /// Emits every block in table order.
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    lower_inst::ensure_dom_xpath_callable_resolvers(ctx)?;
     let blocks = ctx.function.blocks.clone();
     for block in blocks {
         emit_block(ctx, &block)?;

@@ -135,3 +135,33 @@ fn test_class_used_only_in_multi_value_echo_is_emitted() {
     let out = compile_and_run(r#"<?php echo "x", (new SplObjectStorage())->count();"#);
     assert_eq!(out, "x0");
 }
+
+/// Verifies a terminal closing tag terminates a statement without an explicit semicolon.
+#[test]
+fn test_terminal_closing_tag_matches_php() {
+    let out = compile_and_run("<?php echo 'closed' ?>\n");
+    assert_eq!(out, "closed");
+}
+
+/// Verifies terminal inline HTML is emitted literally after PHP's one-newline absorption.
+#[test]
+fn test_terminal_inline_html_matches_php() {
+    let out = compile_and_run("<?php echo 'A'; ?>\nDone\n");
+    assert_eq!(out, "ADone\n");
+}
+
+/// Verifies spaces and a second newline after the close tag remain observable inline HTML.
+#[test]
+fn test_terminal_inline_html_preserves_non_absorbed_bytes() {
+    let out = compile_and_run("<?php echo 'A'; ?> \n\nB");
+    assert_eq!(out, "A \n\nB");
+}
+
+/// Verifies bytes after `__HALT_COMPILER()` are data and never parsed or emitted.
+#[test]
+fn test_halt_compiler_stops_php_execution_and_output() {
+    let out = compile_and_run(
+        "<?php echo 'before'; __HALT_COMPILER(); ?>\n===DONE===\n<?php broken",
+    );
+    assert_eq!(out, "before");
+}

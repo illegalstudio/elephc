@@ -405,6 +405,42 @@ echo $g->greet("World");
     assert_eq!(out, "Hello World!");
 }
 
+/// Verifies borrowed `$this` property reads do not leave provisional stabilization owners.
+#[test]
+fn test_method_substr_return_releases_borrowed_this_property_reads() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ChunkReader {
+    private string $data = "abcdefghijkl";
+
+    public function whole(): string {
+        return $this->data;
+    }
+
+    public function head(): string {
+        return substr($this->data, 0, 7);
+    }
+}
+
+$reader = new ChunkReader();
+echo strlen($reader->whole()) . "|";
+$total = 0;
+for ($index = 0; $index < 100; $index++) {
+    $total += strlen($reader->head());
+}
+echo $total;
+unset($reader);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "12|700");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected borrowed property reads to remain balanced, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test: object property stores a string that was derived from a
 /// concatenated literal (`"AB" . "CD"`). Verifies that property initialization
 /// and subsequent method access (`$this->bytes`) survives constructor parameter
@@ -1690,6 +1726,34 @@ echo "done";
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap after unbound catches, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies an inline owning method receiver is released when the method throws.
+#[test]
+fn test_regression_temporary_method_receiver_unwinds_on_throw() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ThrowingTemporaryReceiver {
+    public function fail(): void {
+        throw new RuntimeException("receiver");
+    }
+}
+
+try {
+    (new ThrowingTemporaryReceiver())->fail();
+} catch (Throwable $error) {
+    echo $error->getMessage();
+}
+unset($error);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "receiver");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the temporary receiver unwind guard to remain balanced, got: {}",
         out.stderr
     );
 }

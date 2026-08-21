@@ -122,7 +122,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_feof_result(
     if context.stream_resources().user_wrapper_stream_info(id).is_none() {
         return Ok(None);
     }
-    let eof = eval_user_wrapper_eof_bool(id, context, values)?;
+    let eof = eval_user_wrapper_feof_bool(id, context, values)?;
     values.bool_value(eof).map(Some)
 }
 
@@ -286,9 +286,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_read_bytes(
     )?;
     let bytes = values.string_bytes(result)?;
     values.release(result)?;
-    context
-        .stream_resources_mut()
-        .set_user_wrapper_eof(id, bytes.is_empty());
+    eval_user_wrapper_eof_after_read(id, context, values)?;
     Ok(Some(bytes))
 }
 
@@ -341,9 +339,6 @@ fn eval_user_wrapper_contents_bytes(
         if length.is_some_and(|limit| bytes.len() >= limit) {
             break;
         }
-        if eval_user_wrapper_eof_bool(id, context, values)? {
-            break;
-        }
         let remaining = length
             .map(|limit| limit.saturating_sub(bytes.len()))
             .unwrap_or(8192);
@@ -363,8 +358,8 @@ fn eval_user_wrapper_contents_bytes(
     Ok(Some(bytes))
 }
 
-/// Returns a userspace-wrapper EOF result, falling back to cached EOF state.
-pub(in crate::interpreter) fn eval_user_wrapper_eof_bool(
+/// Returns the strict `feof()` result and caches terminal truthy outcomes.
+fn eval_user_wrapper_feof_bool(
     id: i64,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -372,10 +367,14 @@ pub(in crate::interpreter) fn eval_user_wrapper_eof_bool(
     let Some(info) = context.stream_resources().user_wrapper_stream_info(id) else {
         return Ok(false);
     };
+    if info.eof {
+        return Ok(true);
+    }
     let Some((declaring_class, stream_eof)) =
         eval_user_wrapper_method(&info.class_name, "stream_eof", context)
     else {
-        return Ok(info.eof);
+        context.stream_resources_mut().set_user_wrapper_eof(id, true);
+        return Ok(true);
     };
     let result = eval_dynamic_method_with_values(
         &declaring_class,
@@ -386,10 +385,81 @@ pub(in crate::interpreter) fn eval_user_wrapper_eof_bool(
         context,
         values,
     )?;
-    let eof = values.truthy(result)?;
-    values.release(result)?;
-    context.stream_resources_mut().set_user_wrapper_eof(id, eof);
+    let eof = match values.type_tag(result) {
+        Ok(EVAL_TAG_BOOL) => values.truthy(result),
+        Ok(tag) => eval_user_wrapper_eof_type_name(result, tag, context, values).and_then(
+            |type_name| {
+                values
+                    .warning(&format!(
+                        "feof(): {}::stream_eof value must be of type bool, {type_name} given",
+                        info.class_name.trim_start_matches('\\'),
+                    ))
+                    .map(|()| true)
+            },
+        ),
+        Err(status) => Err(status),
+    };
+    let release = values.release(result);
+    let eof = eof?;
+    release?;
+    if eof {
+        context.stream_resources_mut().set_user_wrapper_eof(id, true);
+    }
     Ok(eof)
+}
+
+/// Applies php-src's lenient post-read EOF probe and caches only truthy results.
+fn eval_user_wrapper_eof_after_read(
+    id: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(info) = context.stream_resources().user_wrapper_stream_info(id) else {
+        return Ok(());
+    };
+    let Some((declaring_class, stream_eof)) =
+        eval_user_wrapper_method(&info.class_name, "stream_eof", context)
+    else {
+        context.stream_resources_mut().set_user_wrapper_eof(id, true);
+        return Ok(());
+    };
+    let result = eval_dynamic_method_with_values(
+        &declaring_class,
+        &info.class_name,
+        &stream_eof,
+        info.object,
+        Vec::new(),
+        context,
+        values,
+    )?;
+    let eof = values.truthy(result);
+    let release = values.release(result);
+    let eof = eof?;
+    release?;
+    if eof {
+        context.stream_resources_mut().set_user_wrapper_eof(id, true);
+    }
+    Ok(())
+}
+
+/// Returns PHP's diagnostic type name for an invalid strict EOF callback result.
+fn eval_user_wrapper_eof_type_name(
+    value: RuntimeCellHandle,
+    tag: u64,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    Ok(match tag {
+        EVAL_TAG_INT => String::from("int"),
+        EVAL_TAG_STRING => String::from("string"),
+        EVAL_TAG_FLOAT => String::from("float"),
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => String::from("array"),
+        EVAL_TAG_OBJECT => eval_object_class_metadata_name(value, context, values)?,
+        EVAL_TAG_NULL => String::from("null"),
+        EVAL_TAG_RESOURCE => String::from("resource"),
+        EVAL_TAG_CALLABLE => String::from("Closure"),
+        _ => String::from("mixed"),
+    })
 }
 
 /// Returns a userspace-wrapper seek result, or false when the method is absent.

@@ -82,7 +82,60 @@ pub(crate) fn inject_builtin_enums(
         crate::span::Span::dummy(),
         checker,
         next_class_id,
-    )
+    )?;
+
+    inject_internal_extension_enums(program, checker, next_class_id)
+}
+
+/// Injects every backed enum declared by the locked internal-extension registry.
+fn inject_internal_extension_enums(
+    program: &Program,
+    checker: &mut Checker,
+    next_class_id: &mut u64,
+) -> Result<(), CompileError> {
+    for class in crate::internal_extensions::registry()
+        .classes()
+        .filter(|class| class.enum_type)
+    {
+        ensure_builtin_enum_name_available(program, checker, &class.canonical_name)?;
+        let mut cases = Vec::with_capacity(class.constants.len());
+        for constant in &class.constants {
+            let value = constant
+                .value
+                .as_object()
+                .and_then(|value| value.get("value"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    CompileError::new(
+                        crate::span::Span::dummy(),
+                        &format!(
+                            "Invalid backed enum metadata for {}::{}",
+                            class.canonical_name, constant.name
+                        ),
+                    )
+                })?;
+            cases.push(EnumCaseInfo {
+                name: constant.name.clone(),
+                value: Some(EnumCaseValue::Str(value.to_string())),
+                attribute_names: Vec::new(),
+                attribute_args: Vec::new(),
+            });
+        }
+        insert_enum_metadata(
+            &class.canonical_name,
+            Some(PhpType::Str),
+            cases,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            crate::span::Span::dummy(),
+            checker,
+            next_class_id,
+        )?;
+    }
+    Ok(())
 }
 
 /// Ensures a builtin enum name does not collide with any user-visible class-like symbol.

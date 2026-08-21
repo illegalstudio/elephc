@@ -26,6 +26,7 @@ use crate::ir_lower::expr::{
     lower_callable_array_for_assignment,
     lower_array_literal_with_expected_type,
     lower_closure_for_assignment, lower_expr,
+    release_owning_receiver_temporary,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,

@@ -60,6 +60,11 @@ impl<'a> Cursor<'a> {
         Span::new(self.line as u32, self.col as u32)
     }
 
+    /// Returns the zero-based byte position within the scanned UTF-8 source slice.
+    pub fn byte_offset(&self) -> usize {
+        self.pos
+    }
+
     /// Returns the next character without advancing the cursor.
     #[inline]
     pub fn peek(&self) -> Option<char> {

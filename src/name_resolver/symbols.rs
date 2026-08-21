@@ -98,6 +98,11 @@ impl Symbols {
                     .find(|builtin| php_symbol_key(builtin) == key)
                     .map(|builtin| (*builtin).to_string())
             })
+            .or_else(|| {
+                crate::internal_extensions::registry()
+                    .class(name)
+                    .map(|class| class.canonical_name.clone())
+            })
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) class,

@@ -99,9 +99,8 @@ pub(crate) use fopen_core::{
     lower_fopen,
 };
 pub(crate) use stream_context::{
-    lower_stream_wrapper_register, lower_stream_wrapper_unregister, lower_stream_wrapper_restore, lower_stream_context_create,
-    lower_stream_context_get_default, lower_stream_context_set_default, lower_stream_context_set_option, lower_stream_context_set_params,
-    lower_stream_context_get_options, lower_stream_context_get_params, lower_stream_get_contents,
+    lower_stream_wrapper_register, lower_stream_wrapper_unregister, lower_stream_wrapper_restore,
+    lower_stream_get_contents,
 };
 pub(crate) use stream_copy_queries::{
     lower_stream_copy_to_stream, lower_stream_get_line, lower_stream_get_meta_data, lower_stream_get_wrappers,
@@ -169,6 +168,186 @@ pub(crate) use stat_ops::{
 pub(super) use boxing_helpers::box_owned_string_or_false_result;
 pub(super) use resource_handles::load_stream_fd_to_result;
 pub(super) use string_validation::load_string_to_result;
+
+/// Lowers `stream_context_create(options?, params?)` into a registry-backed resource.
+pub(crate) fn lower_stream_context_create(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "stream_context_create", 0, 2)?;
+    stream_context::capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
+    if let Some(options) = inst.operands.first().copied() {
+        ctx.load_value_to_result(options)?;
+    } else {
+        emit_fd_result(ctx, 0);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_create");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `stream_context_get_default(options?)` while updating the default registry entry.
+pub(crate) fn lower_stream_context_get_default(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "stream_context_get_default", 0, 1)?;
+    if let Some(options) = inst.operands.first().copied() {
+        replace_stream_context_options(ctx, None, options)?;
+    }
+    emit_fd_result(ctx, 0);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `stream_context_set_default(options)` by replacing the default options hash.
+pub(crate) fn lower_stream_context_set_default(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "stream_context_set_default", 1)?;
+    replace_stream_context_options(ctx, None, expect_operand(inst, 0)?)?;
+    emit_fd_result(ctx, 0);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers both supported `stream_context_set_option` call forms against one selected resource.
+pub(crate) fn lower_stream_context_set_option(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "stream_context_set_option", 2, 4)?;
+    match inst.operands.len() {
+        2 => {
+            replace_stream_context_options(
+                ctx,
+                Some(expect_operand(inst, 0)?),
+                expect_operand(inst, 1)?,
+            )?;
+            emit_bool_result(ctx, true);
+        }
+        4 => {
+            select_stream_context(ctx, expect_operand(inst, 0)?)?;
+            lower_stream_context_set_option_4(ctx, inst)?;
+            abi::emit_call_label(ctx.emitter, "__rt_stream_context_commit_options");
+        }
+        _ => emit_bool_result(ctx, true),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `stream_context_set_params(context, params)` after selecting its registry entry.
+pub(crate) fn lower_stream_context_set_params(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "stream_context_set_params", 2)?;
+    select_stream_context(ctx, expect_operand(inst, 0)?)?;
+    stream_context::capture_stream_notification_callback(ctx, inst.operands.get(1).copied())?;
+    emit_bool_result(ctx, true);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `stream_context_get_options(context)` and retains the selected options hash.
+pub(crate) fn lower_stream_context_get_options(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "stream_context_get_options", 1)?;
+    select_stream_context(ctx, expect_operand(inst, 0)?)?;
+    let empty_label = ctx.next_label("scgo_empty");
+    let done_label = ctx.next_label("scgo_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", empty_label));       // allocate an empty hash when no context options exist
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the empty-hash fallback after retaining options
+            ctx.emitter.label(&empty_label);
+            ctx.emitter.instruction("mov x0, #1");                              // pass the empty fallback hash capacity
+            ctx.emitter.instruction("mov x1, #7");                              // select Mixed values for the fallback hash
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test whether a context options pointer exists
+            ctx.emitter.instruction(&format!("jz {}", empty_label));            // allocate an empty hash when no context options exist
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the options pointer to incref
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the empty-hash fallback after retaining options
+            ctx.emitter.label(&empty_label);
+            ctx.emitter.instruction("mov edi, 1");                              // pass the empty fallback hash capacity
+            ctx.emitter.instruction("mov esi, 7");                              // select Mixed values for the fallback hash
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+            ctx.emitter.label(&done_label);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `stream_context_get_params(context)` after validating the selected resource.
+pub(crate) fn lower_stream_context_get_params(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "stream_context_get_params", 1)?;
+    select_stream_context(ctx, expect_operand(inst, 0)?)?;
+    emit_empty_mixed_hash(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Selects one stream-context resource and exposes its options as the current result.
+fn select_stream_context(ctx: &mut FunctionContext<'_>, context: ValueId) -> Result<()> {
+    load_stream_context_resource_to_result(ctx, context)?;
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_select");
+    Ok(())
+}
+
+/// Replaces one explicit or default stream context's independently owned options hash.
+fn replace_stream_context_options(
+    ctx: &mut FunctionContext<'_>,
+    context: Option<ValueId>,
+    options: ValueId,
+) -> Result<()> {
+    if let Some(context) = context {
+        load_stream_context_resource_to_result(ctx, context)?;
+    } else {
+        emit_fd_result(ctx, 0);
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.load_value_to_result(options)?;
+            ctx.emitter.instruction("mov x1, x0");                              // pass the replacement options hash as argument two
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.load_value_to_result(options)?;
+            ctx.emitter.instruction("mov rdx, rax");                            // pass the replacement options hash in the registry helper's second slot
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_replace_options");
+    Ok(())
+}
+
+/// Loads a stream-context resource, including Mixed boxes read from untyped properties.
+fn load_stream_context_resource_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    ctx.load_value_to_result(value)?;
+    match raw_ty {
+        PhpType::Resource(_) => Ok(()),
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Void | PhpType::Never => {
+            emit_unbox_stream_or_type_error(ctx, "stream context");
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "stream context argument PHP type {:?}",
+            other
+        ))),
+    }
+}
 
 /// Emits a literal `file_get_contents("phar://...")` payload through compile-time PHAR extraction.
 ///

@@ -49,6 +49,9 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let class_name = class_name.to_string();
+        if crate::internal_extensions::is_native_wrapper_class(&class_name) {
+            self.require_builtin_library("elephc_dom");
+        }
         if self.enums.contains_key(class_name.as_str()) {
             return Err(CompileError::new(
                 expr.span,
@@ -225,12 +228,33 @@ impl Checker {
         self.require_builtin_library("bz2");
     }
 
-    /// Returns true when construct internal iterator from builtin get iterator.
-    fn can_construct_internal_iterator_from_builtin_get_iterator(&self, class_name: &str) -> bool {
+    /// Returns true when constructing an `InternalIterator` from a supported
+    /// `IteratorAggregate::getIterator()` body.
+    ///
+    /// The wrapper is private in userland but is instantiated by the synthetic
+    /// bodies for `SplFixedArray` and the DOM live collections covered by this
+    /// worktree.
+    fn can_construct_internal_iterator_from_builtin_get_iterator(
+        &self,
+        class_name: &str,
+    ) -> bool {
         let get_iterator_key = php_symbol_key("getIterator");
+        let allowed_owners: &[&str] = &[
+            "SplFixedArray",
+            "DOMNodeList",
+            "DOMNamedNodeMap",
+            "Dom\\NodeList",
+            "Dom\\NamedNodeMap",
+            "Dom\\DtdNamedNodeMap",
+            "Dom\\HTMLCollection",
+            "Dom\\TokenList",
+        ];
         class_name == "InternalIterator"
-            && self.current_class.as_deref() == Some("SplFixedArray")
             && self.current_method.as_deref() == Some(get_iterator_key.as_str())
+            && self.current_class.as_deref().is_some_and(|current_class| {
+                let normalized = current_class.trim_start_matches('\\');
+                allowed_owners.contains(&normalized)
+            })
     }
 
     /// Allows PDOStatement::fetch() to allocate the private internal PDORow view.

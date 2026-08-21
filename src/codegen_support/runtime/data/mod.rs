@@ -18,7 +18,10 @@ mod user;
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
-pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_method};
+pub(crate) use user::{
+    is_user_filter_contract_method, is_user_wrapper_contract_method, user_wrapper_adapter_symbol,
+    user_wrapper_default_thunk_name, USER_WRAPPER_METHOD_NAMES,
+};
 pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 
 /// Fatal error message when `php_uname()` receives a `$mode` argument whose length is not exactly 1.

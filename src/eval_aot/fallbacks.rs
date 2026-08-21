@@ -164,6 +164,9 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null => None,
+        // This marker is only legal beneath `ArrayAccess`, which already
+        // classifies the complete expression as an array fallback.
+        ExprKind::ArrayAppend => Some(EvalAotFallbackReason::ArrayOrIterable),
         ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)

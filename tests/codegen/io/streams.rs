@@ -5134,9 +5134,8 @@ fclose($m);
 /// Verifies compiled PHP output for stream context create returns resource.
 #[test]
 fn test_stream_context_create_returns_resource() {
-    // v1 stub: stream_context_create/get_default return a resource so PHP
-    // code that constructs or consults stream contexts compiles. The options
-    // are not yet persisted on the resource.
+    // Created and default contexts have stable resource identity and accept
+    // independent option mutation.
     let out = compile_and_run(
         r#"<?php
 $c = stream_context_create(["http" => ["method" => "POST"]]);
@@ -5154,9 +5153,8 @@ echo stream_context_set_option($c, "http", "method", "GET") ? "set-ok" : "FAIL";
 /// Verifies compiled PHP output for stream context get options returns array.
 #[test]
 fn test_stream_context_get_options_returns_array() {
-    // stream_context_get_options now returns the hash that was passed to
-    // stream_context_create (Phase 11 B2 — single global context slot in v1).
-    // stream_context_get_params is still an empty-array stub.
+    // stream_context_get_options returns the hash owned by this exact context.
+    // stream_context_get_params remains an empty-array compatibility stub.
     let out = compile_and_run(
         r#"<?php
 $c = stream_context_create(["http" => ["method" => "POST"]]);
@@ -5167,6 +5165,27 @@ echo gettype(stream_context_get_params($c));
 "#,
     );
     assert_eq!(out, "array|1|array");
+}
+
+/// Verifies created stream contexts preserve distinct option identity and clean ownership.
+#[test]
+fn test_stream_context_options_are_isolated_and_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = stream_context_create(["x" => ["name" => "a"]]);
+$b = stream_context_create(["x" => ["name" => "b"]]);
+echo stream_context_get_options($a)["x"]["name"];
+echo "|";
+echo stream_context_get_options($b)["x"]["name"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "a|b");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
 }
 
 /// Verifies compiled PHP output for fopen accepts 4 arg form with context.
@@ -5287,10 +5306,7 @@ echo ($a && $b ? "ok" : "FAIL") . "|" . $count;
 /// Verifies compiled PHP output for stream context set option two arg replaces options.
 #[test]
 fn test_stream_context_set_option_two_arg_replaces_options() {
-    // Phase 11 B2: the 2-arg form
-    // stream_context_set_option(ctx, options_array) overwrites the
-    // global persisted options hash, so a subsequent get_options sees
-    // the new wrapper set.
+    // The two-argument form replaces only the selected context's options hash.
     let out = compile_and_run(
         r#"<?php
 $ctx = stream_context_create(["http" => ["method" => "POST"]]);
@@ -5752,6 +5768,53 @@ echo is_resource($f) ? "ok" : "fail";
     assert_eq!(out, "ok");
 }
 
+/// Verifies `::class` registrations retain the wrapper's dynamic-construction metadata.
+#[test]
+fn test_fopen_user_wrapper_class_constant_returns_resource() {
+    let out = compile_and_run(
+        r#"<?php
+class ClassConstantWrapper {
+    public function stream_open($path, $mode, $options, &$opened): bool {
+        return true;
+    }
+}
+stream_wrapper_register("classconst", ClassConstantWrapper::class);
+$stream = fopen("classconst://anywhere", "r");
+echo is_resource($stream) ? "ok" : "fail";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies an uncaught wrapper signature mismatch retains its precise fatal diagnostic.
+#[test]
+fn test_fopen_user_wrapper_uncaught_typed_callback_error_is_precise() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class UncaughtTypedReadWrapper {
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_read(array $count): string {
+        return "";
+    }
+}
+
+stream_wrapper_register("typedfatal", UncaughtTypedReadWrapper::class);
+$stream = fopen("typedfatal://source", "r");
+fread($stream, 1);
+"#,
+    );
+    assert!(!out.success, "program unexpectedly succeeded");
+    assert_eq!(out.stdout, "");
+    assert_eq!(
+        out.stderr,
+        "Fatal error: Uncaught TypeError: UncaughtTypedReadWrapper::stream_read(): \
+Argument #1 ($count) must be of type array, int given\n"
+    );
+}
+
 /// Verifies compiled PHP output for fopen user wrapper registered class is case insensitive.
 #[test]
 fn test_fopen_user_wrapper_registered_class_is_case_insensitive() {
@@ -5798,6 +5861,269 @@ echo fclose($f) ? "1" : "0";
 "#,
     );
     assert_eq!(out, "hello|3|0|1");
+}
+
+/// Verifies post-read EOF truthiness, strict feof warnings, caching, and suppression.
+#[test]
+fn test_user_wrapper_stream_eof_context_and_cached_state_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class EofResultType {}
+
+class EofModeWrapper {
+    public $context;
+    private int $reads = 0;
+    public static bool $object = false;
+
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_read($count): string {
+        echo "R|";
+        $this->reads += 1;
+        if ($this->reads === 1) {
+            return "X";
+        }
+        return "";
+    }
+
+    public function stream_eof(): mixed {
+        echo "E|";
+        if (self::$object) {
+            return new EofResultType();
+        }
+        return "truthy";
+    }
+
+    public function stream_seek($offset, $whence): bool {
+        echo "K|";
+        return true;
+    }
+
+    public function stream_tell(): int {
+        return 0;
+    }
+}
+
+stream_wrapper_register("eofmode", EofModeWrapper::class);
+
+$one = fopen("eofmode://one", "r");
+echo "A:";
+var_dump(feof($one));
+echo "B:";
+var_dump(feof($one));
+echo "Q:";
+var_dump(fseek($one, 0));
+echo "Z:";
+var_dump(@feof($one));
+fclose($one);
+
+$two = fopen("eofmode://two", "r");
+echo "C:";
+var_dump(fread($two, 1));
+echo "D:";
+var_dump(feof($two));
+fclose($two);
+
+$three = fopen("eofmode://three", "r");
+echo "S:";
+var_dump(@feof($three));
+fclose($three);
+
+EofModeWrapper::$object = true;
+$four = fopen("eofmode://four", "r");
+echo "O:";
+var_dump(feof($four));
+fclose($four);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "A:E|bool(true)\nB:bool(true)\nQ:K|int(0)\nZ:E|bool(true)\n\
+C:R|E|string(1) \"X\"\n\
+D:bool(true)\nS:E|bool(true)\nO:E|bool(true)\n"
+    );
+    assert_eq!(
+        out.stderr.matches(
+            "Warning: feof(): EofModeWrapper::stream_eof value must be of type bool, string given"
+        ).count(),
+        1,
+        "expected one unsuppressed string warning, got: {}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stderr.matches(
+            "Warning: feof(): EofModeWrapper::stream_eof value must be of type bool, \
+EofResultType given"
+        ).count(),
+        1,
+        "expected one concrete-object warning, got: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected EOF result owners to remain balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies post-read stream-eof exceptions preserve identity and release the pending chunk.
+#[test]
+fn test_user_wrapper_post_read_stream_eof_throw_unwinds_chunk_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ThrowingEofWrapper {
+    public $context;
+    private string $data = "payload";
+
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_read($count): string {
+        echo "R|";
+        return substr($this->data, 0, 3);
+    }
+
+    public function stream_eof(): bool {
+        echo "E|";
+        throw new Exception("eof");
+    }
+
+    public function stream_close(): void {
+        echo "C|";
+    }
+}
+
+stream_wrapper_register("eofthrow", ThrowingEofWrapper::class);
+$stream = fopen("eofthrow://source", "r");
+try {
+    fread($stream, 1);
+} catch (Exception $exception) {
+    echo get_class($exception) . ":" . $exception->getMessage() . "|";
+}
+fclose($stream);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "R|E|Exception:eof|C|");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the pending read result to unwind cleanly, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies explicit and ownership-driven wrapper closes release the wrapper object exactly once.
+#[test]
+fn test_fopen_user_wrapper_close_releases_handle_object() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ClosingWrapper {
+    public $context;
+
+    public function stream_open(
+        string $path,
+        string $mode,
+        int $options,
+        ?string &$openedPath
+    ): bool {
+        return true;
+    }
+
+    public function stream_close(): void {
+        echo "X|";
+    }
+
+    public function __destruct() {
+        echo "D|";
+    }
+}
+
+stream_wrapper_register("closing", "ClosingWrapper");
+$explicit = fopen("closing://explicit", "r");
+echo "B|";
+fclose($explicit);
+echo "A|";
+$owned = fopen("closing://owned", "r");
+echo "C|";
+unset($owned);
+echo "E";
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "B|X|D|A|C|X|D|E");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies computed wrapper read strings transfer to `fread()` and release after use.
+#[test]
+fn test_fopen_user_wrapper_computed_read_result_is_released() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ComputedReadWrapper {
+    public $context;
+    private string $data = "abcdefghijkl";
+    private int $offset = 0;
+
+    public function stream_open(
+        string $path,
+        string $mode,
+        int $options,
+        ?string &$openedPath
+    ): bool {
+        return true;
+    }
+
+    public function stream_read(int $count): string {
+        $chunk = substr($this->data, $this->offset, 7);
+        $this->offset += strlen($chunk);
+        return $chunk;
+    }
+
+    public function stream_close(): void {}
+}
+
+stream_wrapper_register("computed", "ComputedReadWrapper");
+$stream = fopen("computed://payload", "r");
+echo fread($stream, 8192);
+echo fread($stream, 8192);
+fclose($stream);
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(out.stdout, "abcdefghijkl");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected computed wrapper reads to remain balanced, got: {}",
+        out.stderr
+    );
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fputcsv routes through stream write.
@@ -5901,11 +6227,10 @@ fclose($h);
 /// Verifies compiled PHP output for fopen user wrapper stream get contents drains.
 #[test]
 fn test_fopen_user_wrapper_stream_get_contents_drains() {
-    // stream_get_contents() on a synthetic wrapper fd drains via a compiled,
-    // feof-gated fread loop: it checks the wrapper's stream_eof before each
-    // read, so it never makes the EOF read whose empty substr result freed the
-    // caller's resource cell. The result is assigned and the stream closed —
-    // the exact pattern that previously SIGSEGV'd / corrupted $f.
+    // stream_get_contents() on a synthetic wrapper fd drains through repeated
+    // fread calls. Each completed stream_read is followed by stream_eof, and
+    // the sticky EOF cache stops the next loop iteration without a pre-read
+    // callback. The result remains owned independently from the resource.
     let out = compile_and_run(
         r#"<?php
 class W {
@@ -5929,9 +6254,9 @@ echo "|t=" . gettype($f);
 /// Verifies compiled PHP output for fopen user wrapper fpassthru writes and counts.
 #[test]
 fn test_fopen_user_wrapper_fpassthru_writes_and_counts() {
-    // fpassthru() on a wrapper fd uses the same feof-gated loop: it streams each
-    // chunk to stdout, returns the byte count, and leaves the resource intact so
-    // a following fclose() still sees a resource (not a freed/int cell).
+    // fpassthru() on a wrapper fd streams each chunk to stdout, probes
+    // stream_eof after the completed read, returns the byte count, and leaves
+    // the resource intact for the following fclose().
     let out = compile_and_run(
         r#"<?php
 class W {
@@ -5955,9 +6280,9 @@ echo "|t=" . gettype($f);
 /// Verifies compiled PHP output for fopen user wrapper fgets reads lines.
 #[test]
 fn test_fopen_user_wrapper_fgets_reads_lines() {
-    // fgets() on a wrapper fd reads one line at a time through a feof-gated
-    // 1-byte loop, keeping the trailing newline and stopping at EOF. The
-    // `!== false` loop must terminate cleanly and leave the resource intact.
+    // fgets() on a wrapper fd reads one line at a time through a 1-byte loop,
+    // keeping the trailing newline. Post-read stream_eof updates sticky state
+    // so the `!== false` loop terminates and leaves the resource intact.
     let out = compile_and_run(
         r#"<?php
 class W {
@@ -6005,9 +6330,9 @@ fclose($f);
 /// Verifies compiled PHP output for fopen user wrapper stream copy to stream drains.
 #[test]
 fn test_fopen_user_wrapper_stream_copy_to_stream_drains() {
-    // stream_copy_to_stream() with a wrapper source uses the feof-gated loop:
-    // each chunk is read via __rt_fread and written to the destination via
-    // __rt_fwrite (here a real php://temp fd). The source resource must survive.
+    // stream_copy_to_stream() with a wrapper source reads each chunk through
+    // __rt_fread, whose post-read EOF callback updates sticky state, and writes
+    // it through __rt_fwrite to php://temp. The source resource must survive.
     let out = compile_and_run(
         r#"<?php
 class W {
@@ -6310,10 +6635,10 @@ echo ":" . (is_file("no_such_elephc_probe") ? "Y" : "N");
 #[test]
 fn test_readfile_dispatches_to_wrapper() {
     // OOS Phase E: readfile("scheme://...") on a registered wrapper routes
-    // through __rt_readfile_wrapper (fopen + feof-gated fread drain to stdout +
-    // close), echoing the wrapper's contents and returning the byte count. A
-    // non-wrapper path falls back to __rt_readfile (raw open + stream), which
-    // preserves the directory read-error semantics.
+    // through __rt_readfile_wrapper (fopen + post-read-EOF fread drain to
+    // stdout + close), echoing the wrapper's contents and returning the byte
+    // count. A non-wrapper path falls back to __rt_readfile (raw open + stream),
+    // which preserves the directory read-error semantics.
     let out = compile_and_run(
         r#"<?php
 class RW {
@@ -6338,10 +6663,10 @@ echo "|" . $m;
 fn test_fgetcsv_and_stream_get_line_on_wrapper() {
     // OOS Phase E: fgetcsv() and stream_get_line() read from a wrapper fd.
     // fgetcsv goes through __rt_fgetcsv -> __rt_fgets, and stream_get_line
-    // through __rt_stream_get_line; both gained a feof-gated, 1-byte __rt_fread
-    // loop that accumulates into _user_wrapper_drain_buf (NOT _concat_buf, which
-    // each __rt_fread result may occupy). The wrapper's stream_read honors
-    // $count (returns a substr), matching PHP's stream_read contract.
+    // through __rt_stream_get_line; both use a 1-byte __rt_fread loop whose
+    // completed reads update sticky EOF state and which accumulates into
+    // _user_wrapper_drain_buf (NOT _concat_buf, which each result may occupy).
+    // The wrapper's stream_read honors $count, matching PHP's contract.
     let out = compile_and_run(
         r#"<?php
 class LW {
@@ -6502,6 +6827,404 @@ echo chmod("nm://f", 0644) ? "1" : "0";
 "#,
     );
     assert_eq!(out, "100");
+}
+
+/// Verifies dynamic metadata values obey PHP's exact-first union coercion preference.
+#[test]
+fn test_user_wrapper_dynamic_mixed_union_parameters_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class UnionMetaWrapper {
+    public $context;
+
+    public function stream_metadata(
+        string $path,
+        int $option,
+        array|string|bool $value
+    ): bool {
+        echo gettype($value), ":";
+        if (is_array($value)) {
+            echo implode(",", $value);
+        } elseif (is_bool($value)) {
+            echo $value ? "true" : "false";
+        } else {
+            echo $value;
+        }
+        echo "|";
+        return true;
+    }
+}
+
+stream_wrapper_register("unionmeta", UnionMetaWrapper::class);
+touch("unionmeta://source", 100, 200);
+chown("unionmeta://source", "staff");
+chown("unionmeta://source", 1000);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "array:100,200|string:staff|string:1000|");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected union conversion owners to remain balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies numeric-string union selection honors PHP integer bounds and bool fallback.
+#[test]
+fn test_user_wrapper_dynamic_mixed_numeric_union_boundaries_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class BoundaryMetaWrapper {
+    public $context;
+
+    public function stream_metadata(
+        string $path,
+        int $option,
+        int|float $value
+    ): bool {
+        echo gettype($value), "|";
+        return true;
+    }
+}
+
+class BoolFallbackMetaWrapper {
+    public $context;
+
+    public function stream_metadata(
+        string $path,
+        int $option,
+        int|bool $value
+    ): bool {
+        echo gettype($value), ":";
+        echo is_bool($value) ? ($value ? "true" : "false") : $value;
+        echo "|";
+        return true;
+    }
+}
+
+stream_wrapper_register("boundarymeta", BoundaryMetaWrapper::class);
+stream_wrapper_register("boolmeta", BoolFallbackMetaWrapper::class);
+chown("boundarymeta://source", "9223372036854775807");
+chown("boundarymeta://source", "9223372036854775808");
+chown("boundarymeta://source", "-9223372036854775808");
+chown("boundarymeta://source", "-9223372036854775809");
+chown("boolmeta://source", "staff");
+chown("boolmeta://source", "12");
+chown("boolmeta://source", "9223372036854775808");
+chown("boolmeta://source", "-9223372036854775809");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "integer|double|integer|double|boolean:true|integer:12|\
+boolean:true|integer:-9223372036854775808|"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected numeric union boundary conversions to remain balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies an int-only dynamic callback accepts PHP_INT_MIN rounding but rejects overflow.
+#[test]
+fn test_user_wrapper_dynamic_mixed_int_boundary_error_matches_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class IntMetaWrapper {
+    public $context;
+
+    public function stream_metadata(
+        string $path,
+        int $option,
+        int $value
+    ): bool {
+        echo gettype($value), ":", $value, "|";
+        return true;
+    }
+}
+
+stream_wrapper_register("intmeta", IntMetaWrapper::class);
+chown("intmeta://source", "-9223372036854775809");
+try {
+    chown("intmeta://source", "9223372036854775808");
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+unset($error);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "integer:-9223372036854775808|TypeError:IntMetaWrapper::stream_metadata(): \
+Argument #3 ($value) must be of type int, string given"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected rejected int-only overflow to unwind cleanly, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies concrete wrapper callback inputs use PHP's exact-first scalar union rules.
+#[test]
+fn test_user_wrapper_static_union_parameters_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class StaticUnionWrapper {
+    public function stream_open(
+        int|bool $path,
+        string|bool $mode,
+        int|float $options,
+        &$openedPath
+    ): bool {
+        echo gettype($path), ":", $path ? "true" : "false", "|";
+        echo gettype($mode), ":", $mode, "|";
+        echo gettype($options), ":", $options, "|";
+        return true;
+    }
+
+    public function stream_read(string|bool $count): string {
+        echo gettype($count), ":", $count;
+        return "";
+    }
+
+    public function stream_eof(): bool {
+        return true;
+    }
+}
+
+stream_wrapper_register("staticunion", StaticUnionWrapper::class);
+$stream = fopen("staticunion://source", "r");
+fread($stream, 12);
+fclose($stream);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "boolean:true|string:r|integer:0|string:12"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected static union callback conversions to remain balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies lossy float-string to int wrapper arguments emit PHP's exact deprecation.
+#[test]
+fn test_user_wrapper_weak_int_conversion_deprecations_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class WeakIntWriteWrapper {
+    public $context;
+
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_write(int $data): int {
+        echo gettype($data), ":", $data, "|";
+        return 3;
+    }
+
+    public function stream_close(): void {
+        echo "C|";
+    }
+}
+
+class WeakIntMetadataWrapper {
+    public $context;
+
+    public function stream_metadata(
+        string $path,
+        int $option,
+        int|bool $value
+    ): bool {
+        echo gettype($value), ":", $value, "|";
+        return true;
+    }
+}
+
+stream_wrapper_register("weakint", WeakIntWriteWrapper::class);
+stream_wrapper_register("weakmeta", WeakIntMetadataWrapper::class);
+
+$first = fopen("weakint://first", "wb");
+var_dump(fwrite($first, "1.5"));
+fclose($first);
+
+$second = fopen("weakint://second", "wb");
+var_dump(fwrite($second, "1.0"));
+fclose($second);
+
+$suppressed = fopen("weakint://suppressed", "wb");
+var_dump(@fwrite($suppressed, "2.5"));
+fclose($suppressed);
+
+var_dump(chown("weakmeta://dynamic", "3.5"));
+"#,
+    );
+    let static_expected = "Deprecated: Implicit conversion from float-string \
+\"1.5\" to int loses precision\n";
+    let dynamic_expected = "Deprecated: Implicit conversion from float-string \
+\"3.5\" to int loses precision\n";
+    assert!(
+        out.success,
+        "program failed; stdout: {}; stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "integer:1|int(3)\nC|integer:1|int(3)\nC|integer:2|int(3)\nC|\
+integer:3|bool(true)\n"
+    );
+    assert_eq!(
+        out.stderr.matches(static_expected).count(),
+        1,
+        "expected one exact static-source deprecation, got: {}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stderr.matches(dynamic_expected).count(),
+        1,
+        "expected one exact boxed-source deprecation, got: {}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("float-string \"1.0\"")
+            && !out.stderr.contains("float-string \"2.5\""),
+        "integer-valued and @-suppressed inputs must stay quiet: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected deprecation formatting scratch to remain balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies wrapper-only optional parameters evaluate PHP constant and object defaults.
+#[test]
+fn test_user_wrapper_non_literal_defaults_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+const WRAPPER_GLOBAL_DEFAULT = "global";
+
+class WrapperDefaultObject {
+    public string $value;
+
+    public function __construct(string $value) {
+        $this->value = $value;
+    }
+}
+
+class NonLiteralDefaultWrapper {
+    public const ARRAY_DEFAULT = [1, 2];
+    public const STRING_DEFAULT = "class";
+
+    public function stream_open(
+        string $path,
+        string $mode,
+        int $options,
+        &$openedPath,
+        array $array = self::ARRAY_DEFAULT,
+        string $global = WRAPPER_GLOBAL_DEFAULT,
+        string $class = self::class,
+        string $constant = self::STRING_DEFAULT,
+        WrapperDefaultObject $object = new WrapperDefaultObject("object")
+    ): bool {
+        echo implode(",", $array), "|";
+        echo $global, "|", $class, "|", $constant, "|";
+        echo get_class($object), ":", $object->value;
+        return false;
+    }
+}
+
+stream_wrapper_register("nonliteral", NonLiteralDefaultWrapper::class);
+var_dump(@fopen("nonliteral://source", "r"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "1,2|global|NonLiteralDefaultWrapper|class|WrapperDefaultObject:objectbool(false)\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected synthetic default thunks to transfer and release every owner, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies numeric unions and intersections diagnose the concrete dynamic metadata type.
+#[test]
+fn test_user_wrapper_dynamic_mixed_union_and_intersection_errors_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface MetadataLeft {}
+interface MetadataRight {}
+
+class NumericMetaWrapper {
+    public $context;
+
+    public function stream_metadata(
+        string $path,
+        int $option,
+        int|float $value
+    ): bool {
+        echo gettype($value), ":", $value, "|";
+        return true;
+    }
+}
+
+class IntersectionMetaWrapper {
+    public $context;
+
+    public function stream_metadata(
+        string $path,
+        int $option,
+        MetadataLeft&MetadataRight $value
+    ): bool {
+        return true;
+    }
+}
+
+stream_wrapper_register("numericmeta", NumericMetaWrapper::class);
+stream_wrapper_register("intermeta", IntersectionMetaWrapper::class);
+chown("numericmeta://source", "12");
+chown("numericmeta://source", "12.5");
+try {
+    chown("numericmeta://source", "staff");
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage(), "|";
+}
+unset($error);
+try {
+    touch("intermeta://source", 100, 200);
+} catch (Throwable $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+unset($error);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "integer:12|double:12.5|TypeError:NumericMetaWrapper::stream_metadata(): \
+Argument #3 ($value) must be of type int|float, string given|\
+TypeError:IntersectionMetaWrapper::stream_metadata(): Argument #3 ($value) must be of type \
+MetadataLeft&MetadataRight, array given"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected rejected dynamic values and union conversions to unwind cleanly, got: {}",
+        out.stderr
+    );
 }
 
 /// Verifies unlink()/mkdir()/rmdir() on a registered userspace-wrapper scheme

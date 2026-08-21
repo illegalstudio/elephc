@@ -67,12 +67,29 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
         ctx.emitter.label(label);
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        if slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+        if let Some(opcode) = runtime_dom_property_opcode_for_slot(ctx, slot) {
+            let receiver_reg = abi::int_result_reg(ctx.emitter).to_string();
+            abi::emit_load_temporary_stack_slot(ctx.emitter, &receiver_reg, 16);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            let property_inst = Instruction {
+                operands: vec![inst.operands[0]],
+                ..inst.clone()
+            };
+            super::super::internal_extensions::lower_mixed_receiver_internal_extension_call(
+                ctx,
+                &property_inst,
+                &receiver_reg,
+                opcode,
+                &slot.php_type,
+            )?;
+        } else {
+            if slot.is_declared {
+                emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+            }
+            emit_property_load(ctx, slot, base_reg)?;
+            materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
-        emit_property_load(ctx, slot, base_reg)?;
-        materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
-        abi::emit_release_temporary_stack(ctx.emitter, 32);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -144,13 +161,22 @@ pub(super) fn declared_dynamic_property_slots(
 /// Collects declared-property candidates readable from a boxed Mixed receiver.
 pub(super) fn declared_mixed_property_get_candidates(
     ctx: &FunctionContext<'_>,
+    object: ValueId,
     inst: &Instruction,
 ) -> Result<Vec<MixedPropertyCandidate>> {
+    let receiver_bases = dynamic_property_receiver_object_bases(ctx, object)?;
     let mut candidates = Vec::new();
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in sorted_classes {
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+            continue;
+        }
+        if receiver_bases.as_ref().is_some_and(|bases| {
+            !bases
+                .iter()
+                .any(|base| dynamic_property_class_is_a(ctx, class_name, base))
+        }) {
             continue;
         }
         for (property, _) in &class_info.properties {
@@ -169,6 +195,104 @@ pub(super) fn declared_mixed_property_get_candidates(
             .then_with(|| left.slot.property.cmp(&right.slot.property))
     });
     Ok(candidates)
+}
+
+/// Resolves shared virtual DOM node properties for a constrained boxed receiver.
+pub(super) fn dynamic_internal_extension_properties(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    inst: &Instruction,
+) -> Result<Vec<(PropertySlot, u32)>> {
+    let Some(bases) = dynamic_property_receiver_object_bases(ctx, object)? else {
+        return Ok(Vec::new());
+    };
+    if bases.is_empty()
+        || bases
+            .iter()
+            .any(|base| !crate::internal_extensions::is_native_wrapper_class(base))
+    {
+        return Ok(Vec::new());
+    }
+    let properties = [
+        "firstChild",
+        "lastChild",
+        "parentNode",
+        "parentElement",
+        "ownerDocument",
+        "previousSibling",
+        "nextSibling",
+        "textContent",
+        "childNodes",
+    ];
+    let mut resolved = Vec::new();
+    for property in properties {
+        let mut shared: Option<(PropertySlot, u32)> = None;
+        for base in &bases {
+            let Ok(slot) = resolve_property_slot_for_class(ctx, base, property, inst) else {
+                shared = None;
+                break;
+            };
+            let Some(opcode) = runtime_dom_property_opcode_for_slot(ctx, &slot) else {
+                shared = None;
+                break;
+            };
+            if shared.as_ref().is_some_and(|(current, current_opcode)| {
+                *current_opcode != opcode || current.php_type != slot.php_type
+            }) {
+                shared = None;
+                break;
+            }
+            shared.get_or_insert((slot, opcode));
+        }
+        if let Some(shared) = shared {
+            resolved.push(shared);
+        }
+    }
+    Ok(resolved)
+}
+
+/// Returns object members that constrain one boxed union receiver's runtime classes.
+fn dynamic_property_receiver_object_bases(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+) -> Result<Option<Vec<String>>> {
+    let raw_type = ctx.raw_value_php_type(object)?;
+    match raw_type {
+        PhpType::Object(class_name) => {
+            Ok(Some(vec![class_name.trim_start_matches('\\').to_string()]))
+        }
+        PhpType::Union(members) => {
+            let mut bases = Vec::new();
+            for member in members {
+                if let PhpType::Object(class_name) = member {
+                    bases.push(class_name.trim_start_matches('\\').to_string());
+                }
+            }
+            Ok((!bases.is_empty()).then_some(bases))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Reports whether one runtime candidate class equals or extends a constrained base.
+fn dynamic_property_class_is_a(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    base: &str,
+) -> bool {
+    let base = base.trim_start_matches('\\');
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(class_name) = current {
+        if class_name.eq_ignore_ascii_case(base) {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(class_name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
 }
 
 /// Verifies that the EIR result type can receive every declared property candidate.

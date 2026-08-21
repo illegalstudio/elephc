@@ -38,6 +38,7 @@ pub(crate) struct SharedCodegenState {
     mixed_string_sharing: [Option<bool>; 2],
     /// Memoized "does this module share the `count()` countable guard", for the same reason.
     count_guard_sharing: Option<bool>,
+    dom_xpath_callable_resolver_emitted: bool,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -100,6 +101,20 @@ impl SharedCodegenState {
     /// Records the `count()` guard sharing decision so later sites reuse it.
     pub(super) fn set_count_guard_sharing(&mut self, shares: bool) {
         self.count_guard_sharing = Some(shares);
+    }
+
+    /// Returns whether the module-wide DOM XPath resolver pair has been emitted.
+    pub(super) fn dom_xpath_callable_resolver_is_emitted(&self) -> bool {
+        self.dom_xpath_callable_resolver_emitted
+    }
+
+    /// Reserves the module-wide DOM XPath callable-name resolver for its first emitter.
+    pub(super) fn reserve_dom_xpath_callable_resolver(&mut self) -> bool {
+        if self.dom_xpath_callable_resolver_emitted {
+            return false;
+        }
+        self.dom_xpath_callable_resolver_emitted = true;
+        true
     }
 
     /// Returns cached runtime string-callable cases for the requested specialization.

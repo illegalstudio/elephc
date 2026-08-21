@@ -18,6 +18,8 @@
 //!   staticlib, so its detection forces that crate to link.
 //! - `eval()` keeps the dynamic bridge feature separate from scope-only helpers
 //!   so AOT fragments can shed bridge-only runtime/link dependencies incrementally.
+//! - DOM bridge helpers and fixed context state are emitted only when lowered EIR
+//!   contains an internal-extension call.
 
 use std::collections::HashMap;
 
@@ -56,6 +58,8 @@ pub struct RuntimeFeatures {
     /// the interpreter bridge. Scope-only helpers are emitted by the core runtime
     /// when the dynamic eval bridge is not otherwise required.
     pub eval_scope: bool,
+    /// True when lowered code crosses the native DOM internal-extension ABI.
+    pub dom_bridge: bool,
     /// True when compiling a `--web` program. Selects the output-capture variant
     /// of `__rt_stdout_write`, which checks the `_elephc_web_capture` flag and may
     /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
@@ -140,6 +144,7 @@ impl RuntimeFeatures {
             descriptor_invoker: false,
             eval_bridge: false,
             eval_scope: false,
+            dom_bridge: false,
             web: false,
             pdo_udf: false,
             fiber: false,
@@ -159,6 +164,7 @@ impl RuntimeFeatures {
             descriptor_invoker: true,
             eval_bridge: true,
             eval_scope: true,
+            dom_bridge: true,
             web: true,
             pdo_udf: true,
             fiber: true,
@@ -209,6 +215,9 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         // Regex is a separate optional capability registered only when enabled.
         requirements.push(LinkRequirement::Bridge("elephc_magician"));
         requirements.push(LinkRequirement::Bridge("elephc_bcmath"));
+    }
+    if features.dom_bridge {
+        requirements.push(LinkRequirement::Bridge("elephc_dom"));
     }
     requirements
 }
@@ -572,6 +581,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
@@ -898,6 +908,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
@@ -1121,6 +1132,18 @@ mod tests {
         .is_empty());
     }
 
+    /// Verifies DOM ABI helpers force the matching typed native bridge requirement.
+    #[test]
+    fn test_dom_runtime_features_require_elephc_dom_bridge() {
+        assert_eq!(
+            link_requirements_for_runtime_features(RuntimeFeatures {
+                dom_bridge: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec![LinkRequirement::Bridge("elephc_dom")]
+        );
+    }
+
     /// Verifies literal callback dispatch to preg builtins enables regex helpers.
     #[test]
     fn test_runtime_features_include_regex_for_call_user_func_literal() {
@@ -1272,6 +1295,7 @@ mod tests {
             descriptor_invoker: true,
             eval_bridge: false,
             eval_scope: false,
+            dom_bridge: false,
             web: false,
             pdo_udf: false,
             fiber: false,

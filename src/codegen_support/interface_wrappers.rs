@@ -15,7 +15,9 @@ use crate::names::{interface_method_wrapper_symbol, method_symbol};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::{abi, platform};
-use super::value_boxing::emit_box_current_value_as_mixed;
+use super::value_boxing::{
+    emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+};
 
 /// Emits return wrappers for interface methods whose implementation returns a concrete type
 /// but the interface signature declares `Mixed`. Wrappers box the concrete return value so the
@@ -101,6 +103,13 @@ fn emit_class_interface_return_wrappers(
                 method_name,
             );
             let implementation = method_symbol(impl_class, method_name);
+            let returns_owned_native_wrapper = matches!(
+                actual_sig.return_type.codegen_repr(),
+                PhpType::Object(_)
+            ) && crate::internal_extensions::is_native_wrapper_class(impl_class)
+                && crate::internal_extensions::operation_registry()
+                    .method(impl_class, method_name)
+                    .is_some();
 
             emitter.raw(".align 2");
             emitter.label_global(&wrapper);
@@ -112,20 +121,34 @@ fn emit_class_interface_return_wrappers(
                 platform::Arch::AArch64 => {
                     emitter.instruction("str x30, [sp, #-16]!");                // preserve the interface dispatch return address across nested calls
                     abi::emit_call_label(emitter, &implementation);
-                    emit_box_current_value_as_mixed(
-                        emitter,
-                        &actual_sig.return_type.codegen_repr(),
-                    );
+                    if returns_owned_native_wrapper {
+                        emit_box_current_owned_value_as_mixed(
+                            emitter,
+                            &actual_sig.return_type.codegen_repr(),
+                        );
+                    } else {
+                        emit_box_current_value_as_mixed(
+                            emitter,
+                            &actual_sig.return_type.codegen_repr(),
+                        );
+                    }
                     emitter.instruction("ldr x30, [sp], #16");                  // restore the interface dispatch return address after boxing
                     emitter.instruction("ret");                                 // return the normalized mixed value to the interface caller
                 }
                 platform::Arch::X86_64 => {
                     emitter.instruction("sub rsp, 8");                          // align the SysV stack before the wrapper's nested calls
                     abi::emit_call_label(emitter, &implementation);
-                    emit_box_current_value_as_mixed(
-                        emitter,
-                        &actual_sig.return_type.codegen_repr(),
-                    );
+                    if returns_owned_native_wrapper {
+                        emit_box_current_owned_value_as_mixed(
+                            emitter,
+                            &actual_sig.return_type.codegen_repr(),
+                        );
+                    } else {
+                        emit_box_current_value_as_mixed(
+                            emitter,
+                            &actual_sig.return_type.codegen_repr(),
+                        );
+                    }
                     emitter.instruction("add rsp, 8");                          // release the alignment padding before returning to the caller
                     emitter.instruction("ret");                                 // return the normalized mixed value to the interface caller
                 }

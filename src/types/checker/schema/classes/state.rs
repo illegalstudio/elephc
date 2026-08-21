@@ -30,8 +30,10 @@ pub(super) struct ClassBuildState {
     pub(super) prop_types: Vec<(String, PhpType)>,
     pub(super) property_offsets: HashMap<String, usize>,
     pub(super) property_declaring_classes: HashMap<String, String>,
+    pub(super) property_declaring_class_slots: Vec<String>,
     pub(super) defaults: Vec<Option<Expr>>,
     pub(super) property_visibilities: HashMap<String, Visibility>,
+    pub(super) property_visibility_slots: Vec<Visibility>,
     pub(super) property_set_visibilities: HashMap<String, Visibility>,
     pub(super) declared_properties: HashSet<String>,
     pub(super) property_declared_slots: Vec<bool>,
@@ -188,8 +190,10 @@ impl ClassBuildState {
             properties: self.prop_types,
             property_offsets: self.property_offsets,
             property_declaring_classes: self.property_declaring_classes,
+            property_declaring_class_slots: self.property_declaring_class_slots,
             defaults: self.defaults,
             property_visibilities: self.property_visibilities,
+            property_visibility_slots: self.property_visibility_slots,
             property_set_visibilities: self.property_set_visibilities,
             declared_properties: self.declared_properties,
             property_declared_slots: self.property_declared_slots,
@@ -408,6 +412,14 @@ impl ClassBuildState {
         for (index, (name, ty)) in parent.properties.iter().enumerate() {
             self.prop_types.push((name.clone(), ty.clone()));
             self.property_offsets.insert(name.clone(), 8 + index * 16);
+            self.property_declaring_class_slots.push(
+                parent
+                    .property_declaring_class_slots
+                    .get(index)
+                    .cloned()
+                    .or_else(|| parent.property_declaring_classes.get(name).cloned())
+                    .unwrap_or_default(),
+            );
             self.defaults.push(parent.defaults[index].clone());
             self.property_declared_slots.push(
                 parent
@@ -427,6 +439,14 @@ impl ClassBuildState {
                 self.property_visibilities
                     .insert(name.clone(), visibility.clone());
             }
+            self.property_visibility_slots.push(
+                parent
+                    .property_visibility_slots
+                    .get(index)
+                    .cloned()
+                    .or_else(|| parent.property_visibilities.get(name).cloned())
+                    .unwrap_or(Visibility::Public),
+            );
             if let Some(set_visibility) = parent.property_set_visibilities.get(name) {
                 self.property_set_visibilities
                     .insert(name.clone(), set_visibility.clone());

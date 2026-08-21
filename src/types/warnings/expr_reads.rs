@@ -225,6 +225,7 @@ pub(super) fn collect_expr_reads(
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::ConstRef(_)
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This => {}

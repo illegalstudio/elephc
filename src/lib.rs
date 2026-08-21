@@ -31,6 +31,8 @@ mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod hash_prelude;
 pub mod image_prelude;
+/// Compiler metadata for native PHP internal extensions such as DOM/libxml/SimpleXML.
+pub mod internal_extensions;
 /// Intrinsic call handling.
 pub mod intrinsics;
 /// Intermediate representation used by the EIR backend track.

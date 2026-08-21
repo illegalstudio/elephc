@@ -16,6 +16,7 @@ mod callables;
 mod compare;
 pub(crate) mod data;
 mod diagnostics;
+mod dom_wrapper_cache;
 mod emitters;
 mod bcmath;
 mod eval_bridge;
@@ -27,6 +28,7 @@ pub(crate) mod generators;
 mod io;
 /// The shared PHP `float`→`int` conversion (`__rt_php_float_to_int`).
 mod numeric;
+mod internal_extensions;
 mod objects;
 /// PDO Tier-D callback adapters (`__rt_pdo_*`) re-entering compiled-PHP callables.
 mod pdo;
@@ -61,7 +63,10 @@ pub(crate) use data::{
 };
 /// Emit fixed runtime data section (symbols, constants, type metadata).
 pub(crate) use data::emit_runtime_data_user;
-pub(crate) use data::{is_user_filter_contract_method, is_user_wrapper_contract_method};
+pub(crate) use data::{
+    is_user_filter_contract_method, user_wrapper_adapter_symbol, user_wrapper_default_thunk_name,
+    USER_WRAPPER_METHOD_NAMES,
+};
 /// Emit user-program-specific runtime data section.
 pub(crate) use emitters::emit_runtime;
 /// The PHP 8.5 NAN-to-bool coercion probe, reached from `src/codegen/lower_inst` float

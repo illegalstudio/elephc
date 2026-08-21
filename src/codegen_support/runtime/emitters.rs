@@ -12,8 +12,8 @@ mod managed;
 mod platform;
 
 use super::{
-    bcmath, callables, diagnostics, exceptions, generators, numeric, round_mode, strings,
-    system,
+    bcmath, callables, diagnostics, dom_wrapper_cache, exceptions, generators,
+    internal_extensions, numeric, round_mode, strings, system,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
@@ -204,6 +204,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     generators::emit_generator_runtime(emitter);
 
     managed::emit_managed_runtime(emitter, features);
+    if features.dom_bridge {
+        // DOM wrapper state is emitted after managed object helpers and before
+        // platform I/O helpers, matching the dependency order of the bridge.
+        dom_wrapper_cache::emit_dom_wrapper_cache(emitter);
+        internal_extensions::emit_dom_runtime(emitter);
+    }
     platform::emit_platform_runtime(emitter, features);
 }
 

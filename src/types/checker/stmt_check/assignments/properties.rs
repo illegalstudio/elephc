@@ -66,10 +66,16 @@ pub(super) fn check_property_array_push(
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    if super::is_simplexml_element_wrapper_type(checker, &obj_ty) {
+        return Ok(());
+    }
     match &obj_ty {
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            if is_dom_named_node_map(&prop_ty) {
+                return Ok(());
+            }
             let updated_prop_ty = updated_array_property_push_type(
                 checker,
                 &prop_ty,
@@ -128,6 +134,9 @@ pub(super) fn check_property_array_assign(
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    if super::is_simplexml_element_wrapper_type(checker, &obj_ty) {
+        return Ok(());
+    }
     if matches!(obj_ty, PhpType::Mixed) {
         if !is_php_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
@@ -138,6 +147,9 @@ pub(super) fn check_property_array_assign(
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
+            if is_dom_named_node_map(&prop_ty) {
+                return Ok(());
+            }
             if let PhpType::Object(prop_class_name) = &prop_ty {
                 if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
                     return Ok(());
@@ -198,6 +210,18 @@ pub(super) fn check_property_array_assign(
     }
 }
 
+/// Returns whether `ty` is a DOM named map with php-src read-only dimensions.
+fn is_dom_named_node_map(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Object(class_name)
+            if matches!(
+                class_name.trim_start_matches('\\'),
+                "DOMNamedNodeMap" | "Dom\\NamedNodeMap" | "Dom\\DtdNamedNodeMap"
+            )
+    )
+}
+
 /// Validates a write to a named property of a class instance.
 ///
 /// Checks: property existence, `__set` magic method fallback, dynamic properties (`#[\AllowDynamicProperties]`),
@@ -214,6 +238,11 @@ fn check_object_property_write(
     span: Span,
 ) -> Result<(), CompileError> {
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
+        return Ok(());
+    }
+    if super::is_simplexml_element_class(checker, class_name) {
+        // SimpleXML member writes mutate the selected XML node set through the
+        // native object handler; they never target a userland property slot.
         return Ok(());
     }
     if let Some(class_info) = checker.classes.get(class_name) {
@@ -239,6 +268,14 @@ fn check_object_property_write(
             .unwrap_or(PhpType::Int);
         let readonly_non_null_coalesce_keep =
             null_coalesce_property_keeps_non_null(object, property, value, &expected_ty);
+        let declaring_class = class_info
+            .property_declaring_classes
+            .get(property)
+            .map(String::as_str)
+            .unwrap_or(class_name);
+        let handler_readonly = crate::internal_extensions::registry()
+            .property_is_writable(declaring_class, property)
+            == Some(false);
         let internal_pdo_statement_initializer = checker
             .current_method
             .as_deref()
@@ -247,14 +284,14 @@ fn check_object_property_write(
                 .property_declaring_classes
                 .get(property)
                 .is_some_and(|owner| owner.trim_start_matches('\\').eq_ignore_ascii_case("PDOStatement"));
-        if class_info.readonly_properties.contains(property)
+        if (handler_readonly || (class_info.readonly_properties.contains(property)
             && !(checker.current_class.as_deref()
                 == class_info
                     .property_declaring_classes
                     .get(property)
                     .map(String::as_str)
                 && checker.current_method.as_deref() == Some("__construct"))
-            && !internal_pdo_statement_initializer
+            && !internal_pdo_statement_initializer))
             && !readonly_non_null_coalesce_keep
         {
             // PHP raises this as a catchable `Error` at runtime instead of a
@@ -300,15 +337,50 @@ fn check_object_property_write(
             ));
         }
         if class_info.visible_property_is_declared(property) {
-            checker.require_compatible_arg_type(
-                &expected_ty,
+            if !dom_body_assignment_uses_runtime_type_check(
+                checker,
+                declaring_class,
+                property,
                 val_ty,
-                span,
-                &format!("Property {}::${}", class_name, property),
-            )?;
+            ) {
+                checker.require_compatible_arg_type(
+                    &expected_ty,
+                    val_ty,
+                    span,
+                    &format!("Property {}::${}", class_name, property),
+                )?;
+            }
         }
     }
     Ok(())
+}
+
+/// Allows DOM body element candidates whose exact namespace class is known only at runtime.
+fn dom_body_assignment_uses_runtime_type_check(
+    checker: &Checker,
+    declaring_class: &str,
+    property: &str,
+    value_type: &PhpType,
+) -> bool {
+    if !declaring_class.eq_ignore_ascii_case("Dom\\Document") || property != "body" {
+        return false;
+    }
+    match value_type {
+        PhpType::Mixed | PhpType::Void => true,
+        PhpType::Object(class_name) => {
+            class_name.eq_ignore_ascii_case("Dom\\Element")
+                || checker.is_subclass_of(class_name, "Dom\\Element")
+        }
+        PhpType::Union(members) => members.iter().all(|member| {
+            dom_body_assignment_uses_runtime_type_check(
+                checker,
+                declaring_class,
+                property,
+                member,
+            )
+        }),
+        _ => false,
+    }
 }
 
 /// Validates that the current context can access a named property, checking visibility and class scope.

@@ -18,7 +18,53 @@ pub(super) fn emit_object_allocation(
     uninitialized_marker_offsets: &[usize],
     owned_reference_property_offsets: &[usize],
 ) -> Result<()> {
-    let dynamic_properties_offset = dynamic_property_hash_offset(property_count);
+    emit_object_allocation_with_hidden_slots(
+        ctx,
+        class_id,
+        property_count,
+        0,
+        allow_dynamic_properties,
+        uninitialized_marker_offsets,
+        owned_reference_property_offsets,
+    )
+}
+
+/// Allocates one named class, reserving native-wrapper metadata outside PHP-visible slots.
+pub(super) fn emit_named_class_object_allocation(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    class_id: u64,
+    property_count: usize,
+    allow_dynamic_properties: bool,
+    uninitialized_marker_offsets: &[usize],
+    owned_reference_property_offsets: &[usize],
+) -> Result<()> {
+    emit_object_allocation_with_hidden_slots(
+        ctx,
+        class_id,
+        property_count,
+        crate::internal_extensions::hidden_slot_count_for(
+            &ctx.module.class_infos,
+            class_name.trim_start_matches('\\'),
+        ),
+        allow_dynamic_properties,
+        uninitialized_marker_offsets,
+        owned_reference_property_offsets,
+    )
+}
+
+/// Emits an ordinary object allocation with compiler-hidden trailing slots before dynamic storage.
+pub(super) fn emit_object_allocation_with_hidden_slots(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    property_count: usize,
+    hidden_slot_count: usize,
+    allow_dynamic_properties: bool,
+    uninitialized_marker_offsets: &[usize],
+    owned_reference_property_offsets: &[usize],
+) -> Result<()> {
+    let storage_slot_count = property_count + hidden_slot_count;
+    let dynamic_properties_offset = dynamic_property_hash_offset(storage_slot_count);
     let dynamic_properties_bytes = if allow_dynamic_properties { 8 } else { 0 };
     let payload_size = dynamic_properties_offset + dynamic_properties_bytes;
     match ctx.emitter.target.arch {
@@ -47,7 +93,7 @@ pub(super) fn emit_object_allocation(
         }
     }
     let object_reg = abi::int_result_reg(ctx.emitter);
-    for index in 0..property_count {
+    for index in 0..storage_slot_count {
         let offset = 8 + index * 16;
         abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
         abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);

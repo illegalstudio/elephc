@@ -122,7 +122,7 @@ pub(super) fn coerce_to_string(ctx: &mut LoweringContext<'_, '_>, value: Lowered
 }
 
 /// Coerces a value to string storage using an explicit source span.
-pub(super) fn coerce_to_string_at_span(
+pub(crate) fn coerce_to_string_at_span(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<crate::span::Span>,
@@ -155,4 +155,3 @@ pub(super) fn coerce_to_string_at_span(
         }
     }
 }
-

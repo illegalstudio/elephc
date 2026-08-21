@@ -571,6 +571,11 @@ pub fn method_symbol(class_name: &str, method_name: &str) -> String {
     join_php_symbol("_method", &[class_name, method_name])
 }
 
+/// Returns the uniform boxed-Mixed runtime adapter symbol for one class's `__debugInfo()`.
+pub fn debug_info_adapter_symbol(class_id: u64) -> String {
+    format!("_class_debug_info_adapter_{class_id}")
+}
+
 /// Returns the interface method wrapper symbol for a class/interface/method triplet.
 ///
 /// Format: `_ifacewrap_<class_id>_<interface_id>_<method>`. Used by the runtime to route

@@ -169,13 +169,30 @@ pub(crate) fn link_with_plan(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
-    let resolved = bridges::resolve(plan, forced_whole_archive)?;
+    let bridges::BridgeResolution {
+        mut plan,
+        needs_libdl,
+        macos_libraries,
+    } = bridges::resolve(plan, forced_whole_archive)?;
+    if target.platform == Platform::MacOS {
+        for library in macos_libraries {
+            let already_present = plan.items().iter().any(|item| {
+                matches!(
+                    item,
+                    LinkItem::NamedLibrary { name, .. } if name == &library
+                )
+            });
+            if !already_present {
+                plan.push(LinkItem::named_runtime(library));
+            }
+        }
+    }
     let prepared = (target.platform == Platform::MacOS)
-        .then(|| archive_dedup::prepare(&resolved.plan));
+        .then(|| archive_dedup::prepare(&plan));
     let render_plan = prepared
         .as_ref()
         .map(|prepared| &prepared.plan)
-        .unwrap_or(&resolved.plan);
+        .unwrap_or(&plan);
 
     let sdk_path = (target.platform == Platform::MacOS).then(sdk::macos_sdk_path);
     let sdk_version = (target.platform == Platform::MacOS).then(sdk::macos_sdk_version);
@@ -200,7 +217,7 @@ pub(crate) fn link_with_plan(
             runtime: runtime_object_path,
         },
         render_plan,
-        resolved.needs_libdl,
+        needs_libdl,
         mac_sdk,
         &homebrew_paths,
     );

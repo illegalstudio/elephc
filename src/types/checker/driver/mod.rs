@@ -253,7 +253,20 @@ pub(super) fn check_types_impl(
     ) {
         errors.extend(error.flatten());
     }
+    if let Err(error) = crate::internal_extensions::inject_checker_declarations(
+        &mut interface_map,
+        &mut class_map,
+        &declared_traits,
+    ) {
+        errors.extend(error.flatten());
+    }
     checker.declared_classes = class_map.keys().cloned().collect();
+    checker.declared_classes.extend(
+        crate::internal_extensions::registry()
+            .classes()
+            .filter(|class| class.enum_type)
+            .map(|class| class.canonical_name.clone()),
+    );
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
     checker.declared_trait_methods = declared_trait_methods;

@@ -51,12 +51,8 @@ pub fn emit_readfile_wrapper(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the synthetic fd across the drain/close
     emitter.instruction("str xzr, [sp, #24]");                                  // bytes-copied total = 0
 
-    // -- feof-gated drain: check stream_eof BEFORE each read so the loop never
-    //    makes the EOF read whose empty result would cross the method boundary --
+    // -- drain through stream_read until an empty result --
     emitter.label("__rt_rfw_loop");
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
-    emitter.instruction("bl __rt_feof");                                        // check stream_eof first (x0 = 1 at EOF)
-    emitter.instruction("cbnz x0, __rt_rfw_done");                              // at EOF: stop without reading
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the wrapper fd
     emitter.instruction("mov x1, #4096");                                       // request up to 4096 bytes
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
@@ -110,12 +106,8 @@ fn emit_readfile_wrapper_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the synthetic fd across the drain/close
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // bytes-copied total = 0
 
-    // -- feof-gated drain: check stream_eof BEFORE each read --
+    // -- drain through stream_read until an empty result --
     emitter.label("__rt_rfw_loop_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
-    emitter.instruction("call __rt_feof");                                      // check stream_eof first (rax = 1 at EOF)
-    emitter.instruction("test rax, rax");                                       // at EOF?
-    emitter.instruction("jnz __rt_rfw_done_x86");                               // at EOF: stop without reading
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
     emitter.instruction("mov rsi, 4096");                                       // request up to 4096 bytes
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len

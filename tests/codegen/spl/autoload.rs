@@ -9,6 +9,29 @@
 
 use crate::support::*;
 
+/// Verifies PSR-4 discovery and loading ignore data after an autoloaded file's halt offset.
+#[test]
+fn test_psr4_autoloaded_file_halt_payload_is_opaque() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Halted.php",
+                "<?php namespace App; class Halted { public static function value(): string { return 'ok'; } } __HALT_COMPILER(); ?><?php broken",
+            ),
+            (
+                "main.php",
+                "<?php echo App\\Halted::value();",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies PSR-4 single namespace autoload.
 #[test]
 fn test_psr4_single_namespace_autoload() {

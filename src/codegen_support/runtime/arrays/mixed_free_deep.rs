@@ -134,11 +134,23 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_mixed_free_deep_resource_stream");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the native fd from the low payload word
 
-    emitter.instruction("mov x9, #0x40000000");                                 // load the synthetic/sentinel handle threshold into a scratch register
+    emitter.instruction("mov x9, #0x40000000");                                 // load the user-wrapper descriptor base into a scratch register
 
-    emitter.instruction("cmp x0, x9");                                          // skip synthetic handles and the -1 sentinel left by an explicit close
+    emitter.instruction("cmp x0, x9");                                          // is this a native descriptor below the wrapper range?
 
-    emitter.instruction("b.hs __rt_mixed_free_deep_box");                       // skip close for synthetic/already-closed handles
+    emitter.instruction("b.lo __rt_mixed_free_deep_resource_stream_native");    // native descriptors close through the platform syscall
+
+    emitter.instruction("add x10, x9, #256");                                   // compute the exclusive end of the 256-slot wrapper range
+
+    emitter.instruction("cmp x0, x10");                                         // does this descriptor belong to a registered user wrapper?
+
+    emitter.instruction("b.hs __rt_mixed_free_deep_box");                       // skip other synthetic handles and the explicit-close sentinel
+
+    emitter.instruction("bl __rt_user_wrapper_fclose");                         // invoke stream_close and release the wrapper table owner
+
+    emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after closing the wrapper stream
+
+    emitter.label("__rt_mixed_free_deep_resource_stream_native");
 
     emitter.syscall(6);                                                         // close(fd) — AArch64 macOS x16=6/svc #0x80, Linux remapped to x8=57/svc #0
     emitter.instruction("b __rt_mixed_free_deep_box");                          // free the mixed box after closing the native fd
@@ -303,9 +315,19 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
     emitter.label("__rt_mixed_free_deep_resource_stream");
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the native fd from the low payload word into the close argument
 
-    emitter.instruction("cmp rdi, 0x40000000");                                 // synthetic/sentinel handle threshold (-1 marks an explicit close)
+    emitter.instruction("cmp rdi, 0x40000000");                                 // is this a native descriptor below the wrapper range?
 
-    emitter.instruction("jae __rt_mixed_free_deep_box");                        // skip synthetic/already-closed handles
+    emitter.instruction("jb __rt_mixed_free_deep_resource_stream_native");      // native descriptors close through libc
+
+    emitter.instruction("cmp rdi, 0x40000100");                                 // does this descriptor belong to a registered user wrapper?
+
+    emitter.instruction("jae __rt_mixed_free_deep_box");                        // skip other synthetic handles and the explicit-close sentinel
+
+    emitter.instruction("call __rt_user_wrapper_fclose");                       // invoke stream_close and release the wrapper table owner
+
+    emitter.instruction("jmp __rt_mixed_free_deep_box");                        // free the mixed box after closing the wrapper stream
+
+    emitter.label("__rt_mixed_free_deep_resource_stream_native");
 
     emitter.instruction("call close");                                          // close(fd) via the C library on x86_64 Linux
 

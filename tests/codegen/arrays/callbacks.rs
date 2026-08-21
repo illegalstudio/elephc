@@ -971,6 +971,24 @@ echo $c("two") . ":" . $c(1);
     assert_eq!(out, "two:1");
 }
 
+/// Verifies that a closure returning an element of an untyped array preserves an object value.
+#[test]
+fn test_mixed_array_element_closure_return_preserves_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public string $value;
+}
+$box = new Box();
+$box->value = "node";
+$first = function (array $values) { return $values[0]; };
+$result = $first([$box]);
+echo get_class($result) . ":" . $result->value;
+"#,
+    );
+    assert_eq!(out, "Box:node");
+}
+
 /// Verifies the same passthrough closure invoked through the descriptor invoker
 /// (`call_user_func`) also preserves a string argument.
 #[test]
@@ -982,6 +1000,28 @@ echo call_user_func($c, "two") . ":" . call_user_func($c, 1);
 "#,
     );
     assert_eq!(out, "two:1");
+}
+
+/// Verifies a returned Mixed argument transfers exactly one invoker owner even when the same
+/// boxed value occupies multiple visible argument slots.
+#[test]
+fn test_mixed_param_callable_return_transfers_one_duplicate_argument_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$shared = $argc > 0 ? "two" : 1;
+$first = function (mixed $left, mixed $right) { return $left; };
+$result = call_user_func($first, $shared, $shared);
+echo $result;
+unset($result, $first, $shared);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "two");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected one transferred Mixed owner and no duplicate alias leak, got: {}",
+        out.stderr
+    );
 }
 
 /// Verifies runtime-selected static callable arrays route fixed-return callbacks through descriptors.

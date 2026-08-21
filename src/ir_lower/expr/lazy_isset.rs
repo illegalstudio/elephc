@@ -75,6 +75,9 @@ pub(super) fn lower_lazy_isset_operand(
 ) -> Option<LoweredValue> {
     match &arg.kind {
         ExprKind::ArrayAccess { array, index } => {
+            if simplexml_object_expr_class(ctx, array).is_some() {
+                return Some(lower_simplexml_has_dimension(ctx, array, index, false, arg));
+            }
             if array_access_expr_satisfies_array_access(ctx, array) {
                 let synthetic = Expr::new(
                     ExprKind::MethodCall {
@@ -93,6 +96,11 @@ pub(super) fn lower_lazy_isset_operand(
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
+            if simplexml_object_expr_class(ctx, object).is_some() {
+                return Some(lower_simplexml_has_property(
+                    ctx, object, property, false, arg,
+                ));
+            }
             lower_lazy_property_isset_operand(ctx, object, property, arg)
         }
         // A typed static property starts uninitialized and `isset()` must answer false there
@@ -135,6 +143,10 @@ pub(super) fn lower_lazy_empty(
         return None;
     }
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
+        if simplexml_object_expr_class(ctx, array).is_some() {
+            let exists = lower_simplexml_has_dimension(ctx, array, index, true, &args[0]);
+            return Some(invert_bool_value(ctx, exists, expr.span));
+        }
         let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
         return Some(emit_builtin_call_value(
             ctx,
@@ -144,6 +156,14 @@ pub(super) fn lower_lazy_empty(
             expr.span,
             None,
         ));
+    }
+    if let ExprKind::PropertyAccess { object, property }
+    | ExprKind::NullsafePropertyAccess { object, property } = &args[0].kind
+    {
+        if simplexml_object_expr_class(ctx, object).is_some() {
+            let exists = lower_simplexml_has_property(ctx, object, property, true, &args[0]);
+            return Some(invert_bool_value(ctx, exists, expr.span));
+        }
     }
     // A typed static property that is still uninitialized is EMPTY in PHP, and reading it the
     // ordinary way to find that out is fatal — the same reason `isset()` and `??` need the
@@ -210,6 +230,208 @@ pub(super) fn lower_lazy_empty(
 
     ctx.builder.position_at_end(merge);
     Some(ctx.load_local(&temp_name, Some(expr.span)))
+}
+
+/// Lowers one SimpleXML property `isset`/`empty` probe through php-src's handler.
+fn lower_simplexml_has_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    check_empty: bool,
+    expr: &Expr,
+) -> LoweredValue {
+    let may_be_failure = simplexml_object_expr_class(ctx, object)
+        .is_some_and(|(_, may_be_failure)| may_be_failure);
+    let receiver = lower_expr(ctx, object);
+    if may_be_failure || value_is_nullable(ctx, receiver.value) {
+        return lower_nullable_simplexml_has_property(
+            ctx,
+            receiver,
+            property,
+            check_empty,
+            expr,
+        );
+    }
+    lower_simplexml_has_property_from_value(ctx, receiver, property, check_empty, expr)
+}
+
+/// Emits a non-failing SimpleXML property existence probe and releases its receiver temp.
+fn lower_simplexml_has_property_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    property: &str,
+    check_empty: bool,
+    expr: &Expr,
+) -> LoweredValue {
+    let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &ctx.builder.value_php_type(receiver.value),
+        "has_property",
+    )
+    .expect("SimpleXML property probe requires the locked has handler");
+    let name = lower_string_literal(ctx, property, expr);
+    let check_empty = lower_bool_literal(ctx, check_empty, expr);
+    let result = crate::ir_lower::internal_extensions::emit_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER,
+        vec![receiver.value, name.value, check_empty.value],
+        PhpType::Bool,
+        expr.span,
+    );
+    release_owning_receiver_temporary(ctx, receiver, expr.span);
+    result
+}
+
+/// Returns false for a failed SimpleXML receiver without probing or evaluating a name.
+fn lower_nullable_simplexml_has_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    property: &str,
+    check_empty: bool,
+    expr: &Expr,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let null_block = ctx
+        .builder
+        .create_named_block("simplexml.has_property.null", Vec::new());
+    let probe_block = ctx
+        .builder
+        .create_named_block("simplexml.has_property.probe", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("simplexml.has_property.merge", Vec::new());
+    let is_failure = simplexml_receiver_is_failure(ctx, receiver.value, expr.span);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_failure.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: probe_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    release_owning_receiver_temporary(ctx, receiver, expr.span);
+    let absent = emit_bool_literal(ctx, false, Some(expr.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, absent, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(probe_block);
+    let present =
+        lower_simplexml_has_property_from_value(ctx, receiver, property, check_empty, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, present, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Lowers one SimpleXML dimension `isset`/`empty` probe through php-src's handler.
+fn lower_simplexml_has_dimension(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    check_empty: bool,
+    expr: &Expr,
+) -> LoweredValue {
+    let may_be_failure = simplexml_object_expr_class(ctx, array)
+        .is_some_and(|(_, may_be_failure)| may_be_failure);
+    let receiver = lower_expr(ctx, array);
+    if may_be_failure || value_is_nullable(ctx, receiver.value) {
+        return lower_nullable_simplexml_has_dimension(ctx, receiver, index, check_empty, expr);
+    }
+    lower_simplexml_has_dimension_from_value(ctx, receiver, index, check_empty, expr)
+}
+
+/// Emits a non-failing SimpleXML dimension existence probe and releases its operands.
+fn lower_simplexml_has_dimension_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    check_empty: bool,
+    expr: &Expr,
+) -> LoweredValue {
+    let receiver_type = ctx.builder.value_php_type(receiver.value);
+    let opcode = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &receiver_type,
+        "has_dimension",
+    )
+    .expect("SimpleXML dimension probe requires the locked has handler");
+    let index_value = lower_simplexml_offset(ctx, index);
+    let check_empty = lower_bool_literal(ctx, check_empty, expr);
+    let result = crate::ir_lower::internal_extensions::emit_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER,
+        vec![receiver.value, index_value.value, check_empty.value],
+        PhpType::Bool,
+        expr.span,
+    );
+    if ctx.value_is_owning_temporary(index_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+    }
+    release_owning_receiver_temporary(ctx, receiver, expr.span);
+    result
+}
+
+/// Returns false for a failed SimpleXML dimension receiver without evaluating the offset.
+fn lower_nullable_simplexml_has_dimension(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: LoweredValue,
+    index: &Expr,
+    check_empty: bool,
+    expr: &Expr,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let null_block = ctx
+        .builder
+        .create_named_block("simplexml.has_dimension.null", Vec::new());
+    let probe_block = ctx
+        .builder
+        .create_named_block("simplexml.has_dimension.probe", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("simplexml.has_dimension.merge", Vec::new());
+    let is_failure = simplexml_receiver_is_failure(ctx, receiver.value, expr.span);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_failure.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: probe_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    let absent = emit_bool_literal(ctx, false, Some(expr.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, absent, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(probe_block);
+    let present =
+        lower_simplexml_has_dimension_from_value(ctx, receiver, index, check_empty, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, present, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Inverts one already-boolean EIR value.
+fn invert_bool_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let zero = emit_i64_at_span(ctx, 0, span);
+    ctx.emit_value(
+        Op::ICmp,
+        vec![value.value, zero.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(span),
+    )
 }
 
 /// For an `empty()` operand that is an overloaded (magic) property access,
@@ -284,3 +506,70 @@ pub(super) fn property_existence_magic_class(
     class_method_signature(ctx, &class_name, &php_symbol_key(magic)).map(|_| class_name)
 }
 
+/// Resolves the precise checker type carried by a potential SimpleXML receiver expression.
+fn simplexml_object_expr_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<PhpType> {
+    let object_type = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::This => PhpType::Object(ctx.current_class.clone()?),
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
+        ExprKind::NewDynamicObject { fallback_class, .. } => {
+            PhpType::Object(fallback_class.to_string())
+        }
+        ExprKind::FunctionCall { name, .. } => ctx
+            .functions
+            .get(name.as_str())
+            .map(|sig| sig.return_type.clone())?,
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::NullsafePropertyAccess { object, property } => {
+            nullsafe_property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::MethodCall { object, method, .. } => {
+            method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::NullsafeMethodCall { object, method, .. } => {
+            nullsafe_method_call_expr_type_for_ir(ctx, object, method)?
+        }
+        ExprKind::StaticMethodCall {
+            receiver, method, ..
+        } => static_method_call_expr_type_for_ir(ctx, receiver, method)?,
+        _ => infer_expr_type_syntactic(object),
+    };
+    Some(object_type)
+}
+
+/// Returns the exact SimpleXML receiver class and whether its expression may fail.
+pub(crate) fn simplexml_object_expr_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<(String, bool)> {
+    if let Some(object_type) = simplexml_object_expr_type(ctx, object) {
+        if let Some(PhpType::Object(class_name)) =
+            crate::ir_lower::internal_extensions::simplexml_object_result_type(ctx, &object_type)
+        {
+            let may_be_failure = matches!(
+                object_type,
+                PhpType::Union(ref members)
+                    if members.iter().any(|member| {
+                        matches!(member, PhpType::Void | PhpType::Never | PhpType::False)
+                    })
+            );
+            return normalized_class_name(&class_name)
+                .map(|class_name| (class_name, may_be_failure));
+        }
+    }
+    match &object.kind {
+        ExprKind::PropertyAccess { object, .. } => simplexml_object_expr_class(ctx, object),
+        ExprKind::NullsafePropertyAccess { object, .. } => {
+            simplexml_object_expr_class(ctx, object).map(|(class_name, _)| (class_name, true))
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            simplexml_object_expr_class(ctx, array).map(|(class_name, _)| (class_name, true))
+        }
+        _ => None,
+    }
+}

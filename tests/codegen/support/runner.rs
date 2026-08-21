@@ -102,6 +102,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_magician",
         package: "elephc-magician",
     },
+    TestBridgeStaticlib {
+        lib_name: "elephc_dom",
+        package: "elephc-dom",
+    },
 ];
 
 /// Default timeout for executing one compiled codegen fixture binary.
@@ -724,6 +728,12 @@ fn test_link_plan(
     }
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
+    }
+    if target().platform == Platform::MacOS
+        && named.contains("elephc_dom")
+        && named.insert("iconv".to_string())
+    {
+        plan.push(LinkItem::named_runtime("iconv"));
     }
     plan.without_redundant_embedded_bridges()
 }

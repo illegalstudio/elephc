@@ -13,7 +13,8 @@ categories = ["compilers", "command-line-utilities"]
 
 # The bridge staticlibs are default workspace members so plain `cargo build` /
 # `cargo test` materialize libelephc_tls.a (https:// wrapper),
-# libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_crypto.a
+# libelephc_pdo.a (PDO: SQLite + PostgreSQL), libelephc_dom.a
+# (PHP DOM/libxml/SimpleXML), libelephc_crypto.a
 # (hash/HMAC family), libelephc_bcmath.a (arbitrary-precision decimal math),
 # libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
@@ -22,8 +23,8 @@ categories = ["compilers", "command-line-utilities"]
 # (optional eval runtime) into target/<profile>/, where linker.rs locates them
 # for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-dom", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-dom", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]
@@ -76,6 +77,7 @@ console = "0.15"
 [dev-dependencies]
 elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
+elephc-dom = { path = "crates/elephc-dom" }
 elephc-crypto = { path = "crates/elephc-crypto" }
 elephc-bcmath = { path = "crates/elephc-bcmath" }
 elephc-phar = { path = "crates/elephc-phar" }

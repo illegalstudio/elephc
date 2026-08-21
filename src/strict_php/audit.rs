@@ -698,6 +698,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             audit_type(element_type, span, errors);
             audit_expr(len, errors);
         }
+        ExprKind::ArrayAppend => {}
         ExprKind::NewScopedObject { receiver: _, args } => audit_exprs(args, errors),
         ExprKind::Yield { key, value } => {
             if let Some(key) = key {

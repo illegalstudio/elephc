@@ -124,6 +124,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
+        ExprKind::ArrayAppend => ExprKind::ArrayAppend,
         ExprKind::Negate(inner) => {
             let inner = fold_expr(*inner);
             try_fold_negate(&inner).unwrap_or_else(|| ExprKind::Negate(Box::new(inner)))

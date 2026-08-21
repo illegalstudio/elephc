@@ -404,6 +404,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::Variable(_)
         | ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)

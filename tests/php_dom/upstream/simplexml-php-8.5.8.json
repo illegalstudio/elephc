@@ -1,0 +1,1259 @@
+{
+  "schema": 1,
+  "component": "simplexml",
+  "source_root": "ext/simplexml/tests",
+  "phpt_count": 156,
+  "all_file_count": 164,
+  "sorted_phpt_digest": "6f43e190d3931b41b627f0d5d09ad88a46b2ac35ab82e11d0db0df8f1b0e6d68",
+  "closed": false,
+  "entries": [
+    {
+      "path": "ext/simplexml/tests/000.phpt",
+      "sha256": "6fefeae50427d437e13273e9dbf8371564b20b15fe8f4f3700fc9ee2799d91ee",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/001-mb.phpt",
+      "sha256": "04184d1ac8894c27f21cef8d2620e92274ba940a24469c58fca47a853ebb106c",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/001.phpt",
+      "sha256": "480979176f1d2520fcd227e6860468d9ce996d03efdad408ff6ced63058caec3",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/002.phpt",
+      "sha256": "f5693d32cc0ba11f03c76d8d1eacda6643b4400874d2f7079f28239228626d2f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/003.phpt",
+      "sha256": "cfee3663ea34329700edd9c3f608cccff7df4f62ce2a738677ef826efb012c99",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/004.phpt",
+      "sha256": "6c1604a730e77f1c8263963d7c39240df662a62b9b8fd5237cd33c76c05c524a",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/005.phpt",
+      "sha256": "ac1a52d91daeca3f8e1fab9aab700d5cb82d9b2bf0387aeeef56c0210128385f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/006.phpt",
+      "sha256": "e4a8aadf043428106d4d14074a76602a39b5542976432b97d90b7bc7b0fb2f55",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/007.phpt",
+      "sha256": "5382a9a36db583be8ae2f93e39eabc6eb3aeab1c06694480b7bec4b5f425aa70",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/008.phpt",
+      "sha256": "052b194b049fb78c05bbc7f54dc741edce30e6dd4f75653db39020b63b8a9ea8",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/009.phpt",
+      "sha256": "af0e0a0063b9d4754c91726353f75d6ffc159260004bd780c435a263f4190227",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/009b.phpt",
+      "sha256": "18b63b48f582e37259846ce965414ede373dc7af393cae7b6e4cbd0c55545960",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/010.phpt",
+      "sha256": "ba1f8bae21758c3ecb67d907644e1944bcd744212b835ef558aff28834ac3f85",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/011.phpt",
+      "sha256": "0a95c77cf5a6ee287a93c22694efec876cb2488bb3d31f3f172bdf8d2a47ffa9",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/012.phpt",
+      "sha256": "a6125135e8ff82e00b4a33b20d202f7bff83095e5fd44f18be123289ab35eccb",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/013.phpt",
+      "sha256": "9eb02b9519f68948a008968de772d55fd25d3fa7c02b6552975a750bd9e45e61",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/014.phpt",
+      "sha256": "e4c379a417294e5345db073d00bba9098705a8374d9e276ca192e3f3fb5832c1",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/014a.phpt",
+      "sha256": "648b53faffe9454fe9bfd7f9266a9e1c8fae1922a1c4667854a45db1e7efa349",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/014b.phpt",
+      "sha256": "d97dccf0bd6b0761386d859b1703986504d41f30c8ced9401cb58a21758af14d",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/015.phpt",
+      "sha256": "56a33b63b2cdf14eea74d43d1985fca0842c8de3a01816543e49b55948d31941",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/016.phpt",
+      "sha256": "f63f3c6ab521d6088d85980f52ba414df4e1029bb02c22e6801d598e9f802378",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/016a.phpt",
+      "sha256": "82c23bbbed04e35f4548cbd2f147ef1aa00936d3c16528474328d41863901c53",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/017.phpt",
+      "sha256": "3d9ccf07cb08b737900e4412293ca33c4fae203145520cae8a6c46895c105cfa",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/018.phpt",
+      "sha256": "60bf2572c10e7753271c7f07e06439906006605932bb541193ddae56e41f035c",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/019.phpt",
+      "sha256": "19318779c8cda9912fc1a19e50dfe6c4ab10aaf62f9fb550663dd69aaa39df82",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/020.phpt",
+      "sha256": "81216103c98223ac12c69ef1ad7b519ef588b0f7824125b7e7eb7c357f5787f2",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/021.phpt",
+      "sha256": "c27f424b34bc7ab8285f26d1cb194f265b8cd9679f1e6c778c36823b19a43c1e",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/022.phpt",
+      "sha256": "8ec5c34a9c75dcee564a73fc9c4ca1aa47b793e48c61488158e1ff4874656cb6",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/023.phpt",
+      "sha256": "d13bfff5ab3d1ef1a6fa07085f6cd887567dab509a7c82ded0913e95014598c2",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/024.phpt",
+      "sha256": "19f087103e7e447a670fd97919a4a29726fd03217cee854e933761122e96b359",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/025.phpt",
+      "sha256": "5e0bf85ef24b4e3491531d918214881c478ed84faa3064dd83df8839216bf608",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/026.phpt",
+      "sha256": "923bd7eb9b788f3709cce8fad1b81b2ff9a32fdf088742930a3fdb6019042edc",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/027.phpt",
+      "sha256": "bacae2c1f2cb10cdda09b4c341063adc73746da582cd77ac8996ced6b27faa37",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/028.phpt",
+      "sha256": "f028976cd3c6a6a8caed7da7a0fb17650696c92dd6353c79f6f6cf1e4d0a6725",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/029.phpt",
+      "sha256": "fb69a82f7f23a881c0f7fd0c00b2c93c6b9146965d72e93032aaa940585db244",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/030.phpt",
+      "sha256": "3d3d1b887229904844779420c0cffd76f87e3a47f1bfed11c29d2eec85aa2ec4",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/031.phpt",
+      "sha256": "486a3b759bf89234340225a40c0a42edb8741a32176e4bce9004302a4e2d6c5a",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/032.phpt",
+      "sha256": "d8a6ff4efe2166fc13d2cc2d7447d43955cd278212bbf9a192894998788b5557",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/033.phpt",
+      "sha256": "d31c91415c8b40e7f97e477af4fe14983a64cd5b31424794b13860b3098e9293",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/034.phpt",
+      "sha256": "7044e5d4dd9797a33b2b062f4a0f35e1bf96aea345a6940d32dec4096da5052a",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/035.phpt",
+      "sha256": "e9fb5fe0d4c9adfed8a1c6bbe6671c44cc2e3d6b24506ff7c3349d7868b18c45",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/036.phpt",
+      "sha256": "811f93d67d18eee826e598bebaa67b170141faa57205b43427cfb96f79e028f1",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/037.phpt",
+      "sha256": "f8fd06970176d4f415a99e7a39e84956eb880c766112f27515d5a0cb56fb56f2",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/038.phpt",
+      "sha256": "bcfb0e3879beeb7999d09be2debbed0c4541be60ba38cbf0a3f0a58bdaae8719",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/SimpleXMLElement_addAttribute_basic.phpt",
+      "sha256": "b8fa6206b1c8767ea3d0ffcc5fd719f02fe549494362dea86b41361564cb3933",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/SimpleXMLElement_addAttribute_required_attribute_name.phpt",
+      "sha256": "e824d487c12fa8f2f4ad06d27f2bc1905f5f9adaa7d28b2c8554c6ea8e3e5475",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/SimpleXMLElement_asXML_fragment_filename.phpt",
+      "sha256": "23f7d94f15b54434aaef0d1dd38d8285310b20e9bae61cfbde16c670d58a81d0",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/SimpleXMLElement_getDocNamespaces.phpt",
+      "sha256": "5f52ccc0026449cb028db78c5db5797d6ce19a13388441422e47b5742db2a60c",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/SimpleXMLElement_xpath.phpt",
+      "sha256": "440b17f393fee51b297231f3017d07fa9e66c4956f1fc3ab3913133b3173ad0b",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/SimpleXMLElement_xpath_4.phpt",
+      "sha256": "0bf9705b75d00be71256fa60eb6a31e65644ef11cf2b0e43689899568e2f1843",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug12170.phpt",
+      "sha256": "3282860d83d00cfe0c57f6cd0123a22fd78ca85435c0f87dc82b6536d2c6e4a1",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug24392.phpt",
+      "sha256": "e5ee76b7b12ecb624bf8032762e269a7046434977098cf8d1ec3b68aad115b23",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug26976.phpt",
+      "sha256": "4b8aefa3c1fc5b2551a070d8da1c653604c18d602238ef9feea939e63ee06897",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug27010.phpt",
+      "sha256": "254e134bb7133b204c430be988bfa8d125a1f789bcf1c1326c44fb253e9c3115",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug35785.phpt",
+      "sha256": "f8dd7d02df2d5e1e8a0e1bd877b6f6117a3dfd69face500ed04c85c8f69280bd",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug36611.phpt",
+      "sha256": "8c659f73e6393ebb9c7025251c0cd78f4ac2cc35423d09acffffc3ed6586f204",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug37076.phpt",
+      "sha256": "0ec8278bd69d1a044ea7da0db4010ab1e323b3fc020d477a5c78dda4f481e784",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug37076_1.phpt",
+      "sha256": "5f6023650e5ab7e998de2dc02f2b690a3c4713934a6fd36919c2b54b9b3faaf5",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug37386.phpt",
+      "sha256": "6e29462e70dd49d309b74fde895c263cfae034cd97f0657a4258c274d2e8ffe9",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug38347.phpt",
+      "sha256": "df7e1e7e7d066d198714793e1cf243a5fb97a667f713d834ab94312b9ba607bb",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug38354.phpt",
+      "sha256": "f587989ea27a0d67276ae0d469b2aaf9d828d813700615b7c9dfccae3ff0792b",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug38406.phpt",
+      "sha256": "27943cb5adf72738c1a795c5c626480b63f59a3070130c255475d776675d83ea",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug38424.phpt",
+      "sha256": "8fe50ce1e62394d70fc033000bab8afabd1a4b5bc85d131dc8866fb66765624e",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug39662.phpt",
+      "sha256": "5f0b4f75d3f468fc27899721c9368abc0b3ad3accfba5a83fc966133f3d62b7c",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug39760.phpt",
+      "sha256": "71f71662577e55a39c12020b7f1bcfed0b35e1189aed63bf19979efcd8f6abbf",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug40451.phpt",
+      "sha256": "167e79d05d8c0dd12268ce0eaea8934f8fb4802749dfcd258e08a2c85bb2b292",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug41175.phpt",
+      "sha256": "56bae19173173d044919264cbc4df4ce5c121b1e6a75260b86ce42039b62d594",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug41582.phpt",
+      "sha256": "8f861da609ca6a7e8cb4a53af965206dcbd322a45954b5fa8c80231f65cc8b19",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug41861.phpt",
+      "sha256": "3bf17046cf779aeeda878292635bfe159a123b602e1ea1e0ead6a626304cc8b1",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug41867.phpt",
+      "sha256": "0769ea40d3cdd4bb67fd3355286dd49ec4bdf044390e66f7b070d6d4902b6c11",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug41947.phpt",
+      "sha256": "24924affbac1fe21d6ba8d5a28371a7b52f796f1f2b11768345cb939d8f6693b",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug42259.phpt",
+      "sha256": "c3bdef7774a036c8fd51006d6e104efb9a7b286328059e0bf4f965d9eca9ed72",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug42369.phpt",
+      "sha256": "59e8882e405fc18cf180f0feb8b69f03ae91b38c716053659f08a1c57e068369",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug43221.phpt",
+      "sha256": "270a9a4784a2093612725d41cd9589c4c0ac1f0b49ce9e9af8d30633665ed615",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug44478.phpt",
+      "sha256": "75eb7eb36c5d4a15f4c7de51f9431e077130d1d172cdfd9808a2fe62e94d9a65",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug45553.phpt",
+      "sha256": "79843291c46d5b27c77901dc8c8aab4bb21dad1023c7b2b66e62d825ee4f8b6b",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug46003.phpt",
+      "sha256": "69bf74ab300b0f5dff051a51ace90c2fadb57916f440656aaccfb6ec1e1b883f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug46047.phpt",
+      "sha256": "109ccffb04e08a1f464f03864d2864da2eee97664a9d82ba6e00fea48d7ca413",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug46048.phpt",
+      "sha256": "5efdfaf556b06da29a72275d41d4162c9b8e7a2435426b204e19d1247070dae2",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug48601.phpt",
+      "sha256": "58453906c7643899e5827c2fe15f19d9f20f024a411cf17e8e79a7590ae0b6a3",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug51615.phpt",
+      "sha256": "8678d526a97b1e770a72788ccc004576ad29cacc880120bb329e0f871b38d445",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug52751.phpt",
+      "sha256": "b15c3827ce648a08858ad8300d55ca89b51f6505f175b93d01562d8d7de829fc",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug53033.phpt",
+      "sha256": "b0bfcb10ceecb8a54c0fccf40790800a965090e4f74929aace962db2285a48fa",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug54973.phpt",
+      "sha256": "a553a4f529ab17c708f1aced86907a286c49c57abff710c31d3dbee9f8bf2929",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug55098.phpt",
+      "sha256": "106460ee106c33f8d11f456bbf0ea2f192d5e16cd91a401b9bdca6d61a79444e",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug61335.phpt",
+      "sha256": "c5401186367b22709168b1384ed4e44b74d566278637e4e501c70bc4401dff44",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug62328.phpt",
+      "sha256": "5c60655127fe138abdffe0af00534e10a1374741bf0ce254b25d5d2b0b643b67",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug62639.phpt",
+      "sha256": "ab7a93085537c807c38a3e8e26b90a52968554b31517ce56243ed8ea3429cba7",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug63575.phpt",
+      "sha256": "5de984d24165a3982825ecc5a00faab36e5314c57c82676613e17cd5716b0012",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug66084_0.phpt",
+      "sha256": "696511695e6762dbcf9199d7a5a3c2cfd278c2853914c67eeced22fcfd5dfc70",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug66084_1.phpt",
+      "sha256": "70c7e2c3788d0ec013971efd180df4589b79d2d796f1e0de72f2314e51ef60b9",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug67116.phpt",
+      "sha256": "b803b5fa59926c3a8515ba6ea7c783ac2bef6cfaae522eb6dbe947501679eee1",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug67572.phpt",
+      "sha256": "64e0d48c885a22558d7a70dbc478a119b15ee4b236c6557adac9f3ecefa327ee",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug69169.phpt",
+      "sha256": "ebdc0304d25461ee505cf4b12057b852b7aa93d60f6e193ca3e7e1b66dbb0dd1",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug69491.phpt",
+      "sha256": "c72d4a39b5cd173d6fc260bfdf9a40f6d590982faa6a83ce19a7adc7937880a8",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug72588.phpt",
+      "sha256": "3a600848f29f77903312b5851d321ea19dd8c81810596ad94a7c22b6098ed7ee",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug72957.phpt",
+      "sha256": "37df46ef12be41fc4e96fdbc6c4ec299c3dd694ab97c7976c9f4a241bdc249c8",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug72971.phpt",
+      "sha256": "ee539edc3a3b577b2b9d3e3f87393f64840b4c8bb0f510a7a64d62c2898b59b1",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug72971_2.phpt",
+      "sha256": "af1276172ff8a5badf0ab591fc86b51f6fbe86812f84cbfb71f5737c5257a6ae",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug74950.phpt",
+      "sha256": "051767f09a2d84446cfa902dbcd4107e2ef9dc4059d8141c0f7a8d7c24036b42",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug75245.phpt",
+      "sha256": "9603bdefe8813db7a0924aa09d3303e6d58460cf9550bff8a89ad3d332ad7b5e",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug76712.phpt",
+      "sha256": "418e09cff69d32b8b3779e60244ff98977d328562eb89d5c0c13ef9340424334",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug79971_1.phpt",
+      "sha256": "d66086880a938f2c8bf4bc8f23f8d4823a593964630459ea10990448836cf3c3",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/bug81325.phpt",
+      "sha256": "ee97a235179ef8b0da3b065a8005378c8b887d19ee9d7734c8b190768af65c0c",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/count_return_type_will_change.phpt",
+      "sha256": "6269ded9e61b12fc571b6225945a598d077f15fc692f125807b47041851e15f3",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/current_error.phpt",
+      "sha256": "d4ab1e104656cbd1c7b3ebc486cf8a1b4dea9e049bc54576eda825faaf3e6bdb",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/feature55218.phpt",
+      "sha256": "235927478674253f84c6c3560a2ba88cd4b01666ca4718959ecd19bffc055790",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/foreach_by_reference.phpt",
+      "sha256": "ff9420aa3d0c26b75006424c512030907831da85c53a002e9fcc325bb4af3c7d",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/getDocNamespaces_no_internal_declaration.phpt",
+      "sha256": "69c1a05278a58a38c2c6d704e5a70d780e2eef3767af7e5f2eff0b9f5278ee49",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/get_prop_address_not_initialized.phpt",
+      "sha256": "8dfddeb0bf5f4e676ab51602b11d6fc8c5a41324cbf4304690cdf58e136a0e21",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh10200.phpt",
+      "sha256": "c50a210e131d7e9f313618842fb0fbc642388fed6b0999eee1d53d02d1ae1898",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh10983.phpt",
+      "sha256": "da10e6d65beade14b0a2a7b1f1202747849201a93cf829ff0d42b610311945e8",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh12167.phpt",
+      "sha256": "c331e7dff64d66288a196aad92a7b82c1602687268a9541f260865f4bd3da732",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh12169.phpt",
+      "sha256": "77f47e48afbb30ba98c49578fc148ed8b1d46f8e4381a59a979d62b12808fc38",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh12192.phpt",
+      "sha256": "caeb0d8d09a2e6f5d81011ee156ec615a7e4f1f94aaefb919d6ad6685d3cf31f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh12208.phpt",
+      "sha256": "22e3b75c130dcff106f9b2249bf3cd786dcdf941f0333958c5cb38927d0698d1",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh12223.phpt",
+      "sha256": "33ce4b20dfe583c32702c9f968678008ef35769bb91adef204bddf436027ee5d",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh12231.phpt",
+      "sha256": "335f3265a35b5abfca06864e00ae15cf1e92dd6069ae0a8c9212eba72a77bf23",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh12929.phpt",
+      "sha256": "48723b076db078febed64b1057b8caba1d2c8ca510de49e5c1d875b3a4c4fa58",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh14638.phpt",
+      "sha256": "40fa21eeaed4c144139e6b1876c02059f056e3793ae475e95be34fe590b9a83f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh15837.phpt",
+      "sha256": "92c8cd4ed92b8ec51ceb25ef25d0502df14d46704e8baa6c8dab56018d8bea91",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh16317.phpt",
+      "sha256": "18d927d6b3667c37243df48b6ac0e1255063d539d3024abd14bb24dc8dffb12f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh16808.phpt",
+      "sha256": "9afc2d8a5fc91d565d4230725a1587308d49acba790516a3eb6ce395ed2f22de",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh17040.phpt",
+      "sha256": "441d48f8d8f6e188042212425c4ed63d497f1e3ebaaeb90a6b20b5c48b03a19f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh17153.phpt",
+      "sha256": "c8ecac8a3297fe7e0d989e19f22d989dea685d2f02908ac270fda374b5d377e9",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh17409.phpt",
+      "sha256": "578a7d3c5cd8c36e6d7fe2cb24886d5d9a7d944f303077491b1f435d4a6d2515",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh17736.phpt",
+      "sha256": "88d865c7170f35401929ba3151f6bc57f88e5d8f6a5bd265bcf68a02c9903e1e",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh18304.phpt",
+      "sha256": "c3c9706a25b4253b8ca895a99b5952aabb2223ea106343867a344bd6345ebfbf",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/gh18597.phpt",
+      "sha256": "f39ffd566ccbbf47aa3445772e2737a2bcfed24601351bc49932f56c8e8c8366",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/iterator_interaction_empty_and_var_dump.phpt",
+      "sha256": "086ad5857b79ac2dda92df0e7a2d3d234e39727eb0f30da189145d08e2c27337",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/key_error.phpt",
+      "sha256": "11f42ad404ac305e935f71575233a396d84032699c44550456f37362ad580b00",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/libxml_global_state_entity_loader_bypass.phpt",
+      "sha256": "8b26876b727d742d4ab451e996a346433d6fedae064923e167ac02907bb3664c",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile01.phpt",
+      "sha256": "f676028c62e9f835e668aedeef3eac3720040f2af3c70d5172a8b32e5a6a02d8",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile02.phpt",
+      "sha256": "22189e1ccaa9c825e12834cb81a6c686516850e21d6199010d45e7669efadc9c",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile03.phpt",
+      "sha256": "ebea0962d4875053fc27c23aa00b5292c71babf6b7fedfb06d3ab57de68a526b",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile04.phpt",
+      "sha256": "9b58207ac54e2f5bbaa48e7f6c9ce0cf201968bcdbb8f62ed11a5c296507d728",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile05.phpt",
+      "sha256": "750e1a26b459b592dd0f6d337e97954aabd8b3b93c883b065737147b0ed7a36d",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile06.phpt",
+      "sha256": "804e93c9a08e779e92bbec69ec2ee6e9ad4c3778d45c4faefa5baa3ee0a22799",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile07.phpt",
+      "sha256": "17a21c19ee03b250c1656cd1f2b9f1084c93512d19455a994bdb8fc52f0852e3",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile08.phpt",
+      "sha256": "675319a655eb4b3efe14a9c74ba2bfb2b73563d958d064733366f0dc77cae79e",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile09.phpt",
+      "sha256": "c70154e69d76d72a91e63e15d2b3ad6d4d6008d6c5d1fe5cb1c82b439bd93f47",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile10.phpt",
+      "sha256": "276ccec03faf628494f163aa03d908b925976997b29329ce4ce547d42905887b",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile11.phpt",
+      "sha256": "0778c24bdb262a03fe3a8fb55bcfeb77663b4507aabd93c784ffb9aa20f81ae9",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile12.phpt",
+      "sha256": "d4ed8cfddce977128fde4fb0117afc759a7ab56eeccf0692f243b7b86f8e399b",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/profile13.phpt",
+      "sha256": "b60ac8f231aac97f29e3c786c67d5de83cc9b62168a07fb24bbcbeea6156307f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/simplexml_import_new_dom.phpt",
+      "sha256": "5f69ac11c03dd1912381f136d40a7c6ed444dceb2e0e6aa72a1adbf49dcfb871",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/simplexml_import_old_dom.phpt",
+      "sha256": "b9f830e9e51d3183dd9c9d24717722980842c78cdf4fd46389d55e6a9a7a43bc",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/simplexml_load_file.phpt",
+      "sha256": "7a11e7239927c35ceef82244e9b9854a7215a6b2044ee27cb2bd6039d7398f38",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/simplexml_uninitialized.phpt",
+      "sha256": "af9a1fd1bed875de31c91bcc98644863bbab31fb6fdfd112949ba67a35aa36cf",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/sxe_001.phpt",
+      "sha256": "40700f1f0b066133747f57b9c437b01ef5ed4670c0f3a466cf046b772f8231a2",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/sxe_002.phpt",
+      "sha256": "ae3c9774f2285d7ee61860967c7374c4bc4ac8b157ef90ed7c8c8c951e288e2a",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/sxe_003.phpt",
+      "sha256": "acdd7c75ec3c4c637ef2ed27538637b72042f7015b37a04c7d362e13746b0a8f",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/sxe_004.phpt",
+      "sha256": "66ab13df9709386130ed20490950a303a624e25a51dc9380d7bf86972f3db532",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/sxe_005.phpt",
+      "sha256": "7ba067ccb68173c2c05f234b41e7f26c952bbd306d32e9deb39448d2905ea9be",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/xml_parsing_LIBXML_NO_XXE.phpt",
+      "sha256": "994cf3a9018d59f959241bd43c4908ae7d365dafa1eed76d906c05748d826c72",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    },
+    {
+      "path": "ext/simplexml/tests/xml_parsing_LIBXML_RECOVER.phpt",
+      "sha256": "208a5e7dfb48896ee64791ec53f87d23a861ea8f321e8ada0142353c6312c5b5",
+      "status": "pending",
+      "fixture": null,
+      "reason": null,
+      "observations": []
+    }
+  ]
+}

@@ -39,7 +39,7 @@ pub(super) fn parse_file(
     include_span: Span,
     defines: &std::collections::HashSet<String>,
 ) -> Result<Vec<Stmt>, CompileError> {
-    let source = std::fs::read_to_string(path).map_err(|e| {
+    let source = std::fs::read(path).map_err(|e| {
         CompileError::new(
             include_span,
             &format!("Cannot read '{}': {}", path.display(), e),
@@ -50,7 +50,7 @@ pub(super) fn parse_file(
 
     let mode = SourceMode::from_path(path);
     let tokens =
-        lexer::tokenize_with_mode(&source, mode).map_err(|e| e.with_file(file.clone()))?;
+        lexer::tokenize_bytes_with_mode(&source, mode).map_err(|e| e.with_file(file.clone()))?;
 
     let parsed = parser::parse_with_mode(&tokens, mode).map_err(|e| e.with_file(file))?;
     crate::source::finalize_physical_program(parsed, path, mode, defines)

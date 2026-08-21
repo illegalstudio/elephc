@@ -337,10 +337,60 @@ echo sum3(...$args, c: 30);
     assert!(err.contains("Fatal error: named argument spread length mismatch"));
 }
 
-/// Verifies that a spread with too many elements followed by a named argument reports the
-/// PHP-compatible duplicate named-argument fatal.
+/// Verifies that a spread with too many elements followed by a named argument throws `Error`.
 #[test]
 fn test_named_arguments_after_spread_rejects_overwrite() {
+    let out = compile_and_run(
+        r#"<?php
+function sum3($a, $b, $c) {
+    return $a + $b + $c;
+}
+$args = [10, 20, 99];
+try {
+    echo sum3(...$args, c: 30);
+} catch (Error $error) {
+    echo get_class($error), "|", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error|Named parameter $c overwrites previous argument\n"
+    );
+}
+
+/// Verifies a runtime named overwrite throws PHP's catchable `Error` after both sides run.
+#[test]
+fn test_named_arguments_after_spread_overwrite_is_catchable_error() {
+    let out = compile_and_run(
+        r#"<?php
+function args() {
+    echo "A";
+    return [10, 20, 99];
+}
+function last() {
+    echo "B";
+    return 30;
+}
+function sum3($a, $b, $c) {
+    return $a + $b + $c;
+}
+try {
+    sum3(...args(), c: last());
+} catch (Error $error) {
+    echo "|", get_class($error), "|", $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "AB|Error|Named parameter $c overwrites previous argument\n"
+    );
+}
+
+/// Verifies an uncaught duplicate preserves PHP's concrete `Uncaught Error` diagnostic.
+#[test]
+fn test_named_arguments_after_spread_overwrite_uncaught_error_is_exact() {
     let err = compile_and_run_expect_failure(
         r#"<?php
 function sum3($a, $b, $c) {
@@ -350,32 +400,39 @@ $args = [10, 20, 99];
 echo sum3(...$args, c: 30);
 "#,
     );
-    assert!(err.contains("Fatal error: Named parameter $c overwrites previous argument"));
-    assert!(!err.contains("named argument spread length mismatch"));
+    assert!(err.contains(
+        "Fatal error: Uncaught Error: Named parameter $c overwrites previous argument"
+    ));
 }
 
 /// Verifies a dynamic associative unpack with a numeric key reports the later named
 /// parameter overwrite instead of a generic spread-length mismatch.
 #[test]
 fn test_named_arguments_after_assoc_spread_rejects_numeric_overwrite() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 function f($a, $b, ...$rest) {
     echo $a . "," . $b . "," . count($rest);
 }
 $args = [0 => 10, "b" => 20];
-f(...$args, a: 5);
+try {
+    f(...$args, a: 5);
+} catch (Error $error) {
+    echo get_class($error), "|", $error->getMessage(), "\n";
+}
 "#,
     );
-    assert!(err.contains("Fatal error: Named parameter $a overwrites previous argument"));
-    assert!(!err.contains("named argument spread length mismatch"));
+    assert_eq!(
+        out,
+        "Error|Named parameter $a overwrites previous argument\n"
+    );
 }
 
 /// Regresses GitHub issue #294: a mixed array unpack followed by a trailing named
 /// argument must report the duplicate named parameter that PHP reports.
 #[test]
 fn test_named_arguments_after_mixed_spread_reports_duplicate_named_parameter() {
-    let err = compile_and_run_expect_failure(
+    let out = compile_and_run(
         r#"<?php
 function f($a, $b, ...$rest) {
     echo $a, ",", $b, ",", count($rest), ",";
@@ -386,11 +443,17 @@ function f($a, $b, ...$rest) {
 
 $arr1 = ["b" => 20, "x" => 30];
 $arr2 = [10, ...$arr1, "x" => 40, "y" => 50];
-f(...$arr2, a: 5);
+try {
+    f(...$arr2, a: 5);
+} catch (Error $error) {
+    echo get_class($error), "|", $error->getMessage(), "\n";
+}
 "#,
     );
-    assert!(err.contains("Fatal error: Named parameter $a overwrites previous argument"));
-    assert!(!err.contains("named argument spread length mismatch"));
+    assert_eq!(
+        out,
+        "Error|Named parameter $a overwrites previous argument\n"
+    );
 }
 
 /// Verifies source evaluation order is preserved for named arguments;
@@ -465,11 +528,10 @@ sum3(...first(), ...second(), c: last());
     assert_eq!(out, "abc:6");
 }
 
-/// Verifies that when a spread with excess elements is followed by a named argument, the runtime error
-/// fires after the spread and named args are evaluated; stdout is "sc" and stderr names the duplicate.
+/// Verifies the duplicate `Error` fires after both spread and named values are evaluated.
 #[test]
 fn test_named_arguments_after_spread_evaluate_later_named_before_runtime_error() {
-    let out = compile_and_run_capture(
+    let out = compile_and_run(
         r#"<?php
 function args() {
     echo "s";
@@ -482,12 +544,17 @@ function last() {
 function sum3($a, $b, $c) {
     echo $a + $b + $c;
 }
-sum3(...args(), c: last());
+try {
+    sum3(...args(), c: last());
+} catch (Error $error) {
+    echo "|", $error->getMessage(), "\n";
+}
 "#,
     );
-    assert!(!out.success);
-    assert_eq!(out.stdout, "sc");
-    assert!(out.stderr.contains("Fatal error: Named parameter $c overwrites previous argument"));
+    assert_eq!(
+        out,
+        "sc|Named parameter $c overwrites previous argument\n"
+    );
 }
 
 /// Pins the argument shapes PHP still accepts around the compile-time

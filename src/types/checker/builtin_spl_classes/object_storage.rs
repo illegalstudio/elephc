@@ -370,9 +370,30 @@ fn serialize_array_body() -> Vec<Stmt> {
     ])))
 }
 
-/// Returns a small debug array exposing stored objects and info values.
+/// Returns php-src's private `storage` debug projection of object/info pairs.
 fn debug_info_body() -> Vec<Stmt> {
-    serialize_array_body()
+    vec![
+        assign_stmt("storage", empty_array_expr()),
+        assign_stmt("i", int_expr(0)),
+        assign_stmt("limit", count_expr(objects_expr())),
+        while_stmt(
+            binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+            vec![
+                array_push_stmt(
+                    "storage",
+                    expr(crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![
+                        (string_expr("obj"), object_at(var_expr("i"))),
+                        (string_expr("inf"), info_at(var_expr("i"))),
+                    ])),
+                ),
+                increment_stmt("i"),
+            ],
+        ),
+        return_stmt(expr(crate::parser::ast::ExprKind::ArrayLiteralAssoc(vec![(
+            string_expr("\0SplObjectStorage\0storage"),
+            var_expr("storage"),
+        )]))),
+    ]
 }
 
 /// Finds the index of an object by strict object identity, or `-1` when absent.

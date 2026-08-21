@@ -339,6 +339,11 @@ fn validate_instruction_immediate(
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
+        InternalExtensionCall => {
+            require_immediate(inst_id, inst, "internal extension operation", |imm| {
+                matches!(imm, Imm::InternalExtension { .. })
+            })
+        }
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
         }),

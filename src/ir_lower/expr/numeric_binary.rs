@@ -42,7 +42,9 @@ pub(super) fn lower_numeric_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
+    let lhs = coerce_simplexml_numeric_operand(ctx, lhs, left.span);
     let rhs = lower_expr(ctx, right);
+    let rhs = coerce_simplexml_numeric_operand(ctx, rhs, right.span);
     if matches!(op, BinOp::Add) {
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
             return ctx.emit_value(
@@ -242,6 +244,94 @@ pub(super) fn lower_numeric_binary(
     )
 }
 
+/// Applies the SimpleXML `_IS_NUMBER` object handler before arithmetic dispatch.
+fn coerce_simplexml_numeric_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let source_type = ctx.builder.value_php_type(value.value);
+    if crate::ir_lower::internal_extensions::simplexml_object_result_type(ctx, &source_type)
+        .is_none()
+    {
+        return value;
+    }
+    let Some(opcode) = crate::ir_lower::internal_extensions::simplexml_object_handler_opcode_for_type(
+        ctx,
+        &source_type,
+        "cast",
+    ) else {
+        return value;
+    };
+    if matches!(source_type, PhpType::Union(_)) {
+        return lower_nullable_simplexml_numeric_operand(ctx, value, opcode, span);
+    }
+    emit_simplexml_numeric_cast(ctx, value, opcode, span)
+}
+
+/// Preserves PHP's zero conversion for an absent or failed nullable SimpleXML read.
+fn lower_nullable_simplexml_numeric_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    opcode: u32,
+    span: Span,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Mixed);
+    let failure_block = ctx
+        .builder
+        .create_named_block("simplexml.number.failure", Vec::new());
+    let object_block = ctx
+        .builder
+        .create_named_block("simplexml.number.object", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("simplexml.number.merge", Vec::new());
+    let is_failure = simplexml_receiver_is_failure(ctx, value.value, span);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_failure.value,
+        then_target: failure_block,
+        then_args: Vec::new(),
+        else_target: object_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(failure_block);
+    release_binary_operand_temporary(ctx, value, span);
+    let zero = emit_i64_at_span(ctx, 0, span);
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, zero, span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(object_block);
+    let number = emit_simplexml_numeric_cast(ctx, value, opcode, span);
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, number, span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, span)
+}
+
+/// Emits one native `_IS_NUMBER` cast for an already proven live SimpleXML wrapper.
+fn emit_simplexml_numeric_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    opcode: u32,
+    span: Span,
+) -> LoweredValue {
+    let kind = emit_i64_at_span(ctx, 4, span);
+    let result = crate::ir_lower::internal_extensions::emit_call(
+        ctx,
+        opcode,
+        crate::ir_lower::internal_extensions::FLAG_RECEIVER,
+        vec![value.value, kind.value],
+        PhpType::Mixed,
+        span,
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    result
+}
+
 /// Returns the EIR opcode and result type for PHP array union operands.
 pub(super) fn array_union_plan(
     ctx: &LoweringContext<'_, '_>,
@@ -372,4 +462,3 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         _ => None,
     }
 }
-

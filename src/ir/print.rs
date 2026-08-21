@@ -214,6 +214,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::ExternRef(id) => {
             let _ = write!(out, " extern#{}", id);
         }
+        Immediate::InternalExtension { opcode, flags } => {
+            let _ = write!(out, " internal_extension#{} flags={}", opcode, flags);
+        }
         Immediate::ClassRef(id) => {
             let _ = write!(out, " class#{}", id);
         }

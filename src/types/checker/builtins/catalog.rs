@@ -87,6 +87,14 @@ pub(crate) fn all_supported_builtin_function_names() -> Vec<&'static str> {
             result.push(def.name);
         }
     }
+    for name in crate::internal_extensions::registry().function_names() {
+        if !result
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(name))
+        {
+            result.push(name);
+        }
+    }
     result
 }
 
@@ -125,6 +133,8 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
         || crate::builtins::registry::is_supported(&canonical)
     {
         Some(canonical)
+    } else if let Some(function) = crate::internal_extensions::registry().function(name) {
+        Some(function.exported_name.clone())
     } else {
         None
     }
@@ -153,6 +163,9 @@ pub(crate) fn is_php_visible_builtin_function_for_profile(
         || crate::builtins::registry::lookup(&canonical)
             .map(|def| !def.spec.internal)
             .unwrap_or(false)
+        || crate::internal_extensions::registry()
+            .function(name)
+            .is_some()
 }
 
 /// Returns `true` if the name is a supported builtin function (case-insensitive).

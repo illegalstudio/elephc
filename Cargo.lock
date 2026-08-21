@@ -665,6 +665,7 @@ dependencies = [
  "elephc-bcmath",
  "elephc-builtin-contract",
  "elephc-crypto",
+ "elephc-dom",
  "elephc-image",
  "elephc-magician",
  "elephc-pdo",
@@ -718,6 +719,14 @@ dependencies = [
  "sha3",
  "subtle",
  "whirlpool",
+]
+
+[[package]]
+name = "elephc-dom"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "sha2 0.10.9",
 ]
 
 [[package]]

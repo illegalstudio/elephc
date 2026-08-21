@@ -405,6 +405,24 @@ fn test_error_unexpected_token_in_stmt() {
     expect_error("<?php 42;", "Unexpected token");
 }
 
+/// Verifies reopening PHP after inline HTML is rejected instead of being emitted literally.
+#[test]
+fn test_php_reopening_after_inline_html_is_explicitly_unsupported() {
+    expect_error(
+        "<?php echo 1; ?>outside<?PHP echo 2;",
+        "Reopening PHP after inline HTML is not yet supported",
+    );
+}
+
+/// Verifies the always-enabled short echo reopening form is rejected by the same boundary.
+#[test]
+fn test_short_echo_reopening_after_inline_html_is_explicitly_unsupported() {
+    expect_error(
+        "<?php echo 1; ?>outside<?= 2 ?>",
+        "Reopening PHP after inline HTML is not yet supported",
+    );
+}
+
 /// Verifies the error diagnostic for missing function name.
 #[test]
 fn test_error_missing_function_name() {

@@ -239,6 +239,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
+        | ExprKind::ArrayAppend
         | ExprKind::ConstRef(_)
         | ExprKind::This => Effect::PURE,
         ExprKind::Negate(inner)
@@ -246,8 +247,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::Spread(inner) => expr_effect(inner),
+        | ExprKind::PtrCast { expr: inner, .. } => expr_effect(inner),
+        ExprKind::Spread(inner) => expr_effect(inner).with_may_throw(),
         ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()

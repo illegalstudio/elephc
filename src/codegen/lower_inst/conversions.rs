@@ -359,7 +359,7 @@ fn move_unboxed_mixed_object_payload(ctx: &mut FunctionContext<'_>, receiver_reg
 }
 
 /// Emits one concrete `__toString()` candidate call for a boxed Mixed object.
-fn emit_mixed_tostring_candidate_call(
+pub(super) fn emit_mixed_tostring_candidate_call(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     receiver_reg: &str,
@@ -397,7 +397,7 @@ fn emit_mixed_tostring_candidate_call(
 }
 
 /// Normalizes a `__toString()` return into a string result pair.
-fn coerce_tostring_return_to_string_result(
+pub(super) fn coerce_tostring_return_to_string_result(
     ctx: &mut FunctionContext<'_>,
     return_ty: &PhpType,
 ) -> Result<()> {

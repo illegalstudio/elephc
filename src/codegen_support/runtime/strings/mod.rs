@@ -16,6 +16,7 @@ mod php_num_scan;
 mod str_eq;
 mod str_loose_eq;
 mod str_to_number;
+mod str_numeric_union_kind;
 mod str_to_int;
 mod str_to_int_base;
 mod number_format;
@@ -117,6 +118,8 @@ pub use str_loose_eq::emit_str_loose_eq;
 pub use str_to_number::emit_str_to_number;
 /// Emit string-to-int parameter coercion validation helper.
 pub use str_to_number::emit_str_looks_like_int_for_coercion;
+/// Emit PHP numeric-string `int|float` member classification.
+pub use str_numeric_union_kind::emit_str_numeric_union_kind;
 /// Emit string-to-number conversion helper.
 pub use str_to_int::emit_str_to_int;
 pub use str_to_int_base::emit_str_to_int_base;

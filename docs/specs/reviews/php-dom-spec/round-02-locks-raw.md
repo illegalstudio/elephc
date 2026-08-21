@@ -1,0 +1,19 @@
+# Raw specification locks — round 2
+
+GLM 5.2:
+
+```text
+LOCK SPEC 2d58e6fe4787e82938d5f053c0271d534619687d8140a53aeea28c40a9712f4b
+```
+
+Kimi K2.7:
+
+```text
+LOCK SPEC 2d58e6fe4787e82938d5f053c0271d534619687d8140a53aeea28c40a9712f4b
+```
+
+MiniMax M3:
+
+```text
+LOCK SPEC 2d58e6fe4787e82938d5f053c0271d534619687d8140a53aeea28c40a9712f4b
+```

@@ -1225,3 +1225,33 @@ fn emit_heap_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return boolean result in rax
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies AArch64 boxed callable descriptors are recognized without reinspection.
+    #[test]
+    fn mixed_aarch64_accepts_callable_descriptor_tag() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_mixed_aarch64(&mut emitter);
+        let output = emitter.output();
+        assert!(output.contains("cmp x0, #10"));
+        assert!(output.contains("b.eq __rt_is_callable_mixed_descriptor"));
+        assert!(output.contains("__rt_is_callable_mixed_descriptor:\n    mov x0, #1"));
+    }
+
+    /// Verifies x86_64 boxed callable descriptors are recognized without reinspection.
+    #[test]
+    fn mixed_x86_64_accepts_callable_descriptor_tag() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_mixed_x86_64(&mut emitter);
+        let output = emitter.output();
+        assert!(output.contains("cmp rax, 10"));
+        assert!(output.contains("je __rt_is_callable_mixed_descriptor_x86_64"));
+        assert!(output.contains(
+            "__rt_is_callable_mixed_descriptor_x86_64:\n    mov eax, 1"
+        ));
+    }
+}

@@ -63,6 +63,7 @@ pub(crate) fn emit_runtime_data_user(
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
     allowed_class_names: Option<&HashSet<String>>,
+    _emit_dom_wrapper_finalizers: bool,
     emit_eval_reflection_metadata: bool,
     source_path: Option<&str>,
     target: Target,
@@ -152,6 +153,8 @@ pub(crate) fn emit_runtime_data_user(
 
     out.push_str(".data\n");
     out.push_str(".p2align 3\n");
+    emit_dom_class_metadata(&mut out, &sorted_classes, &class_id_by_name);
+    out.push_str(".p2align 3\n");
     emit_callable_function_data(&mut out, functions, function_variant_groups);
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
@@ -211,23 +214,24 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_queue_class_id", "SplQueue"),
         ("_spl_fixed_array_class_id", "SplFixedArray"),
         ("_spl_error_class_id", "Error"),
+        ("_spl_exception_class_id", "Exception"),
         ("_spl_logic_exception_class_id", "LogicException"),
         ("_spl_runtime_exception_class_id", "RuntimeException"),
         ("_spl_out_of_range_exception_class_id", "OutOfRangeException"),
         ("_spl_out_of_bounds_exception_class_id", "OutOfBoundsException"),
         ("_spl_invalid_argument_exception_class_id", "InvalidArgumentException"),
         ("_spl_type_error_class_id", "TypeError"),
+        (
+            "_spl_argument_count_error_class_id",
+            "ArgumentCountError",
+        ),
         ("_spl_value_error_class_id", "ValueError"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
+        ("_dom_exception_class_id", "DOMException"),
         // Emitted for the `intdiv($a, 0)` / `$a % 0` zero-divisor guards, which
         // raise reference PHP's catchable DivisionByZeroError from codegen with
         // no EIR class reference to hang the id off.
         ("_spl_division_by_zero_error_class_id", "DivisionByZeroError"),
-        // Emitted for the `new $c(...)` arity refusals. The checker rejects a
-        // static `new C()` that passes too few arguments, but `new $c()` names
-        // its class in a VALUE, so the refusal has to be raised at run time and
-        // has no EIR class reference to hang the id off either.
-        ("_spl_argument_count_error_class_id", "ArgumentCountError"),
     ] {
         let class_id = all_class_id_by_name
             .get(class_name)
@@ -296,6 +300,20 @@ pub(crate) fn emit_runtime_data_user(
                 out.push_str(&format!("    .quad _class_prop_desc_{}\n", class_id));
             } else {
                 out.push_str("    .quad _class_prop_desc_missing\n");
+            }
+        }
+    }
+
+    // Compact print_r descriptor pointers used by the DOM/debug projection
+    // walker. Keep this table distinct from `_class_prop_desc_ptrs`: the latter
+    // also carries var_export names and therefore has six words per row.
+    out.push_str(".globl _class_pr_desc_ptrs\n_class_pr_desc_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_pr_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_pr_desc_missing\n");
             }
         }
     }
@@ -392,7 +410,7 @@ pub(crate) fn emit_runtime_data_user(
             let payload_size =
                 match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
                     (Some(class_info), Some(class_name)) => {
-                        class_object_payload_size(class_name, class_info)
+                        class_object_payload_size(classes, class_name, class_info)
                     }
                     _ => 0,
                 };
@@ -535,6 +553,56 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Native-wrapper hidden metadata starts immediately after declared property slots.
+    // Runtime finalization indexes this dense table by class id without exposing the
+    // offsets through PHP Reflection or serialized property metadata.
+    out.push_str(
+        ".globl _class_internal_extension_hidden_offsets_count\n_class_internal_extension_hidden_offsets_count:\n",
+    );
+    out.push_str(&format!(
+        "    .quad {}\n",
+        max_class_id.map_or(0, |class_id| class_id + 1)
+    ));
+
+    out.push_str(
+        ".globl _class_internal_extension_hidden_offsets\n_class_internal_extension_hidden_offsets:\n",
+    );
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let offset = class_name_by_id
+                .get(&class_id)
+                .filter(|class_name| {
+                    crate::internal_extensions::is_native_wrapper_descendant(classes, class_name)
+                })
+                .and_then(|_| class_info_by_id.get(&class_id))
+                .map(|class_info| 8 + class_info.properties.len() * 16)
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {}\n", offset));
+        }
+    }
+
+    let dom_wrapper_kinds = crate::internal_extensions::LEGACY_DOM_WRAPPER_KINDS
+        .iter()
+        .chain(crate::internal_extensions::MODERN_DOM_WRAPPER_KINDS);
+    let max_dom_wrapper_kind = dom_wrapper_kinds
+        .clone()
+        .map(|(kind, _)| *kind)
+        .max()
+        .unwrap_or(0);
+    out.push_str(".globl _dom_wrapper_kind_count\n_dom_wrapper_kind_count:\n");
+    out.push_str(&format!("    .quad {}\n", max_dom_wrapper_kind + 1));
+    out.push_str(".globl _dom_wrapper_kind_class_ids\n_dom_wrapper_kind_class_ids:\n");
+    for kind in 0..=max_dom_wrapper_kind {
+        let class_id = dom_wrapper_kinds
+            .clone()
+            .find_map(|(candidate, class_name)| {
+                (*candidate == kind)
+                    .then(|| class_id_by_name.get(*class_name).copied())
+                    .flatten()
+            })
+            .unwrap_or(u64::MAX);
+        out.push_str(&format!("    .quad {}\n", class_id));
+    }
     // Per-class serialize-magic symbol tables — consulted by __rt_serialize_object
     // and __rt_unser_at_object. Each is a dense class_id-indexed table whose entry
     // resolves through the implementing class (so an inherited magic method
@@ -558,6 +626,47 @@ pub(crate) fn emit_runtime_data_user(
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
             }
+        }
+    }
+
+    // php-src gives DOM nodes an overridable __sleep/__wakeup denial, while
+    // classes carrying ZEND_ACC_NOT_SERIALIZABLE reject before magic methods.
+    // The serializer uses this dense policy table after resolving the runtime
+    // class ID, so nested wrappers and user subclasses follow the same rule.
+    out.push_str(".globl _class_dom_serialize_deny_modes\n_class_dom_serialize_deny_modes:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let mode = class_name_by_id
+                .get(&class_id)
+                .map(|class_name| dom_serialize_deny_mode(classes, class_name))
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {mode}\n"));
+        }
+    }
+
+    // Dense class-id-indexed boxed-Mixed `__debugInfo()` adapter table. The
+    // adapters normalize raw array/hash method returns so recursive runtime
+    // renderers can invoke user overrides and native SimpleXML uniformly.
+    out.push_str(".globl _class_debug_info_ptrs\n_class_debug_info_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        let method_key = php_symbol_key("__debugInfo");
+        for class_id in 0..=max_class_id {
+            let compiler_projection = class_info_by_id
+                .get(&class_id)
+                .is_some_and(|class_info| {
+                    class_info.method_impl_classes.contains_key(&method_key)
+                        && !class_info.methods.contains_key(&method_key)
+                });
+            let entry = class_info_by_id
+                .get(&class_id)
+                .filter(|class_info| {
+                    compiler_projection
+                        || (class_info.method_impl_classes.contains_key(&method_key)
+                            && class_info.methods.contains_key(&method_key))
+                })
+                .map(|_| crate::names::debug_info_adapter_symbol(class_id))
+                .unwrap_or_else(|| "0".to_string());
+            out.push_str(&format!("    .quad {entry}\n"));
         }
     }
 
@@ -687,6 +796,9 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".globl _class_prop_desc_missing\n_class_prop_desc_missing:\n");
     out.push_str("    .quad 0\n"); // property count = 0
     out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_pr_desc_missing\n_class_pr_desc_missing:\n");
+    out.push_str("    .quad 0\n"); // property count = 0
+    out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_vtable_missing\n_class_vtable_missing:\n");
     out.push_str("    .quad 0\n");
     out.push_str("    .p2align 3\n");
@@ -718,7 +830,7 @@ pub(crate) fn emit_runtime_data_user(
         emit_eval_reflection_source_file_data(&mut out, source_path);
     }
     out.push_str(".p2align 3\n");
-    emit_classes_by_name_table(&mut out, &sorted_classes);
+    emit_classes_by_name_table(&mut out, classes, &sorted_classes);
     if emit_eval_reflection_metadata {
         out.push_str(".p2align 3\n");
         emit_eval_reflection_method_lookup_data(&mut out, &sorted_classes, &sorted_interfaces);
@@ -948,6 +1060,16 @@ pub(crate) fn emit_runtime_data_user(
             .properties
             .iter()
             .enumerate()
+            .filter(|(prop_index, _)| {
+                class_info
+                    .property_declaring_class_slots
+                    .get(*prop_index)
+                    .is_none_or(|declaring_class| {
+                        !crate::internal_extensions::is_native_wrapper_class(
+                            declaring_class,
+                        )
+                    })
+            })
             .filter(|(prop_index, (name, _))| {
                 class_info
                     .visible_property_index(name)
@@ -1027,7 +1149,9 @@ pub(crate) fn emit_runtime_data_user(
 
         out.push_str("    .p2align 3\n");
         out.push_str(&format!(".globl _class_gc_desc_{}\n_class_gc_desc_{}:\n", class_info.class_id, class_info.class_id));
-        if class_info.properties.is_empty() {
+        let hidden_slot_count =
+            crate::internal_extensions::hidden_slot_count_for(classes, class_name);
+        if class_info.properties.is_empty() && hidden_slot_count == 0 {
             out.push_str("    .byte 0\n");
         } else {
             out.push_str("    .byte ");
@@ -1050,6 +1174,7 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::Mixed => 7,
                         PhpType::Union(_) => 7,
                         PhpType::Iterable => 7,
+                        PhpType::Void => 7,
                         PhpType::Resource(_) => 9,
                         PhpType::TaggedScalar => {
                             unreachable!("nullable scalar properties use the boxed Mixed representation")
@@ -1058,9 +1183,22 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::Pointer(_)
                         | PhpType::Buffer(_)
                         | PhpType::Packed(_)
-                        | PhpType::Never
-                        | PhpType::Void => 0,
+                        | PhpType::Never => 0,
                     }
+                };
+                out.push_str(&tag.to_string());
+            }
+            for hidden_index in 0..hidden_slot_count {
+                if !class_info.properties.is_empty() || hidden_index > 0 {
+                    out.push_str(", ");
+                }
+                let hidden_offset = hidden_index * 16;
+                let tag = if hidden_offset
+                    == crate::internal_extensions::NATIVE_WRAPPER_ITERATOR_CURRENT_OFFSET
+                {
+                    6
+                } else {
+                    0
                 };
                 out.push_str(&tag.to_string());
             }
@@ -1072,7 +1210,8 @@ pub(crate) fn emit_runtime_data_user(
         // property's byte offset within the object, and its runtime value tag.
         // __rt_serialize_object / __rt_unserialize_object walk this by class id.
         for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
-            let mangled = mangled_property_name(class_info, class_name, prop_name);
+            let mangled =
+                mangled_property_name(class_info, class_name, prop_index, prop_name);
             out.push_str(&format!(
                 ".globl _class_serpname_{}_{}\n_class_serpname_{}_{}:\n",
                 class_info.class_id, prop_index, class_info.class_id, prop_index,
@@ -1093,13 +1232,10 @@ pub(crate) fn emit_runtime_data_user(
         ));
         out.push_str(&format!("    .quad {}\n", class_info.properties.len()));
         for (prop_index, (prop_name, prop_ty)) in class_info.properties.iter().enumerate() {
-            let mangled_len = mangled_property_name(class_info, class_name, prop_name).len();
-            let offset = class_info
-                .property_offsets
-                .get(prop_name)
-                .copied()
-                .unwrap_or(8 + prop_index * 16);
-            let tag = prop_value_tag(class_info, prop_name, prop_ty);
+            let mangled_len =
+                mangled_property_name(class_info, class_name, prop_index, prop_name).len();
+            let offset = 8 + prop_index * 16;
+            let tag = prop_value_tag(class_info, prop_index, prop_name, prop_ty);
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
                 class_info.class_id, prop_index
@@ -1214,6 +1350,51 @@ pub(crate) fn emit_runtime_data_user(
             out.push_str(&format!("    .quad {}\n", row.plain_key.len())); // bare property-name byte length
         }
 
+        // Compact print_r rows consumed by the DOM/debug projection walker.
+        // Unlike `_class_prop_desc_*`, this table always describes declared
+        // slots and has four words per row: key pointer/length, offset, tag.
+        let pr_rows = class_info
+            .properties
+            .iter()
+            .enumerate()
+            .map(|(layout_index, (prop_name, prop_ty))| {
+                (
+                    print_r_property_key(class_info, class_name, layout_index, prop_name),
+                    class_info
+                        .property_offsets
+                        .get(prop_name)
+                        .copied()
+                        .unwrap_or(8 + layout_index * 16),
+                    prop_value_tag(class_info, layout_index, prop_name, prop_ty),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (row_index, (key, _, _)) in pr_rows.iter().enumerate() {
+            out.push_str(&format!(
+                ".globl _class_pr_pkey_{}_{}\n_class_pr_pkey_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id,
+                row_index,
+                class_info.class_id,
+                row_index,
+                escaped_ascii(key),
+            ));
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_pr_desc_{}\n_class_pr_desc_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        out.push_str(&format!("    .quad {}\n", pr_rows.len()));
+        for (row_index, (_, offset, tag)) in pr_rows.iter().enumerate() {
+            out.push_str(&format!(
+                "    .quad _class_pr_pkey_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", pr_rows[row_index].0.len()));
+            out.push_str(&format!("    .quad {}\n", offset));
+            out.push_str(&format!("    .quad {}\n", tag));
+        }
+
         out.push_str("    .p2align 3\n");
         out.push_str(&format!(".globl _class_vtable_{}\n_class_vtable_{}:\n", class_info.class_id, class_info.class_id));
         if class_info.vtable_methods.is_empty() {
@@ -1256,6 +1437,56 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(&format!("    .quad {}\n", stdclass_id));
 
     out
+}
+
+/// Returns php-src's DOM serialization-denial policy for one runtime class.
+///
+/// Mode zero is ordinary serialization, mode one is the overridable DOM-node
+/// fallback, and mode two is `ZEND_ACC_NOT_SERIALIZABLE`, which also applies to
+/// descendants before any user serialization hook can run.
+fn dom_serialize_deny_mode(classes: &HashMap<String, ClassInfo>, class_name: &str) -> u64 {
+    const HARD_DENY_BASES: &[&str] = &[
+        "DOMXPath",
+        "Dom\\Implementation",
+        "Dom\\TokenList",
+        "Dom\\NamespaceInfo",
+        "Dom\\XPath",
+    ];
+    if HARD_DENY_BASES
+        .iter()
+        .any(|base| class_is_or_descends_from(classes, class_name, base))
+    {
+        return 2;
+    }
+    if class_name == "DOMNameSpaceNode"
+        || class_is_or_descends_from(classes, class_name, "DOMNode")
+        || class_is_or_descends_from(classes, class_name, "Dom\\Node")
+    {
+        return 1;
+    }
+    0
+}
+
+/// Returns whether one class is equal to or transitively extends the named base.
+fn class_is_or_descends_from(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+    base: &str,
+) -> bool {
+    let mut current = Some(class_name);
+    let mut visited = HashSet::new();
+    while let Some(candidate) = current {
+        if candidate == base {
+            return true;
+        }
+        if !visited.insert(candidate.to_string()) {
+            return false;
+        }
+        current = classes
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
 }
 
 /// Emits a dense class-id to class-name lookup table for runtime `get_class()`.
@@ -2269,6 +2500,7 @@ fn emit_callable_function_data(
 /// so the runtime helper can bound its linear scan.
 fn emit_classes_by_name_table(
     out: &mut String,
+    classes: &HashMap<String, ClassInfo>,
     sorted_classes: &[(&String, &ClassInfo)],
 ) {
     for (class_name, class_info) in sorted_classes {
@@ -2283,7 +2515,7 @@ fn emit_classes_by_name_table(
     out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
     for (class_name, class_info) in sorted_classes {
-        let obj_size = class_object_payload_size(class_name, class_info);
+        let obj_size = class_object_payload_size(classes, class_name, class_info);
         out.push_str(&format!(
             "    .quad _class_by_name_str_{}\n",
             class_info.class_id
@@ -2294,14 +2526,60 @@ fn emit_classes_by_name_table(
     }
 }
 
+/// Emits the flat class table installed into each process-local DOM bridge context.
+fn emit_dom_class_metadata(
+    out: &mut String,
+    sorted_classes: &[(&String, &ClassInfo)],
+    class_id_by_name: &HashMap<String, u64>,
+) {
+    for (index, (class_name, _)) in sorted_classes.iter().enumerate() {
+        out.push_str(&format!(
+            ".globl _elephc_dom_class_metadata_name_{index}\n\
+             _elephc_dom_class_metadata_name_{index}:\n\
+                 .ascii \"{}\"\n",
+            escaped_ascii(class_name),
+        ));
+    }
+    out.push_str(".p2align 3\n");
+    out.push_str(
+        ".globl _elephc_dom_class_metadata_count\n_elephc_dom_class_metadata_count:\n",
+    );
+    out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
+    out.push_str(".globl _elephc_dom_class_metadata\n_elephc_dom_class_metadata:\n");
+    for (index, (class_name, class_info)) in sorted_classes.iter().enumerate() {
+        let parent_id = class_info
+            .parent
+            .as_ref()
+            .and_then(|parent| class_id_by_name.get(parent))
+            .copied()
+            .unwrap_or(u64::MAX);
+        out.push_str(&format!(
+            "    .quad _elephc_dom_class_metadata_name_{index}\n"
+        ));
+        out.push_str(&format!("    .quad {}\n", class_name.len()));
+        out.push_str(&format!("    .quad {}\n", class_info.class_id));
+        out.push_str(&format!("    .quad {parent_id}\n"));
+        out.push_str(&format!(
+            "    .long {}\n    .long 0\n",
+            u8::from(class_info.is_abstract),
+        ));
+    }
+}
+
 /// Returns the PHP object payload bytes required by one class layout.
-fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize {
+fn class_object_payload_size(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+    class_info: &ClassInfo,
+) -> usize {
+    let hidden_slot_count =
+        crate::internal_extensions::hidden_slot_count_for(classes, class_name);
     let dyn_props_slot = if class_uses_dynamic_property_tail(class_name, class_info) {
         8
     } else {
         0
     };
-    8 + class_info.properties.len() * 16 + dyn_props_slot
+    8 + (class_info.properties.len() + hidden_slot_count) * 16 + dyn_props_slot
 }
 
 /// Returns whether this class layout stores a dynamic-property hash tail.
@@ -2346,12 +2624,6 @@ pub(crate) const USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET: usize = USER_WRAPPER_VTA
 /// branch with a single load + cmp.
 pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 5;
 
-/// Returns true when a method key belongs to the fixed-ABI stream-wrapper
-/// vtable surface dispatched by the runtime with raw arguments.
-pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
-    USER_WRAPPER_METHOD_NAMES.contains(&method_key)
-}
-
 /// Returns true when a method key belongs to the fixed-ABI user-filter
 /// vtable surface dispatched by the runtime with raw arguments.
 pub(crate) fn is_user_filter_contract_method(method_key: &str) -> bool {
@@ -2363,6 +2635,11 @@ const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "oncreate",
     "onclose",
 ];
+
+/// Returns true when a method key belongs to the fixed-ABI user-wrapper vtable surface.
+pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
+    USER_WRAPPER_METHOD_NAMES.contains(&method_key)
+}
 
 /// Vtable slots whose runtime helper reads the method's result as a RAW STRING PAIR
 /// (pointer + length in the string-result registers) rather than as a boxed Mixed.
@@ -2418,7 +2695,7 @@ fn user_wrapper_boxed_result_mask(class_info: &ClassInfo) -> u64 {
     mask
 }
 
-const USER_WRAPPER_METHOD_NAMES: [&str; USER_WRAPPER_VTABLE_SLOTS] = [
+pub(crate) const USER_WRAPPER_METHOD_NAMES: [&str; USER_WRAPPER_VTABLE_SLOTS] = [
     "stream_open",
     "stream_close",
     "stream_read",
@@ -2443,6 +2720,29 @@ const USER_WRAPPER_METHOD_NAMES: [&str; USER_WRAPPER_VTABLE_SLOTS] = [
     "dir_closedir",
     "dir_rewinddir",
 ];
+
+/// Returns the generated ABI-adapter symbol stored in a user-wrapper vtable slot.
+pub(crate) fn user_wrapper_adapter_symbol(class_id: u64, method_name: &str) -> String {
+    format!(
+        "_user_wrapper_adapter_{}_{}",
+        class_id,
+        mangle_fqn(method_name)
+    )
+}
+
+/// Returns the synthetic EIR function name that materializes one wrapper parameter default.
+pub(crate) fn user_wrapper_default_thunk_name(
+    class_id: u64,
+    method_name: &str,
+    parameter_index: usize,
+) -> String {
+    format!(
+        "_user_wrapper_default_{}_{}_{}",
+        class_id,
+        mangle_fqn(method_name),
+        parameter_index
+    )
+}
 
 /// Returns true when a class publishes at least one of the eight
 /// stream-wrapper methods publicly — i.e. when it is plausibly a stream
@@ -2532,11 +2832,11 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             .method_visibilities
             .get(*method_name)
             .is_some_and(|visibility| matches!(visibility, Visibility::Public));
-        let impl_class = class_info.method_impl_classes.get(*method_name);
-        if is_public && impl_class.is_some() {
+        let has_impl = class_info.method_impl_classes.contains_key(*method_name);
+        if is_public && has_impl {
             out.push_str(&format!(
                 "    .quad {}\n",
-                method_symbol(impl_class.unwrap(), method_name)
+                user_wrapper_adapter_symbol(class_info.class_id, method_name)
             ));
         } else {
             out.push_str("    .quad 0\n");
@@ -2692,19 +2992,24 @@ fn interface_method_needs_return_wrapper(
 /// Returns a property's PHP-mangled `serialize()` key bytes: `name` for a public
 /// property, `\0*\0name` for protected, and `\0DeclaringClass\0name` for private
 /// (matching the keys the PHP interpreter emits inside `O:...{...}`).
-fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> Vec<u8> {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => {
+fn mangled_property_name(
+    class_info: &ClassInfo,
+    class_name: &str,
+    layout_index: usize,
+    prop_name: &str,
+) -> Vec<u8> {
+    match class_info.property_slot_visibility(layout_index, prop_name) {
+        Visibility::Protected => {
             let mut out = vec![0u8, b'*', 0u8];
             out.extend_from_slice(prop_name.as_bytes());
             out
         }
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
+        Visibility::Private => {
+            let declaring = class_info.property_slot_declaring_class(
+                layout_index,
+                prop_name,
+                class_name,
+            );
             let mut out = vec![0u8];
             out.extend_from_slice(declaring.as_bytes());
             out.push(0u8);
@@ -2755,11 +3060,7 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         return projection
             .into_iter()
             .filter_map(|(key, prop_name)| {
-                let (layout_index, (_, prop_ty)) = class_info
-                    .properties
-                    .iter()
-                    .enumerate()
-                    .find(|(_, (name, _))| *name == prop_name)?;
+                let (layout_index, (_, prop_ty)) = class_info.visible_property(&prop_name)?;
                 Some(VarDumpRow {
                     key: format!("\"{}\"", key),
                     // A `__debugInfo()` projection key is a plain array key, so PHP
@@ -2772,7 +3073,7 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
                         .get(&prop_name)
                         .copied()
                         .unwrap_or(8 + layout_index * 16),
-                    tag: prop_value_tag(class_info, &prop_name, prop_ty),
+                    tag: prop_value_tag(class_info, layout_index, &prop_name, prop_ty),
                     type_name: var_dump_property_type_name(prop_ty),
                 })
             })
@@ -2783,15 +3084,15 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         .iter()
         .enumerate()
         .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
-            key: var_dump_property_key(class_info, class_name, prop_name),
-            print_r_key: print_r_property_key(class_info, class_name, prop_name),
+            key: var_dump_property_key(class_info, class_name, layout_index, prop_name),
+            print_r_key: print_r_property_key(class_info, class_name, layout_index, prop_name),
             plain_key: prop_name.clone(),
             offset: class_info
                 .property_offsets
                 .get(prop_name)
                 .copied()
                 .unwrap_or(8 + layout_index * 16),
-            tag: prop_value_tag(class_info, prop_name, prop_ty),
+            tag: prop_value_tag(class_info, layout_index, prop_name, prop_ty),
             type_name: var_dump_property_type_name(prop_ty),
         })
         .collect()
@@ -2887,15 +3188,20 @@ fn var_dump_debug_info_projection(class_info: &ClassInfo) -> Option<Vec<(String,
 
 /// Renders the text PHP prints between the `[` and `]` of a declared property's
 /// `var_dump` key line, including its visibility suffix.
-fn var_dump_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => format!("\"{}\":protected", prop_name),
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
+fn var_dump_property_key(
+    class_info: &ClassInfo,
+    class_name: &str,
+    layout_index: usize,
+    prop_name: &str,
+) -> String {
+    match class_info.property_slot_visibility(layout_index, prop_name) {
+        Visibility::Protected => format!("\"{}\":protected", prop_name),
+        Visibility::Private => {
+            let declaring = class_info.property_slot_declaring_class(
+                layout_index,
+                prop_name,
+                class_name,
+            );
             format!("\"{}\":\"{}\":private", prop_name, declaring)
         }
         _ => format!("\"{}\"", prop_name),
@@ -2949,15 +3255,20 @@ fn enum_case_name_property_offset(class_info: &ClassInfo) -> i64 {
 /// (verified against PHP 8.4). The declaring class comes from the same
 /// `property_declaring_classes` map `var_dump_property_key` reads, so the two
 /// renderings can never name a different class for one property.
-fn print_r_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
-    match class_info.property_visibilities.get(prop_name) {
-        Some(Visibility::Protected) => format!("{}:protected", prop_name),
-        Some(Visibility::Private) => {
-            let declaring = class_info
-                .property_declaring_classes
-                .get(prop_name)
-                .map(String::as_str)
-                .unwrap_or(class_name);
+fn print_r_property_key(
+    class_info: &ClassInfo,
+    class_name: &str,
+    layout_index: usize,
+    prop_name: &str,
+) -> String {
+    match class_info.property_slot_visibility(layout_index, prop_name) {
+        Visibility::Protected => format!("{}:protected", prop_name),
+        Visibility::Private => {
+            let declaring = class_info.property_slot_declaring_class(
+                layout_index,
+                prop_name,
+                class_name,
+            );
             format!("{}:{}:private", prop_name, declaring)
         }
         _ => prop_name.to_string(),
@@ -2992,8 +3303,13 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
 /// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
 /// properties are stored as boxed `Mixed` cells (tag 7).
-fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
-    if class_info.reference_properties.contains(prop_name) {
+fn prop_value_tag(
+    class_info: &ClassInfo,
+    layout_index: usize,
+    prop_name: &str,
+    prop_ty: &PhpType,
+) -> u64 {
+    if class_info.property_slot_is_reference(layout_index, prop_name) {
         return 7;
     }
     match prop_ty {
@@ -3163,7 +3479,7 @@ mod tests {
     use crate::parser::ast::Visibility;
     use crate::types::{ClassInfo, PhpType};
 
-    use super::emit_runtime_data_user;
+    use super::{class_object_payload_size, emit_runtime_data_user};
 
     /// Provides the Empty class info helper used by the user module.
     pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
@@ -3199,8 +3515,10 @@ mod tests {
             properties: Vec::new(),
             property_offsets: HashMap::new(),
             property_declaring_classes: HashMap::new(),
+            property_declaring_class_slots: Vec::new(),
             defaults: Vec::new(),
             property_visibilities: HashMap::new(),
+            property_visibility_slots: Vec::new(),
             property_set_visibilities: HashMap::new(),
             declared_properties: HashSet::new(),
             property_declared_slots: Vec::new(),
@@ -3272,6 +3590,7 @@ mod tests {
             &HashMap::new(),
             Some(&allowed_class_names),
             false,
+            false,
             None,
             Target {
                 platform: Platform::MacOS,
@@ -3312,6 +3631,7 @@ mod tests {
             &classes,
             &HashMap::new(),
             None,
+            false,
             false,
             None,
             Target {
@@ -3355,6 +3675,7 @@ mod tests {
             &HashMap::new(),
             None,
             false,
+            false,
             None,
             Target {
                 platform: Platform::MacOS,
@@ -3363,5 +3684,290 @@ mod tests {
         );
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));
+    }
+
+    /// Verifies untyped properties release boxed Mixed values during object destruction.
+    #[test]
+    fn test_emit_runtime_data_user_tags_untyped_properties_for_gc() {
+        let mut class_info = empty_class_info(1, "run");
+        class_info
+            .properties
+            .push(("context".to_string(), PhpType::Void));
+        class_info
+            .property_offsets
+            .insert("context".to_string(), 8);
+
+        let mut classes = HashMap::new();
+        classes.insert("UntypedOwner".to_string(), class_info);
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            None,
+            false,
+            false,
+            None,
+        );
+
+        assert!(asm.contains("_class_gc_desc_1:\n    .byte 7\n"));
+    }
+
+    /// Verifies native virtual properties stay out of JSON while user descendant slots remain.
+    #[test]
+    fn test_native_wrapper_json_descriptors_only_publish_user_storage() {
+        let mut native = empty_class_info(1, "saveXML");
+        native
+            .properties
+            .push(("xmlVersion".to_string(), PhpType::Str));
+        native
+            .property_offsets
+            .insert("xmlVersion".to_string(), 8);
+        native
+            .property_visibilities
+            .insert("xmlVersion".to_string(), Visibility::Public);
+        native
+            .property_declaring_class_slots
+            .push("DOMDocument".to_string());
+
+        let mut descendant = empty_class_info(2, "saveXML");
+        descendant.parent = Some("DOMDocument".to_string());
+        descendant.properties.extend([
+            ("xmlVersion".to_string(), PhpType::Str),
+            ("label".to_string(), PhpType::Str),
+        ]);
+        descendant
+            .property_offsets
+            .insert("xmlVersion".to_string(), 8);
+        descendant
+            .property_offsets
+            .insert("label".to_string(), 24);
+        descendant
+            .property_visibilities
+            .insert("xmlVersion".to_string(), Visibility::Public);
+        descendant
+            .property_visibilities
+            .insert("label".to_string(), Visibility::Public);
+        descendant.property_declaring_class_slots.extend([
+            "DOMDocument".to_string(),
+            "CustomDocument".to_string(),
+        ]);
+
+        let classes = HashMap::from([
+            ("DOMDocument".to_string(), native),
+            ("CustomDocument".to_string(), descendant),
+        ]);
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            None,
+            false,
+            false,
+            None,
+        );
+
+        assert!(asm.contains(
+            "_class_json_desc_1:\n    .quad 0\n    .quad 0\n    .quad 0\n"
+        ));
+        assert!(!asm.contains("_class_json_pname_1_0"));
+        assert!(asm.contains(
+            "_class_json_desc_2:\n    .quad 0\n    .quad 0\n    .quad 1\n"
+        ));
+        assert!(!asm.contains("_class_json_pname_2_0"));
+        assert!(asm.contains("_class_json_pname_2_1"));
+    }
+
+    /// Verifies named allocation tables reserve every hidden native-wrapper metadata slot.
+    #[test]
+    fn test_native_wrapper_payload_size_includes_hidden_metadata() {
+        let mut classes = HashMap::new();
+        classes.insert(
+            "DOMImplementation".to_string(),
+            empty_class_info(1, "hasfeature"),
+        );
+        let class_info = classes
+            .get("DOMImplementation")
+            .expect("missing DOMImplementation test metadata");
+
+        assert_eq!(
+            class_object_payload_size(&classes, "DOMImplementation", class_info),
+            8 + crate::internal_extensions::NATIVE_WRAPPER_HIDDEN_SLOTS * 16
+        );
+    }
+
+    /// Verifies DOM class metadata rows retain names, ids, parents, and abstract flags.
+    #[test]
+    fn test_dom_class_metadata_uses_locked_forty_byte_rows() {
+        let mut dom_node = empty_class_info(1, "node");
+        dom_node.parent = None;
+        let mut dom_element = empty_class_info(2, "element");
+        dom_element.parent = Some("DOMNode".to_string());
+        let mut custom = empty_class_info(3, "custom");
+        custom.parent = Some("DOMElement".to_string());
+        custom.is_abstract = true;
+        let classes = HashMap::from([
+            ("DOMNode".to_string(), dom_node),
+            ("DOMElement".to_string(), dom_element),
+            ("CustomElement".to_string(), custom),
+        ]);
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            None,
+            false,
+            false,
+            None,
+        );
+
+        assert!(asm.contains(
+            "_elephc_dom_class_metadata_count:\n    .quad 3\n"
+        ));
+        assert!(asm.contains(
+            concat!(
+                "_elephc_dom_class_metadata:\n",
+                "    .quad _elephc_dom_class_metadata_name_0\n",
+                "    .quad 7\n",
+                "    .quad 1\n",
+                "    .quad 18446744073709551615\n",
+                "    .long 0\n",
+                "    .long 0\n",
+            )
+        ));
+        assert!(asm.contains(
+            concat!(
+                "    .quad _elephc_dom_class_metadata_name_2\n",
+                "    .quad 13\n",
+                "    .quad 3\n",
+                "    .quad 2\n",
+                "    .long 1\n",
+                "    .long 0\n",
+            )
+        ));
+    }
+
+    /// Verifies wrapper descendants retain user destructors and share one hidden native layout.
+    #[test]
+    fn test_native_wrapper_descendant_runtime_layout_is_atomic() {
+        let mut dom_element = empty_class_info(1, "element");
+        dom_element.parent = None;
+        let mut custom = empty_class_info(2, "custom");
+        custom.parent = Some("DOMElement".to_string());
+        custom
+            .method_impl_classes
+            .insert("__destruct".to_string(), "CustomElement".to_string());
+        let mut special = empty_class_info(3, "special");
+        special.parent = Some("CustomElement".to_string());
+        special
+            .method_impl_classes
+            .insert("__destruct".to_string(), "CustomElement".to_string());
+        let classes = HashMap::from([
+            ("DOMElement".to_string(), dom_element),
+            ("CustomElement".to_string(), custom),
+            ("SpecialElement".to_string(), special),
+        ]);
+
+        let asm = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            None,
+            true,
+            false,
+            None,
+        );
+
+        let special = classes
+            .get("SpecialElement")
+            .expect("missing SpecialElement test metadata");
+        assert_eq!(
+            class_object_payload_size(&classes, "SpecialElement", special),
+            8 + crate::internal_extensions::NATIVE_WRAPPER_HIDDEN_SLOTS * 16
+        );
+        assert!(asm.contains(
+            "_class_gc_desc_3:\n    .byte 0, 0, 0, 0, 0, 6\n"
+        ));
+        let destruct_symbol =
+            crate::names::method_symbol("CustomElement", "__destruct");
+        assert!(asm.contains(&format!(
+            concat!(
+                "_class_destruct_ptrs:\n",
+                "    .quad 0\n",
+                "    .quad 0\n",
+                "    .quad {0}\n",
+                "    .quad {0}\n",
+            ),
+            destruct_symbol,
+        )));
+        assert!(asm.contains(
+            concat!(
+                "_class_internal_extension_hidden_offsets:\n",
+                "    .quad 0\n",
+                "    .quad 8\n",
+                "    .quad 8\n",
+                "    .quad 8\n",
+            )
+        ));
+        assert!(asm.contains(
+            concat!(
+                "    .quad _class_by_name_str_3\n",
+                "    .quad 14\n",
+                "    .quad 3\n",
+                "    .quad 104\n",
+            )
+        ));
+
+        let asm_without_dom_runtime = emit_runtime_data_user(
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &[],
+            &HashMap::new(),
+            &HashMap::new(),
+            &classes,
+            &HashMap::new(),
+            None,
+            false,
+            false,
+            None,
+        );
+        assert!(!asm_without_dom_runtime.contains("__rt_dom_wrapper_finalize"));
     }
 }

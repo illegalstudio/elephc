@@ -38,6 +38,32 @@ pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_u
 pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
 pub(crate) use recovery::recover_to_statement_boundary;
 
+/// Parses the terminal outermost `__HALT_COMPILER()` directive into source metadata.
+pub(super) fn parse_outermost_halt_compiler(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+) -> Result<Stmt, CompileError> {
+    let span = tokens
+        .get(*pos)
+        .map(|(_, metadata)| metadata.span)
+        .unwrap_or(Span::dummy());
+    let offset = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::HaltCompiler(offset)) => *offset,
+        _ => return Err(CompileError::new(span, "Expected __HALT_COMPILER()")),
+    };
+    *pos += 1;
+    expect_token(tokens, pos, &Token::LParen, "Expected '(' after __HALT_COMPILER")?;
+    expect_token(tokens, pos, &Token::RParen, "Expected ')' after __HALT_COMPILER(")?;
+    expect_semicolon(tokens, pos)?;
+    Ok(Stmt::new(
+        StmtKind::ConstDecl {
+            name: crate::source::HALT_OFFSET_SENTINEL.to_string(),
+            value: crate::parser::ast::Expr::int_lit(offset as i64),
+        },
+        span,
+    ))
+}
+
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {
     // PHP attribute groups (`#[...]`) may decorate any statement-level
@@ -238,6 +264,10 @@ fn parse_stmt_dispatch(
             expect_semicolon(tokens, pos)?;
             Ok(Stmt::new(StmtKind::Continue(levels), span))
         }
+        Token::HaltCompiler(_) => Err(CompileError::new(
+            span,
+            "__HALT_COMPILER() can only be used from the outermost scope",
+        )),
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token at statement position: {:?}", other),

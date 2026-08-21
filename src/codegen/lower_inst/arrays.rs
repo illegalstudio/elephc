@@ -1975,13 +1975,14 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.instruction("ldr x11, [x10, x1, lsl #3]");                      // load the existing boxed Mixed slot
     ctx.emitter.instruction(&format!("cbz x11, {}", runtime_label));            // null gap slots are ordinary array writes
     ctx.emitter.instruction("ldr x12, [x11]");                                  // load the existing Mixed tag for marker detection
-    ctx.emitter.instruction(&format!("cmp x12, #{}", INVOKER_ARG_REF_CELL_TAG));// check whether the slot aliases caller storage
+    let marker_cmp = format!("cmp x12, #{}", INVOKER_ARG_REF_CELL_TAG);
+    ctx.emitter.instruction(&marker_cmp);                                       // check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("b.ne {}", runtime_label));                // ordinary boxed Mixed slots are replaced by the runtime setter
     ctx.emitter.instruction("ldr x12, [x11, #16]");                             // load the source runtime tag carried by the by-reference marker
     ctx.emitter.instruction("ldr x10, [x11, #8]");                              // load the caller ref-cell address from the marker payload
-    ctx.emitter.instruction(
-        &format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))
-    );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
+    emit_release_mixed_array_ref_marker_payload(ctx);
+    let mixed_tag_cmp = format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed));
+    ctx.emitter.instruction(&mixed_tag_cmp);                                    // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));             // transfer boxed Mixed replacements as handles rather than payload words
     ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement Mixed low payload word
     ctx.emitter.instruction("str x12, [x10]");                                  // write the replacement low word through the caller ref-cell
@@ -2017,13 +2018,14 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction("test r10, r10");                                   // check whether the existing slot is a null gap
     ctx.emitter.instruction(&format!("jz {}", runtime_label));                  // null gap slots are ordinary array writes
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the existing Mixed tag for marker detection
-    ctx.emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
+    let marker_cmp = format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG);
+    ctx.emitter.instruction(&marker_cmp);                                       // check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("jne {}", runtime_label));                 // ordinary boxed Mixed slots are replaced by the runtime setter
     ctx.emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                   // load the source runtime tag carried by the by-reference marker
     ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                    // load the caller ref-cell address from the marker payload
-    ctx.emitter.instruction(
-        &format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))
-    );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
+    emit_release_mixed_array_ref_marker_payload(ctx);
+    let mixed_tag_cmp = format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed));
+    ctx.emitter.instruction(&mixed_tag_cmp);                                    // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("je {}", mixed_cell_label));               // transfer boxed Mixed replacements as handles rather than payload words
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement Mixed low payload word
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // write the replacement low word through the caller ref-cell
@@ -2043,6 +2045,127 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.label(&runtime_label);
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
     ctx.emitter.label(&done_label);
+}
+
+/// Releases the old payload before an invoker variadic marker writes through its cell.
+fn emit_release_mixed_array_ref_marker_payload(ctx: &mut FunctionContext<'_>) {
+    let release_any_label = ctx.next_label("mixed_array_ref_release_any");
+    let release_callable_label = ctx.next_label("mixed_array_ref_release_callable");
+    let release_resource_label = ctx.next_label("mixed_array_ref_release_resource");
+    let release_string_label = ctx.next_label("mixed_array_ref_release_string");
+    let done_label = ctx.next_label("mixed_array_ref_release_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            for register in ["x0", "x10", "x2", "x12"] {
+                abi::emit_push_reg(ctx.emitter, register);
+            }
+            ctx.emitter.instruction("cmp x12, #1");                             // strings own a persisted heap payload
+            ctx.emitter.instruction(&format!("b.eq {}", release_string_label)); // release strings through their persistent-storage helper
+            ctx.emitter.instruction("cmp x12, #10");                            // callable descriptors use their dedicated release helper
+            let callable_branch = format!("b.eq {}", release_callable_label);
+            ctx.emitter.instruction(&callable_branch);                          // branch to callable descriptor cleanup
+            ctx.emitter.instruction("cmp x12, #9");                             // resource payloads need their kind-specific destructor
+            let resource_branch = format!("b.eq {}", release_resource_label);
+            ctx.emitter.instruction(&resource_branch);                          // rebuild a temporary Mixed owner for resource cleanup
+            ctx.emitter.instruction("cmp x12, #4");                             // tags below indexed arrays are non-owning scalars
+            ctx.emitter.instruction(&format!("b.lo {}", done_label));           // skip integer, float, and boolean payloads
+            ctx.emitter.instruction("cmp x12, #8");                             // null carries no heap payload
+            ctx.emitter.instruction(&format!("b.eq {}", done_label));           // keep the empty reference cell unchanged
+            ctx.emitter.instruction("cmp x12, #10");                            // tags above callable are not runtime-owned payloads
+            ctx.emitter.instruction(&format!("b.hi {}", done_label));           // ignore unknown marker payload tags conservatively
+            abi::emit_jump(ctx.emitter, &release_any_label);
+
+            ctx.emitter.label(&release_any_label);
+            abi::emit_load_from_address(ctx.emitter, "x0", "x10", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            abi::emit_jump(ctx.emitter, &done_label);
+
+            ctx.emitter.label(&release_string_label);
+            abi::emit_load_from_address(ctx.emitter, "x0", "x10", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            abi::emit_jump(ctx.emitter, &done_label);
+
+            ctx.emitter.label(&release_callable_label);
+            abi::emit_load_from_address(ctx.emitter, "x0", "x10", 0);
+            crate::codegen::callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+            abi::emit_jump(ctx.emitter, &done_label);
+
+            ctx.emitter.label(&release_resource_label);
+            abi::emit_load_from_address(ctx.emitter, "x13", "x10", 0);
+            abi::emit_load_from_address(ctx.emitter, "x14", "x10", 8);
+            abi::emit_push_reg(ctx.emitter, "x13");
+            abi::emit_push_reg(ctx.emitter, "x14");
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 24);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x14", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x13", 16);
+            abi::emit_load_int_immediate(ctx.emitter, "x15", 9);
+            abi::emit_store_to_address(ctx.emitter, "x15", "x0", 0);
+            abi::emit_store_to_address(ctx.emitter, "x13", "x0", 8);
+            abi::emit_store_to_address(ctx.emitter, "x14", "x0", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_free_deep");
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+
+            ctx.emitter.label(&done_label);
+            for register in ["x12", "x2", "x10", "x0"] {
+                abi::emit_pop_reg(ctx.emitter, register);
+            }
+        }
+        Arch::X86_64 => {
+            for register in ["rdi", "r10", "rdx", "r11"] {
+                abi::emit_push_reg(ctx.emitter, register);
+            }
+            ctx.emitter.instruction("cmp r11, 1");                              // strings own a persisted heap payload
+            ctx.emitter.instruction(&format!("je {}", release_string_label));   // release strings through their persistent-storage helper
+            ctx.emitter.instruction("cmp r11, 10");                             // callable descriptors use their dedicated release helper
+            ctx.emitter.instruction(&format!("je {}", release_callable_label)); // branch to callable descriptor cleanup
+            ctx.emitter.instruction("cmp r11, 9");                              // resource payloads need their kind-specific destructor
+            ctx.emitter.instruction(&format!("je {}", release_resource_label)); // rebuild a temporary Mixed owner for resource cleanup
+            ctx.emitter.instruction("cmp r11, 4");                              // tags below indexed arrays are non-owning scalars
+            ctx.emitter.instruction(&format!("jb {}", done_label));             // skip integer, float, and boolean payloads
+            ctx.emitter.instruction("cmp r11, 8");                              // null carries no heap payload
+            ctx.emitter.instruction(&format!("je {}", done_label));             // keep the empty reference cell unchanged
+            ctx.emitter.instruction("cmp r11, 10");                             // tags above callable are not runtime-owned payloads
+            ctx.emitter.instruction(&format!("ja {}", done_label));             // ignore unknown marker payload tags conservatively
+            abi::emit_jump(ctx.emitter, &release_any_label);
+
+            ctx.emitter.label(&release_any_label);
+            abi::emit_load_from_address(ctx.emitter, "rax", "r10", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            abi::emit_jump(ctx.emitter, &done_label);
+
+            ctx.emitter.label(&release_string_label);
+            abi::emit_load_from_address(ctx.emitter, "rax", "r10", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            abi::emit_jump(ctx.emitter, &done_label);
+
+            ctx.emitter.label(&release_callable_label);
+            abi::emit_load_from_address(ctx.emitter, "rax", "r10", 0);
+            crate::codegen::callable_descriptor::emit_release_current_descriptor(ctx.emitter);
+            abi::emit_jump(ctx.emitter, &done_label);
+
+            ctx.emitter.label(&release_resource_label);
+            abi::emit_load_from_address(ctx.emitter, "r8", "r10", 0);
+            abi::emit_load_from_address(ctx.emitter, "r9", "r10", 8);
+            abi::emit_push_reg(ctx.emitter, "r8");
+            abi::emit_push_reg(ctx.emitter, "r9");
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 24);
+            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r8", 16);
+            abi::emit_load_int_immediate(ctx.emitter, "r11", 9);
+            abi::emit_store_to_address(ctx.emitter, "r11", "rax", 0);
+            abi::emit_store_to_address(ctx.emitter, "r8", "rax", 8);
+            abi::emit_store_to_address(ctx.emitter, "r9", "rax", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_free_deep");
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+
+            ctx.emitter.label(&done_label);
+            for register in ["r11", "rdx", "r10", "rdi"] {
+                abi::emit_pop_reg(ctx.emitter, register);
+            }
+        }
+    }
 }
 
 /// Boxes a value for a Mixed array, consuming owned producers when possible.

@@ -345,6 +345,20 @@ pub(crate) fn collect_constants(
             PhpType::Str,
         ),
     );
+    for name in crate::internal_extensions::registry().constant_names() {
+        let value = crate::internal_extensions::registry()
+            .constant(name)
+            .expect("internal extension constant index must resolve");
+        let expression = crate::internal_extensions::value_expression(value)
+            .unwrap_or_else(|error| {
+                panic!("invalid internal constant {name}: {error}")
+            });
+        let php_type = crate::internal_extensions::value_php_type(value)
+            .unwrap_or_else(|error| {
+                panic!("invalid internal constant {name}: {error}")
+            });
+        constants.insert(name.to_string(), (expression.kind, php_type));
+    }
     collect_constant_decls(program, &mut constants);
     constants
 }
@@ -428,5 +442,20 @@ mod tests {
         assert_eq!(int_constant(&linux, "FNM_PATHNAME"), 1);
         assert_eq!(int_constant(&linux, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&linux, "FNM_CASEFOLD"), 16);
+    }
+
+    /// Verifies frozen DOM/libxml constants carry their PHP values into EIR lowering.
+    #[test]
+    fn internal_extension_constants_are_seeded_with_values() {
+        let constants = collect_constants(&vec![], Platform::MacOS);
+        assert_eq!(int_constant(&constants, "LIBXML_NOERROR"), 32);
+        assert_eq!(
+            int_constant(&constants, "LIBXML_HTML_NOIMPLIED"),
+            8_192
+        );
+        assert_eq!(
+            int_constant(&constants, "Dom\\HTML_NO_DEFAULT_NS"),
+            2_147_483_648
+        );
     }
 }

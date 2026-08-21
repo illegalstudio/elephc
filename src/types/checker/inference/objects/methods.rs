@@ -35,10 +35,35 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        require_internal_extension_for_type(self, &obj_ty);
         if let PhpType::Object(class_name) = &obj_ty {
             if self.interfaces.contains_key(class_name) {
+                if !self
+                    .interfaces
+                    .get(class_name)
+                    .is_some_and(|info| info.methods.contains_key(&php_symbol_key(method)))
+                {
+                    if let Some(return_type) = self
+                        .infer_runtime_native_descendant_method_call(
+                            class_name, method, args, expr, env,
+                        )?
+                    {
+                        return Ok(return_type);
+                    }
+                }
                 return self
                     .infer_method_call_on_interface_type(class_name, method, args, expr, env);
+            }
+            if !self
+                .classes
+                .get(class_name)
+                .is_some_and(|info| info.methods.contains_key(&php_symbol_key(method)))
+            {
+                if let Some(return_type) = self.infer_runtime_native_descendant_method_call(
+                    class_name, method, args, expr, env,
+                )? {
+                    return Ok(return_type);
+                }
             }
             let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
             return Ok(self
@@ -59,6 +84,19 @@ impl Checker {
             });
             if let Some(class_name) = class_name {
                 if self.interfaces.contains_key(&class_name) {
+                    if !self
+                        .interfaces
+                        .get(&class_name)
+                        .is_some_and(|info| info.methods.contains_key(&php_symbol_key(method)))
+                    {
+                        if let Some(return_type) = self
+                            .infer_runtime_native_descendant_method_call(
+                                &class_name, method, args, expr, env,
+                            )?
+                        {
+                            return Ok(return_type);
+                        }
+                    }
                     return self.infer_method_call_on_interface_type(
                         &class_name,
                         method,
@@ -66,6 +104,17 @@ impl Checker {
                         expr,
                         env,
                     );
+                }
+                if !self
+                    .classes
+                    .get(&class_name)
+                    .is_some_and(|info| info.methods.contains_key(&php_symbol_key(method)))
+                {
+                    if let Some(return_type) = self.infer_runtime_native_descendant_method_call(
+                        &class_name, method, args, expr, env,
+                    )? {
+                        return Ok(return_type);
+                    }
                 }
                 let return_ty =
                     self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?;
@@ -170,6 +219,106 @@ impl Checker {
         } else {
             Some(self.normalize_union_type(candidates))
         }
+    }
+
+    /// Validates a method that is absent from a native base/interface but present on
+    /// compatible concrete wrappers selected by PHP's runtime object dispatch.
+    fn infer_runtime_native_descendant_method_call(
+        &mut self,
+        receiver_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        let candidates = self.runtime_native_descendant_method_candidates(receiver_name, method);
+        let Some(first) = candidates.first() else {
+            return Ok(None);
+        };
+        let method_key = php_symbol_key(method);
+        let first_signature = self
+            .classes
+            .get(first)
+            .and_then(|info| info.methods.get(&method_key))
+            .cloned();
+        let signatures_agree = first_signature.as_ref().is_some_and(|signature| {
+            candidates.iter().all(|candidate| {
+                self.classes
+                    .get(candidate)
+                    .and_then(|info| info.methods.get(&method_key))
+                    == Some(signature)
+            })
+        });
+        if signatures_agree {
+            self.infer_method_call_on_class_type(first, method, args, expr, env)?;
+        } else {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+        }
+        let return_types = candidates
+            .iter()
+            .filter_map(|candidate| {
+                crate::internal_extensions::method_result_type_override(candidate, &method_key)
+                    .or_else(|| {
+                        self.classes
+                            .get(candidate)
+                            .and_then(|info| info.methods.get(&method_key))
+                            .map(|signature| signature.return_type.clone())
+                    })
+            })
+            .collect::<Vec<_>>();
+        Ok((!return_types.is_empty()).then(|| self.normalize_union_type(return_types)))
+    }
+
+    /// Collects native concrete wrappers compatible with a base class or interface
+    /// that expose the requested runtime-only method.
+    fn runtime_native_descendant_method_candidates(
+        &self,
+        receiver_name: &str,
+        method: &str,
+    ) -> Vec<String> {
+        let method_key = php_symbol_key(method);
+        let receiver_is_interface = self.interfaces.contains_key(receiver_name);
+        let mut candidates = self
+            .classes
+            .iter()
+            .filter(|(candidate, info)| {
+                crate::internal_extensions::is_native_wrapper_class(candidate)
+                    && info.methods.contains_key(&method_key)
+                    && if receiver_is_interface {
+                        self.native_class_satisfies_interface(candidate, receiver_name)
+                    } else {
+                        candidate.as_str() == receiver_name
+                            || self.is_subclass_of(candidate, receiver_name)
+                    }
+            })
+            .map(|(candidate, _)| candidate.clone())
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates
+    }
+
+    /// Checks interface compatibility across a native wrapper's parent chain.
+    fn native_class_satisfies_interface(
+        &self,
+        class_name: &str,
+        interface_name: &str,
+    ) -> bool {
+        let mut current = Some(class_name);
+        while let Some(candidate) = current {
+            let Some(info) = self.classes.get(candidate) else {
+                return false;
+            };
+            if info.interfaces.iter().any(|implemented| {
+                implemented == interface_name
+                    || self.interface_extends_interface(implemented, interface_name)
+            }) {
+                return true;
+            }
+            current = info.parent.as_deref();
+        }
+        false
     }
 
     /// Returns a concrete reflected object type for tracked `ReflectionClass` construction helpers.
@@ -417,6 +566,13 @@ impl Checker {
                     &format!("Method {}::{}", class_name, method),
                     env,
                 )?;
+                if crate::internal_extensions::is_native_wrapper_class(class_name) {
+                    self.relax_internal_extension_dynamic_validation_sig(
+                        &mut effective_sig,
+                        &normalized_args,
+                        env,
+                    )?;
+                }
                 if allow_by_ref_spread {
                     self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
@@ -555,6 +711,10 @@ impl Checker {
                 } else if !variadic_is_declared
                     && sig.variadic.is_some()
                     && arg_types.len() > regular_param_count
+                    && !declared_flags
+                        .get(regular_param_count)
+                        .copied()
+                        .unwrap_or(false)
                     && !method_variadic_param_is_by_ref(sig)
                     // A declared element type on the variadic (`mixed ...$xs`, `int ...$xs`) is
                     // the contract, exactly like a declared regular parameter above: call-site
@@ -572,12 +732,88 @@ impl Checker {
                             wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
-                return Ok(late_static_return_type
-                    .clone()
-                    .unwrap_or_else(|| sig.return_type.clone()));
+                return Ok(
+                    crate::internal_extensions::method_result_type_override(
+                        class_name,
+                        &method_key,
+                    )
+                    .or_else(|| late_static_return_type.clone())
+                    .unwrap_or_else(|| sig.return_type.clone()),
+                );
             }
         }
         Ok(PhpType::Int)
+    }
+
+    /// Allows runtime-checked Mixed wrappers and exact-string Stringable arguments.
+    fn relax_internal_extension_dynamic_validation_sig(
+        &mut self,
+        signature: &mut FunctionSig,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let regular_param_count = if signature.variadic.is_some() {
+            signature.params.len().saturating_sub(1)
+        } else {
+            signature.params.len()
+        };
+        let mut parameter_index = 0usize;
+        for argument in args {
+            if matches!(argument.kind, ExprKind::Spread(_)) {
+                continue;
+            }
+            let actual = self.infer_type(argument, env)?;
+            let expected = if parameter_index < regular_param_count {
+                signature
+                    .params
+                    .get_mut(parameter_index)
+                    .map(|(_, php_type)| php_type)
+            } else {
+                signature.params.last_mut().and_then(|(_, php_type)| {
+                    if let PhpType::Array(element) = php_type {
+                        Some(element.as_mut())
+                    } else {
+                        None
+                    }
+                })
+            };
+            let Some(expected) = expected else {
+                parameter_index += 1;
+                continue;
+            };
+            if actual.codegen_repr() == PhpType::Mixed
+                && internal_extension_type_accepts_native_wrapper(expected)
+            {
+                *expected = PhpType::Mixed;
+            } else if expected.codegen_repr() == PhpType::Str {
+                if let PhpType::Object(class_name) = &actual {
+                    if self.class_has_tostring_method(class_name) {
+                        *expected = actual;
+                    }
+                }
+            }
+            parameter_index += 1;
+        }
+        Ok(())
+    }
+
+    /// Reports whether a class or one of its parents declares `__toString()`.
+    fn class_has_tostring_method(&self, class_name: &str) -> bool {
+        let method_key = php_symbol_key("__toString");
+        let mut current = Some(class_name.trim_start_matches('\\'));
+        for _ in 0..=self.classes.len() {
+            let Some(candidate) = current else {
+                return false;
+            };
+            let Some(class_info) = self.classes.get(candidate) else {
+                return false;
+            };
+            if class_info.methods.contains_key(&method_key) {
+                return true;
+            }
+            current = class_info.parent.as_deref();
+        }
+        false
     }
 
     /// Returns preserved late-static return syntax for an instance method.
@@ -809,6 +1045,9 @@ impl Checker {
             }
         };
         let class_name = resolved_class_name.as_str();
+        if crate::internal_extensions::is_native_wrapper_class(class_name) {
+            self.require_builtin_library("elephc_dom");
+        }
         // `Closure::bind($closure, $newThis [, $scope])` is the static form of
         // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
         // `$scope` is accepted and ignored (closed-world visibility).
@@ -1142,6 +1381,10 @@ impl Checker {
                 } else if !variadic_is_declared
                     && sig.variadic.is_some()
                     && arg_types.len() > regular_param_count
+                    && !static_declared_flags
+                        .get(regular_param_count)
+                        .copied()
+                        .unwrap_or(false)
                     && !method_variadic_param_is_by_ref(sig)
                     // Same rule as the instance-method path: a declared variadic element type is
                     // a contract to validate against, not a slot to narrow from the call site.
@@ -1213,6 +1456,10 @@ impl Checker {
                 if !variadic_is_declared
                     && sig.variadic.is_some()
                     && arg_types.len() > regular_param_count
+                    && !instance_declared_flags
+                        .get(regular_param_count)
+                        .copied()
+                        .unwrap_or(false)
                     && !method_variadic_param_is_by_ref(sig)
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
@@ -1269,6 +1516,39 @@ impl Checker {
         class_name == "PDOException"
             && php_symbol_key(method) == "__elephcfromerrorinfo"
             && matches!(self.current_class.as_deref(), Some("PDO" | "PDOStatement"))
+    }
+}
+
+/// Records the DOM bridge when a statically known receiver type contains a native wrapper.
+fn require_internal_extension_for_type(checker: &mut Checker, php_type: &PhpType) {
+    let required = match php_type {
+        PhpType::Object(class_name) => {
+            crate::internal_extensions::is_native_wrapper_class(class_name)
+        }
+        PhpType::Union(members) => members.iter().any(|member| {
+            matches!(
+                member,
+                PhpType::Object(class_name)
+                    if crate::internal_extensions::is_native_wrapper_class(class_name)
+            )
+        }),
+        _ => false,
+    };
+    if required {
+        checker.require_builtin_library("elephc_dom");
+    }
+}
+
+/// Reports whether one checker type contains a native DOM wrapper member.
+fn internal_extension_type_accepts_native_wrapper(php_type: &PhpType) -> bool {
+    match php_type {
+        PhpType::Object(class_name) => {
+            crate::internal_extensions::is_native_wrapper_class(class_name)
+        }
+        PhpType::Union(members) => members
+            .iter()
+            .any(internal_extension_type_accepts_native_wrapper),
+        _ => false,
     }
 }
 

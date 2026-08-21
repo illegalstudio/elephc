@@ -1,0 +1,3 @@
+#ifndef ELEPHC_DOM_EMPTY_ZEND_H
+#define ELEPHC_DOM_EMPTY_ZEND_H
+#endif

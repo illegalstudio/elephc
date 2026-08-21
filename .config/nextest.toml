@@ -35,6 +35,9 @@ relative-to = "target"
 path = "debug/libelephc_image.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_dom.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_magician.a"
 relative-to = "target"
 [[profile.ci.archive.include]]

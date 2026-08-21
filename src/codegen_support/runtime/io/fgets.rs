@@ -72,7 +72,7 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("mov w9, #0x4000");                                     // high half of USER_WRAPPER_FD_BASE
     emitter.instruction("lsl w9, w9, #16");                                     // form 0x40000000 in w9
     emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
-    emitter.instruction("b.ge __rt_fgets_wrapper_entry");                       // wrappers read via the feof-gated stream_read loop below
+    emitter.instruction("b.ge __rt_fgets_wrapper_entry");                       // wrappers read through the post-read-EOF stream_read loop below
 
     // -- read loop: one byte at a time until \n or EOF --
     emitter.label("__rt_fgets_loop");
@@ -125,9 +125,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_fgets_done");                                // if newline, line is complete
     emitter.instruction("b __rt_fgets_loop");                                   // otherwise continue reading
 
-    // -- user-wrapper line read: feof-gated stream_read, one byte at a time.
-    //    feof is checked BEFORE each read so the loop never makes the EOF read
-    //    whose empty result would cross the wrapper-method boundary. Bytes are
+    // -- user-wrapper line read: stream_read one byte at a time until empty.
+    //    Each read performs php-src's lenient post-read stream_eof callback. Bytes are
     //    appended to _user_wrapper_drain_buf — NOT _concat_buf, because each
     //    __rt_fread result may itself occupy _concat_buf and clobber the line.
     //    [sp,#8] tracks the accumulated line length; the line is returned
@@ -138,9 +137,6 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat_publish");                              // hand the unused line window back to the shared scratch buffer
     emitter.instruction("str xzr, [sp, #8]");                                   // line length = 0
     emitter.label("__rt_fgets_wrapper_loop");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the wrapper fd
-    emitter.instruction("bl __rt_feof");                                        // check stream_eof FIRST (x0 = 1 at EOF)
-    emitter.instruction("cbnz x0, __rt_fgets_wrapper_done");                    // at EOF: return the bytes gathered so far
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the wrapper fd
     emitter.instruction("mov x1, #1");                                          // read exactly one byte
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
@@ -228,7 +224,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the file descriptor
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rax, r9");                                         // is this a synthetic user-wrapper fd?
-    emitter.instruction("jge __rt_fgets_wrapper_entry_x86");                    // wrappers read via the feof-gated stream_read loop below
+    emitter.instruction("jge __rt_fgets_wrapper_entry_x86");                    // wrappers read through the post-read-EOF stream_read loop below
 
     emitter.label("__rt_fgets_loop_x86");
 
@@ -276,9 +272,8 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 fgets() helper completes
     emitter.instruction("ret");                                                 // return the fgets() line slice to the caller
 
-    // -- user-wrapper line read: feof-gated stream_read, one byte at a time.
-    //    feof is checked BEFORE each read so the loop never makes the EOF read
-    //    whose empty result would cross the wrapper-method boundary. Bytes are
+    // -- user-wrapper line read: stream_read one byte at a time until empty.
+    //    Each read performs php-src's lenient post-read stream_eof callback. Bytes are
     //    appended to _user_wrapper_drain_buf — NOT _concat_buf, because each
     //    __rt_fread result may itself occupy _concat_buf and clobber the line.
     //    [rbp-16] tracks the accumulated line length; the line is returned
@@ -289,10 +284,6 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_publish");                            // hand the unused line window back to the shared scratch buffer
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // line length = 0
     emitter.label("__rt_fgets_wrapper_loop_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
-    emitter.instruction("call __rt_feof");                                      // check stream_eof FIRST (rax = 1 at EOF)
-    emitter.instruction("test rax, rax");                                       // at EOF?
-    emitter.instruction("jnz __rt_fgets_wrapper_done_x86");                     // at EOF: return the bytes gathered so far
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the wrapper fd
     emitter.instruction("mov rsi, 1");                                          // read exactly one byte
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len

@@ -31,6 +31,7 @@ use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
 use crate::codegen_support::platform::Target;
+use crate::codegen_support::RuntimeFeatures;
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
 };
@@ -49,7 +50,13 @@ use crate::types::checker::builtins::{
 /// runtime's `.comm`, the runtime's load, and the Rust bridge's `extern "C"`
 /// all name the same symbol (`_elephc_web_capture` on macOS, `elephc_web_capture`
 /// on Linux). The cache key already includes the target, so this stays cache-safe.
-pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> String {
+///
+/// `features` gates fixed state whose text helpers reference optional native bridges.
+pub(crate) fn emit_runtime_data_fixed(
+    heap_size: usize,
+    target: Target,
+    features: RuntimeFeatures,
+) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
@@ -103,6 +110,46 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     }
     out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
     out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
+    if features.dom_bridge {
+        // Process-local DOM bridge state. The context is initialized lazily in a
+        // worker after fork and calls back through the generic re-entrant host entry.
+        out.push_str(&comm_directive("_elephc_dom_context", 8, target));
+        out.push_str(&comm_directive("_elephc_dom_wrapper_cache_head", 8, target));
+        out.push_str(
+            ".p2align 3\n.globl _elephc_dom_host_vtable\n_elephc_dom_host_vtable:\n",
+        );
+        out.push_str("    .long 1\n");
+        out.push_str("    .long 24\n");
+        out.push_str("    .quad _elephc_dom_context\n");
+        out.push_str("    .quad __rt_dom_host_call\n");
+        out.push_str(
+            ".globl _elephc_dom_bridge_failure_msg\n_elephc_dom_bridge_failure_msg:\n",
+        );
+        out.push_str("    .ascii \"Fatal error: Elephc DOM bridge ABI failure\\n\"\n");
+        out.push_str(
+            ".globl _elephc_dom_xpath_object_type_error\n_elephc_dom_xpath_object_type_error:\n",
+        );
+        out.push_str(&format!(
+            "    .ascii \"{}\"\n",
+            super::super::internal_extensions::DOM_XPATH_OBJECT_TYPE_ERROR,
+        ));
+        out.push_str(
+            ".globl _elephc_dom_loader_context_directory\n_elephc_dom_loader_context_directory:\n",
+        );
+        out.push_str("    .ascii \"directory\"\n");
+        out.push_str(
+            ".globl _elephc_dom_loader_context_int_sub_name\n_elephc_dom_loader_context_int_sub_name:\n",
+        );
+        out.push_str("    .ascii \"intSubName\"\n");
+        out.push_str(
+            ".globl _elephc_dom_loader_context_ext_sub_uri\n_elephc_dom_loader_context_ext_sub_uri:\n",
+        );
+        out.push_str("    .ascii \"extSubURI\"\n");
+        out.push_str(
+            ".globl _elephc_dom_loader_context_ext_sub_system\n_elephc_dom_loader_context_ext_sub_system:\n",
+        );
+        out.push_str("    .ascii \"extSubSystem\"\n");
+    }
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
     // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
     // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
@@ -1058,6 +1105,23 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // Each fread chunk is copied here, building one contiguous result. Drains
     // larger than 1 MiB are truncated (v1).
     out.push_str(&comm_directive("_user_wrapper_drain_buf", 1048576, target));
+    // _user_wrapper_eof_flags: one cached php_stream EOF byte per synthetic
+    // userspace-wrapper handle. Reads set it from lenient stream_eof truthiness;
+    // successful seeks and handle reuse clear it before public feof() probes.
+    out.push_str(&comm_directive("_user_wrapper_eof_flags", 256, target));
+    // Registered-wrapper stat/open helpers publish failure detail for the
+    // DOM bridge after returning from their contained PHP callbacks. Kind 0
+    // is generic/success, stat kind 1 means missing url_stat, and open kinds
+    // 1/2 mean missing stream_open / stream_open returned false. Class-name
+    // pointers borrow the immutable generated registration strings.
+    // Failure metadata and drain state use target-aware common symbols so the
+    // runtime and bridge agree on macOS leading-underscore mangling.
+    out.push_str(&comm_directive("_user_wrapper_url_stat_failure_kind", 8, target));
+    out.push_str(&comm_directive("_user_wrapper_url_stat_class_ptr", 8, target));
+    out.push_str(&comm_directive("_user_wrapper_url_stat_class_len", 8, target));
+    out.push_str(&comm_directive("_user_wrapper_open_failure_kind", 8, target));
+    out.push_str(&comm_directive("_user_wrapper_open_class_ptr", 8, target));
+    out.push_str(&comm_directive("_user_wrapper_open_class_len", 8, target));
     // phar:// write stream state. _phar_write_out is the 1 MiB in-memory
     // payload buffer (template prefix + entry content); _phar_write_len is the
     // bytes used; _phar_write_tpl_len locates the entry payload. The path and
@@ -1080,6 +1144,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // safely write to it; elephc v1 zeroes the slot before each call and
     // does not read the value back.
     out.push_str(&comm_directive("_stream_open_opened_path_scratch", 16, target));
+    // Host-driven libxml stream opens temporarily publish their selected
+    // context resource here. User-wrapper construction consumes the pair
+    // before invoking url_stat()/stream_open(), then the host boundary clears it.
+    out.push_str(&comm_directive("_dom_stream_context_active", 8, target));
+    out.push_str(&comm_directive("_dom_stream_context_resource", 8, target));
+    out.push_str(
+        ".globl _stream_context_property_name\n_stream_context_property_name:\n    .ascii \"context\"\n",
+    );
     // _user_filter_registry: 128 (filter_name, class_name) registrations,
     // each entry 32 bytes (filter_name_ptr/len + class_name_ptr/len). Slot
     // is free when filter_name_ptr is null. User filter IDs are slot_index
@@ -1098,6 +1170,16 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
     out.push_str(&comm_directive("_stream_context_options", 8, target));
+    // Stream-context records own independent options hashes. Resource zero
+    // resolves to the fixed default record; dynamically created resources
+    // carry managed-heap record pointers linked from _stream_context_head.
+    // _stream_context_options remains a borrowed alias for existing consumers.
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _stream_context_default\n_stream_context_default:\n");
+    out.push_str("    .quad 0x53544358\n");
+    out.push_str("    .quad 0\n    .quad 0\n    .quad 0\n    .quad 0\n");
+    out.push_str(&comm_directive("_stream_context_head", 8, target));
+    out.push_str(&comm_directive("_stream_context_selected", 8, target));
     // var_dump body literals (rodata): per-element prefix/suffix bytes used by
     // the array/hash walkers. NONE of them carry a leading indent: every
     // var_dump line is padded by `__rt_vd_pad`, which writes `_vd_indent`
@@ -1119,6 +1201,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // key bytes and `"]=>\n` after, matching PHP's `["key"]=>` line format.
     out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"[\\\"\"\n");
     out.push_str(".globl _vd_str_key_close\n_vd_str_key_close:\n    .ascii \"\\\"]=>\\n\"\n");
+    // Object debug projections use PHP's mangled-property array keys. The
+    // dedicated top-level projection walker splits `\0*\0name` and
+    // `\0Class\0name` without changing ordinary associative-array keys.
+    out.push_str(
+        ".globl _vd_debug_protected_suffix\n_vd_debug_protected_suffix:\n    .ascii \"\\\":protected]=>\\n\"\n",
+    );
+    out.push_str(
+        ".globl _vd_debug_private_sep\n_vd_debug_private_sep:\n    .ascii \"\\\":\\\"\"\n",
+    );
+    out.push_str(
+        ".globl _vd_debug_private_suffix\n_vd_debug_private_suffix:\n    .ascii \"\\\":private]=>\\n\"\n",
+    );
     // var_dump nested-container delimiters: `array(` + count + `) {\n` opens a
     // nested array/hash on its value line, `}\n` closes it at the same indent.
     out.push_str(".globl _vd_array_prefix\n_vd_array_prefix:\n    .ascii \"array(\"\n");
@@ -1154,10 +1248,24 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
     // the recursive indentation helper (written in <=64-byte chunks).
     out.push_str(".globl _pr_array_hdr\n_pr_array_hdr:\n    .ascii \"Array\\n\"\n");
+    out.push_str(".globl _pr_object_suffix\n_pr_object_suffix:\n    .ascii \" Object\\n\"\n");
+    out.push_str(".globl _pr_recursion\n_pr_recursion:\n    .ascii \" *RECURSION*\"\n");
+    out.push_str(".globl _debug_info_null_prefix\n_debug_info_null_prefix:\n    .ascii \"Deprecated: Returning null from \"\n");
+    out.push_str(".globl _debug_info_null_suffix\n_debug_info_null_suffix:\n    .ascii \"::__debugInfo() is deprecated, return an empty array instead\\n\"\n");
+    out.push_str(".globl _debug_info_invalid_return\n_debug_info_invalid_return:\n    .ascii \"Fatal error: __debuginfo() must return an array\\n\"\n");
     out.push_str(".globl _pr_open\n_pr_open:\n    .ascii \"(\\n\"\n");
     out.push_str(".globl _pr_close\n_pr_close:\n    .ascii \")\\n\"\n");
     out.push_str(".globl _pr_lbrack\n_pr_lbrack:\n    .ascii \"[\"\n");
     out.push_str(".globl _pr_arrow\n_pr_arrow:\n    .ascii \"] => \"\n");
+    out.push_str(
+        ".globl _pr_debug_protected_suffix\n_pr_debug_protected_suffix:\n    .ascii \":protected] => \"\n",
+    );
+    out.push_str(
+        ".globl _pr_debug_private_sep\n_pr_debug_private_sep:\n    .ascii \":\"\n",
+    );
+    out.push_str(
+        ".globl _pr_debug_private_suffix\n_pr_debug_private_suffix:\n    .ascii \":private] => \"\n",
+    );
     out.push_str(".globl _pr_nl\n_pr_nl:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _pr_one\n_pr_one:\n    .ascii \"1\"\n");
     // print_r object literals: the header suffix PHP writes after the class name
@@ -1339,7 +1447,7 @@ fn emit_builtin_callable_data(target: Target) -> String {
     builtins.sort_by_key(|name| !strict_builtins.contains(name));
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!(
-            ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
+            ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii {1:?}\n",
             idx, name
         ));
     }
@@ -1360,6 +1468,44 @@ fn emit_builtin_callable_data(target: Target) -> String {
         out.push_str(&format!("    .quad {}\n", name.len()));
     }
     out
+}
+
+#[cfg(test)]
+mod dom_internal_extension_tests {
+    use super::{emit_builtin_callable_data, emit_runtime_data_fixed};
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+    use crate::codegen_support::RuntimeFeatures;
+
+    /// Verifies namespaced internal-extension functions use assembler-safe backslash escaping.
+    #[test]
+    fn test_builtin_callable_data_escapes_namespaced_function_names() {
+        let output = emit_builtin_callable_data();
+        assert!(output.contains(r#".ascii "Dom\\import_simplexml""#));
+    }
+
+    /// Verifies process-local DOM ABI state is absent unless its text helpers are selected.
+    #[test]
+    fn test_fixed_runtime_data_gates_dom_bridge_state() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let omitted = emit_runtime_data_fixed(1024, target, RuntimeFeatures::none());
+        assert!(!omitted.contains("_elephc_dom_context"));
+
+        let included = emit_runtime_data_fixed(
+            1024,
+            target,
+            RuntimeFeatures {
+                dom_bridge: true,
+                ..RuntimeFeatures::none()
+            },
+        );
+        assert!(included.contains("_elephc_dom_context"));
+        assert!(included.contains("_elephc_dom_host_vtable"));
+        assert!(included.contains(".quad _elephc_dom_context"));
+        assert!(included.contains(".quad __rt_dom_host_call"));
+        assert!(included.contains("_elephc_dom_xpath_object_type_error"));
+        assert!(included.contains("_elephc_dom_loader_context_directory"));
+        assert!(included.contains("_elephc_dom_loader_context_ext_sub_system"));
+    }
 }
 
 /// Emit the `php_uname_mode_len_msg` and `php_uname_mode_value_msg`

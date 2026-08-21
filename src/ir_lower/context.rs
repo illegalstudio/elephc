@@ -49,7 +49,10 @@ pub(crate) struct LoopFrame {
 /// Cleanup that must run when control leaves a loop without visiting its exit block.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LoopCleanup {
-    pub value: LoweredValue,
+    /// Stack-resident iterator state whose retained object must be released.
+    pub iterator: LoweredValue,
+    /// Fresh owning source expression released after the iterator drops its retain.
+    pub source: Option<LoweredValue>,
     pub span: Span,
 }
 
@@ -1259,23 +1262,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         stored
     }
 
-    /// Emits a load using the local slot's concrete frame-storage type.
-    ///
-    /// This is for cleanup paths that must release the value already present in
-    /// a slot. Normal expression reads should use `load_local`, which preserves
-    /// the narrower logical type facts from the checker.
+    /// Emits a load using the local slot's concrete frame-storage type and ownership.
     fn load_local_storage(
         &mut self,
         name: &str,
         slot: LocalSlotId,
         php_type: PhpType,
+        ownership: Ownership,
         span: Option<Span>,
     ) -> LoweredValue {
         let ir_type = value_ir_type(&php_type);
-        // This load exists specifically to release the owner held by the slot;
-        // mark it explicitly so finalization does not mistake it for a deferred
-        // borrowed expression load when the storage stays concrete.
-        let ownership = Ownership::Owned;
         let kind = self
             .local_kinds
             .get(name)
@@ -1311,6 +1307,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Loads a boxed Mixed local without applying its narrower flow-sensitive view.
+    ///
+    /// Runtime array reads inspect the boxed payload's array metadata, so they can
+    /// safely read a typed array that arrived through an `array|null` or `mixed`
+    /// slot without reinterpreting its elements as boxed Mixed pointers.
+    pub(crate) fn load_local_mixed_storage_for_runtime_read(
+        &mut self,
+        name: &str,
+        span: Option<Span>,
+    ) -> Option<LoweredValue> {
+        let slot = self.local_slots.get(name).copied()?;
+        let storage_type = self.builder.local_php_type(slot);
+        if storage_type.codegen_repr() != PhpType::Mixed {
+            return None;
+        }
+        Some(self.load_local_storage(
+            name,
+            slot,
+            storage_type,
+            Ownership::Borrowed,
+            span,
+        ))
+    }
+
     /// Releases the value currently stored in a local slot using frame-storage metadata.
     pub(crate) fn release_stored_local_value(
         &mut self,
@@ -1322,7 +1342,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !Ownership::php_type_needs_lifetime_tracking(&storage_type) {
             return;
         }
-        let previous = self.load_local_storage(name, slot, storage_type, span);
+        // Cleanup consumes the owner held by the slot, unlike ordinary runtime
+        // reads which borrow that storage for the duration of the operation.
+        let previous = self.load_local_storage(
+            name,
+            slot,
+            storage_type,
+            Ownership::Owned,
+            span,
+        );
         crate::ir_lower::ownership::release_if_owned(self, previous, span);
     }
 
@@ -2069,7 +2097,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owned_unboxed_local_load(value.value) {
             return true;
         }
-        if self.value_is_owning_mixed_string_cast(value.value) {
+        if self.value_is_owning_string_cast(value.value) {
             return true;
         }
         if self.value_is_owning_array_cast(value.value) {
@@ -2159,6 +2187,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::EvalStaticMethodCall
                     | Op::RuntimeCall
                     | Op::ExternCall
+                    | Op::InternalExtensionCall
                     | Op::MethodCall
                     | Op::NullsafeMethodCall
                     | Op::StaticMethodCall
@@ -2286,35 +2315,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         argument: ValueId,
         result: ValueId,
     ) -> bool {
-        let argument_type = self.builder.value_php_type(argument).codegen_repr();
-        let result_type = self.builder.value_php_type(result).codegen_repr();
-        if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
-            || !Ownership::php_type_needs_lifetime_tracking(&result_type)
-        {
-            return false;
-        }
-        match (&argument_type, &result_type) {
-            (PhpType::Mixed | PhpType::Union(_), _)
-            | (_, PhpType::Mixed | PhpType::Union(_)) => true,
-            (PhpType::Object(_), PhpType::Object(_)) => true,
-            (PhpType::Array(_), PhpType::Array(_)) => true,
-            (
-                PhpType::AssocArray { .. },
-                PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
-            ) => true,
-            (
-                PhpType::Iterable,
-                PhpType::Iterable
-                | PhpType::Array(_)
-                | PhpType::AssocArray { .. }
-                | PhpType::Object(_),
-            ) => true,
-            (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
-            (PhpType::Str, PhpType::Str) => true,
-            (PhpType::Callable, PhpType::Callable) => true,
-            (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
-            _ => argument_type == result_type,
-        }
+        let argument_type = self.builder.value_php_type(argument);
+        let result_type = self.builder.value_php_type(result);
+        php_types_can_alias_storage(&argument_type, &result_type)
     }
 
     /// Returns whether the value is a read from a one-shot hidden expression temp.
@@ -2336,8 +2339,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Later source-order stores can widen the final frame slot after this load has
     /// already been lowered. Array/hash/object/iterable loads are therefore treated as
     /// provisional owners; builder finalization removes their emitted releases if the
-    /// slot stays concrete. Callable loads use the eager answer because assignment has
-    /// a separate move-vs-retain decision that cannot be repaired by pruning a release.
+    /// slot stays concrete. `$this` is excluded because PHP forbids rebinding it, so its
+    /// parameter slot remains a borrowed receiver for the complete method body; treating
+    /// it as provisional would persist borrowed property reads without a matching release.
+    /// Callable loads use the eager answer because assignment has a separate move-vs-retain
+    /// decision that cannot be repaired by pruning a release.
     ///
     /// Callers that *publish* the pointer without consuming the local's ownership
     /// (notably `throw $e`) must still retain: the slot remains an owner after the load.
@@ -2351,6 +2357,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
             return false;
         };
+        if self.local_slots.get("this").copied() == Some(slot) {
+            return false;
+        }
         if !matches!(
             self.builder.local_kind(slot),
             LocalKind::PhpLocal | LocalKind::StaticLocal
@@ -2372,8 +2381,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             && matches!(result_type, PhpType::Callable)
     }
 
-    /// Returns whether a generic cast owns a detached string copy of a Mixed operand.
-    fn value_is_owning_mixed_string_cast(&self, value: ValueId) -> bool {
+    /// Returns whether a generic cast owns a detached runtime string result.
+    fn value_is_owning_string_cast(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
@@ -2385,7 +2394,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         matches!(
             self.builder.value_php_type(source).codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_)
+            PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)
         )
     }
 
@@ -2954,6 +2963,59 @@ fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
             | LocalKind::OwnedTemp
             | LocalKind::NamedArgTemp
     )
+}
+
+/// Returns whether two PHP types can reference the same refcounted runtime storage.
+///
+/// Union members are compared recursively because nullability or scalar failure
+/// alternatives do not make otherwise disjoint payload families aliasable. `Mixed`
+/// remains conservative and can alias every lifetime-tracked representation.
+pub(crate) fn php_types_can_alias_storage(left: &PhpType, right: &PhpType) -> bool {
+    // `codegen_repr()` lowers every ordinary union to `Mixed`. Expand unions before
+    // that lowering, otherwise two disjoint alternatives such as `DOMElement|null`
+    // and `string|false` both appear as `Mixed` and incorrectly retain a call
+    // argument temporary as though it were returned by the callee.
+    match (left, right) {
+        (PhpType::Union(members), other) => {
+            return members
+                .iter()
+                .any(|member| php_types_can_alias_storage(member, other));
+        }
+        (other, PhpType::Union(members)) => {
+            return members
+                .iter()
+                .any(|member| php_types_can_alias_storage(other, member));
+        }
+        _ => {}
+    }
+    let left = left.codegen_repr();
+    let right = right.codegen_repr();
+    if !Ownership::php_type_needs_lifetime_tracking(&left)
+        || !Ownership::php_type_needs_lifetime_tracking(&right)
+    {
+        return false;
+    }
+    match (&left, &right) {
+        (PhpType::Mixed, _) | (_, PhpType::Mixed) => true,
+        (PhpType::Object(_), PhpType::Object(_)) => true,
+        (PhpType::Array(_), PhpType::Array(_)) => true,
+        (
+            PhpType::AssocArray { .. },
+            PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
+        ) => true,
+        (
+            PhpType::Iterable,
+            PhpType::Iterable
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_),
+        ) => true,
+        (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
+        (PhpType::Str, PhpType::Str) => true,
+        (PhpType::Callable, PhpType::Callable) => true,
+        (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
+        _ => left == right,
+    }
 }
 
 /// Returns true when eval can replace a local value with an arbitrary boxed cell.

@@ -225,8 +225,13 @@ fn try_compile_source_to_asm_with_defines_repr(
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
-    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
-    let ast = elephc::conditional::apply(ast, defines);
+    let ast = elephc::source::finalize_physical_program(
+        ast,
+        &synthetic_main,
+        elephc::source::SourceMode::Php,
+        defines,
+    )
+    .expect("physical-source finalization failed");
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");

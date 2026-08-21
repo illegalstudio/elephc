@@ -81,3 +81,18 @@ fn runtime_function_probes_expose_targeted_effects() {
         Effects::READS_PROCESS | Effects::ALLOC_CONCAT | Effects::MAY_FATAL
     );
 }
+
+/// Persistent class-name results cannot alias their object arguments.
+#[test]
+fn class_name_lookup_results_are_argument_independent() {
+    use crate::builtins::semantics::BuiltinResultOwnership;
+
+    assert_eq!(
+        RuntimeFnId::GetClass.result_ownership(),
+        BuiltinResultOwnership::Independent
+    );
+    assert_eq!(
+        RuntimeFnId::GetParentClass.result_ownership(),
+        BuiltinResultOwnership::Independent
+    );
+}

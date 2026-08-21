@@ -228,15 +228,17 @@ fn render_linux_command(
     if has_link_inputs {
         args.push(OsString::from("-Wl,--no-as-needed"));
     }
-    args.extend([OsString::from("-lm"), OsString::from("-lpthread")]);
-    if needs_libdl {
-        args.push(OsString::from("-ldl"));
-    }
     append_search_paths(&mut args, plan);
     if whole_bridge_count(plan) >= 2 {
         args.push(OsString::from("-Wl,--allow-multiple-definition"));
     }
     append_link_inputs(&mut args, plan, Platform::Linux);
+    // GNU ld resolves static archives in one pass, so system libraries must
+    // follow the bridge archives that introduce their unresolved references.
+    args.extend([OsString::from("-lm"), OsString::from("-lpthread")]);
+    if needs_libdl {
+        args.push(OsString::from("-ldl"));
+    }
     if has_link_inputs {
         args.push(OsString::from("-Wl,--as-needed"));
     }
@@ -478,6 +480,59 @@ mod tests {
             .unwrap();
         assert_eq!((archive, close), (open + 1, open + 2));
         assert!(close < managed);
+    }
+
+    /// Verifies Linux system libraries follow every DOM/libxml archive on both supported architectures.
+    #[test]
+    fn linux_system_libraries_follow_bridge_archives() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive("libelephc_dom.a", "elephc_dom", false),
+            LinkItem::managed_archive("libxml2.a", "libxml2"),
+        ]);
+        let commands = [
+            render_link_command(
+                Target::new(Platform::Linux, Arch::X86_64),
+                Emit::Executable,
+                paths(),
+                &plan,
+                true,
+                None,
+                &[],
+            )
+            .arguments_lossy(),
+            render_link_command(
+                Target::new(Platform::Linux, Arch::AArch64),
+                Emit::Executable,
+                paths(),
+                &plan,
+                true,
+                None,
+                &[],
+            )
+            .arguments_lossy(),
+        ];
+
+        for args in commands {
+            let last_archive = ["libelephc_dom.a", "libxml2.a"]
+                .into_iter()
+                .map(|archive| {
+                    args.iter()
+                        .position(|argument| argument == archive)
+                        .expect("archive must be rendered")
+                })
+                .max()
+                .expect("the test plan has bridge archives");
+            for library in ["-lm", "-lpthread", "-ldl"] {
+                let system_library = args
+                    .iter()
+                    .position(|argument| argument == library)
+                    .expect("Linux system library must be rendered");
+                assert!(
+                    last_archive < system_library,
+                    "{library} must follow all bridge archives: {args:?}"
+                );
+            }
+        }
     }
 
     /// Verifies exact macOS archives do not trigger implicit Homebrew search paths.

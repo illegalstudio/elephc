@@ -40,6 +40,7 @@ use super::{
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
+    mixed_simplexml_candidates, MixedSimpleXmlCandidate,
     emit_runtime_callable_invoker_inline, property_values, store_if_result,
     store_method_call_result,
 };
@@ -230,6 +231,143 @@ pub(super) fn store_mutated_container_property_owner(
     value: ValueId,
 ) -> Result<()> {
     store_mutated_container_property(ctx, object, slot, value)
+}
+
+/// Allocates one ordinary compiler-owned internal value object with declared slots only.
+pub(super) fn emit_internal_value_object_allocation(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+) -> Result<()> {
+    let normalized = class_name.trim_start_matches('\\');
+    if !crate::internal_extensions::is_native_value_object_class(normalized) {
+        return Err(CodegenIrError::unsupported(format!(
+            "internal-extension value-object class {}",
+            normalized
+        )));
+    }
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(normalized)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", normalized)))?;
+    let class_id = class_info.class_id;
+    let property_count = class_info.properties.len();
+    let allow_dynamic_properties = class_info.allow_dynamic_properties;
+    let uninitialized_marker_offsets = uninitialized_property_marker_offsets(class_info);
+    let owned_reference_property_offsets = owned_reference_property_offsets(class_info);
+    emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        allow_dynamic_properties,
+        &uninitialized_marker_offsets,
+        &owned_reference_property_offsets,
+    )
+}
+
+/// Allocates one native wrapper value without storing it into an EIR result slot.
+pub(super) fn emit_internal_extension_wrapper_value(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    context_reg: &str,
+    handle_reg: &str,
+) -> Result<()> {
+    emit_internal_extension_wrapper_value_impl(ctx, class_name, context_reg, handle_reg)
+}
+
+/// Allocates a bridge-selected registered descendant while preserving native wrapper state.
+pub(super) fn emit_registered_internal_extension_wrapper_value(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    context_reg: &str,
+    handle_reg: &str,
+) -> Result<()> {
+    emit_internal_extension_wrapper_value_impl(ctx, class_name, context_reg, handle_reg)
+}
+
+/// Materializes one native wrapper or verified userland descendant with native state.
+fn emit_internal_extension_wrapper_value_impl(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    context_reg: &str,
+    handle_reg: &str,
+) -> Result<()> {
+    let normalized = class_name.trim_start_matches('\\');
+    let wrapper_supported = crate::internal_extensions::is_native_wrapper_class(normalized)
+        || crate::internal_extensions::is_native_wrapper_descendant(
+            &ctx.module.class_infos,
+            normalized,
+        );
+    if !wrapper_supported {
+        return Err(CodegenIrError::unsupported(format!(
+            "internal-extension wrapper class {}",
+            normalized
+        )));
+    }
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(normalized)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", normalized)))?;
+    let class_id = class_info.class_id;
+    let property_count = class_info.properties.len();
+    let allow_dynamic_properties = class_info.allow_dynamic_properties;
+    let uninitialized_marker_offsets = uninitialized_property_marker_offsets(class_info);
+    let owned_reference_property_offsets = owned_reference_property_offsets(class_info);
+    let hidden_base = dynamic_property_hash_offset(property_count);
+    let cache_miss = ctx.next_label("dom_wrapper_cache_miss");
+    let cache_done = ctx.next_label("dom_wrapper_cache_done");
+    let context_restore = abi::secondary_scratch_reg(ctx.emitter).to_string();
+    let handle_restore = abi::tertiary_scratch_reg(ctx.emitter).to_string();
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let handle_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+
+    abi::emit_push_reg_pair(ctx.emitter, context_reg, handle_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, context_arg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, handle_arg, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_dom_wrapper_cache_get");
+    abi::emit_pop_reg_pair(ctx.emitter, &context_restore, &handle_restore);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &cache_miss);
+    abi::emit_jump(ctx.emitter, &cache_done);
+
+    ctx.emitter.label(&cache_miss);
+    abi::emit_push_reg(ctx.emitter, &context_restore);
+    abi::emit_push_reg(ctx.emitter, &handle_restore);
+    emit_object_allocation_with_hidden_slots(
+        ctx,
+        class_id,
+        property_count,
+        crate::internal_extensions::hidden_slot_count_for(
+            &ctx.module.class_infos,
+            normalized,
+        ),
+        allow_dynamic_properties,
+        &uninitialized_marker_offsets,
+        &owned_reference_property_offsets,
+    )?;
+    let object_reg = abi::int_result_reg(ctx.emitter).to_string();
+    abi::emit_pop_reg(ctx.emitter, &handle_restore);
+    abi::emit_pop_reg(ctx.emitter, &context_restore);
+
+    abi::emit_store_to_address(ctx.emitter, &context_restore, &object_reg, hidden_base + 16);
+    abi::emit_store_to_address(ctx.emitter, &handle_restore, &object_reg, hidden_base + 32);
+    abi::emit_load_int_immediate(ctx.emitter, &handle_restore, 1);
+    abi::emit_store_to_address(ctx.emitter, &handle_restore, &object_reg, hidden_base);
+    abi::emit_load_int_immediate(ctx.emitter, &handle_restore, class_id as i64);
+    abi::emit_store_to_address(ctx.emitter, &handle_restore, &object_reg, hidden_base + 8);
+    abi::emit_store_to_address(ctx.emitter, &handle_restore, &object_reg, hidden_base + 48);
+    abi::emit_store_zero_to_address(
+        ctx.emitter,
+        &object_reg,
+        hidden_base + crate::internal_extensions::NATIVE_WRAPPER_ITERATOR_CURRENT_OFFSET,
+    );
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_reg_move(ctx.emitter, object_arg, &object_reg);
+    abi::emit_load_from_address(ctx.emitter, context_arg, object_arg, hidden_base + 16);
+    abi::emit_load_from_address(ctx.emitter, handle_arg, object_arg, hidden_base + 32);
+    abi::emit_call_label(ctx.emitter, "__rt_dom_wrapper_cache_put");
+    ctx.emitter.label(&cache_done);
+    Ok(())
 }
 
 /// Stamps a declared property slot with the uninitialized-typed-property marker.

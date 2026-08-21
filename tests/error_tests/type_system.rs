@@ -620,6 +620,37 @@ class Box {
     );
 }
 
+/// Verifies a global constant method default is checked after its top-level type is known.
+#[test]
+fn test_error_method_parameter_default_rejects_mismatched_global_constant() {
+    expect_error(
+        r#"<?php
+const DEFAULT_VALUE = 1;
+class Wrapper {
+    public function stream_open(string $value = DEFAULT_VALUE): bool {
+        return false;
+    }
+}
+"#,
+        "Method parameter $value expects Str, got Int",
+    );
+}
+
+/// Verifies an undefined global constant method default retains its PHP-facing diagnostic.
+#[test]
+fn test_error_method_parameter_default_rejects_undefined_global_constant() {
+    expect_error(
+        r#"<?php
+class Wrapper {
+    public function stream_open(string $value = MISSING_DEFAULT): bool {
+        return false;
+    }
+}
+"#,
+        "Undefined constant: MISSING_DEFAULT",
+    );
+}
+
 /// Verifies an enum-typed parameter default rejects a missing enum case semantically.
 #[test]
 fn test_error_enum_case_parameter_default_rejects_missing_case() {

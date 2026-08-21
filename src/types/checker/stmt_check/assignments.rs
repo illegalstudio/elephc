@@ -20,6 +20,45 @@ use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::Checker;
 
+/// Returns whether `ty` identifies exactly one SimpleXML wrapper, optionally paired with
+/// only the fallible/null-like `Void`, `Never`, or literal `False` alternatives.
+///
+/// This mirrors the type boundary consumed by SimpleXML object-handler lowering. Broad
+/// dynamic types, `Bool`, and unions containing a second object class must keep following
+/// the ordinary assignment rules instead of being mistaken for a SimpleXML write target.
+pub(super) fn is_simplexml_element_wrapper_type(checker: &Checker, ty: &PhpType) -> bool {
+    simplexml_element_wrapper_class_name(ty)
+        .is_some_and(|class_name| is_simplexml_element_class(checker, class_name))
+}
+
+/// Returns the sole object class carried by a direct object or strict fallible wrapper union.
+fn simplexml_element_wrapper_class_name(ty: &PhpType) -> Option<&str> {
+    match ty {
+        PhpType::Object(class_name) => Some(class_name.as_str()),
+        PhpType::Union(members) => {
+            let mut wrapper = None;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never | PhpType::False => {}
+                    PhpType::Object(class_name) if wrapper.is_none() => {
+                        wrapper = Some(class_name.as_str());
+                    }
+                    _ => return None,
+                }
+            }
+            wrapper
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether a class is `SimpleXMLElement` or one of its userland descendants.
+pub(super) fn is_simplexml_element_class(checker: &Checker, class_name: &str) -> bool {
+    let class_name = class_name.trim_start_matches('\\');
+    class_name.eq_ignore_ascii_case("SimpleXMLElement")
+        || checker.is_subclass_of(class_name, "SimpleXMLElement")
+}
+
 impl Checker {
     /// Type-checks the parser-generated `$array[$index][] = $value` sequence when
     /// an empty indexed base needs its element type auto-vivified to an array.
@@ -285,5 +324,56 @@ fn assignment_target_may_write_property(target: &Expr) -> bool {
         ExprKind::Variable(_) => false,
         ExprKind::ArrayAccess { array, .. } => assignment_target_may_write_property(array),
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::simplexml_element_wrapper_class_name;
+    use crate::types::PhpType;
+
+    /// Verifies the SimpleXML assignment shape accepts one wrapper plus loader failures.
+    #[test]
+    fn simplexml_wrapper_shape_accepts_one_object_and_fallible_alternatives() {
+        let direct = PhpType::Object("SimpleXMLElement".to_string());
+        let fallible = PhpType::Union(vec![
+            PhpType::Object("SimpleXMLElement".to_string()),
+            PhpType::Void,
+            PhpType::Never,
+            PhpType::False,
+        ]);
+
+        assert_eq!(
+            simplexml_element_wrapper_class_name(&direct),
+            Some("SimpleXMLElement")
+        );
+        assert_eq!(
+            simplexml_element_wrapper_class_name(&fallible),
+            Some("SimpleXMLElement")
+        );
+    }
+
+    /// Verifies broad, boolean, and multi-object types stay outside the SimpleXML path.
+    #[test]
+    fn simplexml_wrapper_shape_rejects_bool_mixed_and_multiple_objects() {
+        let bool_union = PhpType::Union(vec![
+            PhpType::Object("SimpleXMLElement".to_string()),
+            PhpType::Bool,
+        ]);
+        let mixed_union = PhpType::Union(vec![
+            PhpType::Object("SimpleXMLElement".to_string()),
+            PhpType::Mixed,
+        ]);
+        let multiple_objects = PhpType::Union(vec![
+            PhpType::Object("SimpleXMLElement".to_string()),
+            PhpType::Object("stdClass".to_string()),
+            PhpType::False,
+        ]);
+
+        assert_eq!(simplexml_element_wrapper_class_name(&PhpType::Bool), None);
+        assert_eq!(simplexml_element_wrapper_class_name(&PhpType::Mixed), None);
+        assert_eq!(simplexml_element_wrapper_class_name(&bool_union), None);
+        assert_eq!(simplexml_element_wrapper_class_name(&mixed_union), None);
+        assert_eq!(simplexml_element_wrapper_class_name(&multiple_objects), None);
     }
 }

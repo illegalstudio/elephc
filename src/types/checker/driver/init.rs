@@ -137,6 +137,14 @@ impl Checker {
         constants.insert("M_LOG10E".to_string(), PhpType::Float);
         constants.insert("PHP_EOL".to_string(), PhpType::Str);
         constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
+        for name in crate::internal_extensions::registry().constant_names() {
+            let value = crate::internal_extensions::registry()
+                .constant(name)
+                .expect("internal extension constant index must resolve");
+            let php_type = crate::internal_extensions::value_php_type(value)
+                .unwrap_or_else(|error| panic!("invalid internal constant {name}: {error}"));
+            constants.insert(name.to_string(), php_type);
+        }
 
         Self {
             target_platform,

@@ -43,6 +43,19 @@ fn test_effect_analysis_treats_eval_as_dynamic_barrier() {
     assert!(expr_is_observable(&expr));
 }
 
+/// Verifies argument unpacking keeps surrounding catches because runtime validation may throw.
+#[test]
+fn test_effect_analysis_treats_spread_as_potentially_throwing() {
+    let spread = Expr::new(
+        ExprKind::Spread(Box::new(Expr::var("arguments"))),
+        Span::dummy(),
+    );
+
+    assert!(!expr_has_side_effects(&spread));
+    assert!(expr_effect(&spread).may_throw);
+    assert!(expr_is_observable(&spread));
+}
+
 /// Verifies unknown property and array reads remain conservative dynamic barriers.
 #[test]
 fn test_effect_analysis_keeps_unknown_property_and_array_reads_observable() {

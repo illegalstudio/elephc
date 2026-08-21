@@ -22,6 +22,7 @@
 //!   `__TRAIT__` keep the trait identity, matching PHP.
 
 mod file_pass;
+mod halt_pass;
 mod scope_pass;
 mod trait_binding;
 mod walker;
@@ -46,6 +47,15 @@ pub fn substitute_file_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt
 pub fn substitute_file_and_scope_constants(stmts: Vec<Stmt>, file_path: &Path) -> Vec<Stmt> {
     let stmts = substitute_file_constants(stmts, file_path);
     substitute_scope_constants_in_file(stmts, file_path)
+}
+
+/// Replaces physical-file-local halt-offset references before source files are merged.
+pub(crate) fn substitute_halt_compiler_constants(
+    program: Program,
+    offset: i64,
+    file_path: &Path,
+) -> Program {
+    halt_pass::substitute_halt_compiler_constants(program, offset, file_path)
 }
 
 /// Resolves scope-dependent magic constants (`__FUNCTION__`, `__CLASS__`, `__METHOD__`,

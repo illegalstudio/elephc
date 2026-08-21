@@ -205,7 +205,6 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat_grow");                                 // move the accumulated bytes into a larger owned buffer
     emitter.instruction("str x0, [sp, #24]");                                   // save the grown accumulation buffer pointer
     emitter.label("__rt_stream_get_contents_bounded_have_room");
-
     emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
     emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
     emitter.instruction("sub x1, x10, x9");                                     // remaining bytes needed
@@ -428,7 +427,6 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_grow");                               // move the accumulated bytes into a larger owned buffer
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the grown accumulation buffer pointer
     emitter.label("__rt_stream_get_contents_bounded_have_room_x86");
-
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // running result length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // requested byte cap
     emitter.instruction("sub rsi, r8");                                         // remaining bytes needed

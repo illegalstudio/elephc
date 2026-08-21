@@ -66,6 +66,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer for the destructor call
     emitter.instruction("bl __rt_call_object_destructor");                      // run the class's __destruct hook if one is declared
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after the destructor returns
+    if features.dom_bridge {
+        emitter.instruction("bl __rt_dom_wrapper_finalize");                    // release native wrapper state after the user destructor
+        emitter.instruction("ldr x0, [sp, #0]");                                // reload the object pointer after native finalization
+    }
 
     // -- incomplete objects own a persisted original class name plus a semantic
     // property hash instead of declared class property slots; release both --
@@ -339,6 +343,11 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // load the object pointer as $this for the destructor call
     emitter.instruction("call __rt_call_object_destructor");                    // run the class's __destruct hook if one is declared
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returns
+    if features.dom_bridge {
+        emitter.instruction("mov rdi, rax");                                    // pass the still-live object to native wrapper finalization
+        emitter.instruction("call __rt_dom_wrapper_finalize");                  // release native wrapper state after the user destructor
+        emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                    // reload the object pointer after native finalization
+    }
 
     // -- incomplete objects own a persisted original class name plus a semantic
     // property hash instead of declared class property slots; release both --

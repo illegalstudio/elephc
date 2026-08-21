@@ -26,6 +26,7 @@ env:
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
+    -p elephc-dom
     -p elephc-magician
     -p elephc-web
 
@@ -79,8 +80,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_dom.a
+        # (DOM / libxml / SimpleXML), libelephc_magician.a (eval), and
+        # libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -118,6 +120,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ensure DOM native build tooling
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            rm -rf /var/lib/apt/lists/*
+          fi
+
       - name: Cache Rust build state
         uses: actions/cache@v4
         with:
@@ -150,8 +160,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_dom.a
+        # (DOM / libxml / SimpleXML), libelephc_magician.a (eval), and
+        # libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES
@@ -183,6 +194,14 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Ensure DOM native build tooling
+        run: |
+          if ! command -v cmake >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake
+            rm -rf /var/lib/apt/lists/*
+          fi
 
       - name: Cache Rust build state
         uses: actions/cache@v4
@@ -216,8 +235,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # and libelephc_web.a. Build
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_dom.a
+        # (DOM / libxml / SimpleXML), libelephc_magician.a (eval), and
+        # libelephc_web.a. Build
         # them before archiving so the archive can capture the .a files (see the
         # archive include list in .config/nextest.toml).
         run: cargo build $BRIDGE_CRATES

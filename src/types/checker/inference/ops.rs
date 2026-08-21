@@ -73,7 +73,11 @@ impl Checker {
                         "Arithmetic operators require numeric operands",
                     ));
                 }
-                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                if uses_mixed_numeric_dispatch(&lt)
+                    || uses_mixed_numeric_dispatch(&rt)
+                    || is_simplexml_element_object(self, &lt)
+                    || is_simplexml_element_object(self, &rt)
+                {
                     Ok(PhpType::Mixed)
                 } else if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
@@ -100,7 +104,11 @@ impl Checker {
                 if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
-                    if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                    if uses_mixed_numeric_dispatch(&lt)
+                        || uses_mixed_numeric_dispatch(&rt)
+                        || is_simplexml_element_object(self, &lt)
+                        || is_simplexml_element_object(self, &rt)
+                    {
                         Ok(PhpType::Mixed)
                     } else if let Some(literal_ty) =
                         checked_literal_int_arithmetic_type(op, left, right)
@@ -130,7 +138,9 @@ impl Checker {
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                let simplexml_ok =
+                    is_simplexml_element_object(self, &lt) && is_simplexml_element_object(self, &rt);
+                if !numeric_ok && !datetime_ok && !simplexml_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Comparison operators require numeric operands",
@@ -160,7 +170,9 @@ impl Checker {
                     is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
                 let datetime_ok =
                     is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                let simplexml_ok =
+                    is_simplexml_element_object(self, &lt) && is_simplexml_element_object(self, &rt);
+                if !numeric_ok && !datetime_ok && !simplexml_ok {
                     return Err(CompileError::new(
                         expr.span,
                         "Spaceship operator requires numeric operands",
@@ -1244,8 +1256,9 @@ fn is_array_like_type(ty: &PhpType) -> bool {
 
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators
 /// (addition, subtraction, multiplication, division, modulo, comparison, spaceship).
-/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union
-/// with mixed integer dispatch behavior.
+/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, a union
+/// with mixed integer dispatch behavior, or a SimpleXML wrapper with php-src's
+/// `_IS_NUMBER` object cast.
 fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
@@ -1256,6 +1269,7 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             | PhpType::Void
             | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
+        || is_simplexml_element_object(checker, ty)
 }
 
 /// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders
@@ -1267,6 +1281,31 @@ fn is_datetime_family_object(ty: &PhpType) -> bool {
         PhpType::Object(name)
             if matches!(name.trim_start_matches('\\'), "DateTime" | "DateTimeImmutable")
     )
+}
+
+/// Returns whether a type is the SimpleXML base wrapper or one of its user descendants.
+fn is_simplexml_element_object(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(name) => {
+            let name = name.trim_start_matches('\\');
+            name.eq_ignore_ascii_case("SimpleXMLElement")
+                || checker.is_subclass_of(name, "SimpleXMLElement")
+        }
+        PhpType::Union(members) => {
+            let mut found_wrapper = false;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never | PhpType::False => {}
+                    PhpType::Object(_) if is_simplexml_element_object(checker, member) => {
+                        found_wrapper = true;
+                    }
+                    _ => return false,
+                }
+            }
+            found_wrapper
+        }
+        _ => false,
+    }
 }
 
 /// Returns `true` if `ty` is a valid operand type for bitwise binary operators.

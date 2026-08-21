@@ -227,6 +227,12 @@ mod misc;
 mod narrowing;
 #[path = "error_tests/image.rs"]
 mod image;
+#[path = "error_tests/dom.rs"]
+mod dom;
+#[path = "error_tests/dom_surface.rs"]
+mod dom_surface;
+#[path = "error_tests/dom_reflection_surface.rs"]
+mod dom_reflection_surface;
 
 // --- Iterator-related errors ---
 

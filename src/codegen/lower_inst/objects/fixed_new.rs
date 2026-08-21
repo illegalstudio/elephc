@@ -109,8 +109,9 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             constructor_impl,
         )
     };
-    emit_object_allocation(
+    emit_named_class_object_allocation(
         ctx,
+        &class_name,
         class_id,
         property_count,
         allow_dynamic_properties,
