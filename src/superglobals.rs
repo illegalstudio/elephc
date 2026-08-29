@@ -92,47 +92,52 @@ pub fn superglobal_type() -> PhpType {
 }
 
 /// Gives a CLI program the superglobals PHP's CLI SAPI would already have created,
-/// by prepending `$_SERVER = [];` (and so on) for every one the source SPELLS.
+/// with the CONTENTS PHP puts in them, for every one the source SPELLS.
 ///
 /// Off-web these names are ordinary top-level locals: nothing pre-initializes the
 /// shared `_eir_global_*` storage, so a bare read used to yield `null` and every
 /// consumer inherited that — silently for `$_SERVER['x']`, and loudly once
 /// `count()` started raising PHP's TypeError for a non-countable argument.
 ///
+/// They were seeded EMPTY at first, which fixed the null but left a second,
+/// quieter divergence: a PHP program reading `$_ENV['HOME']` or `$_SERVER['argv']`
+/// got nothing rather than the wrong thing, and nothing looks like "not set".
+/// Measured against `php -n` on a script file, the CLI SAPI creates:
+///
+/// - `$_ENV` — exactly `getenv()`, entry for entry.
+/// - `$_SERVER` — the same environment, plus nine of its own: `argv`, `argc`,
+///   `PHP_SELF`, `SCRIPT_NAME`, `SCRIPT_FILENAME`, `PATH_TRANSLATED`,
+///   `DOCUMENT_ROOT`, `REQUEST_TIME` and `REQUEST_TIME_FLOAT`.
+/// - `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` — empty arrays, which
+///   is what they already were.
+///
+/// The four path-shaped keys are `$argv[0]`. PHP names the script it was asked to
+/// run; a compiled program has no script at run time, and the thing that WAS
+/// invoked is the closest true answer rather than a fabricated path.
+/// `DOCUMENT_ROOT` is empty because PHP leaves it empty off-web.
+///
 /// Seeding is driven by what the program mentions, so a source that never names
-/// one emits nothing for it and the binary does not grow. The assignment is an
-/// ordinary top-level store, which `contextualize_local_assignment` already types
-/// as `AssocArray{Str, Mixed}` for these names, so the empty literal lands on hash
-/// storage rather than indexed storage.
+/// one emits nothing for it and the binary does not grow — which is also what
+/// PHP's own `auto_globals_jit` does, for the same reason.
 ///
 /// Only `$_SESSION` is deliberately absent from the seeded set — it does not
 /// exist until `session_start()` — see `CLI_POPULATED_SUPERGLOBALS`.
 pub fn seed_cli_populated_superglobals(
     program: crate::parser::ast::Program,
 ) -> crate::parser::ast::Program {
-    use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+    use crate::parser::ast::{Stmt, StmtKind};
 
     // Under `--web` the request prelude OWNS these names: it stores the real request
-    // data into `_eir_global_*` before the script body runs. Prepending an empty
-    // literal there would wipe the request.
+    // data into `_eir_global_*` before the script body runs. Seeding there would
+    // wipe the request.
     if compiling_for_web() {
         return program;
     }
     let spelled = crate::prelude_prune::usage::collect(&program).variables;
-    let seeds: Vec<Stmt> = CLI_POPULATED_SUPERGLOBALS
-        .iter()
-        .filter(|name| spelled.contains(**name))
-        .map(|name| {
-            let span = crate::span::Span::synthetic();
-            Stmt::new(
-                StmtKind::Assign {
-                    name: (*name).to_string(),
-                    value: Expr::new(ExprKind::ArrayLiteral(Vec::new()), span),
-                },
-                span,
-            )
-        })
-        .collect();
+    let mut seeds: Vec<Stmt> = Vec::new();
+    for name in CLI_POPULATED_SUPERGLOBALS.iter().filter(|name| spelled.contains(**name)) {
+        seeds.extend(seed_for(name));
+    }
     if seeds.is_empty() {
         return program;
     }
@@ -143,6 +148,52 @@ pub fn seed_cli_populated_superglobals(
     seeded.push(Stmt::new(StmtKind::Synthetic(seeds), crate::span::Span::synthetic()));
     seeded.extend(program);
     seeded
+}
+
+/// Builds the statements that give ONE superglobal the contents PHP gives it.
+///
+/// `$_ENV` and `$_SERVER` carry the environment; the rest are empty arrays, which
+/// is what PHP's CLI SAPI leaves them as. Emitted as ordinary PHP statements
+/// rather than a runtime call, so the same optimizer, checker and ownership
+/// passes see them as they would see the program's own code.
+fn seed_for(name: &str) -> Vec<crate::parser::ast::Stmt> {
+    use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
+    use crate::synthetic_class::{
+        e_bool, e_call, e_index, e_int, e_str, e_var, s_array_assign, s_assign,
+    };
+
+    let span = crate::span::Span::synthetic();
+    let empty = || Expr::new(ExprKind::ArrayLiteral(Vec::new()), span);
+
+    match name {
+        // `$_ENV` is `getenv()`: PHP populates it from the same environment, and
+        // the two compare equal entry for entry.
+        "_ENV" => vec![s_assign("_ENV", e_call("getenv", Vec::new()))],
+        "_SERVER" => {
+            // The environment first, then PHP's own keys on top — the order
+            // matters only if a variable is literally named `argv`, in which case
+            // PHP's key wins, as it does here.
+            let mut out = vec![s_assign("_SERVER", e_call("getenv", Vec::new()))];
+            let invoked = || e_index(e_var("argv"), e_int(0));
+            for key in ["PHP_SELF", "SCRIPT_NAME", "SCRIPT_FILENAME", "PATH_TRANSLATED"] {
+                out.push(s_array_assign("_SERVER", e_str(key), invoked()));
+            }
+            out.push(s_array_assign("_SERVER", e_str("DOCUMENT_ROOT"), e_str("")));
+            out.push(s_array_assign("_SERVER", e_str("REQUEST_TIME"), e_call("time", Vec::new())));
+            out.push(s_array_assign(
+                "_SERVER",
+                e_str("REQUEST_TIME_FLOAT"),
+                e_call("microtime", vec![e_bool(true)]),
+            ));
+            out.push(s_array_assign("_SERVER", e_str("argv"), e_var("argv")));
+            out.push(s_array_assign("_SERVER", e_str("argc"), e_var("argc")));
+            out
+        }
+        _ => vec![Stmt::new(
+            StmtKind::Assign { name: name.to_string(), value: empty() },
+            span,
+        )],
+    }
 }
 
 #[cfg(test)]

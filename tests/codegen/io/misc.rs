@@ -44,6 +44,11 @@ echo "continued";
 
 /// Compiles a `readline()` call piped with "world\n" on stdin and verifies
 /// the input is read, trimmed, and printed as "read: world".
+///
+/// The `trim()` here is why this test did not see that `readline` used to keep
+/// the trailing newline: trimming removes it either way. What the line actually
+/// returns is pinned by `readline_strips_the_newline_and_answers_false_at_eof`
+/// below, without a trim in the way.
 #[test]
 fn test_readline() {
     let out = compile_and_run_with_stdin(
@@ -54,4 +59,42 @@ echo "read: " . trim($line);
         "world\n",
     );
     assert_eq!(out, "read: world");
+}
+
+/// The three answers `readline()` has, told apart.
+///
+/// PHP returns the line WITHOUT its trailing newline, `""` for a line the user
+/// left empty, and `false` at end of input. elephc used to answer all three with
+/// a string — `"abc\n"`, `"\n"` and `""` — so a program could not tell an empty
+/// line from the end of the input, and `while (($l = readline()) !== false)`
+/// never terminated.
+///
+/// The order inside the fix is the whole of it, which is why the empty line is
+/// asserted alongside EOF: `readline` strips the newline, so stripping BEFORE the
+/// end-of-input test would turn a line the user typed into zero bytes and report
+/// EOF for it. Measured against `php -n`, one call per input.
+///
+/// Lengths are printed rather than the values, because the difference between
+/// `""` and `false` is invisible when echoed, and so is a trailing newline.
+#[test]
+fn readline_strips_the_newline_and_answers_false_at_eof() {
+    let source = r#"<?php
+$one = readline();
+echo $one === false ? "false" : "str" . strlen($one);
+echo ":";
+$two = readline();
+echo $two === false ? "false" : "str" . strlen($two);
+"#;
+    // A terminated line, then an empty one: the newline goes, the empty line is
+    // still a line.
+    assert_eq!(compile_and_run_with_stdin(source, "abc\n\n"), "str3:str0");
+    // A terminated line, then nothing at all: that second read is the end.
+    assert_eq!(compile_and_run_with_stdin(source, "abc\n"), "str3:false");
+    // Nothing at all, twice: end of input does not become an empty string.
+    assert_eq!(compile_and_run_with_stdin(source, ""), "false:false");
+    // An unterminated last line keeps every byte it has.
+    assert_eq!(compile_and_run_with_stdin(source, "abc"), "str3:false");
+    // Exactly one `\n` is removed; a `\r` before it belongs to the line, and php
+    // answers `string(4)` for this input.
+    assert_eq!(compile_and_run_with_stdin(source, "abc\r\n"), "str4:false");
 }

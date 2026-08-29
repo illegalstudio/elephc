@@ -1,6 +1,6 @@
 ---
 title: "getenv()"
-description: "Gets the value of an environment variable."
+description: "Gets the value of an environment variable, or the whole environment."
 sidebar:
   order: 133
 ---
@@ -8,13 +8,14 @@ sidebar:
 ## getenv()
 
 ```php
-function getenv(string $name): mixed
+function getenv(string $name = null, bool $local_only = false): mixed
 ```
 
-Gets the value of an environment variable.
+Gets the value of an environment variable, or the whole environment.
 
 **Parameters**:
-- `$name` (`string`)
+- `$name` (`string`), default `null`, optional
+- `$local_only` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
 

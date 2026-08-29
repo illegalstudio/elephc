@@ -562,6 +562,10 @@ pub(crate) fn lower_readline(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgets");
+    // `__rt_fgets` keeps the newline and answers zero bytes at EOF; `readline`
+    // strips the newline and answers `false`. Both halves are in one helper
+    // because the ORDER between them is the whole correctness argument.
+    super::super::io::box_readline_result(ctx, "readline");
     store_if_result(ctx, inst)
 }
 

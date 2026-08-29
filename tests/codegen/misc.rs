@@ -387,10 +387,71 @@ echo reset_and_set();
 /// leaves these names untyped (`Mixed`) instead of assuming initialized
 /// storage. `compile_and_run` itself asserts the binary exits successfully,
 /// so a regression here fails via that assertion, not just the output check.
+///
+/// The count was `0` while `$_SERVER` was seeded EMPTY. It now carries what PHP
+/// puts there, so the number is the environment's size plus PHP's own keys — and
+/// asserting a literal would pin this test to whatever environment happens to run
+/// it. What it can still assert is the bug: a number, and a positive one, rather
+/// than a crash or a `null` that `count()` refuses.
 #[test]
 fn bug0_cli_read_of_server_superglobal_before_assignment_does_not_crash() {
     let out = compile_and_run("<?php echo count($_SERVER);");
-    assert_eq!(out, "0");
+    let count: i64 = out.parse().unwrap_or_else(|_| panic!("count() answered {out:?}"));
+    assert!(count > 0, "a CLI $_SERVER carries the environment: {count}");
+}
+
+/// `unset($_SERVER)` must not abandon MORE storage than leaving it alone does.
+///
+/// The type-level guard for this lives in `test_seeded_superglobal_not_killable`,
+/// and it reads `$_GET` now: its observable is a refused RETYPE, which needs an
+/// array type, and `$_SERVER` is seeded from `getenv()` and so is `Mixed` —
+/// assigning an int to it is accepted, exactly as PHP accepts `$_SERVER = 5;`.
+///
+/// That leaves the property unobserved for the one superglobal that actually
+/// holds heap storage, which is where it matters: a seeded name is not a binding
+/// the body created, and lowering that treats `unset` as a kill abandons an
+/// `_eir_global_*` slot rather than releasing it.
+///
+/// It is measured as a DIFFERENCE rather than against a clean heap, because a
+/// clean heap is not what this shape produces today: a boxed assoc array from a
+/// builtin is not released at exit, and `getdate()` — the sibling this one is
+/// modelled on — leaks its 13 blocks the same way (`allocs=15 frees=2`). That is
+/// a pre-existing gap in the boxed-assoc release path, not something `unset`
+/// causes, and a test asserting `clean` here would be asserting a bug fix nobody
+/// has made. What `unset` must not do is add to it.
+#[test]
+fn unsetting_a_filled_superglobal_abandons_nothing_extra() {
+    fn live_blocks(stderr: &str) -> i64 {
+        stderr
+            .lines()
+            .find_map(|line| line.split("live_blocks=").nth(1))
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|n| n.trim_end_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+            .unwrap_or_else(|| panic!("no live_blocks in: {stderr}"))
+    }
+
+    let left_alone = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = count($_SERVER);
+echo $n > 0 ? "filled" : "empty";
+"#,
+    );
+    let unset = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = count($_SERVER);
+unset($_SERVER);
+echo $n > 0 ? "filled" : "empty";
+"#,
+    );
+
+    assert!(left_alone.success && unset.success, "a program failed: {}", unset.stderr);
+    assert_eq!(left_alone.stdout, "filled", "the seed did not fill $_SERVER");
+    assert_eq!(unset.stdout, "filled");
+    assert_eq!(
+        live_blocks(&unset.stderr),
+        live_blocks(&left_alone.stderr),
+        "unset abandoned storage that leaving the name alone releases"
+    );
 }
 
 /// BUG-0 regression (companion): a non-`--web` program checking `isset()` on
@@ -414,11 +475,17 @@ if (isset($_SESSION)) {
 }
 
 /// A CLI build must offer the superglobals PHP's CLI SAPI has already created, as
-/// ARRAYS rather than `null`. Measured under `php -n`: `$_SERVER` holds entries and
-/// `$_GET`/`$_POST`/`$_COOKIE`/`$_FILES` are empty arrays. elephc does not populate
-/// `$_SERVER`'s contents, but the TYPE is what every consumer depends on — `count()`
-/// raises `count(): Argument #1 ($value) must be of type Countable|array, null given`
-/// on the old `null`, and an index read yielded null for anything.
+/// ARRAYS rather than `null`, AND with the contents PHP puts in them. Measured
+/// under `php -n`: `$_SERVER` holds the environment plus nine keys of its own,
+/// `$_ENV` equals `getenv()`, and `$_GET`/`$_POST`/`$_COOKIE`/`$_FILES` are empty.
+///
+/// The type was the first half of this — `count()` raises `count(): Argument #1
+/// ($value) must be of type Countable|array, null given` on the old `null`. The
+/// contents are the second: seeded empty, a program reading `$_SERVER['argv']` or
+/// `$_ENV['HOME']` got nothing, and nothing is indistinguishable from unset.
+///
+/// The written key is read back to show a seeded `$_SERVER` is still an ordinary
+/// array afterwards, not a frozen snapshot.
 #[test]
 fn cli_populated_superglobals_read_as_arrays() {
     let out = compile_and_run(
@@ -429,11 +496,13 @@ echo is_array($_POST) ? "y" : "n";
 echo is_array($_COOKIE) ? "y" : "n";
 echo is_array($_FILES) ? "y" : "n";
 echo ":", count($_GET);
+echo ":", count($_SERVER) > 0 ? "filled" : "empty";
+echo ":", array_key_exists("argv", $_SERVER) ? "argv" : "no-argv";
 $_SERVER["k"] = "v";
-echo ":", $_SERVER["k"], count($_SERVER);
+echo ":", $_SERVER["k"];
 "#,
     );
-    assert_eq!(out, "yyyyy:0:v1");
+    assert_eq!(out, "yyyyy:0:filled:argv:v");
 }
 
 /// The other half of the same measurement, and the reason the seeded set is a SUBSET:

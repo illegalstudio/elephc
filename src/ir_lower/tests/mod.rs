@@ -301,11 +301,26 @@ fn unary_string_builtin_coerces_mixed_operand_before_runtime_call() {
     );
 }
 
-/// Verifies descriptor result contracts override checker precision when runtime layouts differ.
+/// Verifies a descriptor's result contract reaches the EIR, in both directions.
+///
+/// A descriptor can be LESS precise than the checker, and `json_encode` is that:
+/// the checker knows `int|string`, the runtime hands back a boxed Mixed, and the
+/// EIR says `mixed` because that is the representation.
+///
+/// It can also be MORE precise, and that direction is where the bugs were.
+/// `getenv` and `readline` both used to override their `string|false` down to a
+/// plain `Str`, which is not a layout fact but a lost answer: an unset variable
+/// became `""`, and end-of-input became `""`, each indistinguishable from a real
+/// empty string. Both now carry the union, and it is asserted here so the
+/// override cannot come back unnoticed.
+///
+/// No builtin narrows a falsy union to a scalar any more — a sweep of every
+/// `BuiltinResultType::Shared` override found none — so this test has no third
+/// example to give, and that emptiness is the point rather than a gap.
 #[test]
 fn builtin_runtime_calls_use_descriptor_result_representations() {
     let module = lower_source(
-        "<?php $encoded = json_encode(INF); $environment = getenv('HOME'); echo $encoded === false; echo strlen($environment);",
+        "<?php $encoded = json_encode(INF); $typed = readline(); $environment = getenv('HOME'); echo $encoded === false; echo $typed === false; echo $environment === false;",
     );
     let text = print_module(&module);
     assert!(
@@ -314,12 +329,12 @@ fn builtin_runtime_calls_use_descriptor_result_representations() {
         }),
         "json_encode must retain its boxed string-or-false EIR result: {text}"
     );
-    assert!(
-        text.lines().any(|line| {
-            line.contains("Str php=string") && line.contains("runtime.getenv")
-        }),
-        "getenv must retain the backend's concrete string EIR result: {text}"
-    );
+    for name in ["runtime.readline", "runtime.getenv"] {
+        assert!(
+            text.lines().any(|line| line.contains("php=string|false") && line.contains(name)),
+            "{name} must carry string|false: narrowing it hides an unset or an EOF: {text}"
+        );
+    }
 }
 
 /// Verifies `count` uses its typed runtime operation for concrete and dynamic values.

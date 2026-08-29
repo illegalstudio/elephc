@@ -2065,9 +2065,16 @@ fn test_a_surviving_retype_still_warns() {
 /// Superglobals are seeded into every environment with no binding depth: they are not bindings
 /// the body created, so `unset` must not kill them — EIR lowering would otherwise abandon (and
 /// re-mint as a frame slot) storage that lives in an `_eir_global_*` symbol.
+///
+/// Read through `$_GET` rather than `$_SERVER`, which used to be the subject. The
+/// observable here is a RETYPE being refused, which needs the name to still carry
+/// an array type; `$_SERVER` is now seeded from `getenv()` and so is `Mixed`, and
+/// assigning an int to it is accepted — as PHP accepts it too, `$_SERVER = 5;`
+/// being legal there. The guard is about storage surviving `unset`, not about
+/// that diagnostic, so it moves to a name where the diagnostic can still see it.
 #[test]
 fn test_seeded_superglobal_not_killable() {
-    expect_error("<?php unset($_SERVER); $_SERVER = 5;", "cannot reassign");
+    expect_error("<?php unset($_GET); $_GET = 5;", "cannot reassign");
 }
 
 /// Same rule for the top-level-seeded `$argv`/`$argc`. Measured before the fix: the kill was

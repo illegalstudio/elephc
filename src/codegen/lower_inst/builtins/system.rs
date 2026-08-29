@@ -694,15 +694,41 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     Ok(())
 }
 
-/// Lowers `getenv(name)` through the target-aware environment lookup helper.
+/// Lowers `getenv(name)` through the target-aware environment lookup helper and
+/// boxes its string-or-false result.
+///
+/// The boxing is what makes the two answers distinguishable. Without it the
+/// result was a plain string, so a variable that is NOT SET came back as `""` —
+/// indistinguishable from one set to the empty string, and `getenv($x) !== false`,
+/// which is the idiom for "is this set", was true for every name.
 pub(crate) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "getenv", 1)?;
+    ensure_arg_count_between(inst, "getenv", 0, 2)?;
+    // No name means "the whole environment": a different runtime answer, and a
+    // different type — an array that cannot fail, because there is no name to
+    // miss.
+    if inst.operands.is_empty() {
+        abi::emit_call_label(ctx.emitter, "__rt_getenv_all");
+        // A raw hash pointer is not yet a PHP value: it has to be boxed as a
+        // Mixed cell, exactly as `getdate` and `stat` do with theirs.
+        emit_box_hash_pointer_as_assoc_mixed(ctx);
+        return store_if_result(ctx, inst);
+    }
+    // `local_only` is accepted and evaluated, then ignored. Measured against
+    // `php -n` in the CLI SAPI: `getenv($n)` and `getenv($n, true)` agree for a
+    // shell variable, a `putenv` one and `PATH`, and `getenv() == getenv(null,
+    // true)`. There is no environment here separate from the process's, so the
+    // flag selects between two identical sources. It is still evaluated, because
+    // an argument PHP would evaluate must not be skipped for its side effects.
+    if let Some(local_only) = inst.operands.get(1).copied() {
+        ctx.load_value_to_result(local_only)?;
+    }
     let name = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(name)?.codegen_repr(), "getenv name")?;
     abi::emit_call_label(ctx.emitter, "__rt_getenv");
+    super::io::box_owned_string_or_false_result(ctx, "getenv");
     store_if_result(ctx, inst)
 }
 

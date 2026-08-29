@@ -17,6 +17,12 @@ use super::{
 };
 
 /// Store OS-provided argc and argv into global symbols.
+///
+/// `envp`, the third `main` argument, is deliberately NOT captured. It was, and
+/// it was wrong: libc may reallocate the entry vector when `putenv` adds a
+/// variable, so the startup pointer becomes a stale snapshot of an environment
+/// the program has since changed. `getenv()` reads the live `environ` instead —
+/// see `runtime::system::getenv_all`.
 pub fn emit_store_process_args_to_globals(emitter: &mut Emitter) {
     emit_store_reg_to_symbol(emitter, process_argc_reg(emitter.target), "_global_argc", 0);
     emit_store_reg_to_symbol(emitter, process_argv_reg(emitter.target), "_global_argv", 0);

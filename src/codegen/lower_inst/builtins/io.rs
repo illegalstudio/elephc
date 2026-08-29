@@ -167,6 +167,7 @@ pub(crate) use stat_ops::{
     lower_is_writeable, lower_is_executable, lower_is_link,
 };
 pub(super) use boxing_helpers::box_owned_string_or_false_result;
+pub(super) use boxing_helpers::box_readline_result;
 pub(super) use resource_handles::load_stream_fd_to_result;
 pub(super) use string_validation::load_string_to_result;
 

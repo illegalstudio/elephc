@@ -16,7 +16,7 @@ sidebar:
 | `hrtime()` | `hrtime($as_number = false): array\|int` | High-resolution monotonic time (`CLOCK_MONOTONIC`). Returns `[seconds, nanoseconds]`, or the total nanoseconds as an int when `$as_number` is true — for benchmarking elapsed time. |
 | `sleep()` | `sleep($seconds): int` | Sleep for seconds |
 | `usleep()` | `usleep($microseconds): void` | Sleep for microseconds |
-| `getenv()` | `getenv($name): string` | Get environment variable |
+| `getenv()` | `getenv($name = null, $local_only = false): string\|array\|false` | Get one environment variable, or — with no argument — the whole environment as a string-keyed array. Answers `false` for a name that is not set, and `""` for one set to the empty string. `$local_only` is accepted and has no effect: there is no environment here separate from the process's |
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |

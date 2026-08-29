@@ -118,7 +118,9 @@ fn test_error_usleep_wrong_args() {
 /// Verifies that `getenv()` with no arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_getenv_wrong_args() {
-    expect_error("<?php getenv();", "getenv() takes exactly 1 argument");
+    // `getenv()` with no argument is VALID PHP — it answers the whole
+    // environment — so the diagnostic moved to the other end of the range.
+    expect_error("<?php getenv(\"a\", \"b\", \"c\");", "getenv() takes at most 2 arguments");
 }
 
 /// Verifies that `putenv()` with no arguments yields a wrong-args diagnostic.

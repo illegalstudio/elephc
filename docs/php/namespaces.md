@@ -507,12 +507,12 @@ define("PI", 3.14159);
 |---|---|---|
 | `$argc` | `int` | Number of CLI arguments |
 | `$argv` | `array(string)` | CLI argument values |
-| `$_SERVER` | `array(string => mixed)` | Request/environment data. Populated with real request data under `--web`; in a CLI binary it is seeded as an **empty** array (PHP's CLI SAPI populates ~67 entries — a divergence in content, not in type) |
+| `$_SERVER` | `array(string => mixed)` | Request/environment data. Populated with real request data under `--web`; in a CLI binary it holds the process environment plus the nine keys PHP's CLI SAPI adds — `argv`, `argc`, `PHP_SELF`, `SCRIPT_NAME`, `SCRIPT_FILENAME`, `PATH_TRANSLATED`, `DOCUMENT_ROOT`, `REQUEST_TIME`, `REQUEST_TIME_FLOAT`. The four path-shaped keys are `$argv[0]`: PHP names the script it was handed, and a compiled program has no script at run time |
 | `$_GET` | `array(string => mixed)` | Query parameters (`--web`); empty array in CLI builds |
 | `$_POST` | `array(string => mixed)` | Form/body parameters (`--web`); empty array in CLI builds |
 | `$_COOKIE` | `array(string => mixed)` | Request cookies (`--web`); empty array in CLI builds |
 | `$_FILES` | `array(string => mixed)` | Uploaded files (`--web`); empty array in CLI builds |
-| `$_ENV` | `array(string => mixed)` | Empty array in CLI builds (read the environment with `getenv()`) |
+| `$_ENV` | `array(string => mixed)` | The process environment, equal to `getenv()` entry for entry. A later `putenv()` does **not** reach it — it is a snapshot taken before the program ran, as it is in PHP |
 | `$_REQUEST` | `array(string => mixed)` | Empty array in CLI builds |
 | `$_SESSION` | `array(string => mixed)` | Exists only after `session_start()` — `isset($_SESSION)` is `false` before it, exactly as in PHP |
 

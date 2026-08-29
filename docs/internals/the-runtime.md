@@ -477,7 +477,8 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 |---|---|---|---|
 | `__rt_time` | Get current Unix timestamp via `gettimeofday` syscall | — | `x0` = seconds since epoch |
 | `__rt_microtime` | Get current time as float seconds via `gettimeofday` syscall | — | `d0` = seconds.microseconds |
-| `__rt_getenv` | Get environment variable value via libc `getenv()` | `x1`/`x2` = name string | `x1`/`x2` = value string |
+| `__rt_getenv` | Get one environment variable via libc `getenv()`, copying the value out of the environment block so the caller can own it | `x1`/`x2` = name string | `x1`/`x2` = owned value string, or a **null pointer** when the name is not set — which is what the caller boxes as PHP `false` |
+| `__rt_getenv_all` | Walk the live `environ` and build the whole environment as a string-keyed hash. Splits each entry at its **first** `=`, since a value may contain more | — | `x0` = hash pointer |
 | `__rt_php_uname` | Read target runtime system information via libc `uname()`; supports PHP modes `a`, `s`, `n`, `r`, `v`, and `m` | `x1`/`x2` = mode string | `x1`/`x2` = selected uname string |
 | `__rt_shell_exec` | Execute shell command and capture output via libc `popen()`/`pclose()` | `x1`/`x2` = command string | `x1`/`x2` = output string |
 

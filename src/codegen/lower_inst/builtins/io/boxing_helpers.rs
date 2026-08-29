@@ -10,6 +10,68 @@
 use super::*;
 use crate::ir::ResourceCleanupKind;
 
+/// Boxes a `readline()` result: `false` at EOF, otherwise the line WITHOUT its
+/// trailing newline.
+///
+/// Not `box_stream_string_or_false_on_empty_result`, and the difference is the
+/// ORDER. That helper reads an empty result as EOF, which is right for `fgets`
+/// because `fgets` keeps the newline — an empty line comes back as `"\n"`, one
+/// byte, and only EOF is zero. `readline` STRIPS the newline, so stripping first
+/// would turn an empty line into zero bytes and report EOF for a line the user
+/// actually typed.
+///
+/// So: test for EOF on the raw length, then strip. Measured against `php -n`,
+/// one call per input: `"abc\n"` → `"abc"`, `"abc"` unterminated → `"abc"`,
+/// `"\n"` → `""`, nothing → `false`. Exactly one `\n` is removed and a `\r`
+/// before it is KEPT — php answers `string(4)` for `"abc\r\n"`.
+pub(in crate::codegen::lower_inst::builtins) fn box_readline_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
+    let false_label = ctx.next_label(&format!("{}_false", label_prefix));
+    let keep_label = ctx.next_label(&format!("{}_keep", label_prefix));
+    let done_label = ctx.next_label(&format!("{}_done", label_prefix));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #0");                              // no bytes at all is EOF, tested BEFORE any stripping
+            ctx.emitter.instruction(&format!("b.le {}", false_label));
+            ctx.emitter.instruction("sub x9, x2, #1");                          // offset of the last byte read
+            ctx.emitter.instruction("ldrb w10, [x1, x9]");                      // load it to see whether it terminates the line
+            ctx.emitter.instruction("cmp w10, #10");                            // 10 = '\n'
+            ctx.emitter.instruction(&format!("b.ne {}", keep_label));           // an unterminated last line keeps every byte
+            ctx.emitter.instruction("mov x2, x9");                              // drop the newline by shortening the string
+            ctx.emitter.label(&keep_label);
+            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // false carries no payload
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 0");                              // no bytes at all is EOF, tested BEFORE any stripping
+            ctx.emitter.instruction(&format!("jle {}", false_label));
+            ctx.emitter.instruction("lea r10, [rdx - 1]");                      // offset of the last byte read
+            ctx.emitter.instruction("mov cl, BYTE PTR [rax + r10]");            // load it to see whether it terminates the line
+            ctx.emitter.instruction("cmp cl, 10");                              // 10 = '\n'
+            ctx.emitter.instruction(&format!("jne {}", keep_label));            // an unterminated last line keeps every byte
+            ctx.emitter.instruction("mov rdx, r10");                            // drop the newline by shortening the string
+            ctx.emitter.label(&keep_label);
+            ctx.emitter.instruction("mov rdi, rax");                            // Mixed low payload = the line pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // Mixed high payload = its length
+            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // false carries no payload
+            ctx.emitter.instruction("xor esi, esi");
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
 /// Boxes a raw stream string slice or EOF result into Mixed string-or-false form.
 pub(super) fn box_stream_string_or_false_on_empty_result(
     ctx: &mut FunctionContext<'_>,

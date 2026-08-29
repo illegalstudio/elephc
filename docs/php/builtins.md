@@ -143,7 +143,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`filetype()`](./builtins/filesystem/filetype.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fnmatch()`](./builtins/filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./builtins/filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
-| [`getenv()`](./builtins/filesystem/getenv.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
+| [`getenv()`](./builtins/filesystem/getenv.md) | `(string $name = null, bool $local_only = false): mixed` | `mixed` | ✓ | ✓ |
 | [`glob()`](./builtins/filesystem/glob.md) | `(string $pattern): array` | `array` | ✓ | ✓ |
 | [`is_dir()`](./builtins/filesystem/is_dir.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_executable()`](./builtins/filesystem/is_executable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |

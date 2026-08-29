@@ -7046,7 +7046,13 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             ParamSpec {
                 name: "name",
                 ty: TypeSpec::Str,
-                default: None,
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "local_only",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
                 by_ref: false,
             },
         ],
@@ -7056,7 +7062,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Gets the value of an environment variable.",
+        summary: "Gets the value of an environment variable, or the whole environment.",
         examples: &[
         ],
         php_manual: None,

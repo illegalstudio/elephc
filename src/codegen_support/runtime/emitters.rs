@@ -150,6 +150,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_microtime_mixed(emitter);
     system::emit_php_uname(emitter);
     system::emit_getenv(emitter);
+    system::emit_getenv_all(emitter);
     system::emit_shell_exec(emitter);
     system::emit_date(emitter);
     system::emit_date_default_timezone(emitter);

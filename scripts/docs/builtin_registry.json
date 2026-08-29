@@ -30662,18 +30662,25 @@
           "by_ref": false,
           "default": null,
           "name": "name",
-          "optional": false,
+          "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "local_only",
+          "optional": true,
+          "type": "bool"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
     },
     "area": "Filesystem",
     "canonical_name": "getenv",
-    "description": "Gets the value of an environment variable.",
+    "description": "Gets the value of an environment variable, or the whole environment.",
     "eval": {
       "adapter_reason": "runtime-state-or-resource",
       "area": "network_env",
@@ -30687,13 +30694,20 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "name",
-          "optional": false,
+          "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "local_only",
+          "optional": true,
+          "type": "bool"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
@@ -30746,7 +30760,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "shared",
+      "result_type": "checked",
       "runtime_functions": [
         "getenv"
       ],
@@ -30765,10 +30779,17 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "name",
-          "optional": false,
+          "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "local_only",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "return_type": "mixed",
@@ -57102,7 +57123,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "shared",
+      "result_type": "checked",
       "runtime_functions": [
         "readline"
       ],
