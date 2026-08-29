@@ -166,6 +166,7 @@ pub extern "C" fn elephc_posix_setsid() -> i64 {
 /// Returns one in the surviving daemon process or zero after recording errno. When `daemon(3)`
 /// forks, only the child returns and therefore only that process replaces the inherited queues.
 #[no_mangle]
+#[cfg_attr(target_os = "macos", allow(deprecated))]
 pub extern "C" fn elephc_pcntl_daemon(
     no_chdir: libc::c_int,
     no_close: libc::c_int,

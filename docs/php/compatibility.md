@@ -45,7 +45,7 @@ Overall builtin coverage: **542 / 2030** (27%).
 | `pcre` | 5 / 11 | 45% | 5 | 5 |
 | `pdo`† | 0 / 1 | 0% | 0 | 0 |
 | `pgsql` | 0 / 122 | 0% | 0 | 0 |
-| `posix` | 0 / 40 | 0% | 0 | 0 |
+| `posix` | 2 / 40 | 5% | 2 | 2 |
 | `random` | 3 / 9 | 33% | 3 | 3 |
 | `readline` | 1 / 13 | 8% | 1 | 1 |
 | `session`† | 0 / 23 | 0% | 0 | 0 |
@@ -136,6 +136,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
+| `pcntl_daemon()` | Misc | Detaches the surviving child into a background daemon process. |
 | `buffer_new()` | Pointer | Allocates a raw byte buffer. |
 | `ptr()` | Pointer | Returns a raw pointer to the given variable. |
 | `ptr_get()` | Pointer | Reads one machine word through a raw pointer and returns it as an integer. |
