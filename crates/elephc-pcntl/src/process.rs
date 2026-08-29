@@ -46,6 +46,14 @@ pub struct ElephcPcntlRUsage {
 impl From<libc::rusage> for ElephcPcntlRUsage {
     /// Copies one target-native `rusage` value into the stable bridge layout.
     fn from(usage: libc::rusage) -> Self {
+        #[cfg(target_os = "macos")]
+        let (ru_utime_tv_usec, ru_stime_tv_usec) = (
+            i64::from(usage.ru_utime.tv_usec),
+            i64::from(usage.ru_stime.tv_usec),
+        );
+        #[cfg(target_os = "linux")]
+        let (ru_utime_tv_usec, ru_stime_tv_usec) =
+            (usage.ru_utime.tv_usec, usage.ru_stime.tv_usec);
         Self {
             ru_oublock: usage.ru_oublock,
             ru_inblock: usage.ru_inblock,
@@ -60,9 +68,9 @@ impl From<libc::rusage> for ElephcPcntlRUsage {
             ru_nvcsw: usage.ru_nvcsw,
             ru_nivcsw: usage.ru_nivcsw,
             ru_nswap: usage.ru_nswap,
-            ru_utime_tv_usec: usage.ru_utime.tv_usec,
+            ru_utime_tv_usec,
             ru_utime_tv_sec: usage.ru_utime.tv_sec,
-            ru_stime_tv_usec: usage.ru_stime.tv_usec,
+            ru_stime_tv_usec,
             ru_stime_tv_sec: usage.ru_stime.tv_sec,
         }
     }
