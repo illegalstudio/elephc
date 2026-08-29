@@ -48,6 +48,7 @@ pub(crate) fn lower_signal(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             abi::emit_pop_reg(ctx.emitter, "x2");
             ctx.emitter.instruction("ldr x1, [sp, #16]");                       // pass the staged handler disposition
             ctx.emitter.instruction("ldr x0, [sp, #32]");                       // pass the staged signal number
+            ctx.emitter.instruction("mov x3, #1");                              // route queued records to the generated AOT handler table
             ctx.emitter.bl_c("elephc_pcntl_signal");
             ctx.emitter.instruction(&format!("cbz x0, {failure}"));             // release staged ownership when registration fails
             ctx.emitter.instruction(&format!("b {success}"));                   // commit the registered handler
@@ -68,6 +69,7 @@ pub(crate) fn lower_signal(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             abi::emit_pop_reg(ctx.emitter, "rdx");
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // pass the staged handler disposition
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");           // pass the staged signal number
+            ctx.emitter.instruction("mov ecx, 1");                              // route queued records to the generated AOT handler table
             ctx.emitter.bl_c("elephc_pcntl_signal");
             ctx.emitter.instruction("test rax, rax");                           // inspect bridge registration success
             ctx.emitter.instruction(&format!("jz {failure}"));                  // release staged ownership when registration fails

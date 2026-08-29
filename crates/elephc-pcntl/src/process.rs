@@ -135,6 +135,65 @@ pub extern "C" fn elephc_pcntl_fork() -> i64 {
     i64::from(pid)
 }
 
+/// Moves one process into a process group and records errno on failure.
+#[no_mangle]
+pub extern "C" fn elephc_posix_setpgid(process_id: i64, process_group_id: i64) -> libc::c_int {
+    let result = unsafe {
+        libc::setpgid(
+            process_id as libc::pid_t,
+            process_group_id as libc::pid_t,
+        )
+    };
+    if result == -1 {
+        record_errno();
+        return 0;
+    }
+    1
+}
+
+/// Creates a new session for the calling process and returns its session identifier.
+#[no_mangle]
+pub extern "C" fn elephc_posix_setsid() -> i64 {
+    let session_id = unsafe { libc::setsid() };
+    if session_id == -1 {
+        record_errno();
+    }
+    i64::from(session_id)
+}
+
+/// Detaches the calling process through `daemon(3)` while preserving PCNTL queue isolation.
+///
+/// Returns one in the surviving daemon process or zero after recording errno. When `daemon(3)`
+/// forks, only the child returns and therefore only that process replaces the inherited queues.
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_daemon(
+    no_chdir: libc::c_int,
+    no_close: libc::c_int,
+) -> libc::c_int {
+    let mut previous_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let mut full_mask = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let mask_was_blocked = signal_queue_initialized()
+        && unsafe {
+            libc::sigfillset(&mut full_mask) == 0
+                && libc::sigprocmask(libc::SIG_SETMASK, &full_mask, &mut previous_mask) == 0
+        };
+    let result = unsafe { libc::daemon(no_chdir, no_close) };
+    let daemon_error = current_errno();
+    if result == 0 {
+        reset_signal_pipe_after_fork();
+    }
+    if mask_was_blocked {
+        unsafe {
+            libc::sigprocmask(libc::SIG_SETMASK, &previous_mask, std::ptr::null_mut());
+        }
+    }
+    if result == -1 {
+        LAST_ERROR.store(daemon_error, Ordering::Relaxed);
+        return 0;
+    }
+    1
+}
+
 /// Waits for a matching child and writes its opaque target-native status word.
 ///
 /// A failure returns `-1` and records errno. The caller must provide writable status storage.

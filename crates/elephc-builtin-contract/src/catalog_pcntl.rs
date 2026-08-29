@@ -50,6 +50,18 @@ const fn pcntl_contract_with_min_args(
     }
 }
 
+/// Builds one Elephc-only PCNTL extension contract hidden by `--strict-php`.
+const fn pcntl_extension_contract(
+    name: &'static str,
+    params: &'static [ParamSpec],
+    returns: TypeSpec,
+    summary: &'static str,
+) -> BuiltinContract {
+    let mut contract = pcntl_contract(name, params, returns, summary);
+    contract.extension = true;
+    contract
+}
+
 /// PCNTL contracts whose typed bridge implementations are available to AOT.
 pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     pcntl_contract(
@@ -73,6 +85,25 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         }],
         TypeSpec::Bool,
         "Enables or queries automatic dispatch of pending signal callbacks.",
+    ),
+    pcntl_extension_contract(
+        "pcntl_daemon",
+        &[
+            ParamSpec {
+                name: "no_chdir",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "no_close",
+                ty: TypeSpec::Bool,
+                default: Some(DefaultSpec::Bool(false)),
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Detaches the surviving child into a background daemon process.",
     ),
     pcntl_contract(
         "pcntl_exec",
@@ -539,5 +570,30 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         }],
         TypeSpec::Mixed,
         "Returns the terminating signal encoded in a child wait status.",
+    ),
+    pcntl_contract(
+        "posix_setpgid",
+        &[
+            ParamSpec {
+                name: "process_id",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "process_group_id",
+                ty: TypeSpec::Int,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        TypeSpec::Bool,
+        "Moves a process into a process group for job control.",
+    ),
+    pcntl_contract(
+        "posix_setsid",
+        &[],
+        TypeSpec::Int,
+        "Creates a new session and makes the current process its leader.",
     ),
 ];

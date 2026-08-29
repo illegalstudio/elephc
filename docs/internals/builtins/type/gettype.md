@@ -2,7 +2,7 @@
 title: "gettype() — internals"
 description: "Compiler internals for gettype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 562
+  order: 565
 ---
 
 ## `gettype()` — internals

@@ -2,7 +2,7 @@
 title: "ctype_digit() — internals"
 description: "Compiler internals for ctype_digit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 557
+  order: 560
 ---
 
 ## `ctype_digit()` — internals

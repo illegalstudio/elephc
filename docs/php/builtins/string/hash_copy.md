@@ -2,7 +2,7 @@
 title: "hash_copy()"
 description: "Clones an incremental hashing context into an independent HashContext object. Provided by the compiler-injected hash prelude in compiled code."
 sidebar:
-  order: 472
+  order: 475
 ---
 
 ## hash_copy()

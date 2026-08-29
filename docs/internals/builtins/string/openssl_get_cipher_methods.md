@@ -2,7 +2,7 @@
 title: "openssl_get_cipher_methods() — internals"
 description: "Compiler internals for openssl_get_cipher_methods(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 507
+  order: 510
 ---
 
 ## `openssl_get_cipher_methods()` — internals

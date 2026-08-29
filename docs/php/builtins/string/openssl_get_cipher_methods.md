@@ -2,7 +2,7 @@
 title: "openssl_get_cipher_methods()"
 description: "Returns the supported OpenSSL cipher method names."
 sidebar:
-  order: 507
+  order: 510
 ---
 
 ## openssl_get_cipher_methods()

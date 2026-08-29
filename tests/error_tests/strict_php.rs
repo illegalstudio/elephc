@@ -57,6 +57,19 @@ fn test_strict_error_extension_builtin_call_carries_hint() {
     );
 }
 
+/// Hides Elephc's daemon convenience wrapper while leaving PHP's POSIX helpers available.
+#[test]
+fn test_strict_error_pcntl_daemon_is_undefined() {
+    expect_strict_error(
+        "<?php pcntl_daemon();",
+        "pcntl_daemon() exists as an elephc extension; it is disabled by --strict-php",
+    );
+    assert!(
+        check_source_strict("<?php posix_setpgid(0, 0); posix_setsid();").is_ok(),
+        "PHP POSIX helpers must remain visible under --strict-php",
+    );
+}
+
 /// Verifies migrated buffer builtins are hidden like every other extension.
 #[test]
 fn test_strict_error_buffer_len_is_undefined() {

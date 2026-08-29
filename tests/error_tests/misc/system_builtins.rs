@@ -40,6 +40,24 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_pcntl_daemon_wrong_args,
+    "<?php pcntl_daemon(false, false, false);",
+    "pcntl_daemon() takes at most 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_setpgid_wrong_args,
+    "<?php posix_setpgid(1);",
+    "posix_setpgid() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_setsid_wrong_args,
+    "<?php posix_setsid(1);",
+    "posix_setsid() takes no arguments"
+);
+
+expect_builtin_arity_error!(
     test_error_pcntl_getpriority_wrong_args,
     "<?php pcntl_getpriority(1, 2, 3);",
     "pcntl_getpriority() takes at most 2 arguments"

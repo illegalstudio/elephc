@@ -2,7 +2,7 @@
 title: "iconv_substr()"
 description: "Extracts a character-indexed slice of a string."
 sidebar:
-  order: 491
+  order: 494
 ---
 
 ## iconv_substr()

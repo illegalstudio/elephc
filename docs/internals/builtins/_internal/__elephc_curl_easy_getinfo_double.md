@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_getinfo_double() — internals"
 description: "Compiler internals for __elephc_curl_easy_getinfo_double(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 589
+  order: 592
 ---
 
 ## `__elephc_curl_easy_getinfo_double()` — internals

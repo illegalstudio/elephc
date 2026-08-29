@@ -6,15 +6,31 @@
 //! - AOT and Magician PCNTL adapters through the bridge's stable C ABI.
 //!
 //! Key details:
-//! - Async handlers write fixed-size records to a nonblocking self-pipe.
+//! - Async handlers route fixed-size records to backend-specific nonblocking self-pipes.
+//! - Saturated pipes spill into preallocated atomic slots, preserving every delivery count.
 //! - Dispatch blocks signals so callers drain one stable snapshot and restore the prior mask.
 //! - The child side of `fork()` replaces inherited descriptors before unmasking signals.
 
 use crate::{current_errno, errno_location, record_errno, LAST_ERROR};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicI64, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-static SIGNAL_PIPE: OnceLock<SignalPipe> = OnceLock::new();
+/// Selects the generated AOT runtime's signal-handler queue.
+pub const PCNTL_SIGNAL_OWNER_AOT: libc::c_int = 1;
+/// Selects Magician's eval signal-handler queue.
+pub const PCNTL_SIGNAL_OWNER_EVAL: libc::c_int = 2;
+
+const SIGNAL_OWNER_COUNT: usize = 2;
+const SIGNAL_SLOT_COUNT: usize = 128;
+
+static SIGNAL_PIPES: OnceLock<SignalPipes> = OnceLock::new();
+static OVERFLOW_SIGNALS: [[OverflowSignal; SIGNAL_SLOT_COUNT]; SIGNAL_OWNER_COUNT] =
+    [const { [const { OverflowSignal::new() }; SIGNAL_SLOT_COUNT] }; SIGNAL_OWNER_COUNT];
+
+/// Backend-specific descriptor pairs used to keep AOT and eval drains independent.
+struct SignalPipes {
+    queues: [SignalPipe; SIGNAL_OWNER_COUNT],
+}
 
 /// Mutable descriptor pair whose allocation itself remains process-global.
 ///
@@ -24,6 +40,94 @@ struct SignalPipe {
     read_descriptor: AtomicI32,
     write_descriptor: AtomicI32,
     error: AtomicI32,
+}
+
+/// Lock-free fallback for records delivered while one backend's self-pipe is full.
+struct OverflowSignal {
+    count: AtomicU64,
+    error: AtomicI64,
+    code: AtomicI64,
+    status: AtomicI64,
+    pid: AtomicI64,
+    uid: AtomicI64,
+    utime: AtomicI64,
+    stime: AtomicI64,
+    address: AtomicI64,
+    band: AtomicI64,
+    fd: AtomicI64,
+    present: AtomicU64,
+}
+
+impl OverflowSignal {
+    /// Creates one empty preallocated overflow slot.
+    const fn new() -> Self {
+        Self {
+            count: AtomicU64::new(0),
+            error: AtomicI64::new(0),
+            code: AtomicI64::new(0),
+            status: AtomicI64::new(0),
+            pid: AtomicI64::new(0),
+            uid: AtomicI64::new(0),
+            utime: AtomicI64::new(0),
+            stime: AtomicI64::new(0),
+            address: AtomicI64::new(0),
+            band: AtomicI64::new(0),
+            fd: AtomicI64::new(0),
+            present: AtomicU64::new(0),
+        }
+    }
+
+    /// Publishes one record and increments its pending delivery count without allocating.
+    fn push(&self, info: &ElephcPcntlSigInfo) {
+        self.error.store(info.error, Ordering::Relaxed);
+        self.code.store(info.code, Ordering::Relaxed);
+        self.status.store(info.status, Ordering::Relaxed);
+        self.pid.store(info.pid, Ordering::Relaxed);
+        self.uid.store(info.uid, Ordering::Relaxed);
+        self.utime.store(info.utime, Ordering::Relaxed);
+        self.stime.store(info.stime, Ordering::Relaxed);
+        self.address.store(info.address, Ordering::Relaxed);
+        self.band.store(info.band, Ordering::Relaxed);
+        self.fd.store(info.fd, Ordering::Relaxed);
+        self.present.store(info.present, Ordering::Relaxed);
+        let _ = self.count.fetch_update(
+            Ordering::Release,
+            Ordering::Relaxed,
+            |count| Some(count.saturating_add(1)),
+        );
+    }
+
+    /// Claims one pending delivery and reconstructs its latest stable signal information.
+    fn pop(&self, signal: usize) -> Option<ElephcPcntlSigInfo> {
+        self.count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                if count == 0 {
+                    None
+                } else {
+                    Some(count - 1)
+                }
+            })
+            .ok()?;
+        Some(ElephcPcntlSigInfo {
+            signo: signal as i64,
+            error: self.error.load(Ordering::Relaxed),
+            code: self.code.load(Ordering::Relaxed),
+            status: self.status.load(Ordering::Relaxed),
+            pid: self.pid.load(Ordering::Relaxed),
+            uid: self.uid.load(Ordering::Relaxed),
+            utime: self.utime.load(Ordering::Relaxed),
+            stime: self.stime.load(Ordering::Relaxed),
+            address: self.address.load(Ordering::Relaxed),
+            band: self.band.load(Ordering::Relaxed),
+            fd: self.fd.load(Ordering::Relaxed),
+            present: self.present.load(Ordering::Relaxed),
+        })
+    }
+
+    /// Discards inherited pending deliveries when a forked process receives private queues.
+    fn clear(&self) {
+        self.count.store(0, Ordering::Release);
+    }
 }
 
 /// Opaque storage for a target-native signal mask saved across one dispatch snapshot.
@@ -254,9 +358,18 @@ fn create_signal_pipe() -> Result<(libc::c_int, libc::c_int), libc::c_int> {
     Ok((descriptors[0], descriptors[1]))
 }
 
-/// Creates or loads the process-local nonblocking self-pipe used by queued signal handlers.
-fn ensure_signal_pipe() -> Option<(libc::c_int, libc::c_int)> {
-    let pipe = SIGNAL_PIPE.get_or_init(|| match create_signal_pipe() {
+/// Maps one stable backend owner identifier to its queue-array index.
+const fn signal_owner_index(owner: libc::c_int) -> Option<usize> {
+    match owner {
+        PCNTL_SIGNAL_OWNER_AOT => Some(0),
+        PCNTL_SIGNAL_OWNER_EVAL => Some(1),
+        _ => None,
+    }
+}
+
+/// Creates one queue descriptor pair, retaining its initialization error when unavailable.
+fn initialize_signal_pipe() -> SignalPipe {
+    match create_signal_pipe() {
         Ok((read_descriptor, write_descriptor)) => SignalPipe {
             read_descriptor: AtomicI32::new(read_descriptor),
             write_descriptor: AtomicI32::new(write_descriptor),
@@ -267,7 +380,19 @@ fn ensure_signal_pipe() -> Option<(libc::c_int, libc::c_int)> {
             write_descriptor: AtomicI32::new(-1),
             error: AtomicI32::new(error),
         },
+    }
+}
+
+/// Creates or loads the process-local nonblocking self-pipe for one handler backend.
+fn ensure_signal_pipe(owner: libc::c_int) -> Option<(libc::c_int, libc::c_int)> {
+    let Some(index) = signal_owner_index(owner) else {
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return None;
+    };
+    let queues = SIGNAL_PIPES.get_or_init(|| SignalPipes {
+        queues: std::array::from_fn(|_| initialize_signal_pipe()),
     });
+    let pipe = &queues.queues[index];
     let read_descriptor = pipe.read_descriptor.load(Ordering::Acquire);
     let write_descriptor = pipe.write_descriptor.load(Ordering::Acquire);
     if read_descriptor == -1 || write_descriptor == -1 {
@@ -280,7 +405,7 @@ fn ensure_signal_pipe() -> Option<(libc::c_int, libc::c_int)> {
 
 /// Reports whether this process has initialized its asynchronous signal queue.
 pub(crate) fn signal_queue_initialized() -> bool {
-    SIGNAL_PIPE.get().is_some()
+    SIGNAL_PIPES.get().is_some()
 }
 
 /// Replaces the inherited signal pipe in the child so parent and child queues are independent.
@@ -288,40 +413,65 @@ pub(crate) fn signal_queue_initialized() -> bool {
 /// The caller keeps signals blocked from before `fork()` until this routine returns, so no native
 /// handler can observe the descriptor swap halfway through.
 pub(crate) fn reset_signal_pipe_after_fork() {
-    let Some(pipe) = SIGNAL_PIPE.get() else {
+    let Some(queues) = SIGNAL_PIPES.get() else {
         return;
     };
-    let old_read = pipe.read_descriptor.swap(-1, Ordering::AcqRel);
-    let old_write = pipe.write_descriptor.swap(-1, Ordering::AcqRel);
-    match create_signal_pipe() {
-        Ok((read_descriptor, write_descriptor)) => {
-            pipe.error.store(0, Ordering::Relaxed);
-            pipe.write_descriptor.store(write_descriptor, Ordering::Release);
-            pipe.read_descriptor.store(read_descriptor, Ordering::Release);
+    for (owner_index, pipe) in queues.queues.iter().enumerate() {
+        let old_read = pipe.read_descriptor.swap(-1, Ordering::AcqRel);
+        let old_write = pipe.write_descriptor.swap(-1, Ordering::AcqRel);
+        match create_signal_pipe() {
+            Ok((read_descriptor, write_descriptor)) => {
+                pipe.error.store(0, Ordering::Relaxed);
+                pipe.write_descriptor.store(write_descriptor, Ordering::Release);
+                pipe.read_descriptor.store(read_descriptor, Ordering::Release);
+            }
+            Err(error) => {
+                pipe.error.store(error, Ordering::Relaxed);
+                LAST_ERROR.store(error, Ordering::Relaxed);
+            }
         }
-        Err(error) => {
-            pipe.error.store(error, Ordering::Relaxed);
-            LAST_ERROR.store(error, Ordering::Relaxed);
+        unsafe {
+            if old_read >= 0 {
+                libc::close(old_read);
+            }
+            if old_write >= 0 {
+                libc::close(old_write);
+            }
         }
-    }
-    unsafe {
-        if old_read >= 0 {
-            libc::close(old_read);
-        }
-        if old_write >= 0 {
-            libc::close(old_write);
+        for overflow in &OVERFLOW_SIGNALS[owner_index] {
+            overflow.clear();
         }
     }
 }
 
-/// Queues one fixed-size signal record through the async-signal-safe self-pipe.
-unsafe extern "C" fn queued_signal_handler(
+/// Queues one AOT-owned record through the generated runtime's signal pipe.
+unsafe extern "C" fn queued_signal_handler_aot(
+    signal: libc::c_int,
+    info: *mut libc::siginfo_t,
+    context: *mut libc::c_void,
+) {
+    queued_signal_handler(signal, info, context, 0);
+}
+
+/// Queues one eval-owned record through Magician's signal pipe.
+unsafe extern "C" fn queued_signal_handler_eval(
+    signal: libc::c_int,
+    info: *mut libc::siginfo_t,
+    context: *mut libc::c_void,
+) {
+    queued_signal_handler(signal, info, context, 1);
+}
+
+/// Queues one fixed-size signal record through its backend's async-signal-safe self-pipe.
+unsafe fn queued_signal_handler(
     signal: libc::c_int,
     info: *mut libc::siginfo_t,
     _context: *mut libc::c_void,
+    owner_index: usize,
 ) {
     let saved_errno = *errno_location();
-    if let Some(pipe) = SIGNAL_PIPE.get() {
+    if let Some(queues) = SIGNAL_PIPES.get() {
+        let pipe = &queues.queues[owner_index];
         let write_descriptor = pipe.write_descriptor.load(Ordering::Acquire);
         if write_descriptor < 0 {
             *errno_location() = saved_errno;
@@ -336,11 +486,14 @@ unsafe extern "C" fn queued_signal_handler(
         } else {
             copy_signal_siginfo(signal, &*info)
         };
-        let _ = libc::write(
+        let written = libc::write(
             write_descriptor,
             std::ptr::from_ref(&stable).cast(),
             std::mem::size_of::<ElephcPcntlSigInfo>(),
         );
+        if written != std::mem::size_of::<ElephcPcntlSigInfo>() as isize {
+            OVERFLOW_SIGNALS[owner_index][signal as usize].push(&stable);
+        }
     }
     *errno_location() = saved_errno;
 }
@@ -360,26 +513,34 @@ pub extern "C" fn elephc_pcntl_signal_limit() -> libc::c_int {
 /// Installs a default, ignored, or queued PCNTL signal disposition.
 ///
 /// `disposition` uses the bridge-private values zero for `SIG_DFL`, one for `SIG_IGN`, and two
-/// for the self-pipe queue consumed by `elephc_pcntl_signal_next()`. Returns one on success or
-/// zero after recording errno or `EINVAL`.
+/// for the backend-specific queue consumed by `elephc_pcntl_signal_next()`. `owner` selects the
+/// AOT or eval callable table. Returns one on success or zero after recording errno or `EINVAL`.
 #[no_mangle]
 pub extern "C" fn elephc_pcntl_signal(
     signal: libc::c_int,
     disposition: libc::c_int,
     restart_syscalls: libc::c_int,
+    owner: libc::c_int,
 ) -> libc::c_int {
-    if signal < 1 || signal >= signal_limit() || !(0..=2).contains(&disposition) {
+    if signal < 1
+        || signal >= signal_limit()
+        || !(0..=2).contains(&disposition)
+        || signal_owner_index(owner).is_none()
+    {
         LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
         return 0;
     }
-    if disposition == 2 && ensure_signal_pipe().is_none() {
+    if disposition == 2 && ensure_signal_pipe(owner).is_none() {
         return 0;
     }
     let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
     action.sa_sigaction = match disposition {
         0 => libc::SIG_DFL,
         1 => libc::SIG_IGN,
-        _ => queued_signal_handler as *const () as libc::sighandler_t,
+        _ if owner == PCNTL_SIGNAL_OWNER_AOT => {
+            queued_signal_handler_aot as *const () as libc::sighandler_t
+        }
+        _ => queued_signal_handler_eval as *const () as libc::sighandler_t,
     };
     if unsafe { libc::sigfillset(&mut action.sa_mask) } != 0 {
         record_errno();
@@ -406,12 +567,17 @@ pub extern "C" fn elephc_pcntl_signal(
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pcntl_signal_next(
     info: *mut ElephcPcntlSigInfo,
+    owner: libc::c_int,
 ) -> libc::c_int {
     if info.is_null() {
         LAST_ERROR.store(libc::EFAULT, Ordering::Relaxed);
         return -1;
     }
-    let Some((read_descriptor, _)) = ensure_signal_pipe() else {
+    let Some(owner_index) = signal_owner_index(owner) else {
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let Some((read_descriptor, _)) = ensure_signal_pipe(owner) else {
         return -1;
     };
     loop {
@@ -427,6 +593,17 @@ pub unsafe extern "C" fn elephc_pcntl_signal_next(
             continue;
         }
         if read == -1 && current_errno() == libc::EAGAIN {
+            for (signal, overflow) in OVERFLOW_SIGNALS[owner_index]
+                .iter()
+                .enumerate()
+                .take(signal_limit() as usize)
+                .skip(1)
+            {
+                if let Some(overflow) = overflow.pop(signal) {
+                    *info = overflow;
+                    return 1;
+                }
+            }
             return 0;
         }
         if read >= 0 {
@@ -436,6 +613,16 @@ pub unsafe extern "C" fn elephc_pcntl_signal_next(
         }
         return -1;
     }
+}
+
+/// Injects one overflow record directly for deterministic bridge regression tests.
+#[cfg(test)]
+pub(crate) fn queue_signal_overflow_for_test(
+    owner: libc::c_int,
+    info: &ElephcPcntlSigInfo,
+) {
+    let owner_index = signal_owner_index(owner).expect("test owner must be valid");
+    OVERFLOW_SIGNALS[owner_index][info.signo as usize].push(info);
 }
 
 /// Blocks signal delivery while one dispatcher drains the queue snapshot.

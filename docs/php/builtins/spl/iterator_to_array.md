@@ -2,7 +2,7 @@
 title: "iterator_to_array()"
 description: "Copy the iterator into an array."
 sidebar:
-  order: 439
+  order: 442
 ---
 
 ## iterator_to_array()

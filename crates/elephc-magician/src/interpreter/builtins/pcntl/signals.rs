@@ -136,6 +136,7 @@ fn eval_pcntl_signal(
         signal as libc::c_int,
         disposition,
         libc::c_int::from(restart),
+        elephc_pcntl::PCNTL_SIGNAL_OWNER_EVAL,
     ) != 0;
     if !success {
         if let EvalPcntlSignalHandler::Callable(handler) = stored {
@@ -402,7 +403,12 @@ fn eval_pcntl_dispatch_masked_snapshot(
 ) -> Result<bool, EvalStatus> {
     loop {
         let mut info = ElephcPcntlSigInfo::default();
-        let status = unsafe { elephc_pcntl::elephc_pcntl_signal_next(&mut info) };
+        let status = unsafe {
+            elephc_pcntl::elephc_pcntl_signal_next(
+                &mut info,
+                elephc_pcntl::PCNTL_SIGNAL_OWNER_EVAL,
+            )
+        };
         match status {
             -1 => return Ok(false),
             0 => return Ok(true),
@@ -425,7 +431,13 @@ fn eval_pcntl_dispatch_masked_snapshot(
 /// Discards the rest of a masked snapshot after one handler propagates a Throwable.
 fn eval_pcntl_discard_masked_snapshot() {
     let mut info = ElephcPcntlSigInfo::default();
-    while unsafe { elephc_pcntl::elephc_pcntl_signal_next(&mut info) } == 1 {}
+    while unsafe {
+        elephc_pcntl::elephc_pcntl_signal_next(
+            &mut info,
+            elephc_pcntl::PCNTL_SIGNAL_OWNER_EVAL,
+        )
+    } == 1
+    {}
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 title: "curl_copy_handle() — internals"
 description: "Compiler internals for curl_copy_handle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 367
+  order: 370
 ---
 
 ## `curl_copy_handle()` — internals

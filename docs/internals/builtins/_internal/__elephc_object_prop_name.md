@@ -2,7 +2,7 @@
 title: "__elephc_object_prop_name() — internals"
 description: "Compiler internals for __elephc_object_prop_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 639
+  order: 642
 ---
 
 ## `__elephc_object_prop_name()` — internals

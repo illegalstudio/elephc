@@ -2,7 +2,7 @@
 title: "curl_init()"
 description: "Initializes a cURL session."
 sidebar:
-  order: 373
+  order: 376
 ---
 
 ## curl_init()

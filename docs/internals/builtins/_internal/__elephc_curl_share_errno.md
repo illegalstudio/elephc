@@ -2,7 +2,7 @@
 title: "__elephc_curl_share_errno() — internals"
 description: "Compiler internals for __elephc_curl_share_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 620
+  order: 623
 ---
 
 ## `__elephc_curl_share_errno()` — internals

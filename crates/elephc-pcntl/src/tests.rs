@@ -252,12 +252,16 @@ fn signal_handler_queues_a_stable_record() {
         assert_eq!(libc::sigprocmask(libc::SIG_UNBLOCK, &selected, &mut original), 0);
     }
     let mut discarded = ElephcPcntlSigInfo::default();
-    while unsafe { elephc_pcntl_signal_next(&mut discarded) } == 1 {}
-    assert_eq!(elephc_pcntl_signal(libc::SIGUSR1, 2, 1), 1);
+    while unsafe { elephc_pcntl_signal_next(&mut discarded, PCNTL_SIGNAL_OWNER_AOT) } == 1 {}
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 2, 1, PCNTL_SIGNAL_OWNER_AOT),
+        1
+    );
     let raise_result = unsafe { libc::raise(libc::SIGUSR1) };
     let mut info = ElephcPcntlSigInfo::default();
-    let queued = unsafe { elephc_pcntl_signal_next(&mut info) };
-    let restore_handler = elephc_pcntl_signal(libc::SIGUSR1, 0, 1);
+    let queued = unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) };
+    let restore_handler =
+        elephc_pcntl_signal(libc::SIGUSR1, 0, 1, PCNTL_SIGNAL_OWNER_AOT);
     unsafe {
         assert_eq!(libc::sigprocmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()), 0);
     }
@@ -266,6 +270,131 @@ fn signal_handler_queues_a_stable_record() {
     assert_eq!(restore_handler, 1);
     assert_eq!(info.signo, i64::from(libc::SIGUSR1));
     assert_ne!(info.present & SIGINFO_SIGNO, 0);
+}
+
+/// Keeps AOT and eval records isolated even when the other backend drains first.
+#[test]
+fn signal_queues_are_routed_to_the_registering_backend() {
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    let mut discarded = ElephcPcntlSigInfo::default();
+    for owner in [PCNTL_SIGNAL_OWNER_AOT, PCNTL_SIGNAL_OWNER_EVAL] {
+        while unsafe { elephc_pcntl_signal_next(&mut discarded, owner) } == 1 {}
+    }
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 2, 1, PCNTL_SIGNAL_OWNER_AOT),
+        1
+    );
+    assert_eq!(unsafe { libc::raise(libc::SIGUSR1) }, 0);
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 2, 1, PCNTL_SIGNAL_OWNER_EVAL),
+        1
+    );
+    assert_eq!(unsafe { libc::raise(libc::SIGUSR1) }, 0);
+
+    let mut aot = ElephcPcntlSigInfo::default();
+    let mut eval = ElephcPcntlSigInfo::default();
+    assert_eq!(
+        unsafe { elephc_pcntl_signal_next(&mut eval, PCNTL_SIGNAL_OWNER_EVAL) },
+        1
+    );
+    assert_eq!(eval.signo, i64::from(libc::SIGUSR1));
+    assert_eq!(
+        unsafe { elephc_pcntl_signal_next(&mut eval, PCNTL_SIGNAL_OWNER_EVAL) },
+        0
+    );
+    assert_eq!(
+        unsafe { elephc_pcntl_signal_next(&mut aot, PCNTL_SIGNAL_OWNER_AOT) },
+        1
+    );
+    assert_eq!(aot.signo, i64::from(libc::SIGUSR1));
+
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 0, 1, PCNTL_SIGNAL_OWNER_EVAL),
+        1
+    );
+}
+
+/// Replays every atomically counted record after a saturated pipe fallback.
+#[test]
+fn signal_queue_overflow_preserves_delivery_count() {
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    const DELIVERY_COUNT: usize = 4096;
+    let mut original = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let mut selected = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    unsafe {
+        libc::sigemptyset(&mut selected);
+        libc::sigaddset(&mut selected, libc::SIGUSR1);
+        assert_eq!(libc::sigprocmask(libc::SIG_UNBLOCK, &selected, &mut original), 0);
+    }
+    let mut discarded = ElephcPcntlSigInfo::default();
+    while unsafe { elephc_pcntl_signal_next(&mut discarded, PCNTL_SIGNAL_OWNER_AOT) } == 1 {}
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 2, 1, PCNTL_SIGNAL_OWNER_AOT),
+        1
+    );
+    let mut raises_succeeded = true;
+    for _ in 0..DELIVERY_COUNT {
+        raises_succeeded &= unsafe { libc::raise(libc::SIGUSR1) } == 0;
+    }
+
+    let mut delivered = 0;
+    let mut records_match = true;
+    loop {
+        let mut info = ElephcPcntlSigInfo::default();
+        let status = unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) };
+        if status != 1 {
+            records_match &= status == 0;
+            break;
+        }
+        delivered += 1;
+        records_match &= info.signo == i64::from(libc::SIGUSR1);
+    }
+    let restore_handler =
+        elephc_pcntl_signal(libc::SIGUSR1, 0, 1, PCNTL_SIGNAL_OWNER_AOT);
+    unsafe {
+        assert_eq!(libc::sigprocmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()), 0);
+    }
+
+    assert!(raises_succeeded);
+    assert_eq!(restore_handler, 1);
+    assert!(records_match);
+    assert_eq!(delivered, DELIVERY_COUNT);
+}
+
+/// Drops inherited overflow records when `fork()` gives the child private signal queues.
+#[test]
+fn signal_queue_overflow_is_not_inherited_by_forked_children() {
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    let mut discarded = ElephcPcntlSigInfo::default();
+    while unsafe { elephc_pcntl_signal_next(&mut discarded, PCNTL_SIGNAL_OWNER_AOT) } == 1 {}
+    let overflow = ElephcPcntlSigInfo {
+        signo: i64::from(libc::SIGUSR1),
+        present: SIGINFO_SIGNO,
+        ..ElephcPcntlSigInfo::default()
+    };
+    queue_signal_overflow_for_test(PCNTL_SIGNAL_OWNER_AOT, &overflow);
+
+    let pid = elephc_pcntl_fork();
+    assert!(
+        pid >= 0,
+        "fork failed with errno {}",
+        elephc_pcntl_get_last_error()
+    );
+    if pid == 0 {
+        let mut inherited = ElephcPcntlSigInfo::default();
+        let status = unsafe {
+            elephc_pcntl_signal_next(&mut inherited, PCNTL_SIGNAL_OWNER_AOT)
+        };
+        unsafe { libc::_exit(libc::c_int::from(status != 0)) };
+    }
+
+    let mut status = 0;
+    assert_eq!(unsafe { elephc_pcntl_waitpid(pid, &mut status, 0) }, pid);
+    assert_eq!(elephc_pcntl_wexitstatus(status), 0);
+    assert_eq!(
+        unsafe { elephc_pcntl_signal_next(&mut discarded, PCNTL_SIGNAL_OWNER_AOT) },
+        1
+    );
 }
 
 /// Receives a queued Linux signal synchronously and exposes sender identity fields.

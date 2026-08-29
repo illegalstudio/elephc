@@ -2,7 +2,7 @@
 title: "curl_error() — internals"
 description: "Compiler internals for curl_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 369
+  order: 372
 ---
 
 ## `curl_error()` — internals

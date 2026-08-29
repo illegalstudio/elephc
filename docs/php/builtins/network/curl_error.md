@@ -2,7 +2,7 @@
 title: "curl_error()"
 description: "Returns a string describing the last cURL error."
 sidebar:
-  order: 369
+  order: 372
 ---
 
 ## curl_error()

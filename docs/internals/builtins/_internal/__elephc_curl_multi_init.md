@@ -2,7 +2,7 @@
 title: "__elephc_curl_multi_init() — internals"
 description: "Compiler internals for __elephc_curl_multi_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 612
+  order: 615
 ---
 
 ## `__elephc_curl_multi_init()` — internals

@@ -378,6 +378,7 @@ fn emit_pcntl_dispatch_pending_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_pcntl_dispatch_failed");                  // propagate bridge mask failures as false
     emitter.label("__rt_pcntl_dispatch_loop");
     emitter.instruction("mov x0, sp");                                          // C arg0 = stable siginfo output storage
+    emitter.instruction("mov x1, #1");                                          // C arg1 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_signal_next_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the bridge queue-pop callback
     emitter.instruction("cbz x9, __rt_pcntl_dispatch_failed_masked");           // missing callback is a dispatch failure
@@ -446,6 +447,7 @@ fn emit_pcntl_dispatch_pending_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pcntl_dispatch_failed_x86");                   // propagate bridge mask failures as false
     emitter.label("__rt_pcntl_dispatch_loop_x86");
     emitter.instruction("mov rdi, rsp");                                        // C arg0 = stable siginfo output storage
+    emitter.instruction("mov esi, 1");                                          // C arg1 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_signal_next_fn");
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the bridge queue-pop callback
     emitter.instruction("test r9, r9");                                         // reject an uninitialized bridge slot
@@ -506,6 +508,7 @@ fn emit_pcntl_abort_dispatch_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x10, __rt_pcntl_abort_dispatch_done");             // ordinary throws require no PCNTL cleanup
     emitter.label("__rt_pcntl_abort_dispatch_drain");
     emitter.instruction("mov x0, sp");                                          // C arg0 = discard record storage
+    emitter.instruction("mov x1, #1");                                          // C arg1 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_signal_next_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the bridge queue-pop callback
     emitter.instruction("cbz x9, __rt_pcntl_abort_dispatch_restore");           // restore state if no queue callback is available
@@ -541,6 +544,7 @@ fn emit_pcntl_abort_dispatch_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_pcntl_abort_dispatch_done_x86");               // ordinary throws require no PCNTL cleanup
     emitter.label("__rt_pcntl_abort_dispatch_drain_x86");
     emitter.instruction("mov rdi, rsp");                                        // C arg0 = discard record storage
+    emitter.instruction("mov esi, 1");                                          // C arg1 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_signal_next_fn");
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the bridge queue-pop callback
     emitter.instruction("test r9, r9");                                         // tolerate an unavailable bridge defensively
@@ -710,6 +714,7 @@ fn emit_pcntl_release_handlers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x9");                                          // bridge arg0 = signal number
     emitter.instruction("mov x1, #0");                                          // bridge arg1 = default disposition
     emitter.instruction("mov x2, #1");                                          // bridge arg2 = restart-syscalls flag
+    emitter.instruction("mov x3, #1");                                          // bridge arg3 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_signal_fn");
     emitter.instruction("ldr x10, [x10]");                                      // load the bridge signal-registration callback
     emitter.instruction("cbz x10, __rt_pcntl_release_handlers_zero");           // clear metadata if no bridge is available
@@ -740,6 +745,7 @@ fn emit_pcntl_release_handlers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x9]");                                       // clear any interrupted dispatch marker
     emitter.label("__rt_pcntl_release_handlers_drain");
     emitter.instruction("mov x0, sp");                                          // bridge arg0 = discard-record scratch storage
+    emitter.instruction("mov x1, #1");                                          // bridge arg1 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_signal_next_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the queued-signal reader callback
     emitter.instruction("cbz x9, __rt_pcntl_release_handlers_done");            // finish if no queue was initialized
@@ -772,6 +778,7 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r9");                                         // bridge arg0 = signal number
     emitter.instruction("xor esi, esi");                                        // bridge arg1 = default disposition
     emitter.instruction("mov edx, 1");                                          // bridge arg2 = restart-syscalls flag
+    emitter.instruction("mov ecx, 1");                                          // bridge arg3 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_signal_fn");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the bridge signal-registration callback
     emitter.instruction("test r10, r10");                                       // tolerate an unavailable bridge during teardown
@@ -800,6 +807,7 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r9], 0");                               // clear any interrupted dispatch marker
     emitter.label("__rt_pcntl_release_handlers_drain_x86");
     emitter.instruction("lea rdi, [rbp - 96]");                                 // bridge arg0 = discard-record scratch storage
+    emitter.instruction("mov esi, 1");                                          // bridge arg1 = generated AOT queue owner
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_signal_next_fn");
     emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the queued-signal reader callback
     emitter.instruction("test r9, r9");                                         // tolerate a queue that was never initialized

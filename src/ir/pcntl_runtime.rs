@@ -26,6 +26,7 @@ pub enum PcntlTargetSupport {
 pub enum PcntlRuntime {
     Alarm,
     AsyncSignals,
+    Daemon,
     Exec,
     Fork,
     GetCpu,
@@ -35,8 +36,10 @@ pub enum PcntlRuntime {
     GetQosClass,
     SetCpuAffinity,
     SetNs,
+    SetProcessGroup,
     SetPriority,
     SetQosClass,
+    SetSession,
     Signal,
     SignalDispatch,
     SignalGetHandler,
@@ -73,6 +76,7 @@ impl PcntlRuntime {
             | Self::WStopSig
             | Self::WTermSig => (1, Some(1)),
             Self::AsyncSignals => (0, Some(1)),
+            Self::Daemon => (0, Some(2)),
             Self::Exec => (1, Some(3)),
             Self::Fork
             | Self::GetCpu
@@ -83,8 +87,10 @@ impl PcntlRuntime {
             Self::GetPriority => (0, Some(2)),
             Self::SetCpuAffinity => (0, Some(2)),
             Self::SetNs => (0, Some(2)),
+            Self::SetProcessGroup => (2, Some(2)),
             Self::SetPriority => (1, Some(3)),
             Self::SetQosClass => (0, Some(1)),
+            Self::SetSession => (0, Some(0)),
             Self::Signal => (2, Some(3)),
             Self::SignalMask => (2, Some(3)),
             Self::SignalTimedWait => (1, Some(4)),
@@ -104,6 +110,7 @@ impl PcntlRuntime {
         match self {
             Self::Alarm => "pcntl.alarm",
             Self::AsyncSignals => "pcntl.async_signals",
+            Self::Daemon => "pcntl.daemon",
             Self::Exec => "pcntl.exec",
             Self::Fork => "pcntl.fork",
             Self::GetCpu => "pcntl.getcpu",
@@ -113,8 +120,10 @@ impl PcntlRuntime {
             Self::GetQosClass => "pcntl.getqos_class",
             Self::SetCpuAffinity => "pcntl.setcpuaffinity",
             Self::SetNs => "pcntl.setns",
+            Self::SetProcessGroup => "posix.setpgid",
             Self::SetPriority => "pcntl.setpriority",
             Self::SetQosClass => "pcntl.setqos_class",
+            Self::SetSession => "posix.setsid",
             Self::Signal => "pcntl.signal",
             Self::SignalDispatch => "pcntl.signal_dispatch",
             Self::SignalGetHandler => "pcntl.signal_get_handler",
@@ -207,7 +216,9 @@ impl PcntlRuntime {
                     | E::MAY_WARN.bits(),
             ),
             Self::SetCpuAffinity
+            | Self::Daemon
             | Self::SetNs
+            | Self::SetProcessGroup
             | Self::SetPriority
             | Self::Signal
             | Self::SignalMask
@@ -289,6 +300,7 @@ mod tests {
         let operations = [
             PcntlRuntime::Alarm,
             PcntlRuntime::AsyncSignals,
+            PcntlRuntime::Daemon,
             PcntlRuntime::Exec,
             PcntlRuntime::Fork,
             PcntlRuntime::GetCpu,
@@ -298,8 +310,10 @@ mod tests {
             PcntlRuntime::GetQosClass,
             PcntlRuntime::SetCpuAffinity,
             PcntlRuntime::SetNs,
+            PcntlRuntime::SetProcessGroup,
             PcntlRuntime::SetPriority,
             PcntlRuntime::SetQosClass,
+            PcntlRuntime::SetSession,
             PcntlRuntime::Signal,
             PcntlRuntime::SignalDispatch,
             PcntlRuntime::SignalGetHandler,

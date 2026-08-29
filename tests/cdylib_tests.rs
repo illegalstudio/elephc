@@ -972,6 +972,12 @@ fn test_host_process_builtins_are_refused_for_ios_targets() {
         ("pclose", r#"<?php $handle = fopen("php://memory", "r+"); pclose($handle);"#),
         ("pcntl_fork", r#"<?php pcntl_fork();"#),
         ("pcntl_signal", r#"<?php pcntl_signal(15, 0);"#),
+        ("pcntl_exec", r#"<?php pcntl_exec("/bin/true");"#),
+        ("pcntl_wait", r#"<?php $status = 0; pcntl_wait($status);"#),
+        ("pcntl_alarm", r#"<?php pcntl_alarm(1);"#),
+        ("pcntl_daemon", r#"<?php pcntl_daemon(true, true);"#),
+        ("posix_setpgid", r#"<?php posix_setpgid(0, 0);"#),
+        ("posix_setsid", r#"<?php posix_setsid();"#),
     ] {
         fs::write(dir.join("spawn.php"), source).unwrap();
 
@@ -1756,6 +1762,66 @@ function mutate_host(): bool {
 }
 "#,
             "pcntl.signal",
+        ),
+        (
+            "exec",
+            r#"<?php
+#[Export]
+function mutate_host(): bool {
+    return pcntl_exec("/bin/true");
+}
+"#,
+            "pcntl.exec",
+        ),
+        (
+            "wait",
+            r#"<?php
+#[Export]
+function mutate_host(): int {
+    return pcntl_wait($status, WNOHANG);
+}
+"#,
+            "pcntl.wait",
+        ),
+        (
+            "alarm",
+            r#"<?php
+#[Export]
+function mutate_host(): int {
+    return pcntl_alarm(1);
+}
+"#,
+            "pcntl.alarm",
+        ),
+        (
+            "daemon",
+            r#"<?php
+#[Export]
+function mutate_host(): bool {
+    return pcntl_daemon(true, true);
+}
+"#,
+            "pcntl.daemon",
+        ),
+        (
+            "setpgid",
+            r#"<?php
+#[Export]
+function mutate_host(): bool {
+    return posix_setpgid(0, 0);
+}
+"#,
+            "posix.setpgid",
+        ),
+        (
+            "setsid",
+            r#"<?php
+#[Export]
+function mutate_host(): int {
+    return posix_setsid();
+}
+"#,
+            "posix.setsid",
         ),
     ];
 

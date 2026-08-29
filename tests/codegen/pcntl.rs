@@ -75,6 +75,81 @@ fn test_pcntl_alarm_returns_previous_remaining_seconds() {
     assert_eq!(out, "0|remaining");
 }
 
+/// Creates process groups and sessions through the shared POSIX bridge.
+#[test]
+fn test_pcntl_posix_process_group_and_session_helpers() {
+    let out = compile_and_run(
+        r#"<?php
+        $group_child = pcntl_fork();
+        if ($group_child === 0) {
+            echo \PoSiX_SeTpGiD(0, 0) ? 'group' : 'group-failed';
+            exit(0);
+        }
+        pcntl_waitpid($group_child, $status);
+        echo '|';
+        $session_child = pcntl_fork();
+        if ($session_child === 0) {
+            echo \PoSiX_SeTsId() > 0 ? 'session' : 'session-failed';
+            exit(0);
+        }
+        pcntl_waitpid($session_child, $status);"#,
+    );
+    assert_eq!(out, "group|session");
+}
+
+/// Detaches through Elephc's daemon helper while retaining the test output descriptors.
+#[test]
+fn test_pcntl_daemon_preserves_requested_process_state() {
+    let out = compile_and_run(
+        r#"<?php
+        if (!\PcNtL_DaEmOn(no_chdir: true, no_close: true)) {
+            echo 'failed';
+            exit(1);
+        }
+        echo 'daemon';"#,
+    );
+    assert_eq!(out, "daemon");
+}
+
+/// Exposes process-group and session helpers through Magician's PCNTL bridge bindings.
+#[test]
+fn test_pcntl_eval_process_group_and_session_helpers() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $group_child = pcntl_fork();
+            if ($group_child === 0) {
+                echo posix_setpgid(process_id: 0, process_group_id: 0) ? "group" : "failed";
+                exit(0);
+            }
+            pcntl_waitpid($group_child, $status);
+            echo "|";
+            $session_child = pcntl_fork();
+            if ($session_child === 0) {
+                echo posix_setsid() > 0 ? "session" : "failed";
+                exit(0);
+            }
+            pcntl_waitpid($session_child, $status);
+        ');"#,
+    );
+    assert_eq!(out, "group|session");
+}
+
+/// Detaches from inside eval while preserving descriptors requested by named arguments.
+#[test]
+fn test_pcntl_eval_daemon_preserves_requested_process_state() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            if (!pcntl_daemon(no_chdir: true, no_close: true)) {
+                return "failed";
+            }
+            return "daemon";
+        ');"#,
+    );
+    assert_eq!(out, "daemon");
+}
+
 /// Verifies target-native wait status helpers preserve boolean and mixed result encodings.
 #[test]
 fn test_pcntl_wait_status_decoders() {
@@ -886,6 +961,87 @@ fn test_pcntl_eval_signal_handler_dispatch() {
         ');"#,
     );
     assert_eq!(out, "dispatch|14");
+}
+
+/// Keeps AOT and eval handler records queued for the backend that registered each callable.
+#[test]
+fn test_pcntl_aot_and_eval_dispatch_do_not_consume_each_others_records() {
+    let out = compile_and_run(
+        r#"<?php
+        extern "System" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        $seen = "missing";
+        pcntl_signal(SIGUSR1, function() use (&$seen): void { $seen = "aot"; });
+        kill(getpid(), SIGUSR1);
+        echo eval('return pcntl_signal_dispatch() ? "eval-empty|" : "eval-failed|";');
+        pcntl_signal_dispatch();
+        echo $seen . "|";
+        pcntl_signal(SIGUSR1, SIG_DFL);
+
+        echo eval('
+            pcntl_signal(SIGALRM, function(): void { echo "eval-handler|"; });
+            pcntl_alarm(1);
+            return "registered|";
+        ');
+        sleep(2);
+        pcntl_signal_dispatch();
+        echo "aot-empty|";
+        echo eval('
+            pcntl_signal_dispatch();
+            pcntl_signal(SIGALRM, SIG_DFL);
+            return "done";
+        ');"#,
+    );
+    assert_eq!(
+        out,
+        "eval-empty|aot|registered|aot-empty|eval-handler|done"
+    );
+}
+
+/// Rejects Fiber switches from an eval-owned signal handler through the shared runtime guard.
+#[test]
+fn test_pcntl_eval_handler_cannot_switch_fibers() {
+    let out = compile_and_run(
+        r#"<?php
+        function start_fiber_from_eval_handler(): void {
+            $fiber = new Fiber(function(): void {});
+            try { $fiber->start(); }
+            catch (FiberError $error) { echo $error->getMessage(); }
+        }
+        echo eval('
+            pcntl_signal(SIGALRM, function(): void {
+                start_fiber_from_eval_handler();
+            });
+            pcntl_alarm(1);
+            sleep(2);
+            pcntl_signal_dispatch();
+            pcntl_signal(SIGALRM, SIG_DFL);
+        ');"#,
+    );
+    assert_eq!(out, "Cannot switch fibers in current execution context");
+}
+
+/// Preserves the inherited environment for a named eval `pcntl_exec()` call with omitted env.
+#[test]
+fn test_pcntl_eval_named_exec_omitted_environment_is_inherited() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $pid = pcntl_fork();
+            if ($pid === 0) {
+                pcntl_exec(
+                    path: "/bin/sh",
+                    args: ["-c", "env | grep -q ^CARGO_MANIFEST_DIR= && printf inherited || printf cleared"],
+                );
+                exit(99);
+            }
+            pcntl_waitpid($pid, $status);
+            return "|" . pcntl_wexitstatus($status);
+        ');"#,
+    );
+    assert_eq!(out, "inherited|0");
 }
 
 /// Restores Magician dispatch state after a handler exception and invokes the next alarm.

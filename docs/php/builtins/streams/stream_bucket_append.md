@@ -2,7 +2,7 @@
 title: "stream_bucket_append()"
 description: "Appends a bucket to the brigade."
 sidebar:
-  order: 451
+  order: 454
 ---
 
 ## stream_bucket_append()

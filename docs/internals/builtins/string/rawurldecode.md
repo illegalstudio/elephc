@@ -2,7 +2,7 @@
 title: "rawurldecode() — internals"
 description: "Compiler internals for rawurldecode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 513
+  order: 516
 ---
 
 ## `rawurldecode()` — internals

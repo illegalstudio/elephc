@@ -20,6 +20,7 @@ sidebar:
 | [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_alarm()`](./misc/pcntl_alarm.md) | `(int $seconds): int` | `int` | ✓ | ✓ |
 | [`pcntl_async_signals()`](./misc/pcntl_async_signals.md) | `(bool $enable = null): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_daemon()`](./misc/pcntl_daemon.md) | `(bool $no_chdir = false, bool $no_close = false): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_errno()`](./misc/pcntl_errno.md) | `(): int` | `int` | ✓ | ✓ |
 | [`pcntl_exec()`](./misc/pcntl_exec.md) | `(string $path, mixed $args = [], mixed $env_vars = []): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_fork()`](./misc/pcntl_fork.md) | `(): int` | `int` | ✓ | ✓ |
@@ -52,6 +53,8 @@ sidebar:
 | [`pcntl_wtermsig()`](./misc/pcntl_wtermsig.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`php_uname()`](./misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
 | [`phpversion()`](./misc/phpversion.md) | `(string $extension = null): string|false` | `string|false` | ✓ | ✓ |
+| [`posix_setpgid()`](./misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
+| [`posix_setsid()`](./misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
 | [`print_r()`](./misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`serialize()`](./misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | — |
 | [`unserialize()`](./misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | — |

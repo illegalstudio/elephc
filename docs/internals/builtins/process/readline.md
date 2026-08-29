@@ -2,7 +2,7 @@
 title: "readline() — internals"
 description: "Compiler internals for readline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 426
+  order: 429
 ---
 
 ## `readline()` — internals

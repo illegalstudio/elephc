@@ -2,7 +2,7 @@
 title: "strpos() — internals"
 description: "Compiler internals for strpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 535
+  order: 538
 ---
 
 ## `strpos()` — internals

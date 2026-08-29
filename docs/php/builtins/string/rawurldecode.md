@@ -2,7 +2,7 @@
 title: "rawurldecode()"
 description: "Decodes an RFC 3986 percent-encoded string without treating '+' as a space."
 sidebar:
-  order: 513
+  order: 516
 ---
 
 ## rawurldecode()

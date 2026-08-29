@@ -26,6 +26,22 @@ pub(super) fn eval_pcntl_scalar_result(
             let seconds = eval_int_value(seconds.value, values)?;
             values.int(elephc_pcntl::elephc_pcntl_alarm(seconds))?
         }
+        "pcntl_daemon" => {
+            let no_chdir = eval_pcntl_arg(args, 0)
+                .map(|arg| values.truthy(arg.value))
+                .transpose()?
+                .unwrap_or(false);
+            let no_close = eval_pcntl_arg(args, 1)
+                .map(|arg| values.truthy(arg.value))
+                .transpose()?
+                .unwrap_or(false);
+            values.bool_value(
+                elephc_pcntl::elephc_pcntl_daemon(
+                    libc::c_int::from(no_chdir),
+                    libc::c_int::from(no_close),
+                ) != 0,
+            )?
+        }
         "pcntl_fork" => {
             if args.iter().any(Option::is_some) {
                 return Err(EvalStatus::RuntimeFatal);
@@ -45,6 +61,20 @@ pub(super) fn eval_pcntl_scalar_result(
             values.int(i64::from(elephc_pcntl::elephc_pcntl_get_last_error()))?
         }
         "pcntl_getpriority" => eval_pcntl_getpriority(args, context, values)?,
+        "posix_setpgid" => {
+            let process_id = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
+            let process_group_id =
+                eval_int_value(eval_pcntl_required_arg(args, 1)?.value, values)?;
+            values.bool_value(
+                elephc_pcntl::elephc_posix_setpgid(process_id, process_group_id) != 0,
+            )?
+        }
+        "posix_setsid" => {
+            if args.iter().any(Option::is_some) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            values.int(elephc_pcntl::elephc_posix_setsid())?
+        }
         "pcntl_setpriority" => eval_pcntl_setpriority(args, context, values)?,
         "pcntl_strerror" => eval_pcntl_strerror(args, values)?,
         "pcntl_wifcontinued" | "pcntl_wifexited" | "pcntl_wifsignaled"

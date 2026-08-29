@@ -33,6 +33,10 @@ fn strict_mode_hides_extension_builtins_from_lookup() {
         "strict mode must hide class_attribute_names from eval lookup"
     );
     assert!(
+        eval_declared_builtin_spec("pcntl_daemon").is_none(),
+        "strict mode must hide pcntl_daemon from eval lookup"
+    );
+    assert!(
         eval_declared_builtin_spec("strlen").is_some(),
         "strlen must stay resolvable in strict mode"
     );
@@ -50,6 +54,10 @@ fn strict_mode_defaults_off_and_guard_restores() {
     assert!(
         eval_declared_builtin_spec("ptr_get").is_some(),
         "extension builtins stay visible without strict mode"
+    );
+    assert!(
+        eval_declared_builtin_spec("pcntl_daemon").is_some(),
+        "pcntl_daemon must stay visible without strict mode"
     );
     {
         let _guard = scoped_enable();

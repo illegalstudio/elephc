@@ -2,7 +2,7 @@
 title: "pcntl_waitid()"
 description: "Waits for a child state change and writes its signal information."
 sidebar:
-  order: 350
+  order: 351
 ---
 
 ## pcntl_waitid()

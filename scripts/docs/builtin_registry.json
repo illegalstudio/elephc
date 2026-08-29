@@ -61015,6 +61015,157 @@
   {
     "aot": {
       "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "no_chdir",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "no_close",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "pcntl_daemon",
+    "description": "Detaches the surviving child into a background daemon process.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "pcntl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_daemon.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "no_chdir",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "no_close",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": true,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 610,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.pcntl.daemon` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/pcntl_daemon.rs",
+      "sig_line": null
+    },
+    "name": "pcntl_daemon",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_process",
+          "writes_process",
+          "may_throw",
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "pcntl.daemon"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_pcntl"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "host_only",
+      "validation": {
+        "kind": "shared"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "no_chdir",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "no_close",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "pcntl_daemon",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
       "params": [],
       "required_param_count": 0,
       "signature_override_reason": null,
@@ -65901,6 +66052,262 @@
     },
     "slug": "popen",
     "sub_area": "Process"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "process_id",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "process_group_id",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "posix_setpgid",
+    "description": "Moves a process into a process group for job control.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "pcntl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/pcntl/posix_setpgid.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "process_id",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "process_group_id",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 610,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.posix.setpgid` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/posix_setpgid.rs",
+      "sig_line": null
+    },
+    "name": "posix_setpgid",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_process",
+          "writes_process",
+          "may_throw",
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "posix.setpgid"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_pcntl"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "host_only",
+      "validation": {
+        "kind": "shared"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "process_id",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "process_group_id",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "posix_setpgid",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "posix_setsid",
+    "description": "Creates a new session and makes the current process its leader.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "pcntl",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/pcntl/posix_setsid.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 610,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.posix.setsid` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/posix_setsid.rs",
+      "sig_line": null
+    },
+    "name": "posix_setsid",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_process",
+          "writes_process",
+          "may_warn"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "posix.setsid"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_pcntl"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "host_only",
+      "validation": {
+        "kind": "shared"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "posix_setsid",
+    "sub_area": "System"
   },
   {
     "aot": {

@@ -2,7 +2,7 @@
 title: "openssl_decrypt() — internals"
 description: "Compiler internals for openssl_decrypt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 505
+  order: 508
 ---
 
 ## `openssl_decrypt()` — internals

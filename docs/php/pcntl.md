@@ -1,6 +1,6 @@
 ---
 title: "PCNTL"
-description: "Forking, waiting, process replacement, signals, affinity, namespaces, and target-specific process controls."
+description: "Forking, waiting, process replacement, signals, sessions, daemonization, affinity, namespaces, and target-specific controls."
 sidebar:
   order: 23
 ---
@@ -66,6 +66,20 @@ an omitted environment inherits the current process environment, while an
 explicit empty array clears it. OS failures emit PHP's warning, return `false`,
 and remain available through `pcntl_get_last_error()` / `pcntl_errno()`.
 
+## Process groups, sessions, and daemonization
+
+`posix_setpgid($process_id, $process_group_id)` moves a process into a process
+group and returns a boolean result. `posix_setsid()` creates a new session for
+the calling process and returns its session identifier, or `-1` after an OS
+failure. Both operations preserve the native errno for
+`pcntl_get_last_error()`.
+
+Elephc also provides `pcntl_daemon(bool $no_chdir = false, bool $no_close =
+false): bool` as a convenience wrapper over the host's `daemon(3)`. This is an
+Elephc extension rather than a PHP 8.4 PCNTL function, so `--strict-php` hides
+it. The surviving daemon process receives private pending-signal queues just as
+a child created by `pcntl_fork()` does.
+
 ## Signal handlers and dispatch
 
 Register `SIG_DFL`, `SIG_IGN`, or any supported PHP callable with
@@ -127,22 +141,21 @@ elephc's supported target matrix and are intentionally absent.
 ## Eval and current limits
 
 Dynamic `eval()` uses the same native bridge, errno state, process signal
-dispositions, queue, dispatch masking, wait outputs, and warning behavior as
-AOT code. Callable descriptors remain owned by the active backend runtime:
+dispositions, dispatch masking, wait outputs, and warning behavior as AOT code.
+Callable descriptors remain owned by the backend that registered them:
 Magician retains eval handlers in its evaluation context, while compiled
-handlers remain in AOT runtime storage.
+handlers remain in AOT runtime storage. Pending records are routed into separate
+AOT and eval queues, so dispatching from the other backend cannot consume or
+drop them. An eval handler is therefore invoked by an eval dispatch, and a
+compiled handler by a compiled dispatch; registrations cannot be inspected as
+the other backend's incompatible callable representation.
 
-Because those handler tables use different callable representations, signal
-registration and dispatch must currently stay in the same backend domain. An
-eval handler must be dispatched from eval, and a compiled handler must be
-dispatched from compiled code. If the other backend drains the shared queue
-first, it has no compatible descriptor to invoke for that record. This is the
-only intentional callable-interoperability limit; ordinary process, wait,
-mask, errno, and disposition state remains shared.
-
-The pending-signal transport is a nonblocking process-local pipe. This keeps
-the OS handler async-signal-safe, but the queue is bounded by the operating
-system's pipe capacity; a sustained burst that fills it can lose later records.
+Each pending-signal queue uses a nonblocking process-local pipe so the OS
+handler remains async-signal-safe. If the pipe fills, later deliveries spill
+into preallocated per-signal atomic counters and are replayed after pipe
+records. Delivery counts are retained; multiple overflowed deliveries of the
+same signal use the latest captured siginfo snapshot. Standard non-realtime
+signals may still be coalesced by the operating system before the handler runs.
 As in PHP, applications should keep handlers short and move work into their
 normal event loop. PCNTL is unavailable on Windows because Windows is not in
 elephc's supported target matrix.

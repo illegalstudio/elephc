@@ -42,6 +42,7 @@ pub(crate) fn lower(
     match target {
         PcntlRuntime::Alarm => lower_unary_int_bridge(ctx, inst, "pcntl_alarm", "elephc_pcntl_alarm", false),
         PcntlRuntime::AsyncSignals => super::pcntl_handlers::lower_async_signals(ctx, inst),
+        PcntlRuntime::Daemon => lower_daemon(ctx, inst),
         PcntlRuntime::Exec => super::pcntl_exec::lower_exec(ctx, inst),
         PcntlRuntime::Fork => lower_fork(ctx, inst),
         PcntlRuntime::GetCpu => {
@@ -58,8 +59,12 @@ pub(crate) fn lower(
         PcntlRuntime::GetQosClass => lower_getqos_class(ctx, inst),
         PcntlRuntime::SetCpuAffinity => lower_setcpuaffinity(ctx, inst),
         PcntlRuntime::SetNs => lower_setns(ctx, inst),
+        PcntlRuntime::SetProcessGroup => lower_set_process_group(ctx, inst),
         PcntlRuntime::SetPriority => lower_setpriority(ctx, inst),
         PcntlRuntime::SetQosClass => lower_setqos_class(ctx, inst),
+        PcntlRuntime::SetSession => {
+            lower_zero_arg_int_bridge(ctx, inst, "posix_setsid", "elephc_posix_setsid")
+        }
         PcntlRuntime::Signal => super::pcntl_handlers::lower_signal(ctx, inst),
         PcntlRuntime::SignalDispatch => super::pcntl_handlers::lower_signal_dispatch(ctx, inst),
         PcntlRuntime::SignalGetHandler => {
@@ -840,6 +845,60 @@ fn lower_fork(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_pop_reg(ctx.emitter, &result);
     ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers Elephc's `pcntl_daemon()` convenience wrapper over the host `daemon(3)` API.
+fn lower_daemon(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "pcntl_daemon", 0, 2)?;
+    load_optional_int(
+        ctx,
+        inst.operands.first().copied(),
+        0,
+        "pcntl_daemon no_chdir",
+    )?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_optional_int(
+        ctx,
+        inst.operands.get(1).copied(),
+        0,
+        "pcntl_daemon no_close",
+    )?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // C arg1 = preserve standard descriptors when truthy
+            abi::emit_pop_reg(ctx.emitter, "x0");                              // C arg0 = preserve working directory when truthy
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // C arg1 = preserve standard descriptors when truthy
+            abi::emit_pop_reg(ctx.emitter, "rdi");                             // C arg0 = preserve working directory when truthy
+        }
+    }
+    ctx.emitter.bl_c("elephc_pcntl_daemon");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `posix_setpgid()` with both process identifiers preserved in source order.
+fn lower_set_process_group(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "posix_setpgid", 2)?;
+    load_as_int(ctx, expect_operand(inst, 0)?, "posix_setpgid process_id")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_as_int(
+        ctx,
+        expect_operand(inst, 1)?,
+        "posix_setpgid process_group_id",
+    )?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // C arg1 = requested process-group id
+            abi::emit_pop_reg(ctx.emitter, "x0");                              // C arg0 = selected process id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // C arg1 = requested process-group id
+            abi::emit_pop_reg(ctx.emitter, "rdi");                             // C arg0 = selected process id
+        }
+    }
+    ctx.emitter.bl_c("elephc_posix_setpgid");
     store_if_result(ctx, inst)
 }
 

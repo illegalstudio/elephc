@@ -339,6 +339,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_alarm()`](./builtins/misc/pcntl_alarm.md) | `(int $seconds): int` | `int` | ✓ | ✓ |
 | [`pcntl_async_signals()`](./builtins/misc/pcntl_async_signals.md) | `(bool $enable = null): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_daemon()`](./builtins/misc/pcntl_daemon.md) | `(bool $no_chdir = false, bool $no_close = false): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_errno()`](./builtins/misc/pcntl_errno.md) | `(): int` | `int` | ✓ | ✓ |
 | [`pcntl_exec()`](./builtins/misc/pcntl_exec.md) | `(string $path, mixed $args = [], mixed $env_vars = []): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_fork()`](./builtins/misc/pcntl_fork.md) | `(): int` | `int` | ✓ | ✓ |
@@ -371,6 +372,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`pcntl_wtermsig()`](./builtins/misc/pcntl_wtermsig.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string|false` | `string|false` | ✓ | ✓ |
+| [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
+| [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | — |
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | — |

@@ -8,7 +8,10 @@ if ($pid === -1) {
 }
 
 if ($pid === 0) {
-    echo "Child completed its work\n";
+    $session = posix_setsid();
+    echo $session > 0
+        ? "Child created session {$session}\n"
+        : 'Unable to create child session: ' . pcntl_strerror(pcntl_get_last_error()) . "\n";
     exit(7);
 }
 
@@ -20,3 +23,14 @@ if ($waited === $pid && pcntl_wifexited($status)) {
     echo 'Parent reaped child exit code ' . pcntl_wexitstatus($status) . "\n";
     echo 'Child user CPU seconds: ' . $usage['ru_utime.tv_sec'] . "\n";
 }
+
+$groupPid = pcntl_fork();
+
+if ($groupPid === 0) {
+    echo posix_setpgid(0, 0)
+        ? "Second child created its own process group\n"
+        : 'Unable to create child process group: ' . pcntl_strerror(pcntl_get_last_error()) . "\n";
+    exit(0);
+}
+
+pcntl_waitpid($groupPid, $groupStatus);
