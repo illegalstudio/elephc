@@ -91,12 +91,12 @@ pub(super) fn lower_sigprocmask(
                 abi::emit_load_int_immediate(ctx.emitter, "x4", SIGNAL_CAPACITY as i64);
             } else {
                 ctx.emitter.instruction("mov x3, #0");                          // caller omitted the output
-                ctx.emitter.instruction("mov x4, #0");
+                ctx.emitter.instruction("mov x4, #0");                          // report no prior-mask output capacity
             }
             ctx.emitter.bl_c("elephc_pcntl_sigprocmask");
             abi::emit_store_to_sp(ctx.emitter, "x0", MASK_RESULT_OFFSET);
-            ctx.emitter.instruction("cmp x0, #0");
-            ctx.emitter.instruction(&format!("b.lt {failure}"));
+            ctx.emitter.instruction("cmp x0, #0");                              // detect bridge failure before writing the old mask
+            ctx.emitter.instruction(&format!("b.lt {failure}"));                // return false while preserving caller output
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // stage the selected signal count
@@ -118,12 +118,12 @@ pub(super) fn lower_sigprocmask(
                 abi::emit_load_int_immediate(ctx.emitter, "r8", SIGNAL_CAPACITY as i64);
             } else {
                 ctx.emitter.instruction("xor ecx, ecx");                        // caller omitted the output
-                ctx.emitter.instruction("xor r8d, r8d");
+                ctx.emitter.instruction("xor r8d, r8d");                        // report no prior-mask output capacity
             }
             ctx.emitter.bl_c("elephc_pcntl_sigprocmask");
             abi::emit_store_to_sp(ctx.emitter, "rax", MASK_RESULT_OFFSET);
-            ctx.emitter.instruction("test rax, rax");
-            ctx.emitter.instruction(&format!("js {failure}"));
+            ctx.emitter.instruction("test rax, rax");                           // detect bridge failure before writing the old mask
+            ctx.emitter.instruction(&format!("js {failure}"));                  // return false while preserving caller output
         }
     }
     if let Some(slot) = old_slot {
@@ -133,8 +133,8 @@ pub(super) fn lower_sigprocmask(
     }
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b {done}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {done}")),         // bypass the false failure result
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),        // bypass the false failure result
     }
     ctx.emitter.label(&failure);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -222,8 +222,8 @@ pub(super) fn lower_signal_wait(
                 "elephc_pcntl_sigwaitinfo"
             });
             abi::emit_store_to_sp(ctx.emitter, "x0", WAIT_RESULT_OFFSET);
-            ctx.emitter.instruction("cmp x0, #-1");
-            ctx.emitter.instruction(&format!("b.eq {failure}"));
+            ctx.emitter.instruction("cmp x0, #-1");                             // detect a failed or timed-out signal wait
+            ctx.emitter.instruction(&format!("b.eq {failure}"));                // return false without siginfo writeback
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", WAIT_SIGNALS_OFFSET);
@@ -239,15 +239,15 @@ pub(super) fn lower_signal_wait(
                 "elephc_pcntl_sigwaitinfo"
             });
             abi::emit_store_to_sp(ctx.emitter, "rax", WAIT_RESULT_OFFSET);
-            ctx.emitter.instruction("cmp rax, -1");
-            ctx.emitter.instruction(&format!("je {failure}"));
+            ctx.emitter.instruction("cmp rax, -1");                             // detect a failed or timed-out signal wait
+            ctx.emitter.instruction(&format!("je {failure}"));                  // return false without siginfo writeback
         }
     }
     if let Some(slot) = info_slot {
         ctx.release_local_before_refcounted_writeback(slot)?;
         match ctx.emitter.target.arch {
-            Arch::AArch64 => ctx.emitter.instruction("mov x0, sp"),
-            Arch::X86_64 => ctx.emitter.instruction("mov rdi, rsp"),
+            Arch::AArch64 => ctx.emitter.instruction("mov x0, sp"),             // pass the stable siginfo record to the array builder
+            Arch::X86_64 => ctx.emitter.instruction("mov rdi, rsp"),            // pass the stable siginfo record to the array builder
         }
         abi::emit_call_label(ctx.emitter, "__rt_pcntl_siginfo_array");
         store_pcntl_siginfo_array(ctx, slot)?;
@@ -260,8 +260,8 @@ pub(super) fn lower_signal_wait(
     abi::emit_release_temporary_stack(ctx.emitter, WAIT_FRAME_BYTES);
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b {done}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {done}")),         // bypass the boxed false failure result
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),        // bypass the boxed false failure result
     }
     ctx.emitter.label(&failure);
     abi::emit_release_temporary_stack(ctx.emitter, WAIT_FRAME_BYTES);
@@ -451,12 +451,12 @@ fn emit_indexed_int_array_from_stack(
             ctx.emitter.instruction("add x12, x0, #24");                        // destination array payload
             ctx.emitter.instruction("mov x13, #0");                             // copy index
             ctx.emitter.label(&copy_loop);
-            ctx.emitter.instruction("cmp x13, x10");
-            ctx.emitter.instruction(&format!("b.ge {copy_done}"));
-            ctx.emitter.instruction("ldr x14, [x11, x13, lsl #3]");
-            ctx.emitter.instruction("str x14, [x12, x13, lsl #3]");
-            ctx.emitter.instruction("add x13, x13, #1");
-            ctx.emitter.instruction(&format!("b {copy_loop}"));
+            ctx.emitter.instruction("cmp x13, x10");                            // test whether every signal was copied
+            ctx.emitter.instruction(&format!("b.ge {copy_done}"));              // finish at the bridge-reported count
+            ctx.emitter.instruction("ldr x14, [x11, x13, lsl #3]");             // load one stable signal number
+            ctx.emitter.instruction("str x14, [x12, x13, lsl #3]");             // append the signal to the PHP array payload
+            ctx.emitter.instruction("add x13, x13, #1");                        // advance the copy index
+            ctx.emitter.instruction(&format!("b {copy_loop}"));                 // copy the next signal number
             ctx.emitter.label(&copy_done);
             ctx.emitter.instruction("str x10, [x0]");                           // publish logical length
         }
@@ -469,12 +469,12 @@ fn emit_indexed_int_array_from_stack(
             ctx.emitter.instruction("lea r8, [rax + 24]");                      // destination array payload
             ctx.emitter.instruction("xor ecx, ecx");                            // copy index
             ctx.emitter.label(&copy_loop);
-            ctx.emitter.instruction("cmp rcx, r10");
-            ctx.emitter.instruction(&format!("jge {copy_done}"));
-            ctx.emitter.instruction("mov r9, QWORD PTR [r11 + rcx * 8]");
-            ctx.emitter.instruction("mov QWORD PTR [r8 + rcx * 8], r9");
-            ctx.emitter.instruction("add rcx, 1");
-            ctx.emitter.instruction(&format!("jmp {copy_loop}"));
+            ctx.emitter.instruction("cmp rcx, r10");                            // test whether every signal was copied
+            ctx.emitter.instruction(&format!("jge {copy_done}"));               // finish at the bridge-reported count
+            ctx.emitter.instruction("mov r9, QWORD PTR [r11 + rcx * 8]");       // load one stable signal number
+            ctx.emitter.instruction("mov QWORD PTR [r8 + rcx * 8], r9");        // append the signal to the PHP array payload
+            ctx.emitter.instruction("add rcx, 1");                              // advance the copy index
+            ctx.emitter.instruction(&format!("jmp {copy_loop}"));               // copy the next signal number
             ctx.emitter.label(&copy_done);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // publish logical length
         }

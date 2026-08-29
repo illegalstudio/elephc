@@ -75,5 +75,8 @@ builtin! {
     contract: "pcntl_exec",
     check: check,
     lazy_check: true,
-    semantics: crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::Exec),
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::Exec),
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlExec,
+    ),
 }

@@ -38,15 +38,15 @@ pub fn php_visible_builtin_names() -> &'static [&'static str] {
     })
 }
 
-/// Returns the compiler's PHP-visible builtin names available on one target platform.
+/// Returns the compiler's PHP-visible builtin names available on one full target.
 ///
 /// Applies the same target-support contracts used by AOT `function_exists()` while
 /// leaving strict-PHP extensions visible for backend parity audits.
 pub fn php_visible_builtin_names_for_target(
-    platform: crate::codegen_support::platform::Platform,
+    target: crate::codegen_support::platform::Target,
 ) -> Vec<&'static str> {
     crate::types::checker::builtins::catalog::supported_builtin_function_names_for_target(
-        false, platform,
+        false, target,
     )
 }
 

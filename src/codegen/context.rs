@@ -224,14 +224,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select the aliased storage address after runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select the aliased storage address after runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select the aliased storage address after runtime promotion
                     }
@@ -606,14 +606,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell loading after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell loading after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell loading after a runtime promotion
                     }
@@ -719,14 +719,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell storage after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell storage after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
@@ -833,14 +833,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell storage after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell storage after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }

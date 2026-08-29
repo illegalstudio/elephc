@@ -180,8 +180,8 @@ unsafe fn copy_signal_siginfo(
         stable.present |= SIGINFO_STATUS | SIGINFO_PID | SIGINFO_UID;
         #[cfg(target_os = "linux")]
         {
-            stable.utime = info.si_utime() as i64;
-            stable.stime = info.si_stime() as i64;
+            stable.utime = info.si_utime();
+            stable.stime = info.si_stime();
             stable.present |= SIGINFO_UTIME | SIGINFO_STIME;
         }
     } else if signal == libc::SIGUSR1
@@ -207,7 +207,7 @@ unsafe fn copy_signal_siginfo(
             fd: libc::c_int,
         }
         let poll = &*(info as *const libc::siginfo_t).cast::<PollSigInfo>();
-        stable.band = poll.band as i64;
+        stable.band = poll.band;
         stable.fd = i64::from(poll.fd);
         stable.present |= SIGINFO_BAND | SIGINFO_FD;
     }

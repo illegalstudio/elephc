@@ -7,11 +7,14 @@
 //! Key details:
 //! - The bridge crate is the single source for target-aware libc values used by AOT and eval.
 
-use crate::codegen_support::platform::Platform;
+use crate::codegen_support::platform::{Platform, Target};
 
-/// Returns the exact PCNTL integer constants exposed for `platform`.
-pub(crate) fn pcntl_int_constants(platform: Platform) -> &'static [(&'static str, i64)] {
-    match platform {
+/// Returns the exact PCNTL integer constants exposed for `target`.
+pub(crate) fn pcntl_int_constants(target: Target) -> &'static [(&'static str, i64)] {
+    if target.is_ios() {
+        return &[];
+    }
+    match target.platform {
         Platform::MacOS => elephc_pcntl::MACOS_PCNTL_INT_CONSTANTS,
         Platform::Linux => elephc_pcntl::LINUX_PCNTL_INT_CONSTANTS,
         Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
@@ -28,8 +31,8 @@ mod tests {
     use super::*;
 
     /// Looks up one named constant in a target-specific table.
-    fn value(platform: Platform, name: &str) -> Option<i64> {
-        pcntl_int_constants(platform)
+    fn value(target: Target, name: &str) -> Option<i64> {
+        pcntl_int_constants(target)
             .iter()
             .find_map(|(candidate, value)| (*candidate == name).then_some(*value))
     }
@@ -37,12 +40,18 @@ mod tests {
     /// Verifies the compiler selects the shared target table without changing values.
     #[test]
     fn compiler_platform_selection_uses_shared_catalog() {
-        assert_eq!(value(Platform::MacOS, "SIGCHLD"), Some(20));
-        assert_eq!(value(Platform::Linux, "SIGCHLD"), Some(17));
-        assert_eq!(value(Platform::MacOS, "PCNTL_EAGAIN"), Some(35));
-        assert_eq!(value(Platform::Linux, "PCNTL_EAGAIN"), Some(11));
-        assert_eq!(value(Platform::Linux, "CLONE_NEWNS"), Some(131_072));
-        assert_eq!(value(Platform::MacOS, "CLONE_NEWNS"), None);
+        use crate::codegen_support::platform::{AppleVariant, Arch};
+
+        let macos = Target::new(Platform::MacOS, Arch::AArch64);
+        let linux = Target::new(Platform::Linux, Arch::AArch64);
+        let ios = Target::new_apple(Arch::AArch64, AppleVariant::IOS);
+        assert_eq!(value(macos, "SIGCHLD"), Some(20));
+        assert_eq!(value(linux, "SIGCHLD"), Some(17));
+        assert_eq!(value(macos, "PCNTL_EAGAIN"), Some(35));
+        assert_eq!(value(linux, "PCNTL_EAGAIN"), Some(11));
+        assert_eq!(value(linux, "CLONE_NEWNS"), Some(131_072));
+        assert_eq!(value(macos, "CLONE_NEWNS"), None);
+        assert!(pcntl_int_constants(ios).is_empty());
         assert!(is_pcntl_int_constant("PRIO_DARWIN_BG"));
         assert!(!is_pcntl_int_constant("NOT_A_PCNTL_CONSTANT"));
     }

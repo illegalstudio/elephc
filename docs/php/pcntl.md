@@ -19,6 +19,11 @@ elephc --with-pcntl worker.php
 
 `extension_loaded('pcntl')` reports `true` whenever the bridge is linked.
 
+PCNTL is intentionally unavailable for iOS targets and for `--emit cdylib` or
+`--emit staticlib`. A hosted library shares its embedding process, so forking,
+replacing the process image, or changing process-wide signal state would escape
+the recoverable export boundary and affect the host application.
+
 ## Fork, wait, and exec
 
 `pcntl_fork()` returns the child PID to the parent and `0` to the child. The

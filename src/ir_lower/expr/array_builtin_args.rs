@@ -88,6 +88,9 @@ pub(super) fn lower_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
             lower_json_decode_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlExec => {
+            lower_args_with_signature_trimming_trailing_defaults(ctx, sig, args)
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback
             if !crate::types::call_args::has_named_args(args)
                 && !args.iter().any(is_spread_arg) =>

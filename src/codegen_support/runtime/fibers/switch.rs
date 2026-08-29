@@ -199,10 +199,10 @@ fn emit_adopt_fiber_stack_limit_aarch64(emitter: &mut Emitter) {
 /// register the symbol helper protects itself.
 fn emit_adopt_fiber_stack_limit_x86_64(emitter: &mut Emitter) {
     emitter.comment("adopt the target fiber's call-stack floor");
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // load the target fiber's stack-mapping floor
         "mov rax, QWORD PTR [rdi + {}]",
         FIBER_STACK_BASE_OFFSET
-    )); // rax = low address of the target fiber's stack mapping
+    ));
     emitter.instruction("test rax, rax");                                       // did this fiber ever get a stack mapping?
     emitter.instruction("jz __rt_fiber_switch_limit_ready");                    // an unallocated stack publishes zero and disables the guard
     emitter.instruction(&format!("add rax, {}", FIBER_STACK_FLOOR_OFFSET));     // skip the guard page and the shared reserve to get the usable floor

@@ -2,7 +2,7 @@
 title: "curl_multi_select() — internals"
 description: "Compiler internals for curl_multi_select(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 351
+  order: 383
 ---
 
 ## `curl_multi_select()` — internals

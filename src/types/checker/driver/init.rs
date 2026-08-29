@@ -134,7 +134,7 @@ impl Checker {
         for (name, _value) in CURL_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
-        for (name, _value) in pcntl_int_constants(target.platform) {
+        for (name, _value) in pcntl_int_constants(target) {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`

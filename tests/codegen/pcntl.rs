@@ -474,6 +474,44 @@ fn test_pcntl_exec_replaces_child_with_arguments_and_environment() {
     assert_eq!(out, "ready|0");
 }
 
+/// Keeps an omitted named environment absent so `pcntl_exec()` inherits the process environment.
+#[test]
+fn test_pcntl_exec_named_omitted_environment_is_inherited() {
+    let out = compile_and_run(
+        r#"<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            pcntl_exec(
+                path: '/bin/sh',
+                args: ['-c', 'if [ -n "$CARGO_MANIFEST_DIR" ]; then printf inherited; else printf cleared; fi'],
+            );
+            exit(99);
+        }
+        pcntl_waitpid($pid, $status);
+        echo '|' . pcntl_wexitstatus($status);"#,
+    );
+    assert_eq!(out, "inherited|0");
+}
+
+/// Keeps an omitted static-spread environment absent instead of materializing its empty default.
+#[test]
+fn test_pcntl_exec_static_spread_omitted_environment_is_inherited() {
+    let out = compile_and_run(
+        r#"<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) {
+            pcntl_exec(...[
+                'path' => '/bin/sh',
+                'args' => ['-c', 'if [ -n "$CARGO_MANIFEST_DIR" ]; then printf inherited; else printf cleared; fi'],
+            ]);
+            exit(99);
+        }
+        pcntl_waitpid($pid, $status);
+        echo '|' . pcntl_wexitstatus($status);"#,
+    );
+    assert_eq!(out, "inherited|0");
+}
+
 /// Returns false and preserves the bridge errno when process replacement fails.
 #[test]
 fn test_pcntl_exec_failure_returns_false_and_records_errno() {

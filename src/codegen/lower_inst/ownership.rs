@@ -226,16 +226,16 @@ fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // pass the loaded string pointer to validated heap release
                 &format!("mov {}, {}", result_reg, ptr_reg)
-            );                                                                  // pass the loaded string pointer to the validating heap-free helper
+            );
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
             if ptr_reg != result_reg {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // pass the loaded string pointer to validated heap release
                     &format!("mov {}, {}", result_reg, ptr_reg)
-                );                                                              // pass the loaded string pointer to the validating heap-free helper
+                );
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }

@@ -958,10 +958,9 @@ fn test_ios_showcase_bridging_headers_compile_against_generated_abi_v3() {
     }
 }
 
-/// Verifies process-spawning builtins are rejected during iOS type checking
-/// while remaining available on the ordinary host target.
+/// Verifies host-process builtins are rejected for both iOS target variants.
 #[test]
-fn test_process_spawning_builtins_are_refused_for_ios_targets() {
+fn test_host_process_builtins_are_refused_for_ios_targets() {
     let dir = make_test_dir("elephc_ios_capability");
 
     for (builtin, source) in [
@@ -971,27 +970,34 @@ fn test_process_spawning_builtins_are_refused_for_ios_targets() {
         ("shell_exec", r#"<?php shell_exec("ls");"#),
         ("popen", r#"<?php popen("ls", "r");"#),
         ("pclose", r#"<?php $handle = fopen("php://memory", "r+"); pclose($handle);"#),
+        ("pcntl_fork", r#"<?php pcntl_fork();"#),
+        ("pcntl_signal", r#"<?php pcntl_signal(15, 0);"#),
     ] {
         fs::write(dir.join("spawn.php"), source).unwrap();
 
-        let refused = elephc_command(&dir)
-            .args(["--check", "--target", "ios-arm64", "spawn.php"])
-            .output()
-            .expect("failed to run elephc");
-        assert!(!refused.status.success(), "{builtin} must not type-check for iOS");
-        let message = String::from_utf8_lossy(&refused.stderr);
-        assert!(
-            message.contains(&format!("{builtin}()")),
-            "{builtin}: diagnostic must name the builtin, got: {message}"
-        );
-        assert!(
-            message.contains("ios-arm64"),
-            "{builtin}: diagnostic must name the target, got: {message}"
-        );
-        assert!(
-            message.contains("error["),
-            "{builtin}: diagnostic must carry a source position, got: {message}"
-        );
+        for target in ["ios-arm64", "ios-sim-arm64"] {
+            let refused = elephc_command(&dir)
+                .args(["--check", "--target", target, "spawn.php"])
+                .output()
+                .expect("failed to run elephc");
+            assert!(
+                !refused.status.success(),
+                "{builtin} must not type-check for {target}"
+            );
+            let message = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                message.contains(&format!("{builtin}()")),
+                "{builtin}: diagnostic must name the builtin, got: {message}"
+            );
+            assert!(
+                message.contains(target),
+                "{builtin}: diagnostic must name {target}, got: {message}"
+            );
+            assert!(
+                message.contains("error["),
+                "{builtin}: diagnostic must carry a source position, got: {message}"
+            );
+        }
 
         let accepted = elephc_command(&dir)
             .args(["--check", "spawn.php"])
@@ -1725,6 +1731,56 @@ function roundtrip(string $input): string {
         stderr.contains("eval cannot return through the cdylib error boundary"),
         "expected the eval restriction, got:\n{stderr}"
     );
+}
+
+/// Rejects PCNTL process and signal operations from both hosted-library artifact kinds.
+#[test]
+fn test_hosted_libraries_reject_reachable_pcntl_operations() {
+    let cases = [
+        (
+            "fork",
+            r#"<?php
+#[Export]
+function mutate_host(): int {
+    return pcntl_fork();
+}
+"#,
+            "pcntl.fork",
+        ),
+        (
+            "signal",
+            r#"<?php
+#[Export]
+function mutate_host(): bool {
+    return pcntl_signal(SIGCHLD, SIG_IGN);
+}
+"#,
+            "pcntl.signal",
+        ),
+    ];
+
+    for emit in ["cdylib", "staticlib"] {
+        for (operation, source, eir_name) in cases {
+            let dir = make_test_dir(&format!("elephc_{emit}_pcntl_{operation}"));
+            fs::write(dir.join("unsafe.php"), source).unwrap();
+            let output = elephc_command(&dir)
+                .args(["--emit", emit, "unsafe.php"])
+                .output()
+                .expect("failed to run elephc");
+            assert!(
+                !output.status.success(),
+                "{emit} unexpectedly accepted {operation}"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(eir_name)
+                    && stderr.contains("--emit cdylib/staticlib")
+                    && stderr.contains("embedding host process"),
+                "expected the hosted-library PCNTL diagnostic, got:\n{stderr}"
+            );
+            fs::remove_dir_all(&dir).ok();
+        }
+    }
 }
 
 /// Rejects a runtime-selected callable whose body cannot be proven free of termination.

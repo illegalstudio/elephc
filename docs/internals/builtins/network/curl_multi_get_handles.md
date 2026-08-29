@@ -2,7 +2,7 @@
 title: "curl_multi_get_handles() — internals"
 description: "Compiler internals for curl_multi_get_handles(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 346
+  order: 378
 ---
 
 ## `curl_multi_get_handles()` — internals

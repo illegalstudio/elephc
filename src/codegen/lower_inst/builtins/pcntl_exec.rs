@@ -49,10 +49,10 @@ pub(super) fn lower_exec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         BUILDER_OFFSET,
     );
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x0, {failure}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x0, {failure}")), // return false if builder allocation fails
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");
-            ctx.emitter.instruction(&format!("jz {failure}"));
+            ctx.emitter.instruction("test rax, rax");                           // inspect builder allocation success
+            ctx.emitter.instruction(&format!("jz {failure}"));                  // return false if builder allocation fails
         }
     }
     if let Some(arguments) = inst.operands.get(1).copied() {
@@ -64,16 +64,16 @@ pub(super) fn lower_exec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     load_builder_argument(ctx);
     ctx.emitter.bl_c("elephc_pcntl_exec_run");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b {os_failure}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {os_failure}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {os_failure}")),   // warn after the failed process replacement
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {os_failure}")),  // warn after the failed process replacement
     }
 
     ctx.emitter.label(&conversion_failure);
     load_builder_argument(ctx);
     ctx.emitter.bl_c("elephc_pcntl_exec_free");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b {failure}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {failure}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {failure}")),      // return false without an OS warning
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {failure}")),     // return false without an OS warning
     }
     ctx.emitter.label(&os_failure);
     emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_EXEC);
@@ -155,7 +155,7 @@ fn emit_indexed_string_array(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", INDEX_OFFSET);
             ctx.emitter.instruction("add x10, x10, #1");                        // advance to the next packed entry
             abi::emit_store_to_sp(ctx.emitter, "x10", INDEX_OFFSET);
-            ctx.emitter.instruction(&format!("b {loop_label}"));
+            ctx.emitter.instruction(&format!("b {loop_label}"));                // stage the next packed entry
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", CONTAINER_OFFSET);
@@ -185,7 +185,7 @@ fn emit_indexed_string_array(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", INDEX_OFFSET);
             ctx.emitter.instruction("add r10, 1");                              // advance to the next packed entry
             abi::emit_store_to_sp(ctx.emitter, "r10", INDEX_OFFSET);
-            ctx.emitter.instruction(&format!("jmp {loop_label}"));
+            ctx.emitter.instruction(&format!("jmp {loop_label}"));              // stage the next packed entry
         }
     }
     ctx.emitter.label(&done);
@@ -232,7 +232,7 @@ fn emit_assoc_string_array(
                 ctx.emitter.bl_c("elephc_pcntl_exec_add_arg");
             }
             ctx.emitter.instruction(&format!("cbz x0, {failure}"));             // abort if copying or NUL validation failed
-            ctx.emitter.instruction(&format!("b {loop_label}"));
+            ctx.emitter.instruction(&format!("b {loop_label}"));                // stage the next insertion-ordered entry
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", CONTAINER_OFFSET);
@@ -253,7 +253,7 @@ fn emit_assoc_string_array(
             }
             ctx.emitter.instruction("test rax, rax");                           // did the bridge copy this entry?
             ctx.emitter.instruction(&format!("jz {failure}"));                  // abort if copying or NUL validation failed
-            ctx.emitter.instruction(&format!("jmp {loop_label}"));
+            ctx.emitter.instruction(&format!("jmp {loop_label}"));              // stage the next insertion-ordered entry
         }
     }
     ctx.emitter.label(&done);

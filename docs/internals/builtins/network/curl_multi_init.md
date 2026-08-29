@@ -2,7 +2,7 @@
 title: "curl_multi_init() — internals"
 description: "Compiler internals for curl_multi_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 381
 ---
 
 ## `curl_multi_init()` — internals

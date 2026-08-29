@@ -142,11 +142,11 @@ fn lower_getqos_class(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x0, #0");                              // reject the bridge's negative pthread error sentinel
-            ctx.emitter.instruction(&format!("b.ge {valid}"));
+            ctx.emitter.instruction(&format!("b.ge {valid}"));                  // continue with a valid QoS ordinal
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, 0");                              // reject the bridge's negative pthread error sentinel
-            ctx.emitter.instruction(&format!("jge {valid}"));
+            ctx.emitter.instruction(&format!("jge {valid}"));                   // continue with a valid QoS ordinal
         }
     }
     super::super::exceptions::emit_error(ctx, "invalid QOS class");
@@ -161,11 +161,11 @@ fn lower_getqos_class(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction(&format!("cmp x0, #{}", ordinal));      // select the PHP enum case for the bridge ordinal
-                ctx.emitter.instruction(&format!("b.eq {label}"));
+                ctx.emitter.instruction(&format!("b.eq {label}"));              // load the matching enum singleton
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction(&format!("cmp rax, {}", ordinal));      // select the PHP enum case for the bridge ordinal
-                ctx.emitter.instruction(&format!("je {label}"));
+                ctx.emitter.instruction(&format!("je {label}"));                // load the matching enum singleton
             }
         }
     }
@@ -259,8 +259,8 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             abi::emit_temporary_stack_address(ctx.emitter, "x1", 0);
             abi::emit_load_int_immediate(ctx.emitter, "x2", PCNTL_CPU_CAPACITY as i64);
             ctx.emitter.bl_c("elephc_pcntl_getcpuaffinity");
-            ctx.emitter.instruction("cmp x0, #-1");
-            ctx.emitter.instruction(&format!("b.eq {failure}"));
+            ctx.emitter.instruction("cmp x0, #-1");                             // detect bridge failure before using the CPU buffer
+            ctx.emitter.instruction(&format!("b.eq {failure}"));                // return false without reading failed output
             abi::emit_store_to_sp(ctx.emitter, "x0", PCNTL_CPU_COUNT_OFFSET);
             ctx.emitter.instruction("mov x1, #8");                              // indexed integer slots are eight bytes
             abi::emit_call_label(ctx.emitter, "__rt_array_new");
@@ -269,12 +269,12 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             ctx.emitter.instruction("add x12, x0, #24");                        // destination payload after the array header
             ctx.emitter.instruction("mov x13, #0");                             // copy index
             ctx.emitter.label(&copy_loop);
-            ctx.emitter.instruction("cmp x13, x10");
-            ctx.emitter.instruction(&format!("b.ge {copy_done}"));
-            ctx.emitter.instruction("ldr x14, [x11, x13, lsl #3]");
-            ctx.emitter.instruction("str x14, [x12, x13, lsl #3]");
-            ctx.emitter.instruction("add x13, x13, #1");
-            ctx.emitter.instruction(&format!("b {copy_loop}"));
+            ctx.emitter.instruction("cmp x13, x10");                            // test whether every returned CPU id was copied
+            ctx.emitter.instruction(&format!("b.ge {copy_done}"));              // finish at the bridge-reported count
+            ctx.emitter.instruction("ldr x14, [x11, x13, lsl #3]");             // load one stable CPU identifier
+            ctx.emitter.instruction("str x14, [x12, x13, lsl #3]");             // append the identifier to the PHP array payload
+            ctx.emitter.instruction("add x13, x13, #1");                        // advance the copy index
+            ctx.emitter.instruction(&format!("b {copy_loop}"));                 // copy the next CPU identifier
             ctx.emitter.label(&copy_done);
             ctx.emitter.instruction("str x10, [x0]");                           // publish logical array length
         }
@@ -283,8 +283,8 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             abi::emit_temporary_stack_address(ctx.emitter, "rsi", 0);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", PCNTL_CPU_CAPACITY as i64);
             ctx.emitter.bl_c("elephc_pcntl_getcpuaffinity");
-            ctx.emitter.instruction("cmp rax, -1");
-            ctx.emitter.instruction(&format!("je {failure}"));
+            ctx.emitter.instruction("cmp rax, -1");                             // detect bridge failure before using the CPU buffer
+            ctx.emitter.instruction(&format!("je {failure}"));                  // return false without reading failed output
             abi::emit_store_to_sp(ctx.emitter, "rax", PCNTL_CPU_COUNT_OFFSET);
             ctx.emitter.instruction("mov rdi, rax");                            // capacity equals returned CPU count
             ctx.emitter.instruction("mov rsi, 8");                              // indexed integer slots are eight bytes
@@ -294,12 +294,12 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             ctx.emitter.instruction("lea r8, [rax + 24]");                      // destination array payload
             ctx.emitter.instruction("xor ecx, ecx");                            // copy index
             ctx.emitter.label(&copy_loop);
-            ctx.emitter.instruction("cmp rcx, r10");
-            ctx.emitter.instruction(&format!("jge {copy_done}"));
-            ctx.emitter.instruction("mov r9, QWORD PTR [r11 + rcx * 8]");
-            ctx.emitter.instruction("mov QWORD PTR [r8 + rcx * 8], r9");
-            ctx.emitter.instruction("add rcx, 1");
-            ctx.emitter.instruction(&format!("jmp {copy_loop}"));
+            ctx.emitter.instruction("cmp rcx, r10");                            // test whether every returned CPU id was copied
+            ctx.emitter.instruction(&format!("jge {copy_done}"));               // finish at the bridge-reported count
+            ctx.emitter.instruction("mov r9, QWORD PTR [r11 + rcx * 8]");       // load one stable CPU identifier
+            ctx.emitter.instruction("mov QWORD PTR [r8 + rcx * 8], r9");        // append the identifier to the PHP array payload
+            ctx.emitter.instruction("add rcx, 1");                              // advance the copy index
+            ctx.emitter.instruction(&format!("jmp {copy_loop}"));               // copy the next CPU identifier
             ctx.emitter.label(&copy_done);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // publish logical array length
         }
@@ -307,8 +307,8 @@ fn lower_getcpuaffinity(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     abi::emit_release_temporary_stack(ctx.emitter, PCNTL_CPU_FRAME_BYTES);
     emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Int)));
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b {done}")),
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {done}")),         // bypass the false failure result
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),        // bypass the false failure result
     }
     ctx.emitter.label(&failure);
     abi::emit_release_temporary_stack(ctx.emitter, PCNTL_CPU_FRAME_BYTES);
@@ -512,11 +512,11 @@ fn lower_wait(
                 ctx.release_local_before_refcounted_writeback(slot)?;
                 ctx.emitter.instruction("ldr x9, [sp, #8]");                    // inspect the returned child id before reading resource usage
                 ctx.emitter.instruction("cmp x9, #0");                          // PHP fills usage only for a reaped child
-                ctx.emitter.instruction(&format!("b.gt {usage_from_result}"));
+                ctx.emitter.instruction(&format!("b.gt {usage_from_result}"));  // materialize usage only for a reaped child
                 ctx.emitter.instruction("mov x0, #8");                          // allocate an empty associative array on failure/WNOHANG
                 ctx.emitter.instruction("mov x1, #0");                          // hash value type = Int
                 abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-                ctx.emitter.instruction(&format!("b {usage_ready}"));
+                ctx.emitter.instruction(&format!("b {usage_ready}"));           // store the empty usage array
                 ctx.emitter.label(&usage_from_result);
                 ctx.emitter.instruction("add x0, sp, #16");                     // pass the stable usage record to the PHP-array builder
                 abi::emit_call_label(ctx.emitter, "__rt_pcntl_rusage_array");
@@ -572,11 +572,11 @@ fn lower_wait(
             if let Some(slot) = usage_slot {
                 ctx.release_local_before_refcounted_writeback(slot)?;
                 ctx.emitter.instruction("cmp QWORD PTR [rsp + 8], 0");          // PHP fills usage only for a reaped child
-                ctx.emitter.instruction(&format!("jg {usage_from_result}"));
+                ctx.emitter.instruction(&format!("jg {usage_from_result}"));    // materialize usage only for a reaped child
                 ctx.emitter.instruction("mov rdi, 8");                          // allocate an empty associative array on failure/WNOHANG
                 ctx.emitter.instruction("xor esi, esi");                        // hash value type = Int
                 abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-                ctx.emitter.instruction(&format!("jmp {usage_ready}"));
+                ctx.emitter.instruction(&format!("jmp {usage_ready}"));         // store the empty usage array
                 ctx.emitter.label(&usage_from_result);
                 ctx.emitter.instruction("lea rdi, [rsp + 16]");                 // pass the stable usage record to the PHP-array builder
                 abi::emit_call_label(ctx.emitter, "__rt_pcntl_rusage_array");
@@ -644,7 +644,7 @@ fn lower_waitid(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()>
             ctx.emitter.instruction("mov QWORD PTR [rsp + 112], rax");          // preserve boolean result across optional array creation
             if let Some(slot) = info_slot {
                 ctx.emitter.instruction("test eax, eax");                       // leave caller output unchanged on failure
-                ctx.emitter.instruction(&format!("jz {no_writeback}"));
+                ctx.emitter.instruction(&format!("jz {no_writeback}"));         // preserve caller output when waitid fails
                 ctx.release_local_before_refcounted_writeback(slot)?;
                 ctx.emitter.instruction("mov rdi, rsp");                        // pass the stable siginfo record to the array builder
                 abi::emit_call_label(ctx.emitter, "__rt_pcntl_siginfo_array");

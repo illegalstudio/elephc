@@ -79,8 +79,8 @@ echo function_exists("StRlEn") ? "M" : "m";');
 #[test]
 fn test_eval_function_exists_covers_static_builtin_catalog() {
     let mut fragment = String::new();
-    let platform = elephc::codegen_support::platform::Platform::detect_host();
-    for name in elephc::builtin_metadata::php_visible_builtin_names_for_target(platform) {
+    let target = elephc::codegen_support::platform::Target::detect_host();
+    for name in elephc::builtin_metadata::php_visible_builtin_names_for_target(target) {
         let contract = elephc_builtin_contract::lookup(name)
             .expect("compiler-visible builtin must have a shared contract");
         if !matches!(

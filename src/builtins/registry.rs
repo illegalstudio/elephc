@@ -924,6 +924,7 @@ mod tests {
             ("count", BuiltinArgumentLowering::Count),
             ("date", BuiltinArgumentLowering::Date),
             ("json_decode", BuiltinArgumentLowering::JsonDecode),
+            ("pcntl_exec", BuiltinArgumentLowering::PcntlExec),
             (
                 "preg_replace_callback",
                 BuiltinArgumentLowering::PregReplaceCallback,

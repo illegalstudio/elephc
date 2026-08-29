@@ -86,7 +86,9 @@ pub(crate) fn inject_builtin_enums(
         next_class_id,
     )?;
 
-    if checker.target_platform == crate::codegen::platform::Platform::MacOS {
+    if checker.target.platform == crate::codegen::platform::Platform::MacOS
+        && !checker.target.is_ios()
+    {
         ensure_builtin_enum_name_available(program, checker, PCNTL_QOS_CLASS)?;
         insert_enum_metadata(
             PCNTL_QOS_CLASS,

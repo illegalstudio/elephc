@@ -241,15 +241,15 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
     abi::emit_load_int_immediate(emitter, scratch, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // compare the property marker with the uninitialized sentinel
                 &format!("cmp {}, {}", abi::int_result_reg(emitter), scratch)
-            );                                                                  // compare the property marker against the uninitialized sentinel
+            );
             emitter.instruction(&format!("b.eq {}", label));                    // skip the release when the property was never written
         }
         Arch::X86_64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // compare the property marker with the uninitialized sentinel
                 &format!("cmp {}, {}", abi::int_result_reg(emitter), scratch)
-            );                                                                  // compare the property marker against the uninitialized sentinel
+            );
             emitter.instruction(&format!("je {}", label));                      // skip the release when the property was never written
         }
     }

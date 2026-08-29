@@ -37,7 +37,7 @@ impl Checker {
                         };
                         value.is_some_and(|value| {
                             let value = value.trim_start_matches('\\');
-                            pcntl_int_constants(self.target_platform)
+                            pcntl_int_constants(self.target)
                                 .iter()
                                 .any(|(constant, _)| *constant == value)
                         })
@@ -120,7 +120,7 @@ impl Checker {
             }
             ExprKind::ConstRef(name) => {
                 let constant_name = name.as_str().trim_start_matches('\\');
-                if pcntl_int_constants(self.target_platform)
+                if pcntl_int_constants(self.target)
                     .iter()
                     .any(|(constant, _)| *constant == constant_name)
                 {

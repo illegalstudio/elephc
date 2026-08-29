@@ -112,7 +112,7 @@ fn emit_pcntl_rusage_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // return the completed hash
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release helper frame
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return the completed resource-usage array
 }
 
 /// Emits the x86_64 SysV resource-usage array builder.
@@ -142,7 +142,7 @@ fn emit_pcntl_rusage_array_x86_64(emitter: &mut Emitter) {
     }
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the completed hash
     emitter.instruction("leave");                                               // release helper frame and restore rbp
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return the completed resource-usage array
 }
 
 /// Emits the AArch64 stable-siginfo associative-array builder.
@@ -184,7 +184,7 @@ fn emit_pcntl_siginfo_array_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #8]");                                    // return the completed hash
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release helper frame
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return the completed signal-information array
 }
 
 /// Emits the x86_64 SysV stable-siginfo associative-array builder.
@@ -224,7 +224,7 @@ fn emit_pcntl_siginfo_array_x86_64(emitter: &mut Emitter) {
     }
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the completed hash
     emitter.instruction("leave");                                               // release helper frame and restore rbp
-    emitter.instruction("ret");
+    emitter.instruction("ret");                                                 // return the completed signal-information array
 }
 
 /// Emits the AArch64 callback adapter for `(int $signal, array $info)`.
@@ -586,62 +586,62 @@ fn emit_pcntl_async_dispatch_preserving_aarch64(emitter: &mut Emitter) {
     emitter.instruction("msr nzcv, x9");                                        // restore the caller's condition flags
     emitter.instruction("ldp x9, x10, [sp]");                                   // restore scratch registers before the complete spill
     emitter.instruction("add sp, sp, #32");                                     // release the fast-path frame before the regular frame
-    emitter.instruction("sub sp, sp, #800");
+    emitter.instruction("sub sp, sp, #800");                                    // reserve the complete register and FP-state spill
     for register in (0..32).step_by(2) {
-        emitter.instruction(&format!(
+        emitter.instruction(&format!(                                           // preserve one pair of SIMD registers
             "stp q{register}, q{}, [sp, #{}]",
             register + 1,
             register * 16
         ));
     }
-    emitter.instruction("str x28, [sp, #736]");
-    emitter.instruction("str x29, [sp, #768]");
-    emitter.instruction("str x30, [sp, #776]");
-    emitter.instruction("add x28, sp, #512");
+    emitter.instruction("str x28, [sp, #736]");                                 // preserve the scratch base register
+    emitter.instruction("str x29, [sp, #768]");                                 // preserve the caller frame pointer
+    emitter.instruction("str x30, [sp, #776]");                                 // preserve the caller return address
+    emitter.instruction("add x28, sp, #512");                                   // address the general-register spill area
     for register in (0..28).step_by(2) {
-        emitter.instruction(&format!(
+        emitter.instruction(&format!(                                           // preserve one pair of general registers
             "stp x{register}, x{}, [x28, #{}]",
             register + 1,
             register * 8
         ));
     }
-    emitter.instruction("mrs x9, nzcv");
-    emitter.instruction("str x9, [sp, #744]");
-    emitter.instruction("mrs x9, fpcr");
-    emitter.instruction("str x9, [sp, #752]");
-    emitter.instruction("mrs x9, fpsr");
-    emitter.instruction("str x9, [sp, #760]");
+    emitter.instruction("mrs x9, nzcv");                                        // capture the caller's condition flags
+    emitter.instruction("str x9, [sp, #744]");                                  // preserve the condition flags across dispatch
+    emitter.instruction("mrs x9, fpcr");                                        // capture the caller's FP control state
+    emitter.instruction("str x9, [sp, #752]");                                  // preserve the FP control state across dispatch
+    emitter.instruction("mrs x9, fpsr");                                        // capture the caller's FP status state
+    emitter.instruction("str x9, [sp, #760]");                                  // preserve the FP status state across dispatch
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_async_enabled");
-    emitter.instruction("ldr x10, [x9]");
-    emitter.instruction("cbz x10, __rt_pcntl_async_restore");
-    emitter.instruction("bl __rt_pcntl_dispatch_pending");
+    emitter.instruction("ldr x10, [x9]");                                       // recheck asynchronous dispatch after the complete spill
+    emitter.instruction("cbz x10, __rt_pcntl_async_restore");                   // skip work if the mode changed while entering
+    emitter.instruction("bl __rt_pcntl_dispatch_pending");                      // run pending handlers with all caller state protected
     emitter.label("__rt_pcntl_async_restore");
-    emitter.instruction("ldr x9, [sp, #744]");
-    emitter.instruction("msr nzcv, x9");
-    emitter.instruction("ldr x9, [sp, #752]");
-    emitter.instruction("msr fpcr, x9");
-    emitter.instruction("ldr x9, [sp, #760]");
-    emitter.instruction("msr fpsr, x9");
-    emitter.instruction("add x28, sp, #512");
+    emitter.instruction("ldr x9, [sp, #744]");                                  // reload the caller's condition flags
+    emitter.instruction("msr nzcv, x9");                                        // restore condition flags after dispatch
+    emitter.instruction("ldr x9, [sp, #752]");                                  // reload the caller's FP control state
+    emitter.instruction("msr fpcr, x9");                                        // restore FP control state after dispatch
+    emitter.instruction("ldr x9, [sp, #760]");                                  // reload the caller's FP status state
+    emitter.instruction("msr fpsr, x9");                                        // restore FP status state after dispatch
+    emitter.instruction("add x28, sp, #512");                                   // address the general-register restore area
     for register in (0..28).step_by(2).rev() {
-        emitter.instruction(&format!(
+        emitter.instruction(&format!(                                           // restore one pair of general registers
             "ldp x{register}, x{}, [x28, #{}]",
             register + 1,
             register * 8
         ));
     }
-    emitter.instruction("ldr x29, [sp, #768]");
-    emitter.instruction("ldr x30, [sp, #776]");
+    emitter.instruction("ldr x29, [sp, #768]");                                 // restore the caller frame pointer
+    emitter.instruction("ldr x30, [sp, #776]");                                 // restore the caller return address
     for register in (0..32).step_by(2).rev() {
-        emitter.instruction(&format!(
+        emitter.instruction(&format!(                                           // restore one pair of SIMD registers
             "ldp q{register}, q{}, [sp, #{}]",
             register + 1,
             register * 16
         ));
     }
-    emitter.instruction("ldr x28, [sp, #736]");
-    emitter.instruction("add sp, sp, #800");
-    emitter.instruction("ret");
+    emitter.instruction("ldr x28, [sp, #736]");                                 // restore the scratch base register last
+    emitter.instruction("add sp, sp, #800");                                    // release the complete preserving spill
+    emitter.instruction("ret");                                                 // resume the interrupted generated-code path
 }
 
 /// Emits an x86_64 safe-point wrapper that preserves every general/vector register and flags.
@@ -661,32 +661,32 @@ fn emit_pcntl_async_dispatch_preserving_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return without the complete spill when async mode is off
     emitter.label("__rt_pcntl_async_slow_x86");
     emitter.instruction("popfq");                                               // restore flags before the complete preserving wrapper
-    emitter.instruction("pushfq");
+    emitter.instruction("pushfq");                                              // preserve caller flags across asynchronous dispatch
     for register in REGISTERS {
-        emitter.instruction(&format!("push {register}"));
+        emitter.instruction(&format!("push {register}"));                       // preserve one general register
     }
-    emitter.instruction("sub rsp, 264");
+    emitter.instruction("sub rsp, 264");                                        // reserve SIMD and floating-point control spill slots
     for register in 0..16 {
-        emitter.instruction(&format!("movdqu XMMWORD PTR [rsp + {}], xmm{register}", register * 16));
+        emitter.instruction(&format!("movdqu XMMWORD PTR [rsp + {}], xmm{register}", register * 16)); // preserve one SIMD register
     }
-    emitter.instruction("stmxcsr DWORD PTR [rsp + 256]");
-    emitter.instruction("fnstcw WORD PTR [rsp + 260]");
+    emitter.instruction("stmxcsr DWORD PTR [rsp + 256]");                       // preserve SSE control and status state
+    emitter.instruction("fnstcw WORD PTR [rsp + 260]");                         // preserve x87 control state
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_async_enabled");
-    emitter.instruction("cmp QWORD PTR [r9], 0");
-    emitter.instruction("je __rt_pcntl_async_restore_x86");
-    emitter.instruction("call __rt_pcntl_dispatch_pending");
+    emitter.instruction("cmp QWORD PTR [r9], 0");                               // recheck asynchronous dispatch after the complete spill
+    emitter.instruction("je __rt_pcntl_async_restore_x86");                     // skip work if the mode changed while entering
+    emitter.instruction("call __rt_pcntl_dispatch_pending");                    // run pending handlers with all caller state protected
     emitter.label("__rt_pcntl_async_restore_x86");
-    emitter.instruction("ldmxcsr DWORD PTR [rsp + 256]");
-    emitter.instruction("fldcw WORD PTR [rsp + 260]");
+    emitter.instruction("ldmxcsr DWORD PTR [rsp + 256]");                       // restore SSE control and status state
+    emitter.instruction("fldcw WORD PTR [rsp + 260]");                          // restore x87 control state
     for register in (0..16).rev() {
-        emitter.instruction(&format!("movdqu xmm{register}, XMMWORD PTR [rsp + {}]", register * 16));
+        emitter.instruction(&format!("movdqu xmm{register}, XMMWORD PTR [rsp + {}]", register * 16)); // restore one SIMD register
     }
-    emitter.instruction("add rsp, 264");
+    emitter.instruction("add rsp, 264");                                        // release the SIMD and control-state spill
     for register in REGISTERS.iter().rev() {
-        emitter.instruction(&format!("pop {register}"));
+        emitter.instruction(&format!("pop {register}"));                        // restore one general register
     }
-    emitter.instruction("popfq");
-    emitter.instruction("ret");
+    emitter.instruction("popfq");                                               // restore caller flags after dispatch
+    emitter.instruction("ret");                                                 // resume the interrupted generated-code path
 }
 
 /// Emits AArch64 teardown for registered descriptors, OS dispositions, and queued records.
@@ -695,61 +695,61 @@ fn emit_pcntl_release_handlers_aarch64(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");
     emitter.comment("--- runtime: pcntl release signal handlers ---");
     emitter.label_global("__rt_pcntl_release_handlers");
-    emitter.instruction("sub sp, sp, #128");
-    emitter.instruction("stp x29, x30, [sp, #112]");
-    emitter.instruction("add x29, sp, #112");
-    emitter.instruction("mov x9, #1");
-    emitter.instruction("str x9, [sp, #96]");
+    emitter.instruction("sub sp, sp, #128");                                    // reserve siginfo scratch storage and the saved frame
+    emitter.instruction("stp x29, x30, [sp, #112]");                            // preserve frame pointer and return address
+    emitter.instruction("add x29, sp, #112");                                   // establish the teardown helper frame
+    emitter.instruction("mov x9, #1");                                          // begin with the first valid signal number
+    emitter.instruction("str x9, [sp, #96]");                                   // preserve the current table index across calls
     emitter.label("__rt_pcntl_release_handlers_loop");
-    emitter.instruction("ldr x9, [sp, #96]");
-    emitter.instruction("cmp x9, #128");
-    emitter.instruction("b.hs __rt_pcntl_release_handlers_state");
+    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the current signal-table index
+    emitter.instruction("cmp x9, #128");                                        // detect the end of the fixed handler table
+    emitter.instruction("b.hs __rt_pcntl_release_handlers_state");              // finish with global dispatch state
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
-    emitter.instruction("ldr x11, [x10, x9, lsl #3]");
-    emitter.instruction("cbz x11, __rt_pcntl_release_handlers_next");
-    emitter.instruction("mov x0, x9");
-    emitter.instruction("mov x1, #0");
-    emitter.instruction("mov x2, #1");
+    emitter.instruction("ldr x11, [x10, x9, lsl #3]");                          // inspect the registered handler kind
+    emitter.instruction("cbz x11, __rt_pcntl_release_handlers_next");           // skip default dispositions
+    emitter.instruction("mov x0, x9");                                          // bridge arg0 = signal number
+    emitter.instruction("mov x1, #0");                                          // bridge arg1 = default disposition
+    emitter.instruction("mov x2, #1");                                          // bridge arg2 = restart-syscalls flag
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_signal_fn");
-    emitter.instruction("ldr x10, [x10]");
-    emitter.instruction("cbz x10, __rt_pcntl_release_handlers_zero");
-    emitter.instruction("blr x10");
-    emitter.instruction("ldr x9, [sp, #96]");
+    emitter.instruction("ldr x10, [x10]");                                      // load the bridge signal-registration callback
+    emitter.instruction("cbz x10, __rt_pcntl_release_handlers_zero");           // clear metadata if no bridge is available
+    emitter.instruction("blr x10");                                             // restore the OS default disposition
+    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after the bridge call
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
-    emitter.instruction("ldr x11, [x10, x9, lsl #3]");
-    emitter.instruction("cmp x11, #2");
-    emitter.instruction("b.ne __rt_pcntl_release_handlers_zero");
+    emitter.instruction("ldr x11, [x10, x9, lsl #3]");                          // reload the registered handler kind
+    emitter.instruction("cmp x11, #2");                                         // detect an owned callable descriptor
+    emitter.instruction("b.ne __rt_pcntl_release_handlers_zero");               // skip release for SIG_IGN
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_descriptor");
-    emitter.instruction("ldr x0, [x10, x9, lsl #3]");
-    emitter.instruction("bl __rt_callable_descriptor_release");
-    emitter.instruction("ldr x9, [sp, #96]");
+    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the descriptor owned by the table
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the handler-table ownership
+    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after release
     emitter.label("__rt_pcntl_release_handlers_zero");
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
-    emitter.instruction("str xzr, [x10, x9, lsl #3]");
+    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the handler-kind entry
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_descriptor");
-    emitter.instruction("str xzr, [x10, x9, lsl #3]");
+    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the descriptor entry
     emitter.label("__rt_pcntl_release_handlers_next");
-    emitter.instruction("ldr x9, [sp, #96]");
-    emitter.instruction("add x9, x9, #1");
-    emitter.instruction("str x9, [sp, #96]");
-    emitter.instruction("b __rt_pcntl_release_handlers_loop");
+    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the completed table index
+    emitter.instruction("add x9, x9, #1");                                      // advance to the next signal
+    emitter.instruction("str x9, [sp, #96]");                                   // preserve the next table index
+    emitter.instruction("b __rt_pcntl_release_handlers_loop");                  // continue scanning registered handlers
     emitter.label("__rt_pcntl_release_handlers_state");
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_async_enabled");
-    emitter.instruction("str xzr, [x9]");
+    emitter.instruction("str xzr, [x9]");                                       // disable asynchronous dispatch during shutdown
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
-    emitter.instruction("str xzr, [x9]");
+    emitter.instruction("str xzr, [x9]");                                       // clear any interrupted dispatch marker
     emitter.label("__rt_pcntl_release_handlers_drain");
-    emitter.instruction("mov x0, sp");
+    emitter.instruction("mov x0, sp");                                          // bridge arg0 = discard-record scratch storage
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_signal_next_fn");
-    emitter.instruction("ldr x9, [x9]");
-    emitter.instruction("cbz x9, __rt_pcntl_release_handlers_done");
-    emitter.instruction("blr x9");
-    emitter.instruction("cmp x0, #1");
-    emitter.instruction("b.eq __rt_pcntl_release_handlers_drain");
+    emitter.instruction("ldr x9, [x9]");                                        // load the queued-signal reader callback
+    emitter.instruction("cbz x9, __rt_pcntl_release_handlers_done");            // finish if no queue was initialized
+    emitter.instruction("blr x9");                                              // discard one queued signal record
+    emitter.instruction("cmp x0, #1");                                          // test whether a complete record was consumed
+    emitter.instruction("b.eq __rt_pcntl_release_handlers_drain");              // drain every remaining queued record
     emitter.label("__rt_pcntl_release_handlers_done");
-    emitter.instruction("ldp x29, x30, [sp, #112]");
-    emitter.instruction("add sp, sp, #128");
-    emitter.instruction("ret");
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // release teardown scratch storage
+    emitter.instruction("ret");                                                 // return after all handler ownership is released
 }
 
 /// Emits x86_64 teardown for registered descriptors, OS dispositions, and queued records.
@@ -758,56 +758,56 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.raw("    .p2align 4");
     emitter.comment("--- runtime: pcntl release signal handlers ---");
     emitter.label_global("__rt_pcntl_release_handlers");
-    emitter.instruction("push rbp");
-    emitter.instruction("mov rbp, rsp");
-    emitter.instruction("sub rsp, 112");
-    emitter.instruction("mov QWORD PTR [rbp - 104], 1");
+    emitter.instruction("push rbp");                                            // preserve the caller frame
+    emitter.instruction("mov rbp, rsp");                                        // establish stable teardown local offsets
+    emitter.instruction("sub rsp, 112");                                        // reserve siginfo scratch storage and the table index
+    emitter.instruction("mov QWORD PTR [rbp - 104], 1");                        // begin with the first valid signal number
     emitter.label("__rt_pcntl_release_handlers_loop_x86");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");
-    emitter.instruction("cmp r9, 128");
-    emitter.instruction("jae __rt_pcntl_release_handlers_state_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the current signal-table index
+    emitter.instruction("cmp r9, 128");                                         // detect the end of the fixed handler table
+    emitter.instruction("jae __rt_pcntl_release_handlers_state_x86");           // finish with global dispatch state
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
-    emitter.instruction("cmp QWORD PTR [r10 + r9*8], 0");
-    emitter.instruction("je __rt_pcntl_release_handlers_next_x86");
-    emitter.instruction("mov rdi, r9");
-    emitter.instruction("xor esi, esi");
-    emitter.instruction("mov edx, 1");
+    emitter.instruction("cmp QWORD PTR [r10 + r9*8], 0");                       // inspect the registered handler kind
+    emitter.instruction("je __rt_pcntl_release_handlers_next_x86");             // skip default dispositions
+    emitter.instruction("mov rdi, r9");                                         // bridge arg0 = signal number
+    emitter.instruction("xor esi, esi");                                        // bridge arg1 = default disposition
+    emitter.instruction("mov edx, 1");                                          // bridge arg2 = restart-syscalls flag
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_signal_fn");
-    emitter.instruction("mov r10, QWORD PTR [r10]");
-    emitter.instruction("test r10, r10");
-    emitter.instruction("jz __rt_pcntl_release_handlers_zero_x86");
-    emitter.instruction("call r10");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the bridge signal-registration callback
+    emitter.instruction("test r10, r10");                                       // tolerate an unavailable bridge during teardown
+    emitter.instruction("jz __rt_pcntl_release_handlers_zero_x86");             // clear metadata if no bridge is available
+    emitter.instruction("call r10");                                            // restore the OS default disposition
+    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after the bridge call
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
-    emitter.instruction("cmp QWORD PTR [r10 + r9*8], 2");
-    emitter.instruction("jne __rt_pcntl_release_handlers_zero_x86");
+    emitter.instruction("cmp QWORD PTR [r10 + r9*8], 2");                       // detect an owned callable descriptor
+    emitter.instruction("jne __rt_pcntl_release_handlers_zero_x86");            // skip release for SIG_IGN
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_descriptor");
-    emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");
-    emitter.instruction("call __rt_callable_descriptor_release");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");
+    emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");                     // load the descriptor owned by the table
+    emitter.instruction("call __rt_callable_descriptor_release");               // release the handler-table ownership
+    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after release
     emitter.label("__rt_pcntl_release_handlers_zero_x86");
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
-    emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");
+    emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");                       // clear the handler-kind entry
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_descriptor");
-    emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");
+    emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");                       // clear the descriptor entry
     emitter.label("__rt_pcntl_release_handlers_next_x86");
-    emitter.instruction("add QWORD PTR [rbp - 104], 1");
-    emitter.instruction("jmp __rt_pcntl_release_handlers_loop_x86");
+    emitter.instruction("add QWORD PTR [rbp - 104], 1");                        // advance and preserve the next signal index
+    emitter.instruction("jmp __rt_pcntl_release_handlers_loop_x86");            // continue scanning registered handlers
     emitter.label("__rt_pcntl_release_handlers_state_x86");
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_async_enabled");
-    emitter.instruction("mov QWORD PTR [r9], 0");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // disable asynchronous dispatch during shutdown
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
-    emitter.instruction("mov QWORD PTR [r9], 0");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // clear any interrupted dispatch marker
     emitter.label("__rt_pcntl_release_handlers_drain_x86");
-    emitter.instruction("lea rdi, [rbp - 96]");
+    emitter.instruction("lea rdi, [rbp - 96]");                                 // bridge arg0 = discard-record scratch storage
     abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_signal_next_fn");
-    emitter.instruction("mov r9, QWORD PTR [r9]");
-    emitter.instruction("test r9, r9");
-    emitter.instruction("jz __rt_pcntl_release_handlers_done_x86");
-    emitter.instruction("call r9");
-    emitter.instruction("cmp rax, 1");
-    emitter.instruction("je __rt_pcntl_release_handlers_drain_x86");
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // load the queued-signal reader callback
+    emitter.instruction("test r9, r9");                                         // tolerate a queue that was never initialized
+    emitter.instruction("jz __rt_pcntl_release_handlers_done_x86");             // finish when no reader is available
+    emitter.instruction("call r9");                                             // discard one queued signal record
+    emitter.instruction("cmp rax, 1");                                          // test whether a complete record was consumed
+    emitter.instruction("je __rt_pcntl_release_handlers_drain_x86");            // drain every remaining queued record
     emitter.label("__rt_pcntl_release_handlers_done_x86");
-    emitter.instruction("leave");
-    emitter.instruction("ret");
+    emitter.instruction("leave");                                               // release teardown storage and restore rbp
+    emitter.instruction("ret");                                                 // return after all handler ownership is released
 }

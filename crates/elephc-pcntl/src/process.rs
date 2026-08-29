@@ -47,23 +47,23 @@ impl From<libc::rusage> for ElephcPcntlRUsage {
     /// Copies one target-native `rusage` value into the stable bridge layout.
     fn from(usage: libc::rusage) -> Self {
         Self {
-            ru_oublock: usage.ru_oublock as i64,
-            ru_inblock: usage.ru_inblock as i64,
-            ru_msgsnd: usage.ru_msgsnd as i64,
-            ru_msgrcv: usage.ru_msgrcv as i64,
-            ru_maxrss: usage.ru_maxrss as i64,
-            ru_ixrss: usage.ru_ixrss as i64,
-            ru_idrss: usage.ru_idrss as i64,
-            ru_minflt: usage.ru_minflt as i64,
-            ru_majflt: usage.ru_majflt as i64,
-            ru_nsignals: usage.ru_nsignals as i64,
-            ru_nvcsw: usage.ru_nvcsw as i64,
-            ru_nivcsw: usage.ru_nivcsw as i64,
-            ru_nswap: usage.ru_nswap as i64,
-            ru_utime_tv_usec: usage.ru_utime.tv_usec as i64,
-            ru_utime_tv_sec: usage.ru_utime.tv_sec as i64,
-            ru_stime_tv_usec: usage.ru_stime.tv_usec as i64,
-            ru_stime_tv_sec: usage.ru_stime.tv_sec as i64,
+            ru_oublock: usage.ru_oublock,
+            ru_inblock: usage.ru_inblock,
+            ru_msgsnd: usage.ru_msgsnd,
+            ru_msgrcv: usage.ru_msgrcv,
+            ru_maxrss: usage.ru_maxrss,
+            ru_ixrss: usage.ru_ixrss,
+            ru_idrss: usage.ru_idrss,
+            ru_minflt: usage.ru_minflt,
+            ru_majflt: usage.ru_majflt,
+            ru_nsignals: usage.ru_nsignals,
+            ru_nvcsw: usage.ru_nvcsw,
+            ru_nivcsw: usage.ru_nivcsw,
+            ru_nswap: usage.ru_nswap,
+            ru_utime_tv_usec: usage.ru_utime.tv_usec,
+            ru_utime_tv_sec: usage.ru_utime.tv_sec,
+            ru_stime_tv_usec: usage.ru_stime.tv_usec,
+            ru_stime_tv_sec: usage.ru_stime.tv_sec,
         }
     }
 }
@@ -88,8 +88,8 @@ unsafe fn copy_child_siginfo(info: &libc::siginfo_t) -> ElephcPcntlSigInfo {
     #[cfg(target_os = "linux")]
     {
         let mut stable = stable;
-        stable.utime = info.si_utime() as i64;
-        stable.stime = info.si_stime() as i64;
+        stable.utime = info.si_utime();
+        stable.stime = info.si_stime();
         stable.present |= SIGINFO_UTIME | SIGINFO_STIME;
         stable
     }

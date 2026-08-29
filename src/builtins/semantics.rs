@@ -141,37 +141,6 @@ pub enum BuiltinTargetSupport {
     MacOs,
 }
 
-impl BuiltinTargetSupport {
-    /// Returns whether this semantic contract is implemented for `target`.
-    pub const fn supports(self, target: crate::codegen_support::platform::Target) -> bool {
-        use crate::codegen_support::platform::{AppleVariant, Platform};
-
-        match self {
-            Self::All => !matches!(target.platform, Platform::Windows),
-            Self::HostOnly => match target.platform {
-                Platform::Linux => true,
-                Platform::MacOS => matches!(target.apple_variant, AppleVariant::MacOS),
-                Platform::Windows => false,
-            },
-            Self::Linux => matches!(target.platform, Platform::Linux),
-            Self::MacOs => {
-                matches!(target.platform, Platform::MacOS)
-                    && matches!(target.apple_variant, AppleVariant::MacOS)
-            }
-        }
-    }
-
-    /// Returns whether this semantic contract is implemented on macOS.
-    pub const fn supports_macos(self) -> bool {
-        matches!(self, Self::All | Self::HostOnly | Self::MacOs)
-    }
-
-    /// Returns whether this semantic contract is implemented on Linux.
-    pub const fn supports_linux(self) -> bool {
-        matches!(self, Self::All | Self::HostOnly | Self::Linux)
-    }
-}
-
 /// Runtime functions that a backend-neutral lowering may emit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuiltinRuntimeFunctions {
@@ -192,6 +161,8 @@ pub enum BuiltinArgumentLowering {
     Date,
     /// Preserve JSON decode's source-sensitive option handling.
     JsonDecode,
+    /// Keep omitted trailing `pcntl_exec()` defaults absent after named/spread planning.
+    PcntlExec,
     /// Lower a statically known callback descriptor before its subject.
     PregReplaceCallback,
     /// Keep positional regex operands in raw source order.
@@ -485,7 +456,7 @@ pub const fn host_only_runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSeman
 /// Builds the shared descriptor for one typed PCNTL bridge operation.
 pub const fn pcntl_semantics(target: crate::ir::PcntlRuntime) -> BuiltinSemantics {
     let target_support = match target.target_support() {
-        crate::ir::PcntlTargetSupport::All => BuiltinTargetSupport::All,
+        crate::ir::PcntlTargetSupport::All => BuiltinTargetSupport::HostOnly,
         crate::ir::PcntlTargetSupport::Linux => BuiltinTargetSupport::Linux,
         crate::ir::PcntlTargetSupport::MacOs => BuiltinTargetSupport::MacOs,
     };

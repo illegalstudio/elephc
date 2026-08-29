@@ -2,7 +2,7 @@
 title: "iconv_mime_encode()"
 description: "Encodes one header field as RFC 2047 encoded-words."
 sidebar:
-  order: 454
+  order: 486
 ---
 
 ## iconv_mime_encode()

@@ -153,7 +153,7 @@ impl Checker {
                 return Err(CompileError::new(
                     span,
                     &format!(
-                        "{}() is not available for the {:?} target",
+                        "{}() is not available for the {} target",
                         def.name, self.target
                     ),
                 ));

@@ -182,7 +182,29 @@ pub(super) fn builtin_is_available_for_target(
     target: crate::codegen_support::platform::Target,
 ) -> bool {
     crate::builtins::registry::lookup(name)
-        .map(|def| def.spec.semantics.target_support.supports(target))
+        .map(|def| {
+            use crate::builtins::semantics::BuiltinTargetSupport;
+            use crate::codegen_support::platform::Platform;
+
+            match target.platform {
+                Platform::MacOS if target.is_ios() => {
+                    matches!(def.spec.semantics.target_support, BuiltinTargetSupport::All)
+                }
+                Platform::MacOS => matches!(
+                    def.spec.semantics.target_support,
+                    BuiltinTargetSupport::All
+                        | BuiltinTargetSupport::HostOnly
+                        | BuiltinTargetSupport::MacOs
+                ),
+                Platform::Linux => matches!(
+                    def.spec.semantics.target_support,
+                    BuiltinTargetSupport::All
+                        | BuiltinTargetSupport::HostOnly
+                        | BuiltinTargetSupport::Linux
+                ),
+                Platform::Windows => false,
+            }
+        })
         .unwrap_or(true)
 }
 
