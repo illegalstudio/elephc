@@ -62,7 +62,9 @@ pub unsafe extern "C" fn __elephc_eval_scope_set(
     } else {
         ScopeCellOwnership::Borrowed
     };
-    if let Some(replaced) = scope.set(name, RuntimeCellHandle::from_raw(cell), ownership) {
+    if let Some(replaced) =
+        scope.set_from_aot(name, RuntimeCellHandle::from_raw(cell), ownership)
+    {
         release_scope_cell(replaced);
     }
     EvalStatus::Ok.code()

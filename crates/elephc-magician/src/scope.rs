@@ -11,7 +11,7 @@
 //! - Scope entries store runtime-cell handles only; the eval bridge does not
 //!   introduce a second PHP value representation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::context::EvalReferenceTarget;
 use crate::value::RuntimeCellHandle;
@@ -141,6 +141,7 @@ impl ScopeEntry {
 /// Materialized activation scope passed opaquely across the eval ABI.
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
+    aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
     generation: u64,
@@ -151,6 +152,7 @@ impl ElephcEvalScope {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
             generation: 0,
@@ -175,6 +177,18 @@ impl ElephcEvalScope {
             ScopeEntry::present(cell, ownership, self.generation),
         );
         owned_cell_except(previous, cell)
+    }
+
+    /// Stores a cell synchronized by generated code and marks its name as AOT-visible.
+    pub fn set_from_aot(
+        &mut self,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+        ownership: ScopeCellOwnership,
+    ) -> Option<RuntimeCellHandle> {
+        let name = name.into();
+        self.aot_visible_names.insert(name.clone());
+        self.set(name, cell, ownership)
     }
 
     /// Stores a variable while preserving existing PHP reference aliases.
@@ -331,6 +345,14 @@ impl ElephcEvalScope {
             .map(ScopeEntry::cell)
     }
 
+    /// Returns visible cells whose names are synchronized back to generated AOT storage.
+    pub fn aot_visible_cells(&self) -> Vec<RuntimeCellHandle> {
+        self.aot_visible_names
+            .iter()
+            .filter_map(|name| self.visible_cell(name))
+            .collect()
+    }
+
     /// Returns true when the scope contains a visible value for the named variable.
     pub fn contains_visible(&self, name: &str) -> bool {
         self.visible_cell(name).is_some()
@@ -383,6 +405,7 @@ impl ElephcEvalScope {
 
     /// Removes every entry and returns runtime cells owned by the scope.
     pub fn drain_owned_cells(&mut self) -> Vec<RuntimeCellHandle> {
+        self.aot_visible_names.clear();
         self.reference_targets.clear();
         self.entries
             .drain()

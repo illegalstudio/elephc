@@ -26,6 +26,24 @@ fn set_records_visible_dirty_cell() {
     assert_eq!(scope.visible_cell("x"), Some(cell));
 }
 
+/// Verifies only generated-code synchronized names participate in AOT escape validation.
+#[test]
+fn aot_visible_cells_exclude_interpreter_only_locals() {
+    let mut scope = ElephcEvalScope::new();
+    let native = RuntimeCellHandle::from_raw(1usize as *mut crate::value::RuntimeCell);
+    let interpreter_only =
+        RuntimeCellHandle::from_raw(2usize as *mut crate::value::RuntimeCell);
+
+    scope.set_from_aot("native", native, ScopeCellOwnership::Borrowed);
+    scope.set(
+        "interpreter_only",
+        interpreter_only,
+        ScopeCellOwnership::Borrowed,
+    );
+
+    assert_eq!(scope.aot_visible_cells(), vec![native]);
+}
+
 /// Verifies unsetting a variable creates a dirty marker that is not visible.
 #[test]
 fn unset_records_missing_dirty_marker() {

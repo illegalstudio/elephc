@@ -1133,7 +1133,93 @@ fn test_pcntl_detached_eval_handler_cannot_escape_to_aot() {
     assert!(!out.success, "foreign eval handler unexpectedly escaped");
     assert_eq!(out.stdout, "before|");
     assert!(
-        out.stderr.contains("Fatal error: eval() runtime failed"),
+        out.stderr
+            .contains("Fatal error: PCNTL handler/closure cannot escape its eval context"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+/// Refuses a detached eval handler nested inside an array returned to AOT.
+#[test]
+fn test_pcntl_detached_eval_handler_cannot_escape_in_returned_array() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function register_array_export_handler(): void {
+            eval('pcntl_signal(SIGUSR1, function(): void { echo "escaped"; });');
+        }
+        register_array_export_handler();
+        echo "before|";
+        $wrapped = eval('
+            $handler = pcntl_signal_get_handler(SIGUSR1);
+            pcntl_signal(SIGUSR1, SIG_DFL);
+            return ["handler" => $handler];
+        ');
+        echo "after";"#,
+    );
+    assert!(!out.success, "array-wrapped eval handler unexpectedly escaped");
+    assert_eq!(out.stdout, "before|");
+    assert!(
+        out.stderr
+            .contains("Fatal error: PCNTL handler/closure cannot escape its eval context"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+/// Refuses a detached eval handler nested inside an object returned to AOT.
+#[test]
+fn test_pcntl_detached_eval_handler_cannot_escape_in_returned_object() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function register_object_export_handler(): void {
+            eval('pcntl_signal(SIGUSR1, function(): void { echo "escaped"; });');
+        }
+        register_object_export_handler();
+        echo "before|";
+        $wrapped = eval('
+            class HandlerBox { public mixed $handler; }
+            $handler = pcntl_signal_get_handler(SIGUSR1);
+            pcntl_signal(SIGUSR1, SIG_DFL);
+            $box = new HandlerBox();
+            $box->handler = $handler;
+            return $box;
+        ');
+        $wrapped->handler();"#,
+    );
+    assert!(!out.success, "object-wrapped eval handler unexpectedly escaped");
+    assert_eq!(out.stdout, "before|");
+    assert!(
+        out.stderr
+            .contains("Fatal error: PCNTL handler/closure cannot escape its eval context"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
+/// Refuses a detached eval handler assigned through `$GLOBALS` before AOT can invoke it.
+#[test]
+fn test_pcntl_detached_eval_handler_cannot_escape_through_globals() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function register_global_export_handler(): void {
+            eval('pcntl_signal(SIGUSR1, function(): void { echo "escaped"; });');
+        }
+        $handler = null;
+        register_global_export_handler();
+        echo "before|";
+        eval('
+            $handler = pcntl_signal_get_handler(SIGUSR1);
+            pcntl_signal(SIGUSR1, SIG_DFL);
+            $GLOBALS["handler"] = $handler;
+        ');
+        call_user_func($handler);"#,
+    );
+    assert!(!out.success, "global eval handler unexpectedly escaped");
+    assert_eq!(out.stdout, "before|");
+    assert!(
+        out.stderr
+            .contains("Fatal error: PCNTL handler/closure cannot escape its eval context"),
         "unexpected stderr: {}",
         out.stderr
     );
@@ -1246,6 +1332,33 @@ fn test_pcntl_aot_and_eval_dispatch_do_not_consume_each_others_records() {
         out,
         "eval-empty|aot|registered|aot-empty|eval-handler|done"
     );
+}
+
+/// Verifies a later eval registration owns delivery after replacing an AOT handler.
+#[test]
+fn test_pcntl_eval_later_signal_installer_owns_delivery_for_same_signal() {
+    let out = compile_and_run(
+        r#"<?php
+        extern "System" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        $seen = "";
+        pcntl_signal(SIGUSR1, function() use (&$seen): void { $seen = "aot"; });
+        echo eval('
+            pcntl_signal(SIGUSR1, function(): void { echo "eval|"; });
+            return "installed|";
+        ');
+        kill(getpid(), SIGUSR1);
+        pcntl_signal_dispatch();
+        echo ($seen === "" ? "aot-empty|" : "aot-ran|");
+        echo eval('
+            pcntl_signal_dispatch();
+            pcntl_signal(SIGUSR1, SIG_DFL);
+            return "done";
+        ');"#,
+    );
+    assert_eq!(out, "installed|aot-empty|eval|done");
 }
 
 /// Rejects Fiber switches from an eval-owned signal handler through the shared runtime guard.

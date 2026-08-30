@@ -360,12 +360,12 @@ mod tests {
                     })
                 })
         });
-        let mut pcntl_record_count = 0;
+        let mut pcntl_names = std::collections::BTreeSet::new();
         for process_builtin in pcntl_records {
-            pcntl_record_count += 1;
             let name = process_builtin["name"]
                 .as_str()
                 .expect("PCNTL builtin name");
+            pcntl_names.insert(name);
             let support_kind = process_builtin["semantics"]["target_support_kind"]
                 .as_str()
                 .expect("PCNTL target support kind");
@@ -383,7 +383,49 @@ mod tests {
                 "{name} must not advertise iOS availability",
             );
         }
-        assert!(pcntl_record_count > 0, "PCNTL records present");
+        let expected_pcntl_names = [
+            "pcntl_alarm",
+            "pcntl_async_signals",
+            "pcntl_daemon",
+            "pcntl_errno",
+            "pcntl_exec",
+            "pcntl_fork",
+            "pcntl_get_last_error",
+            "pcntl_getcpu",
+            "pcntl_getcpuaffinity",
+            "pcntl_getpriority",
+            "pcntl_getqos_class",
+            "pcntl_setcpuaffinity",
+            "pcntl_setns",
+            "pcntl_setpriority",
+            "pcntl_setqos_class",
+            "pcntl_signal",
+            "pcntl_signal_dispatch",
+            "pcntl_signal_get_handler",
+            "pcntl_sigprocmask",
+            "pcntl_sigtimedwait",
+            "pcntl_sigwaitinfo",
+            "pcntl_strerror",
+            "pcntl_unshare",
+            "pcntl_wait",
+            "pcntl_waitid",
+            "pcntl_waitpid",
+            "pcntl_wexitstatus",
+            "pcntl_wifcontinued",
+            "pcntl_wifexited",
+            "pcntl_wifsignaled",
+            "pcntl_wifstopped",
+            "pcntl_wstopsig",
+            "pcntl_wtermsig",
+            "posix_setpgid",
+            "posix_setsid",
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            pcntl_names, expected_pcntl_names,
+            "every exported PCNTL bridge builtin must remain in the pinned host-only inventory",
+        );
     }
 
     /// Verifies the include-internal export is a strict superset of the PHP-visible one and

@@ -17,6 +17,7 @@ pub enum EvalStatus {
     UncaughtThrowable,
     UnsupportedConstruct,
     AbiMismatch,
+    EscapingPcntlCallable,
 }
 
 impl EvalStatus {
@@ -29,6 +30,7 @@ impl EvalStatus {
             Self::UncaughtThrowable => 3,
             Self::UnsupportedConstruct => 4,
             Self::AbiMismatch => 5,
+            Self::EscapingPcntlCallable => 6,
         }
     }
 }
@@ -81,5 +83,11 @@ mod tests {
             EvalParseError::UnexpectedToken.status(),
             EvalStatus::ParseError
         );
+    }
+
+    /// Pins the ABI code used for the dedicated eval-to-AOT PCNTL escape diagnostic.
+    #[test]
+    fn escaping_pcntl_callable_status_code_is_stable() {
+        assert_eq!(EvalStatus::EscapingPcntlCallable.code(), 6);
     }
 }

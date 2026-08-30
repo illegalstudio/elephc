@@ -306,6 +306,49 @@ fn signal_handler_queues_a_stable_record() {
     assert_ne!(info.present & SIGINFO_SIGNO, 0);
 }
 
+/// Pins the PHP/POSIX limit: standard signals coalesce before the queued handler runs.
+#[test]
+fn standard_non_realtime_signals_coalesce_before_php_style_handler_runs() {
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    let mut original = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let mut selected = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    unsafe {
+        libc::sigemptyset(&mut selected);
+        libc::sigaddset(&mut selected, libc::SIGUSR1);
+        assert_eq!(libc::sigprocmask(libc::SIG_BLOCK, &selected, &mut original), 0);
+    }
+    let mut info = ElephcPcntlSigInfo::default();
+    while unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) } == 1 {}
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 2, 1, PCNTL_SIGNAL_OWNER_AOT),
+        1
+    );
+    assert_eq!(unsafe { libc::raise(libc::SIGUSR1) }, 0);
+    assert_eq!(unsafe { libc::raise(libc::SIGUSR1) }, 0);
+    unsafe {
+        assert_eq!(
+            libc::sigprocmask(libc::SIG_UNBLOCK, &selected, std::ptr::null_mut()),
+            0
+        );
+    }
+
+    let mut delivered = 0;
+    while unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) } == 1 {
+        delivered += 1;
+    }
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 0, 1, PCNTL_SIGNAL_OWNER_AOT),
+        1
+    );
+    unsafe {
+        assert_eq!(
+            libc::sigprocmask(libc::SIG_SETMASK, &original, std::ptr::null_mut()),
+            0
+        );
+    }
+    assert_eq!(delivered, 1);
+}
+
 /// Keeps AOT and eval records isolated even when the other backend drains first.
 #[test]
 fn signal_queues_are_routed_to_the_registering_backend() {
@@ -382,7 +425,7 @@ fn later_signal_installer_owns_delivery_for_same_signal() {
     );
 }
 
-/// Replays every atomically counted record after a saturated pipe fallback.
+/// Replays every retained record after a saturated pipe falls back to the spill queue.
 #[test]
 fn signal_queue_overflow_preserves_delivery_count() {
     let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
@@ -429,9 +472,9 @@ fn signal_queue_overflow_preserves_delivery_count() {
     assert_eq!(delivered, DELIVERY_COUNT);
 }
 
-/// Pins the bounded overflow contract: counts survive, but one signal reuses its latest siginfo.
+/// Verifies overflow retains each delivery's distinct siginfo snapshot in FIFO order.
 #[test]
-fn signal_queue_overflow_reuses_latest_siginfo_snapshot() {
+fn signal_queue_overflow_preserves_distinct_siginfo_snapshots() {
     let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
     let mut info = ElephcPcntlSigInfo::default();
     while unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) } == 1 {}
@@ -442,20 +485,70 @@ fn signal_queue_overflow_reuses_latest_siginfo_snapshot() {
         present: SIGINFO_SIGNO | SIGINFO_STATUS,
         ..ElephcPcntlSigInfo::default()
     };
-    let latest = ElephcPcntlSigInfo {
+    let second = ElephcPcntlSigInfo {
         status: 22,
         ..first
     };
-    queue_signal_overflow_for_test(PCNTL_SIGNAL_OWNER_AOT, &first);
-    queue_signal_overflow_for_test(PCNTL_SIGNAL_OWNER_AOT, &latest);
+    assert!(queue_signal_overflow_for_test(
+        PCNTL_SIGNAL_OWNER_AOT,
+        &first
+    ));
+    assert!(queue_signal_overflow_for_test(
+        PCNTL_SIGNAL_OWNER_AOT,
+        &second
+    ));
 
-    for _ in 0..2 {
+    for expected_status in [11, 22] {
         assert_eq!(
             unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) },
             1
         );
-        assert_eq!(info.status, 22);
+        assert_eq!(info.status, expected_status);
         assert_eq!(info.present, SIGINFO_SIGNO | SIGINFO_STATUS);
+    }
+    assert_eq!(
+        unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) },
+        0
+    );
+}
+
+/// Pins the PHP-style preallocated limit: overflow drops newer records after 4096 entries.
+#[test]
+fn signal_queue_overflow_drops_newer_records_after_4096_record_capacity() {
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    let mut info = ElephcPcntlSigInfo::default();
+    while unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) } == 1 {}
+    assert_eq!(signal_overflow_capacity_for_test(), 4096);
+
+    for status in 0..signal_overflow_capacity_for_test() {
+        let record = ElephcPcntlSigInfo {
+            signo: i64::from(libc::SIGUSR1),
+            status: status as i64,
+            present: SIGINFO_SIGNO | SIGINFO_STATUS,
+            ..ElephcPcntlSigInfo::default()
+        };
+        assert!(queue_signal_overflow_for_test(
+            PCNTL_SIGNAL_OWNER_AOT,
+            &record
+        ));
+    }
+    let dropped = ElephcPcntlSigInfo {
+        signo: i64::from(libc::SIGUSR1),
+        status: 4096,
+        present: SIGINFO_SIGNO | SIGINFO_STATUS,
+        ..ElephcPcntlSigInfo::default()
+    };
+    assert!(!queue_signal_overflow_for_test(
+        PCNTL_SIGNAL_OWNER_AOT,
+        &dropped
+    ));
+
+    for expected_status in 0..signal_overflow_capacity_for_test() {
+        assert_eq!(
+            unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) },
+            1
+        );
+        assert_eq!(info.status, expected_status as i64);
     }
     assert_eq!(
         unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) },
@@ -474,7 +567,10 @@ fn signal_queue_overflow_is_not_inherited_by_forked_children() {
         present: SIGINFO_SIGNO,
         ..ElephcPcntlSigInfo::default()
     };
-    queue_signal_overflow_for_test(PCNTL_SIGNAL_OWNER_AOT, &overflow);
+    assert!(queue_signal_overflow_for_test(
+        PCNTL_SIGNAL_OWNER_AOT,
+        &overflow
+    ));
 
     let pid = elephc_pcntl_fork();
     assert!(

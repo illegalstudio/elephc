@@ -112,22 +112,68 @@ unsafe fn execute_parsed_eval(
     match interpreter::execute_program_outcome_with_context(context, program, scope, &mut values) {
         Ok(outcome) => {
             if let interpreter::EvalOutcome::Value(result) = &outcome {
-                let exports_foreign_callable = context
-                    .pcntl_foreign_callable_owner(*result)
-                    .is_some()
-                    || values
-                        .object_identity(*result)
-                        .ok()
-                        .and_then(|identity| context.closure_object_target(identity))
-                        .is_some_and(|target| target.contains_foreign_context());
-                if exports_foreign_callable {
-                    return EvalStatus::RuntimeFatal.code();
+                match interpreter::value_contains_foreign_pcntl_callable(
+                    *result,
+                    context,
+                    &mut values,
+                ) {
+                    Ok(true) => {
+                        let _ = values.release(*result);
+                        return EvalStatus::EscapingPcntlCallable.code();
+                    }
+                    Ok(false) => {}
+                    Err(status) => {
+                        let _ = values.release(*result);
+                        return status.code();
+                    }
+                }
+            }
+            let escape_candidates = eval_escape_scope_cells(context, scope);
+            for candidate in escape_candidates {
+                match interpreter::value_contains_foreign_pcntl_callable(
+                    candidate,
+                    context,
+                    &mut values,
+                ) {
+                    Ok(true) => {
+                        if let interpreter::EvalOutcome::Value(result) = &outcome {
+                            let _ = values.release(*result);
+                        }
+                        return EvalStatus::EscapingPcntlCallable.code();
+                    }
+                    Ok(false) => {}
+                    Err(status) => {
+                        if let interpreter::EvalOutcome::Value(result) = &outcome {
+                            let _ = values.release(*result);
+                        }
+                        return status.code();
+                    }
                 }
             }
             write_outcome(outcome, out).code()
         }
         Err(status) => status.code(),
     }
+}
+
+/// Collects every visible local and global cell that could cross the eval-to-AOT boundary.
+#[cfg(not(test))]
+fn eval_escape_scope_cells(
+    context: &ElephcEvalContext,
+    scope: &ElephcEvalScope,
+) -> Vec<crate::value::RuntimeCellHandle> {
+    let mut cells = scope.aot_visible_cells();
+    if let Some(global_scope) = context.global_scope_ptr() {
+        let current_scope = scope as *const ElephcEvalScope as *mut ElephcEvalScope;
+        if global_scope != current_scope {
+            if let Some(global_scope) = unsafe { global_scope.as_ref() } {
+                cells.extend(global_scope.aot_visible_cells());
+            }
+        }
+    }
+    cells.sort_unstable_by_key(|cell| cell.as_ptr() as usize);
+    cells.dedup_by_key(|cell| cell.as_ptr() as usize);
+    cells
 }
 
 /// Keeps crate unit tests independent from generated runtime assembly wrappers.

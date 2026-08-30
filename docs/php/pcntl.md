@@ -20,10 +20,11 @@ elephc --with-pcntl worker.php
 
 `extension_loaded('pcntl')` reports `true` whenever the bridge is linked.
 
-PCNTL is intentionally unavailable for iOS targets and for `--emit cdylib` or
-`--emit staticlib`. A hosted library shares its embedding process, so forking,
-replacing the process image, or changing process-wide signal state would escape
-the recoverable export boundary and affect the host application.
+PCNTL is intentionally unavailable for both `ios-arm64` and `ios-sim-arm64`, and
+for `--emit cdylib` or `--emit staticlib`. A hosted library shares its embedding
+process, so forking, replacing the process image, or changing process-wide
+signal state would escape the recoverable export boundary and affect the host
+application.
 
 ## Fork, wait, and exec
 
@@ -115,23 +116,25 @@ The native OS handler only enqueues a stable record. PHP callables run later at
 - signals stay masked while the snapshot is processed;
 - an exception stops the current snapshot, discards its remaining records,
   restores the signal mask and dispatch state, then propagates normally;
-- starting, resuming, or suspending a Fiber from a handler throws `FiberError`
-  because switching execution contexts during dispatch is unsafe.
+- starting, resuming, throwing into, or suspending a Fiber from a handler throws
+  `FiberError` because switching execution contexts during dispatch is unsafe.
 
 `pcntl_signal_get_handler()` returns the registered callable or integer
-disposition. Eval callables keep their owning context alive when returned from
-a later eval call, remain invokable after the signal is unregistered, and can
-be passed through `Closure::fromCallable()`. An invalid signal number throws
-`ValueError`. If the OS rejects a valid registration, `pcntl_signal()` emits
-`E_WARNING` and returns `false`.
+disposition. A later eval context may fetch and invoke an eval handler, or wrap
+it with `Closure::fromCallable()`, while the owning context remains pinned. That
+foreign descriptor cannot cross from eval into compiled storage: direct results and
+nested array/object/global values that contain it are refused. An invalid signal
+number throws `ValueError`. If the OS rejects a valid registration,
+`pcntl_signal()` emits `E_WARNING` and returns `false`.
 
 An eval context detached by a registered handler can therefore remain alive for
 the rest of the process. It is reclaimed only after its last handler is
 replaced by another callable, `SIG_DFL`, or `SIG_IGN`; it is never freed while a
 native signal trampoline still names it. A foreign eval handler may be fetched,
-wrapped, and invoked inside a later eval context, but returning that
-context-local descriptor across the `eval()` result boundary into compiled code
-is refused before the owner can be freed.
+wrapped, and invoked inside a later eval context. Returning or assigning that
+context-local descriptor across the eval-to-AOT boundary is refused before the
+owner can be freed, including when an array, object, or `$GLOBALS` entry hides
+the descriptor.
 
 Signal masks use `pcntl_sigprocmask()`. Linux additionally provides
 `pcntl_sigwaitinfo()` and `pcntl_sigtimedwait()` for synchronous signal receipt.
@@ -178,11 +181,14 @@ make their descriptors interchangeable.
 
 Each pending-signal queue uses a nonblocking process-local pipe so the OS
 handler remains async-signal-safe. If the pipe fills, later deliveries spill
-into preallocated per-signal atomic counters and are replayed after pipe
-records. This fallback has bounded information fidelity: delivery counts are
-retained, but every overflowed delivery of one signal is replayed with the one
-latest captured siginfo snapshot. Standard non-realtime signals may still be
-coalesced by the operating system before the handler runs.
+into a preallocated 4096-record lock-free queue and are replayed in FIFO order
+after pipe records; every retained delivery keeps its own siginfo snapshot. If
+both the pipe and those 4096 spill slots are full, newer deliveries are dropped.
+PHP 8.5 has the same bounded-overload rule: it preallocates `num_signals`
+pending records and drops a delivery when that pool is exhausted. Independently,
+the operating system may coalesce repeated standard non-realtime signals while
+one is already pending, before either PHP or elephc's handler runs; realtime
+signals retain the OS's queued-delivery semantics.
 As in PHP, applications should keep handlers short and move work into their
 normal event loop. PCNTL is unavailable on Windows because Windows is not in
 elephc's supported target matrix.

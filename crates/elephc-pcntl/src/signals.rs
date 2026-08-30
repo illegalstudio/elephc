@@ -7,12 +7,14 @@
 //!
 //! Key details:
 //! - Async handlers route fixed-size records to backend-specific nonblocking self-pipes.
-//! - Saturated pipes spill into preallocated atomic slots, preserving every delivery count.
+//! - Saturated pipes spill into preallocated lock-free queues that retain each siginfo record.
 //! - Dispatch blocks signals so callers drain one stable snapshot and restore the prior mask.
 //! - The child side of `fork()` replaces inherited descriptors before unmasking signals.
 
 use crate::{current_errno, errno_location, record_errno, LAST_ERROR};
-use std::sync::atomic::{AtomicI32, AtomicI64, AtomicU64, Ordering};
+use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 /// Selects the generated AOT runtime's signal-handler queue.
@@ -21,11 +23,11 @@ pub const PCNTL_SIGNAL_OWNER_AOT: libc::c_int = 1;
 pub const PCNTL_SIGNAL_OWNER_EVAL: libc::c_int = 2;
 
 const SIGNAL_OWNER_COUNT: usize = 2;
-const SIGNAL_SLOT_COUNT: usize = 128;
+const SIGNAL_OVERFLOW_CAPACITY: usize = 4096;
 
 static SIGNAL_PIPES: OnceLock<SignalPipes> = OnceLock::new();
-static OVERFLOW_SIGNALS: [[OverflowSignal; SIGNAL_SLOT_COUNT]; SIGNAL_OWNER_COUNT] =
-    [const { [const { OverflowSignal::new() }; SIGNAL_SLOT_COUNT] }; SIGNAL_OWNER_COUNT];
+static OVERFLOW_QUEUES: [OverflowQueue; SIGNAL_OWNER_COUNT] =
+    [const { OverflowQueue::new() }; SIGNAL_OWNER_COUNT];
 
 /// Backend-specific descriptor pairs used to keep AOT and eval drains independent.
 struct SignalPipes {
@@ -42,91 +44,118 @@ struct SignalPipe {
     error: AtomicI32,
 }
 
-/// Lock-free fallback for records delivered while one backend's self-pipe is full.
-struct OverflowSignal {
-    count: AtomicU64,
-    error: AtomicI64,
-    code: AtomicI64,
-    status: AtomicI64,
-    pid: AtomicI64,
-    uid: AtomicI64,
-    utime: AtomicI64,
-    stime: AtomicI64,
-    address: AtomicI64,
-    band: AtomicI64,
-    fd: AtomicI64,
-    present: AtomicU64,
+/// One cell in the bounded multi-producer, single-consumer overflow queue.
+struct OverflowSlot {
+    sequence: AtomicU64,
+    value: UnsafeCell<MaybeUninit<ElephcPcntlSigInfo>>,
 }
 
-impl OverflowSignal {
-    /// Creates one empty preallocated overflow slot.
-    const fn new() -> Self {
+// The sequence protocol grants a producer or the consumer exclusive access before the cell is
+// read or written, so sharing the interior cell across signal handlers is synchronized.
+unsafe impl Sync for OverflowSlot {}
+
+impl OverflowSlot {
+    /// Creates one uninitialized queue cell with its initial sequence number.
+    const fn new(sequence: u64) -> Self {
         Self {
-            count: AtomicU64::new(0),
-            error: AtomicI64::new(0),
-            code: AtomicI64::new(0),
-            status: AtomicI64::new(0),
-            pid: AtomicI64::new(0),
-            uid: AtomicI64::new(0),
-            utime: AtomicI64::new(0),
-            stime: AtomicI64::new(0),
-            address: AtomicI64::new(0),
-            band: AtomicI64::new(0),
-            fd: AtomicI64::new(0),
-            present: AtomicU64::new(0),
+            sequence: AtomicU64::new(sequence),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+        }
+    }
+}
+
+/// Lock-free per-delivery fallback used when one backend's self-pipe is full.
+struct OverflowQueue {
+    enqueue_position: AtomicU64,
+    dequeue_position: AtomicU64,
+    slots: [OverflowSlot; SIGNAL_OVERFLOW_CAPACITY],
+}
+
+impl OverflowQueue {
+    /// Creates one empty preallocated overflow queue.
+    const fn new() -> Self {
+        let mut slots = [const { OverflowSlot::new(0) }; SIGNAL_OVERFLOW_CAPACITY];
+        let mut index = 0;
+        while index < SIGNAL_OVERFLOW_CAPACITY {
+            slots[index] = OverflowSlot::new(index as u64);
+            index += 1;
+        }
+        Self {
+            enqueue_position: AtomicU64::new(0),
+            dequeue_position: AtomicU64::new(0),
+            slots,
         }
     }
 
-    /// Publishes one record and increments its pending delivery count without allocating.
-    fn push(&self, info: &ElephcPcntlSigInfo) {
-        self.error.store(info.error, Ordering::Relaxed);
-        self.code.store(info.code, Ordering::Relaxed);
-        self.status.store(info.status, Ordering::Relaxed);
-        self.pid.store(info.pid, Ordering::Relaxed);
-        self.uid.store(info.uid, Ordering::Relaxed);
-        self.utime.store(info.utime, Ordering::Relaxed);
-        self.stime.store(info.stime, Ordering::Relaxed);
-        self.address.store(info.address, Ordering::Relaxed);
-        self.band.store(info.band, Ordering::Relaxed);
-        self.fd.store(info.fd, Ordering::Relaxed);
-        self.present.store(info.present, Ordering::Relaxed);
-        let _ = self.count.fetch_update(
-            Ordering::Release,
-            Ordering::Relaxed,
-            |count| Some(count.saturating_add(1)),
-        );
+    /// Publishes one complete siginfo record without allocating, returning false when full.
+    fn push(&self, info: &ElephcPcntlSigInfo) -> bool {
+        let mut position = self.enqueue_position.load(Ordering::Relaxed);
+        loop {
+            let slot = &self.slots[position as usize % SIGNAL_OVERFLOW_CAPACITY];
+            let sequence = slot.sequence.load(Ordering::Acquire);
+            let difference = sequence.wrapping_sub(position) as i64;
+            if difference == 0 {
+                match self.enqueue_position.compare_exchange_weak(
+                    position,
+                    position.wrapping_add(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => {
+                        unsafe { (*slot.value.get()).write(*info) };
+                        slot.sequence
+                            .store(position.wrapping_add(1), Ordering::Release);
+                        return true;
+                    }
+                    Err(observed) => position = observed,
+                }
+            } else if difference < 0 {
+                return false;
+            } else {
+                position = self.enqueue_position.load(Ordering::Relaxed);
+            }
+        }
     }
 
-    /// Claims one pending delivery and reconstructs its latest stable signal information.
-    fn pop(&self, signal: usize) -> Option<ElephcPcntlSigInfo> {
-        self.count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                if count == 0 {
-                    None
-                } else {
-                    Some(count - 1)
+    /// Claims and returns the oldest complete overflow record.
+    fn pop(&self) -> Option<ElephcPcntlSigInfo> {
+        let mut position = self.dequeue_position.load(Ordering::Relaxed);
+        loop {
+            let slot = &self.slots[position as usize % SIGNAL_OVERFLOW_CAPACITY];
+            let sequence = slot.sequence.load(Ordering::Acquire);
+            let difference = sequence.wrapping_sub(position.wrapping_add(1)) as i64;
+            if difference == 0 {
+                match self.dequeue_position.compare_exchange_weak(
+                    position,
+                    position.wrapping_add(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => {
+                        let info = unsafe { (*slot.value.get()).assume_init_read() };
+                        slot.sequence.store(
+                            position.wrapping_add(SIGNAL_OVERFLOW_CAPACITY as u64),
+                            Ordering::Release,
+                        );
+                        return Some(info);
+                    }
+                    Err(observed) => position = observed,
                 }
-            })
-            .ok()?;
-        Some(ElephcPcntlSigInfo {
-            signo: signal as i64,
-            error: self.error.load(Ordering::Relaxed),
-            code: self.code.load(Ordering::Relaxed),
-            status: self.status.load(Ordering::Relaxed),
-            pid: self.pid.load(Ordering::Relaxed),
-            uid: self.uid.load(Ordering::Relaxed),
-            utime: self.utime.load(Ordering::Relaxed),
-            stime: self.stime.load(Ordering::Relaxed),
-            address: self.address.load(Ordering::Relaxed),
-            band: self.band.load(Ordering::Relaxed),
-            fd: self.fd.load(Ordering::Relaxed),
-            present: self.present.load(Ordering::Relaxed),
-        })
+            } else if difference < 0 {
+                return None;
+            } else {
+                position = self.dequeue_position.load(Ordering::Relaxed);
+            }
+        }
     }
 
     /// Discards inherited pending deliveries when a forked process receives private queues.
     fn clear(&self) {
-        self.count.store(0, Ordering::Release);
+        self.enqueue_position.store(0, Ordering::Relaxed);
+        self.dequeue_position.store(0, Ordering::Relaxed);
+        for (index, slot) in self.slots.iter().enumerate() {
+            slot.sequence.store(index as u64, Ordering::Relaxed);
+        }
     }
 }
 
@@ -438,9 +467,7 @@ pub(crate) fn reset_signal_pipe_after_fork() {
                 libc::close(old_write);
             }
         }
-        for overflow in &OVERFLOW_SIGNALS[owner_index] {
-            overflow.clear();
-        }
+        OVERFLOW_QUEUES[owner_index].clear();
     }
 }
 
@@ -492,7 +519,7 @@ unsafe fn queued_signal_handler(
             std::mem::size_of::<ElephcPcntlSigInfo>(),
         );
         if written != std::mem::size_of::<ElephcPcntlSigInfo>() as isize {
-            OVERFLOW_SIGNALS[owner_index][signal as usize].push(&stable);
+            let _ = OVERFLOW_QUEUES[owner_index].push(&stable);
         }
     }
     *errno_location() = saved_errno;
@@ -593,16 +620,9 @@ pub unsafe extern "C" fn elephc_pcntl_signal_next(
             continue;
         }
         if read == -1 && current_errno() == libc::EAGAIN {
-            for (signal, overflow) in OVERFLOW_SIGNALS[owner_index]
-                .iter()
-                .enumerate()
-                .take(signal_limit() as usize)
-                .skip(1)
-            {
-                if let Some(overflow) = overflow.pop(signal) {
-                    *info = overflow;
-                    return 1;
-                }
+            if let Some(overflow) = OVERFLOW_QUEUES[owner_index].pop() {
+                *info = overflow;
+                return 1;
             }
             return 0;
         }
@@ -620,9 +640,15 @@ pub unsafe extern "C" fn elephc_pcntl_signal_next(
 pub(crate) fn queue_signal_overflow_for_test(
     owner: libc::c_int,
     info: &ElephcPcntlSigInfo,
-) {
+) -> bool {
     let owner_index = signal_owner_index(owner).expect("test owner must be valid");
-    OVERFLOW_SIGNALS[owner_index][info.signo as usize].push(info);
+    OVERFLOW_QUEUES[owner_index].push(info)
+}
+
+/// Returns the fixed per-backend overflow capacity for deterministic saturation tests.
+#[cfg(test)]
+pub(crate) const fn signal_overflow_capacity_for_test() -> usize {
+    SIGNAL_OVERFLOW_CAPACITY
 }
 
 /// Blocks signal delivery while one dispatcher drains the queue snapshot.

@@ -45,6 +45,7 @@ mod tests {
         let macos = Target::new(Platform::MacOS, Arch::AArch64);
         let linux = Target::new(Platform::Linux, Arch::AArch64);
         let ios = Target::new_apple(Arch::AArch64, AppleVariant::IOS);
+        let ios_sim = Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator);
         assert_eq!(value(macos, "SIGCHLD"), Some(20));
         assert_eq!(value(linux, "SIGCHLD"), Some(17));
         assert_eq!(value(macos, "PCNTL_EAGAIN"), Some(35));
@@ -52,6 +53,7 @@ mod tests {
         assert_eq!(value(linux, "CLONE_NEWNS"), Some(131_072));
         assert_eq!(value(macos, "CLONE_NEWNS"), None);
         assert!(pcntl_int_constants(ios).is_empty());
+        assert!(pcntl_int_constants(ios_sim).is_empty());
         assert!(is_pcntl_int_constant("PRIO_DARWIN_BG"));
         assert!(!is_pcntl_int_constant("NOT_A_PCNTL_CONSTANT"));
     }

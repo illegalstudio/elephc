@@ -15,10 +15,16 @@ pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     let parse_error_label = ctx.next_label("eval_status_parse_error");
     let throwable_label = ctx.next_label("eval_status_throwable");
     let unsupported_label = ctx.next_label("eval_status_unsupported");
+    let escaping_pcntl_label = ctx.next_label("eval_status_escaping_pcntl_callable");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_PARSE_ERROR, &parse_error_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_UNCAUGHT_THROWABLE, &throwable_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_UNSUPPORTED, &unsupported_label);
+    emit_branch_if_eval_status(
+        ctx,
+        EVAL_STATUS_ESCAPING_PCNTL_CALLABLE,
+        &escaping_pcntl_label,
+    );
     emit_eval_fatal_message(ctx, EVAL_RUNTIME_FATAL_MESSAGE);
     ctx.emitter.label(&parse_error_label);
     emit_eval_fatal_message(ctx, EVAL_PARSE_ERROR_MESSAGE);
@@ -26,6 +32,8 @@ pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     emit_eval_throw_current(ctx);
     ctx.emitter.label(&unsupported_label);
     emit_eval_fatal_message(ctx, EVAL_UNSUPPORTED_MESSAGE);
+    ctx.emitter.label(&escaping_pcntl_label);
+    emit_eval_fatal_message(ctx, EVAL_ESCAPING_PCNTL_CALLABLE_MESSAGE);
     ctx.emitter.label(&ok_label);
 }
 

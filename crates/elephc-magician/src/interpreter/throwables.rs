@@ -64,6 +64,28 @@ pub(in crate::interpreter) fn eval_reject_fiber_switch_during_pcntl_dispatch(
     Ok(())
 }
 
+/// Rejects a switching method on an actual runtime or eval-declared Fiber receiver.
+pub(in crate::interpreter) fn eval_reject_fiber_object_switch_during_pcntl_dispatch(
+    object: RuntimeCellHandle,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Ok(identity) = values.object_identity(object) else {
+        return Ok(());
+    };
+    let class_name = match context.dynamic_object_class(identity) {
+        Some(class) => class.name().to_string(),
+        None => runtime_object_class_name(object, values)?,
+    };
+    eval_reject_fiber_switch_during_pcntl_dispatch(
+        &class_name,
+        method_name,
+        context,
+        values,
+    )
+}
+
 /// Creates and schedules a `TypeError` through eval's normal Throwable channel.
 pub(in crate::interpreter) fn eval_throw_type_error<T>(
     message: &str,

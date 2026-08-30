@@ -312,6 +312,11 @@ fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
     ))
     .into_iter()
     .collect::<BTreeSet<_>>();
+    let ios_sim = elephc::builtin_metadata::php_visible_builtin_names_for_target(
+        Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+    )
+    .into_iter()
+    .collect::<BTreeSet<_>>();
 
     assert!(macos.contains("pcntl_getqos_class"));
     assert!(macos.contains("pcntl_setqos_class"));
@@ -323,16 +328,18 @@ fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
     assert!(linux.contains("pcntl_getcpu"));
     assert!(linux.contains("pcntl_unshare"));
 
-    assert!(!ios.contains("pcntl_fork"));
-    assert!(!ios.contains("pcntl_exec"));
-    assert!(!ios.contains("pcntl_wait"));
-    assert!(!ios.contains("pcntl_alarm"));
-    assert!(!ios.contains("pcntl_signal"));
-    assert!(!ios.contains("pcntl_daemon"));
-    assert!(!ios.contains("posix_setpgid"));
-    assert!(!ios.contains("posix_setsid"));
-    assert!(!ios.contains("pcntl_getcpu"));
-    assert!(!ios.contains("pcntl_getqos_class"));
+    for ios_names in [&ios, &ios_sim] {
+        assert!(!ios_names.contains("pcntl_fork"));
+        assert!(!ios_names.contains("pcntl_exec"));
+        assert!(!ios_names.contains("pcntl_wait"));
+        assert!(!ios_names.contains("pcntl_alarm"));
+        assert!(!ios_names.contains("pcntl_signal"));
+        assert!(!ios_names.contains("pcntl_daemon"));
+        assert!(!ios_names.contains("posix_setpgid"));
+        assert!(!ios_names.contains("posix_setsid"));
+        assert!(!ios_names.contains("pcntl_getcpu"));
+        assert!(!ios_names.contains("pcntl_getqos_class"));
+    }
 }
 
 /// Verifies each backend exposes exactly the signature profile selected by the contract.

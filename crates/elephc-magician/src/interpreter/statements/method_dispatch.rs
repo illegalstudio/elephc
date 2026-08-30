@@ -38,6 +38,12 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
         let evaluated_args = positional_evaluated_arg_values(evaluated_args)?;
         return values.method_call(object, method_name, evaluated_args);
     };
+    eval_reject_fiber_object_switch_during_pcntl_dispatch(
+        object,
+        method_name,
+        context,
+        values,
+    )?;
     if let Some(target) = context.closure_object_target(identity).cloned() {
         if let Some(result) =
             eval_closure_object_method_result(target, method_name, evaluated_args.clone(), context, values)?
@@ -456,12 +462,6 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(object, values)?;
-        eval_reject_fiber_switch_during_pcntl_dispatch(
-            &class_name,
-            method_name,
-            context,
-            values,
-        )?;
         if method_name.eq_ignore_ascii_case("__clone") {
             if let Some((declaring_class, visibility, is_static, is_abstract)) =
                 eval_aot_method_dispatch_metadata(&class_name, method_name, values)?
