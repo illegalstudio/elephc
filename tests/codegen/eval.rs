@@ -16995,8 +16995,12 @@ echo $box->value;');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "Ada");
+}
 
-    for source in [
+/// Verifies eval rejects an explicit untyped set-hook parameter.
+#[test]
+fn test_eval_declared_property_set_hook_rejects_untyped_explicit_parameter() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalUntypedExplicitSetHookParam {
     public string $value {
@@ -17004,6 +17008,17 @@ eval('class EvalUntypedExplicitSetHookParam {
     }
 }');
 "#,
+    );
+    assert!(
+        err.contains("Fatal error: eval()"),
+        "stderr did not contain eval fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects a set-hook parameter narrower than its property type.
+#[test]
+fn test_eval_declared_property_set_hook_rejects_narrow_parameter() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalNarrowSetHookParam {
     public mixed $value {
@@ -17011,13 +17026,11 @@ eval('class EvalNarrowSetHookParam {
     }
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval()"),
-            "stderr did not contain eval fatal diagnostic: {err}"
-        );
-    }
+    );
+    assert!(
+        err.contains("Fatal error: eval()"),
+        "stderr did not contain eval fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval-declared nullsafe and mixed-case property hook reads stay routed.
