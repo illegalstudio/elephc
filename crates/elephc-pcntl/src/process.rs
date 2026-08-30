@@ -282,6 +282,8 @@ pub unsafe extern "C" fn elephc_pcntl_waitid(
     usage: *mut ElephcPcntlRUsage,
 ) -> libc::c_int {
     let mut native_info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    #[cfg(target_os = "macos")]
+    let _ = usage;
     #[cfg(target_os = "linux")]
     let mut native_usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
     #[cfg(target_os = "linux")]
