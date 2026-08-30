@@ -65,6 +65,7 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Mirrors eval handler execution into the generated runtime Fiber-switch guard.
     fn set_pcntl_dispatching(&mut self, active: bool) -> Result<(), EvalStatus> {
+        crate::context::pcntl_runtime::set_fiber_dispatching(active);
         unsafe {
             __elephc_eval_set_pcntl_dispatching(u64::from(active));
         }

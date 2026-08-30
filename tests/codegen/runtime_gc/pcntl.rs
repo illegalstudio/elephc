@@ -33,6 +33,31 @@ fn test_pcntl_waitpid_resource_usage_rebind_is_heap_clean() {
     );
 }
 
+/// Releases PHP 8.5 `waitid` usage written into a previously undefined local at frame exit.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_waitid_resource_usage_writeback_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { exit(7); }
+        $ok = pcntl_waitid(
+            idtype: P_PID,
+            id: $pid,
+            flags: WEXITED,
+            resource_usage: $usage,
+        );
+        echo ($ok ? 'ok' : 'bad') . '|' . count($usage);",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok|17", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr,
+    );
+}
+
 /// Releases a capturing closure retained by the process-wide signal-handler table at exit.
 #[test]
 fn test_pcntl_signal_closure_registration_is_heap_clean() {

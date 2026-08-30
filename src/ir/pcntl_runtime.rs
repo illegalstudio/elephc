@@ -290,7 +290,7 @@ mod tests {
             PcntlRuntime::WaitId.signature(),
             RuntimeCallSignature::Polymorphic {
                 min_operands: 0,
-                max_operands: Some(4),
+                max_operands: Some(5),
             }
         );
     }

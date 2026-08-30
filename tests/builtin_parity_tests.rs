@@ -328,6 +328,9 @@ fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
     assert!(!ios.contains("pcntl_wait"));
     assert!(!ios.contains("pcntl_alarm"));
     assert!(!ios.contains("pcntl_signal"));
+    assert!(!ios.contains("pcntl_daemon"));
+    assert!(!ios.contains("posix_setpgid"));
+    assert!(!ios.contains("posix_setsid"));
     assert!(!ios.contains("pcntl_getcpu"));
     assert!(!ios.contains("pcntl_getqos_class"));
 }

@@ -1109,6 +1109,36 @@ fn test_pcntl_eval_get_detached_handler_remains_callable() {
     assert_eq!(out, "yes|callable|callable|done");
 }
 
+/// Refuses a detached eval handler before its context-local descriptor can escape into AOT.
+#[test]
+fn test_pcntl_detached_eval_handler_cannot_escape_to_aot() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        function register_exported_eval_handler(): void {
+            $word = "escaped";
+            eval('pcntl_signal(SIGUSR1, function() use ($word): void { echo $word; });');
+        }
+        function export_eval_handler_to_aot(): mixed {
+            return eval('
+                $handler = pcntl_signal_get_handler(SIGUSR1);
+                pcntl_signal(SIGUSR1, SIG_DFL);
+                return $handler;
+            ');
+        }
+        register_exported_eval_handler();
+        echo "before|";
+        $handler = export_eval_handler_to_aot();
+        echo "after";"#,
+    );
+    assert!(!out.success, "foreign eval handler unexpectedly escaped");
+    assert_eq!(out.stdout, "before|");
+    assert!(
+        out.stderr.contains("Fatal error: eval() runtime failed"),
+        "unexpected stderr: {}",
+        out.stderr
+    );
+}
+
 /// Retains the owner of a detached named-function handler after it is unregistered.
 #[test]
 fn test_pcntl_eval_get_detached_named_handler_remains_callable() {

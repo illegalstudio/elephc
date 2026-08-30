@@ -82,6 +82,7 @@ struct PcntlRuntimeState {
     active_contexts: HashMap<usize, usize>,
     async_signals: bool,
     dispatching: bool,
+    fiber_dispatching: bool,
 }
 
 static PCNTL_RUNTIME: OnceLock<Mutex<PcntlRuntimeState>> = OnceLock::new();
@@ -270,6 +271,21 @@ pub(crate) fn end_dispatch() {
     if let Ok(mut state) = pcntl_runtime().lock() {
         state.dispatching = false;
     }
+}
+
+/// Publishes whether the interpreter is currently invoking a PCNTL handler.
+pub(crate) fn set_fiber_dispatching(active: bool) {
+    if let Ok(mut state) = pcntl_runtime().lock() {
+        state.fiber_dispatching = active;
+    }
+}
+
+/// Returns whether Magician must reject a Fiber context switch during signal dispatch.
+pub(crate) fn fiber_dispatching() -> bool {
+    pcntl_runtime()
+        .lock()
+        .map(|state| state.fiber_dispatching)
+        .unwrap_or(false)
 }
 
 /// Converts pointer-free registry storage back into an interpreter-facing entry.

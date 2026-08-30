@@ -456,6 +456,12 @@ pub(in crate::interpreter) fn eval_method_call_result_with_evaluated_args(
     }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = runtime_object_class_name(object, values)?;
+        eval_reject_fiber_switch_during_pcntl_dispatch(
+            &class_name,
+            method_name,
+            context,
+            values,
+        )?;
         if method_name.eq_ignore_ascii_case("__clone") {
             if let Some((declaring_class, visibility, is_static, is_abstract)) =
                 eval_aot_method_dispatch_metadata(&class_name, method_name, values)?

@@ -306,8 +306,7 @@ mod tests {
         assert_eq!(strlen["internal"], false);
     }
 
-    /// Verifies all-target metadata names both iOS targets while process-spawning
-    /// builtins retain the three-host surface enforced by their checker diagnostics.
+    /// Verifies all-target metadata includes iOS while process and PCNTL exports stay host-gated.
     #[test]
     fn export_distinguishes_all_targets_from_host_only_process_builtins() {
         let exported = super::export_builtins_json();
@@ -351,6 +350,40 @@ mod tests {
                 "{name} must remain host-only",
             );
         }
+        let pcntl_records = records.iter().filter(|record| {
+            record["semantics"]["requirements"]["values"]
+                .as_array()
+                .is_some_and(|requirements| {
+                    requirements.iter().any(|requirement| {
+                        requirement["kind"] == "bridge"
+                            && requirement["name"] == "elephc_pcntl"
+                    })
+                })
+        });
+        let mut pcntl_record_count = 0;
+        for process_builtin in pcntl_records {
+            pcntl_record_count += 1;
+            let name = process_builtin["name"]
+                .as_str()
+                .expect("PCNTL builtin name");
+            let support_kind = process_builtin["semantics"]["target_support_kind"]
+                .as_str()
+                .expect("PCNTL target support kind");
+            let expected = match support_kind {
+                "host_only" => {
+                    serde_json::json!(["macos-aarch64", "linux-aarch64", "linux-x86_64"])
+                }
+                "linux" => serde_json::json!(["linux-aarch64", "linux-x86_64"]),
+                "macos" => serde_json::json!(["macos-aarch64"]),
+                other => panic!("{name} must not use {other} target support"),
+            };
+            assert_eq!(
+                process_builtin["semantics"]["target_support"],
+                expected,
+                "{name} must not advertise iOS availability",
+            );
+        }
+        assert!(pcntl_record_count > 0, "PCNTL records present");
     }
 
     /// Verifies the include-internal export is a strict superset of the PHP-visible one and

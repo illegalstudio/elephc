@@ -42,6 +42,14 @@ pub enum EvalClosureObjectTarget {
     },
 }
 
+#[cfg(not(test))]
+impl EvalClosureObjectTarget {
+    /// Returns whether this callable depends on metadata retained by another eval context.
+    pub(crate) fn contains_foreign_context(&self) -> bool {
+        matches!(self, Self::ForeignContext { .. })
+    }
+}
+
 /// Runtime value captured by an eval closure literal.
 #[derive(Clone)]
 pub struct EvalClosureCaptureBinding {

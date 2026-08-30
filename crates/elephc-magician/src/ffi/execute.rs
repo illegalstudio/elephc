@@ -18,6 +18,8 @@ use crate::errors::EvalStatus;
 use crate::eval_ir;
 #[cfg(not(test))]
 use crate::interpreter;
+#[cfg(not(test))]
+use crate::interpreter::RuntimeValueOps;
 use crate::parse_cache;
 #[cfg(not(test))]
 use crate::runtime_hooks::ElephcRuntimeOps;
@@ -108,7 +110,22 @@ unsafe fn execute_parsed_eval(
     context.sync_global_eval_classes();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_program_outcome_with_context(context, program, scope, &mut values) {
-        Ok(outcome) => write_outcome(outcome, out).code(),
+        Ok(outcome) => {
+            if let interpreter::EvalOutcome::Value(result) = &outcome {
+                let exports_foreign_callable = context
+                    .pcntl_foreign_callable_owner(*result)
+                    .is_some()
+                    || values
+                        .object_identity(*result)
+                        .ok()
+                        .and_then(|identity| context.closure_object_target(identity))
+                        .is_some_and(|target| target.contains_foreign_context());
+                if exports_foreign_callable {
+                    return EvalStatus::RuntimeFatal.code();
+                }
+            }
+            write_outcome(outcome, out).code()
+        }
         Err(status) => status.code(),
     }
 }

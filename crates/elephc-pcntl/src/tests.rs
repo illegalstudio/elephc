@@ -348,6 +348,40 @@ fn signal_queues_are_routed_to_the_registering_backend() {
     );
 }
 
+/// Routes a new delivery only to the backend whose later registration owns `sigaction`.
+#[test]
+fn later_signal_installer_owns_delivery_for_same_signal() {
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    let mut discarded = ElephcPcntlSigInfo::default();
+    for owner in [PCNTL_SIGNAL_OWNER_AOT, PCNTL_SIGNAL_OWNER_EVAL] {
+        while unsafe { elephc_pcntl_signal_next(&mut discarded, owner) } == 1 {}
+    }
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 2, 1, PCNTL_SIGNAL_OWNER_AOT),
+        1
+    );
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 2, 1, PCNTL_SIGNAL_OWNER_EVAL),
+        1
+    );
+    assert_eq!(unsafe { libc::raise(libc::SIGUSR1) }, 0);
+
+    let mut info = ElephcPcntlSigInfo::default();
+    assert_eq!(
+        unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_EVAL) },
+        1
+    );
+    assert_eq!(info.signo, i64::from(libc::SIGUSR1));
+    assert_eq!(
+        unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) },
+        0
+    );
+    assert_eq!(
+        elephc_pcntl_signal(libc::SIGUSR1, 0, 1, PCNTL_SIGNAL_OWNER_EVAL),
+        1
+    );
+}
+
 /// Replays every atomically counted record after a saturated pipe fallback.
 #[test]
 fn signal_queue_overflow_preserves_delivery_count() {
@@ -393,6 +427,40 @@ fn signal_queue_overflow_preserves_delivery_count() {
     assert_eq!(restore_handler, 1);
     assert!(records_match);
     assert_eq!(delivered, DELIVERY_COUNT);
+}
+
+/// Pins the bounded overflow contract: counts survive, but one signal reuses its latest siginfo.
+#[test]
+fn signal_queue_overflow_reuses_latest_siginfo_snapshot() {
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    let mut info = ElephcPcntlSigInfo::default();
+    while unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) } == 1 {}
+
+    let first = ElephcPcntlSigInfo {
+        signo: i64::from(libc::SIGUSR1),
+        status: 11,
+        present: SIGINFO_SIGNO | SIGINFO_STATUS,
+        ..ElephcPcntlSigInfo::default()
+    };
+    let latest = ElephcPcntlSigInfo {
+        status: 22,
+        ..first
+    };
+    queue_signal_overflow_for_test(PCNTL_SIGNAL_OWNER_AOT, &first);
+    queue_signal_overflow_for_test(PCNTL_SIGNAL_OWNER_AOT, &latest);
+
+    for _ in 0..2 {
+        assert_eq!(
+            unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) },
+            1
+        );
+        assert_eq!(info.status, 22);
+        assert_eq!(info.present, SIGINFO_SIGNO | SIGINFO_STATUS);
+    }
+    assert_eq!(
+        unsafe { elephc_pcntl_signal_next(&mut info, PCNTL_SIGNAL_OWNER_AOT) },
+        0
+    );
 }
 
 /// Drops inherited overflow records when `fork()` gives the child private signal queues.

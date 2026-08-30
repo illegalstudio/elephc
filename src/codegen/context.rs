@@ -403,7 +403,7 @@ impl<'a> FunctionContext<'a> {
                 ))) => &[1, 3],
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
                     crate::ir::PcntlRuntime::WaitId,
-                ))) => &[2],
+                ))) => &[2, 4],
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
                     crate::ir::PcntlRuntime::SignalMask,
                 ))) => &[2],

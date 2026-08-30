@@ -24,6 +24,46 @@ pub(in crate::interpreter) fn eval_throw_error<T>(
     Err(EvalStatus::UncaughtThrowable)
 }
 
+/// Creates and schedules a `FiberError` through eval's normal Throwable channel.
+pub(in crate::interpreter) fn eval_throw_fiber_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("FiberError")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Rejects Fiber methods that would switch execution contexts inside a Magician handler.
+pub(in crate::interpreter) fn eval_reject_fiber_switch_during_pcntl_dispatch(
+    class_name: &str,
+    method_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let is_fiber = class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Fiber");
+    let switches_context = ["start", "resume", "throw", "suspend"]
+        .iter()
+        .any(|method| method_name.eq_ignore_ascii_case(method));
+    if is_fiber
+        && switches_context
+        && crate::context::pcntl_runtime::fiber_dispatching()
+    {
+        return eval_throw_fiber_error(
+            "Cannot switch fibers in current execution context",
+            context,
+            values,
+        );
+    }
+    Ok(())
+}
+
 /// Creates and schedules a `TypeError` through eval's normal Throwable channel.
 pub(in crate::interpreter) fn eval_throw_type_error<T>(
     message: &str,

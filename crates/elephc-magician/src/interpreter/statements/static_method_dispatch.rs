@@ -84,6 +84,12 @@ pub(super) fn eval_static_method_call_result_resolved(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reject_fiber_switch_during_pcntl_dispatch(
+        &class_name,
+        method_name,
+        context,
+        values,
+    )?;
     if let Some(result) = eval_closure_static_method_result(
         &class_name,
         method_name,

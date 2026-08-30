@@ -125,6 +125,14 @@ be passed through `Closure::fromCallable()`. An invalid signal number throws
 `ValueError`. If the OS rejects a valid registration, `pcntl_signal()` emits
 `E_WARNING` and returns `false`.
 
+An eval context detached by a registered handler can therefore remain alive for
+the rest of the process. It is reclaimed only after its last handler is
+replaced by another callable, `SIG_DFL`, or `SIG_IGN`; it is never freed while a
+native signal trampoline still names it. A foreign eval handler may be fetched,
+wrapped, and invoked inside a later eval context, but returning that
+context-local descriptor across the `eval()` result boundary into compiled code
+is refused before the owner can be freed.
+
 Signal masks use `pcntl_sigprocmask()`. Linux additionally provides
 `pcntl_sigwaitinfo()` and `pcntl_sigtimedwait()` for synchronous signal receipt.
 Invalid dynamic mask modes, empty signal sets, out-of-range signals, and invalid
@@ -162,12 +170,19 @@ consume or drop them. An eval handler is therefore invoked by an eval dispatch,
 and a compiled handler by a compiled dispatch; registrations cannot be
 inspected as the other backend's incompatible callable representation.
 
+The native `sigaction` disposition is still process-wide. If AOT and Magician
+both install a handler for the same signal, the later installer owns future OS
+delivery; records queued before that replacement stay with their original
+backend. This last-installer-wins rule does not merge the callable tables or
+make their descriptors interchangeable.
+
 Each pending-signal queue uses a nonblocking process-local pipe so the OS
 handler remains async-signal-safe. If the pipe fills, later deliveries spill
 into preallocated per-signal atomic counters and are replayed after pipe
-records. Delivery counts are retained; multiple overflowed deliveries of the
-same signal use the latest captured siginfo snapshot. Standard non-realtime
-signals may still be coalesced by the operating system before the handler runs.
+records. This fallback has bounded information fidelity: delivery counts are
+retained, but every overflowed delivery of one signal is replayed with the one
+latest captured siginfo snapshot. Standard non-realtime signals may still be
+coalesced by the operating system before the handler runs.
 As in PHP, applications should keep handlers short and move work into their
 normal event loop. PCNTL is unavailable on Windows because Windows is not in
 elephc's supported target matrix.
