@@ -661,7 +661,9 @@ fn pcntl_output_type(builtin: &str, arg: &Expr, index: usize) -> Option<PhpType>
         "pcntl_waitpid" => ["process_id", "status", "flags", "resource_usage"]
             .get(index)
             .copied(),
-        "pcntl_waitid" => ["idtype", "id", "info", "flags"].get(index).copied(),
+        "pcntl_waitid" => ["idtype", "id", "info", "flags", "resource_usage"]
+            .get(index)
+            .copied(),
         "pcntl_sigprocmask" => ["mode", "signals", "old_signals"].get(index).copied(),
         "pcntl_sigwaitinfo" => ["signals", "info"].get(index).copied(),
         "pcntl_sigtimedwait" => ["signals", "info", "seconds", "nanoseconds"]

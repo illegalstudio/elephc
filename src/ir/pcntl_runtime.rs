@@ -5,7 +5,7 @@
 //! - PCNTL builtin semantic descriptors and the target-aware runtime-call backend.
 //!
 //! Key details:
-//! - Arity, effects, ownership, and platform availability are centralized for the full PHP 8.4 surface.
+//! - Arity, effects, ownership, and platform availability are centralized for the maintained PCNTL surface.
 
 use crate::builtins::semantics::BuiltinResultOwnership;
 use crate::ir::{Effects, RuntimeCallSignature};
@@ -21,7 +21,7 @@ pub enum PcntlTargetSupport {
     MacOs,
 }
 
-/// Typed PHP 8.4 PCNTL operation selected before target code generation.
+/// Typed maintained PCNTL operation selected before target code generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PcntlRuntime {
     Alarm,
@@ -96,7 +96,7 @@ impl PcntlRuntime {
             Self::SignalTimedWait => (1, Some(4)),
             Self::SignalWaitInfo => (1, Some(2)),
             Self::Wait => (1, Some(3)),
-            Self::WaitId => (0, Some(4)),
+            Self::WaitId => (0, Some(5)),
             Self::WaitPid => (2, Some(4)),
         };
         RuntimeCallSignature::Polymorphic {
@@ -194,7 +194,8 @@ impl PcntlRuntime {
                 E::READS_HEAP.bits()
                     | E::READS_PROCESS.bits()
                     | E::WRITES_PROCESS.bits()
-                    | E::MAY_WARN.bits(),
+                    | E::MAY_WARN.bits()
+                    | E::MAY_THROW.bits(),
             ),
             Self::SignalDispatch => E::from_bits_retain(
                 E::READS_HEAP.bits()

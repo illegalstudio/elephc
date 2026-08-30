@@ -71,6 +71,12 @@ fn eval_validate_callback(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_validate_callback(callback, error, owner_context, values)
+        }
         EvaluatedCallable::Named { name, display_name } => {
             eval_validate_named_callable(name, display_name, error, context, values)
         }

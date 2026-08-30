@@ -294,6 +294,12 @@ pub(in crate::interpreter) fn eval_callable_probe_exists(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_callable_probe_exists(callback, owner_context, values)
+        }
         EvaluatedCallable::Named { name, .. } => Ok(context.has_closure(name)
             || super::function_exists::eval_function_probe_exists(context, name)),
         EvaluatedCallable::BoundClosure { name, .. } => Ok(context.has_closure(name)

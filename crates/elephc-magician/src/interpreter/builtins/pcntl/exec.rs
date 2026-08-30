@@ -25,9 +25,17 @@ impl Drop for ExecBuilderGuard {
 /// Evaluates `pcntl_exec` and returns false on its only returning bridge path.
 pub(super) fn eval_pcntl_exec_result(
     args: &[Option<EvaluatedCallArg>],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = values.string_bytes(eval_pcntl_required_arg(args, 0)?.value)?;
+    if path.contains(&0) {
+        return eval_throw_builtin_value_error(
+            "pcntl_exec(): Argument #1 ($path) must not contain any null bytes",
+            context,
+            values,
+        );
+    }
     let arguments = eval_pcntl_arg(args, 1);
     let environment = eval_pcntl_arg(args, 2);
     let builder = unsafe {
@@ -42,10 +50,10 @@ pub(super) fn eval_pcntl_exec_result(
     }
     let mut guard = ExecBuilderGuard(builder);
     if let Some(arguments) = arguments {
-        eval_pcntl_exec_add_arguments(builder, arguments.value, values)?;
+        eval_pcntl_exec_add_arguments(builder, arguments.value, context, values)?;
     }
     if let Some(environment) = environment {
-        eval_pcntl_exec_add_environment(builder, environment.value, values)?;
+        eval_pcntl_exec_add_environment(builder, environment.value, context, values)?;
     }
     guard.0 = std::ptr::null_mut();
     let success = unsafe { elephc_pcntl::elephc_pcntl_exec_run(builder) };
@@ -61,6 +69,7 @@ pub(super) fn eval_pcntl_exec_result(
 fn eval_pcntl_exec_add_arguments(
     builder: *mut libc::c_void,
     arguments: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if !values.is_array_like(arguments)? {
@@ -70,6 +79,13 @@ fn eval_pcntl_exec_add_arguments(
         let key = values.array_iter_key(arguments, position)?;
         let argument = values.array_get(arguments, key)?;
         let bytes = values.string_bytes(argument)?;
+        if bytes.contains(&0) {
+            let _: RuntimeCellHandle = eval_throw_builtin_value_error(
+                "pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes",
+                context,
+                values,
+            )?;
+        }
         if unsafe {
             elephc_pcntl::elephc_pcntl_exec_add_arg(builder, bytes.as_ptr(), bytes.len())
         } == 0
@@ -84,6 +100,7 @@ fn eval_pcntl_exec_add_arguments(
 fn eval_pcntl_exec_add_environment(
     builder: *mut libc::c_void,
     environment: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if !values.is_array_like(environment)? {
@@ -93,10 +110,24 @@ fn eval_pcntl_exec_add_environment(
         let key = values.array_iter_key(environment, position)?;
         let value = values.array_get(environment, key)?;
         let value = values.string_bytes(value)?;
+        if value.contains(&0) {
+            let _: RuntimeCellHandle = eval_throw_builtin_value_error(
+                "pcntl_exec(): Argument #3 ($env_vars) value for environment variable must not contain null bytes",
+                context,
+                values,
+            )?;
+        }
         let (key_low, key_high, key_bytes) = match values.type_tag(key)? {
             EVAL_TAG_INT => (eval_int_value(key, values)? as u64, -1, None),
             EVAL_TAG_STRING => {
                 let bytes = values.string_bytes(key)?;
+                if bytes.contains(&0) {
+                    let _: RuntimeCellHandle = eval_throw_builtin_value_error(
+                        "pcntl_exec(): Argument #3 ($env_vars) name for environment variable must not contain null bytes",
+                        context,
+                        values,
+                    )?;
+                }
                 (bytes.as_ptr() as u64, bytes.len() as i64, Some(bytes))
             }
             _ => return Err(EvalStatus::RuntimeFatal),

@@ -116,6 +116,9 @@ fn check_signal_arguments(
         let name = argument_name(arg);
         let value = argument_value(arg);
         if name.as_deref() == Some(output_name) || (name.is_none() && index == output_index) {
+            if cx.argument_was_omitted(index) {
+                continue;
+            }
             if !matches!(value.kind, ExprKind::Variable(_)) {
                 return Err(CompileError::new(
                     value.span,

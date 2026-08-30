@@ -77,6 +77,6 @@ builtin! {
     lazy_check: true,
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::Exec),
-        crate::builtins::semantics::BuiltinArgumentLowering::PcntlExec,
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted,
     ),
 }

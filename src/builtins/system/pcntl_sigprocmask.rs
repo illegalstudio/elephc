@@ -11,5 +11,8 @@ builtin! {
     contract: "pcntl_sigprocmask",
     check: super::pcntl_signal_support::check_sigprocmask,
     lazy_check: true,
-    semantics: crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::SignalMask),
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::SignalMask),
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted,
+    ),
 }

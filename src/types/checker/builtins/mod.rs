@@ -115,16 +115,19 @@ impl Checker {
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         let normalized_args;
+        let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
             (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
-            normalized_args = self.normalize_builtin_call_args(
+            let plan = self.plan_builtin_call_args(
                 &sig,
                 args,
                 span,
                 &format!("Builtin '{}'", name),
                 env,
             )?;
+            normalized_args = plan.normalized_args();
+            builtin_arg_plan = Some(plan);
             normalized_args.as_slice()
         } else {
             args
@@ -163,6 +166,14 @@ impl Checker {
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
             for (index, arg) in args.iter().enumerate() {
                 if !def.ref_params.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                if matches!(
+                    builtin_arg_plan
+                        .as_ref()
+                        .and_then(|plan| plan.regular_args.get(index)),
+                    Some(crate::types::call_args::PlannedRegularArg::Default(_))
+                ) {
                     continue;
                 }
                 // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
@@ -286,6 +297,7 @@ impl Checker {
                 checker: self,
                 name,
                 args,
+                argument_plan: builtin_arg_plan.as_ref(),
                 span,
                 env,
             };

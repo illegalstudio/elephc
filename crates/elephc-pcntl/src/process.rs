@@ -265,31 +265,60 @@ pub unsafe extern "C" fn elephc_pcntl_wait4(
 
 /// Waits for a child state change and writes PHP's stable signal-information record.
 ///
-/// Returns one on success or zero after recording errno on failure.
+/// Linux optionally uses the raw five-argument `waitid` syscall to collect the
+/// PHP 8.5 resource-usage output. Darwin accepts the ABI slot but leaves it
+/// untouched, matching PHP where neither `wait6` nor Linux's raw syscall is
+/// available. Returns one on success or zero after recording errno on failure.
 ///
 /// # Safety
-/// `info` must be null or point to writable `ElephcPcntlSigInfo` storage for the duration of
-/// the call.
+/// `info` and `usage` must be null or point to their writable stable records
+/// for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pcntl_waitid(
     id_type: libc::c_int,
     id: i64,
     info: *mut ElephcPcntlSigInfo,
     flags: libc::c_int,
+    usage: *mut ElephcPcntlRUsage,
 ) -> libc::c_int {
     let mut native_info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    #[cfg(target_os = "linux")]
+    let mut native_usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    #[cfg(target_os = "linux")]
+    let result = if usage.is_null() {
+        libc::waitid(
+            id_type as libc::idtype_t,
+            id as libc::id_t,
+            native_info.as_mut_ptr(),
+            flags,
+        ) as libc::c_long
+    } else {
+        libc::syscall(
+            libc::SYS_waitid,
+            id_type as libc::idtype_t,
+            id as libc::id_t,
+            native_info.as_mut_ptr(),
+            flags,
+            native_usage.as_mut_ptr(),
+        )
+    };
+    #[cfg(target_os = "macos")]
     let result = libc::waitid(
         id_type as libc::idtype_t,
         id as libc::id_t,
         native_info.as_mut_ptr(),
         flags,
-    );
+    ) as libc::c_long;
     if result == -1 {
         record_errno();
         return 0;
     }
     if !info.is_null() {
         *info = copy_child_siginfo(&native_info.assume_init());
+    }
+    #[cfg(target_os = "linux")]
+    if !usage.is_null() {
+        *usage = ElephcPcntlRUsage::from(native_usage.assume_init());
     }
     1
 }

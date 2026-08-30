@@ -226,6 +226,24 @@ fn test_pcntl_signal_mask_round_trip() {
     assert_eq!(out, "blocked|array|restored");
 }
 
+/// Keeps named optional PCNTL outputs absent instead of lowering default arrays as lvalues.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_named_optional_outputs_remain_omitted() {
+    let out = compile_and_run(
+        "<?php
+        $masked = pcntl_sigprocmask(mode: SIG_BLOCK, signals: [SIGUSR1]);
+        $timed = pcntl_sigtimedwait(signals: [SIGUSR2], nanoseconds: 1);
+        pcntl_sigprocmask(mode: SIG_UNBLOCK, signals: [SIGUSR1]);
+        $status = 7;
+        $waited = pcntl_wait(status: $status, flags: WNOHANG);
+        echo ($masked ? 'masked' : 'bad') . '|';
+        echo ($timed === false ? 'timeout' : 'bad') . '|';
+        echo ($waited === -1 ? 'waited' : 'bad');",
+    );
+    assert_eq!(out, "masked|timeout|waited");
+}
+
 /// Raises PHP's runtime mask and signal-array `ValueError`s for dynamic inputs.
 #[test]
 fn test_pcntl_signal_mask_rejects_dynamic_invalid_values() {
@@ -263,6 +281,24 @@ fn test_pcntl_signal_handler_dispatch_and_lookup() {
         echo (pcntl_signal(SIGALRM, SIG_DFL) ? 'reset' : 'bad');",
     );
     assert_eq!(out, "set|callable|handled:14:14|dispatched|reset");
+}
+
+/// Preserves the SIGALRM-aware restart default for a named call that omits the third argument.
+#[test]
+fn test_pcntl_signal_named_omitted_restart_uses_signal_aware_default() {
+    let dir = make_cli_test_dir("elephc_pcntl_signal_named_restart");
+    let (user_asm, _, _) = compile_source_to_asm_with_options(
+        "<?php pcntl_signal(signal: SIGALRM, handler: SIG_IGN);",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    let _ = fs::remove_dir_all(&dir);
+    #[cfg(target_arch = "aarch64")]
+    assert!(user_asm.contains("cmp x0, #14"));
+    #[cfg(target_arch = "x86_64")]
+    assert!(user_asm.contains("cmp QWORD PTR [rsp + 32], 14"));
 }
 
 /// Returns integer signal dispositions exactly as registered.
@@ -606,6 +642,32 @@ fn test_pcntl_exec_failure_returns_false_and_records_errno() {
     );
 }
 
+/// Raises PHP's precise catchable `ValueError`s for every embedded-NUL exec input position.
+#[test]
+fn test_pcntl_exec_rejects_embedded_null_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+        try { pcntl_exec("/bin/echo\0bad"); }
+        catch (ValueError $error) { echo $error->getMessage() . "|"; }
+        try { pcntl_exec("/bin/echo", ["bad\0arg"]); }
+        catch (ValueError $error) { echo $error->getMessage() . "|"; }
+        try { pcntl_exec("/bin/echo", [], ["bad\0name" => "ok"]); }
+        catch (ValueError $error) { echo $error->getMessage() . "|"; }
+        try { pcntl_exec("/bin/echo", [], ["NAME" => "bad\0value"]); }
+        catch (ValueError $error) { echo $error->getMessage() . "|"; }
+        try { pcntl_exec("/bin/echo", [], ["bad\0name" => "bad\0value"]); }
+        catch (ValueError $error) { echo $error->getMessage(); }"#,
+    );
+    assert_eq!(
+        out,
+        "pcntl_exec(): Argument #1 ($path) must not contain any null bytes|\
+pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes|\
+pcntl_exec(): Argument #3 ($env_vars) name for environment variable must not contain null bytes|\
+pcntl_exec(): Argument #3 ($env_vars) value for environment variable must not contain null bytes|\
+pcntl_exec(): Argument #3 ($env_vars) value for environment variable must not contain null bytes"
+    );
+}
+
 /// Emits a warning when the OS rejects a valid but uncatchable signal disposition.
 #[test]
 fn test_pcntl_signal_os_failure_warns_and_returns_false() {
@@ -852,6 +914,42 @@ fn test_pcntl_waitid_populates_signal_info() {
     assert_eq!(out, "ok|37|pid|8|17");
 }
 
+/// Exposes PHP 8.5 `pcntl_waitid()` resource usage through Linux's raw syscall.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_waitid_populates_php_85_resource_usage() {
+    let out = compile_and_run(
+        "<?php
+        $pid = pcntl_fork();
+        if ($pid === 0) { exit(0); }
+        $ok = pcntl_waitid(
+            idtype: P_PID,
+            id: $pid,
+            flags: WEXITED,
+            resource_usage: $usage,
+        );
+        echo ($ok ? 'ok' : 'bad') . '|';
+        echo count($usage) . '|';
+        echo is_int($usage['ru_utime.tv_sec']) ? 'int' : 'bad';",
+    );
+    assert_eq!(out, "ok|17|int");
+}
+
+/// Initializes PHP 8.5 waitid usage to an empty array when the syscall fails.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_waitid_failure_empties_php_85_resource_usage() {
+    let out = compile_and_run(
+        "<?php
+        $info = ['old' => 1];
+        $usage = ['old' => 1];
+        $ok = pcntl_waitid(P_PID, 99999999, $info, WEXITED | WNOHANG, $usage);
+        echo ($ok ? 'bad' : 'false') . '|';
+        echo $info['old'] . '|' . count($usage);",
+    );
+    assert_eq!(out, "false|1|0");
+}
+
 /// Preserves PHP's Linux waitid key order and floating-point clock fields.
 #[cfg(target_os = "linux")]
 #[test]
@@ -963,6 +1061,126 @@ fn test_pcntl_eval_signal_handler_dispatch() {
     assert_eq!(out, "dispatch|14");
 }
 
+/// Keeps an eval handler callable alive after the generated function frame that registered it exits.
+#[test]
+fn test_pcntl_eval_handler_survives_registering_function_frame() {
+    let out = compile_and_run(
+        r#"<?php
+        extern "System" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        function register_eval_handler(): void {
+            $word = "handled";
+            eval('pcntl_signal(SIGUSR1, function() use ($word): void { echo $word; });');
+        }
+        register_eval_handler();
+        kill(getpid(), SIGUSR1);
+        echo eval('
+            pcntl_signal_dispatch();
+            pcntl_signal(SIGUSR1, SIG_DFL);
+            return "|done";
+        ');"#,
+    );
+    assert_eq!(out, "handled|done");
+}
+
+/// Returns a detached eval handler as a callable from a later eval context.
+#[test]
+fn test_pcntl_eval_get_detached_handler_remains_callable() {
+    let out = compile_and_run(
+        r#"<?php
+        function register_gettable_eval_handler(): void {
+            $word = "callable";
+            eval('pcntl_signal(SIGUSR1, function() use ($word): void { echo $word; });');
+        }
+        register_gettable_eval_handler();
+        echo eval('
+            $handler = pcntl_signal_get_handler(SIGUSR1);
+            pcntl_signal(SIGUSR1, SIG_DFL);
+            echo is_callable($handler) ? "yes|" : "no|";
+            $handler();
+            echo "|";
+            $closure = Closure::fromCallable($handler);
+            $closure();
+            return "|done";
+        ');"#,
+    );
+    assert_eq!(out, "yes|callable|callable|done");
+}
+
+/// Retains the owner of a detached named-function handler after it is unregistered.
+#[test]
+fn test_pcntl_eval_get_detached_named_handler_remains_callable() {
+    let out = compile_and_run(
+        r#"<?php
+        function register_named_eval_handler(): void {
+            eval('
+                function detached_named_handler(): void { echo "named"; }
+                pcntl_signal(SIGUSR1, "detached_named_handler");
+            ');
+        }
+        register_named_eval_handler();
+        echo eval('
+            $handler = pcntl_signal_get_handler(SIGUSR1);
+            pcntl_signal(SIGUSR1, SIG_DFL);
+            echo is_callable($handler) ? "yes|" : "no|";
+            $handler();
+            return "|done";
+        ');"#,
+    );
+    assert_eq!(out, "yes|named|done");
+}
+
+/// Propagates a Throwable from a detached handler owner into the eval context doing dispatch.
+#[test]
+fn test_pcntl_detached_eval_handler_exception_reaches_dispatch_catch() {
+    let out = compile_and_run(
+        r#"<?php
+        extern "System" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        function register_throwing_eval_handler(): void {
+            eval('pcntl_signal(SIGUSR1, function(): void { throw new RuntimeException("detached"); });');
+        }
+        register_throwing_eval_handler();
+        kill(getpid(), SIGUSR1);
+        echo eval('
+            try { pcntl_signal_dispatch(); }
+            catch (RuntimeException $error) { echo $error->getMessage(); }
+            pcntl_signal(SIGUSR1, SIG_DFL);
+            return "|done";
+        ');"#,
+    );
+    assert_eq!(out, "detached|done");
+}
+
+/// Keeps a detached owner pinned while its running handler replaces its own registration.
+#[test]
+fn test_pcntl_detached_eval_handler_can_replace_itself_safely() {
+    let out = compile_and_run(
+        r#"<?php
+        extern "System" {
+            function getpid(): int;
+            function kill(int $pid, int $signal): int;
+        }
+        function register_self_replacing_eval_handler(): void {
+            eval('
+                function detached_handler_result(): string { return "safe"; }
+                pcntl_signal(SIGUSR1, function(): void {
+                    pcntl_signal(SIGUSR1, SIG_DFL);
+                    echo detached_handler_result();
+                });
+            ');
+        }
+        register_self_replacing_eval_handler();
+        kill(getpid(), SIGUSR1);
+        echo eval('pcntl_signal_dispatch(); return "|done";');"#,
+    );
+    assert_eq!(out, "safe|done");
+}
+
 /// Keeps AOT and eval handler records queued for the backend that registered each callable.
 #[test]
 fn test_pcntl_aot_and_eval_dispatch_do_not_consume_each_others_records() {
@@ -1042,6 +1260,37 @@ fn test_pcntl_eval_named_exec_omitted_environment_is_inherited() {
         ');"#,
     );
     assert_eq!(out, "inherited|0");
+}
+
+/// Raises the same embedded-NUL `ValueError` through Magician's exec adapter.
+#[test]
+fn test_pcntl_eval_exec_rejects_embedded_null_bytes() {
+    let out = compile_and_run(
+        r#"<?php echo eval('
+            try { pcntl_exec("/bin/echo", ["bad" . chr(0) . "arg"]); }
+            catch (ValueError $error) { return $error->getMessage(); }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(
+        out,
+        "pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes"
+    );
+}
+
+/// Exposes PHP 8.5 waitid resource usage through the Magician by-reference adapter.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_pcntl_eval_waitid_populates_php_85_resource_usage() {
+    let out = compile_and_run(
+        r#"<?php echo eval('
+            $pid = pcntl_fork();
+            if ($pid === 0) { exit(0); }
+            $ok = pcntl_waitid(P_PID, $pid, $info, WEXITED, $usage);
+            return ($ok ? "ok" : "bad") . "|" . count($usage);
+        ');"#,
+    );
+    assert_eq!(out, "ok|17");
 }
 
 /// Restores Magician dispatch state after a handler exception and invokes the next alarm.

@@ -65,6 +65,8 @@ pub struct ElephcEvalContext {
     pub(super) dynamic_property_aliases: HashMap<(u64, String), EvalReferenceTarget>,
     pub(super) array_element_aliases: HashMap<(usize, EvalArrayReferenceKey), EvalReferenceTarget>,
     pub(super) array_cursors: HashMap<usize, EvalArrayCursor>,
+    pub(super) pcntl_foreign_callables:
+        HashMap<usize, pcntl_runtime::EvalPcntlContextLease>,
     pub(super) dynamic_initialized_properties: HashSet<(u64, String)>,
     pub(super) eval_reflection_attributes: HashMap<u64, EvalReflectionAttributeMetadata>,
     pub(super) eval_reflection_classes: HashMap<u64, String>,
@@ -92,9 +94,6 @@ pub struct ElephcEvalContext {
     pub(super) call_dir: String,
     pub(super) call_line: i64,
     pub(super) file_magic_override: Option<String>,
-    pub(super) pcntl_signal_handlers: HashMap<i32, EvalPcntlSignalHandler>,
-    pub(super) pcntl_async_signals: bool,
-    pub(super) pcntl_dispatching: bool,
 }
 
 impl ElephcEvalContext {
@@ -142,6 +141,7 @@ impl ElephcEvalContext {
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
             array_cursors: HashMap::new(),
+            pcntl_foreign_callables: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
@@ -169,9 +169,6 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
-            pcntl_signal_handlers: HashMap::new(),
-            pcntl_async_signals: false,
-            pcntl_dispatching: false,
         }
     }
 
@@ -220,6 +217,7 @@ impl ElephcEvalContext {
             dynamic_property_aliases: HashMap::new(),
             array_element_aliases: HashMap::new(),
             array_cursors: HashMap::new(),
+            pcntl_foreign_callables: HashMap::new(),
             dynamic_initialized_properties: HashSet::new(),
             eval_reflection_attributes: HashMap::new(),
             eval_reflection_classes: HashMap::new(),
@@ -247,9 +245,6 @@ impl ElephcEvalContext {
             call_dir: String::new(),
             call_line: 0,
             file_magic_override: None,
-            pcntl_signal_handlers: HashMap::new(),
-            pcntl_async_signals: false,
-            pcntl_dispatching: false,
         }
     }
 

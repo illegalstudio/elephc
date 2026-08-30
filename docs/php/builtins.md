@@ -361,7 +361,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`pcntl_strerror()`](./builtins/misc/pcntl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`pcntl_unshare()`](./builtins/misc/pcntl_unshare.md) | `(int $flags): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_wait()`](./builtins/misc/pcntl_wait.md) | `(mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
-| [`pcntl_waitid()`](./builtins/misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_waitid()`](./builtins/misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_waitpid()`](./builtins/misc/pcntl_waitpid.md) | `(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
 | [`pcntl_wexitstatus()`](./builtins/misc/pcntl_wexitstatus.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_wifcontinued()`](./builtins/misc/pcntl_wifcontinued.md) | `(int $status): bool` | `bool` | ✓ | ✓ |

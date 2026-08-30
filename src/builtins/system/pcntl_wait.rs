@@ -11,5 +11,8 @@ builtin! {
     contract: "pcntl_wait",
     check: super::pcntl_wait_support::check_wait,
     lazy_check: true,
-    semantics: crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::Wait),
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::Wait),
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted,
+    ),
 }

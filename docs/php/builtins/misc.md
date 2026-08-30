@@ -42,7 +42,7 @@ sidebar:
 | [`pcntl_strerror()`](./misc/pcntl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`pcntl_unshare()`](./misc/pcntl_unshare.md) | `(int $flags): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_wait()`](./misc/pcntl_wait.md) | `(mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
-| [`pcntl_waitid()`](./misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4): bool` | `bool` | ✓ | ✓ |
+| [`pcntl_waitid()`](./misc/pcntl_waitid.md) | `(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool` | `bool` | ✓ | ✓ |
 | [`pcntl_waitpid()`](./misc/pcntl_waitpid.md) | `(int $process_id, mixed $status, int $flags = 0, mixed $resource_usage = []): int` | `int` | ✓ | ✓ |
 | [`pcntl_wexitstatus()`](./misc/pcntl_wexitstatus.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`pcntl_wifcontinued()`](./misc/pcntl_wifcontinued.md) | `(int $status): bool` | `bool` | ✓ | ✓ |

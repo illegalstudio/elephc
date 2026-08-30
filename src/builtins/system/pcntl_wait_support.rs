@@ -24,16 +24,22 @@ pub(super) fn check_waitpid(cx: &mut BuiltinCheckCtx) -> Result<PhpType, Compile
     check_wait_outputs(cx, true)
 }
 
-/// Checks `pcntl_waitid()` inputs while leaving its optional info output unread.
+/// Checks `pcntl_waitid()` inputs while leaving its optional outputs unread.
 pub(super) fn check_waitid(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     for (index, arg) in cx.args.iter().enumerate() {
         let parameter = waitid_parameter_name(arg, index);
-        if parameter.as_deref() == Some("info") {
+        if matches!(parameter.as_deref(), Some("info" | "resource_usage")) {
+            if cx.argument_was_omitted(index) {
+                continue;
+            }
             let value = named_argument_value(arg);
             if !matches!(value.kind, ExprKind::Variable(_)) {
                 return Err(CompileError::new(
                     value.span,
-                    "pcntl_waitid() parameter $info must be passed a variable",
+                    &format!(
+                        "pcntl_waitid() parameter ${} must be passed a variable",
+                        parameter.expect("output parameter name must be present"),
+                    ),
                 ));
             }
         } else {
@@ -51,6 +57,9 @@ fn check_wait_outputs(
     for (index, arg) in cx.args.iter().enumerate() {
         let parameter = wait_parameter_name(arg, index, selected_child);
         if matches!(parameter.as_deref(), Some("status" | "resource_usage")) {
+            if cx.argument_was_omitted(index) {
+                continue;
+            }
             let value = named_argument_value(arg);
             if !matches!(value.kind, ExprKind::Variable(_)) {
                 return Err(CompileError::new(
@@ -87,7 +96,7 @@ fn waitid_parameter_name(arg: &Expr, index: usize) -> Option<String> {
     if let ExprKind::NamedArg { name, .. } = &arg.kind {
         return Some(php_symbol_key(name));
     }
-    ["idtype", "id", "info", "flags"]
+    ["idtype", "id", "info", "flags", "resource_usage"]
         .get(index)
         .map(|name| (*name).to_string())
 }

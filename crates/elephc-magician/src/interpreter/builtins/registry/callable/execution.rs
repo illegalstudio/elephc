@@ -17,6 +17,17 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_evaluated_callable_with_values(
+                callback,
+                evaluated_args,
+                owner_context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
                 return eval_closure_with_evaluated_args(
@@ -215,6 +226,17 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_evaluated_callable_with_call_user_func_values(
+                callback,
+                evaluated_args,
+                owner_context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
         }
@@ -325,6 +347,17 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = eval_clear_evaluated_arg_ref_targets(evaluated_args);
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_evaluated_callable_with_by_value_call_args(
+                callback,
+                evaluated_args,
+                owner_context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_args(name, evaluated_args, context, values)
         }

@@ -5,8 +5,9 @@ sidebar:
   order: 23
 ---
 
-elephc implements PHP 8.4's PCNTL process-control surface on macOS AArch64,
-Linux AArch64, and Linux x86_64. PCNTL calls are backed by the optional
+elephc implements the maintained PCNTL process-control surface, including PHP
+8.5's `pcntl_waitid()` resource-usage output, on macOS AArch64, Linux AArch64,
+and Linux x86_64. PCNTL calls are backed by the optional
 `elephc-pcntl` bridge and produce standalone binaries; the target machine does
 not need PHP or the PHP PCNTL extension.
 
@@ -55,16 +56,23 @@ if ($waited === $pid && pcntl_wifexited($status)) {
 wait preserves the caller's prior `$status` and replaces `$resource_usage` with
 an empty array. A `WNOHANG` result of `0` also leaves usage empty.
 
-`pcntl_waitid()` writes the target-supported siginfo fields on success. The
-usual status helpers are available: `pcntl_wifexited`, `pcntl_wexitstatus`,
-`pcntl_wifsignaled`, `pcntl_wtermsig`, `pcntl_wifstopped`, `pcntl_wstopsig`, and
-`pcntl_wifcontinued` where the host libc supports it.
+`pcntl_waitid()` writes the target-supported siginfo fields on success. Its PHP
+8.5 fifth `&$resource_usage` argument is populated with the same 17 fields on
+Linux, including a successful `WNOHANG` result. A Linux syscall failure writes
+an empty usage array while preserving the prior siginfo output. macOS accepts
+the portable signature but leaves the usage variable untouched, matching
+php-src's non-Linux path where neither the raw Linux syscall nor `wait6()` is
+available. The usual status helpers are available: `pcntl_wifexited`,
+`pcntl_wexitstatus`, `pcntl_wifsignaled`, `pcntl_wtermsig`, `pcntl_wifstopped`,
+`pcntl_wstopsig`, and `pcntl_wifcontinued` where the host libc supports it.
 
 `pcntl_exec()` replaces the current process and never returns on success. Its
 argument and environment arrays are copied into native `argv`/`envp` storage;
 an omitted environment inherits the current process environment, while an
-explicit empty array clears it. OS failures emit PHP's warning, return `false`,
-and remain available through `pcntl_get_last_error()` / `pcntl_errno()`.
+explicit empty array clears it. Embedded null bytes raise PHP's position-specific
+`ValueError` before entering the OS. Other OS failures emit PHP's warning,
+return `false`, and remain available through `pcntl_get_last_error()` /
+`pcntl_errno()`.
 
 ## Process groups, sessions, and daemonization
 
@@ -111,8 +119,11 @@ The native OS handler only enqueues a stable record. PHP callables run later at
   because switching execution contexts during dispatch is unsafe.
 
 `pcntl_signal_get_handler()` returns the registered callable or integer
-disposition. An invalid signal number throws `ValueError`. If the OS rejects a
-valid registration, `pcntl_signal()` emits `E_WARNING` and returns `false`.
+disposition. Eval callables keep their owning context alive when returned from
+a later eval call, remain invokable after the signal is unregistered, and can
+be passed through `Closure::fromCallable()`. An invalid signal number throws
+`ValueError`. If the OS rejects a valid registration, `pcntl_signal()` emits
+`E_WARNING` and returns `false`.
 
 Signal masks use `pcntl_sigprocmask()`. Linux additionally provides
 `pcntl_sigwaitinfo()` and `pcntl_sigtimedwait()` for synchronous signal receipt.
@@ -143,12 +154,13 @@ elephc's supported target matrix and are intentionally absent.
 Dynamic `eval()` uses the same native bridge, errno state, process signal
 dispositions, dispatch masking, wait outputs, and warning behavior as AOT code.
 Callable descriptors remain owned by the backend that registered them:
-Magician retains eval handlers in its evaluation context, while compiled
-handlers remain in AOT runtime storage. Pending records are routed into separate
-AOT and eval queues, so dispatching from the other backend cannot consume or
-drop them. An eval handler is therefore invoked by an eval dispatch, and a
-compiled handler by a compiled dispatch; registrations cannot be inspected as
-the other backend's incompatible callable representation.
+Magician retains eval handlers in a process-global registry that keeps their
+owning eval context alive across generated function-frame teardown, while
+compiled handlers remain in AOT runtime storage. Pending records are routed
+into separate AOT and eval queues, so dispatching from the other backend cannot
+consume or drop them. An eval handler is therefore invoked by an eval dispatch,
+and a compiled handler by a compiled dispatch; registrations cannot be
+inspected as the other backend's incompatible callable representation.
 
 Each pending-signal queue uses a nonblocking process-local pipe so the OS
 handler remains async-signal-safe. If the pipe fills, later deliveries spill

@@ -324,6 +324,10 @@ fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
     assert!(linux.contains("pcntl_unshare"));
 
     assert!(!ios.contains("pcntl_fork"));
+    assert!(!ios.contains("pcntl_exec"));
+    assert!(!ios.contains("pcntl_wait"));
+    assert!(!ios.contains("pcntl_alarm"));
+    assert!(!ios.contains("pcntl_signal"));
     assert!(!ios.contains("pcntl_getcpu"));
     assert!(!ios.contains("pcntl_getqos_class"));
 }

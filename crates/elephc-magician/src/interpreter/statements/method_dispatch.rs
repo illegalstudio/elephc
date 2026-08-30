@@ -608,6 +608,24 @@ pub(super) fn eval_closure_object_method_result(
     }
     let (bound_this, call_args) = eval_closure_call_split_args(evaluated_args)?;
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_closure_object_method_result(
+                *target,
+                "call",
+                std::iter::once(EvaluatedCallArg {
+                    name: None,
+                    value: bound_this,
+                    ref_target: None,
+                })
+                .chain(call_args)
+                .collect(),
+                owner_context,
+                values,
+            )
+        }
         EvalClosureObjectTarget::Named(name) => {
             if context.closure(&name).is_some() {
                 let callable = EvaluatedCallable::BoundClosure {
@@ -703,6 +721,17 @@ pub(super) fn eval_closure_object_invoke_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let callable = match target {
+        EvalClosureObjectTarget::ForeignContext { target, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            return eval_closure_object_invoke_result(
+                *target,
+                evaluated_args,
+                owner_context,
+                values,
+            );
+        }
         EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {
             display_name: name.clone(),
             name,

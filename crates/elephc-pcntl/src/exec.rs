@@ -12,6 +12,20 @@ use crate::{record_errno, LAST_ERROR};
 use std::ffi::CString;
 use std::sync::atomic::Ordering;
 
+/// No PHP-visible input validation error was recorded.
+pub const PCNTL_EXEC_INPUT_OK: libc::c_int = 0;
+/// The executable path contains an embedded null byte.
+pub const PCNTL_EXEC_INPUT_PATH_NUL: libc::c_int = 1;
+/// One argv element contains an embedded null byte.
+pub const PCNTL_EXEC_INPUT_ARG_NUL: libc::c_int = 2;
+/// One environment-variable name contains an embedded null byte.
+pub const PCNTL_EXEC_INPUT_ENV_NAME_NUL: libc::c_int = 3;
+/// One environment-variable value contains an embedded null byte.
+pub const PCNTL_EXEC_INPUT_ENV_VALUE_NUL: libc::c_int = 4;
+
+static EXEC_INPUT_ERROR: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(PCNTL_EXEC_INPUT_OK);
+
 /// Owned native strings staged for one `pcntl_exec()` attempt.
 struct ExecBuilder {
     path: CString,
@@ -42,6 +56,12 @@ unsafe fn copy_c_string(ptr: *const u8, len: usize) -> Option<CString> {
     }
 }
 
+/// Reports the most recent PHP-visible exec input classification.
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_exec_input_error() -> libc::c_int {
+    EXEC_INPUT_ERROR.load(Ordering::Relaxed)
+}
+
 /// Releases an opaque execution builder previously returned by `elephc_pcntl_exec_new()`.
 ///
 /// # Safety
@@ -67,6 +87,12 @@ pub unsafe extern "C" fn elephc_pcntl_exec_new(
     path_len: usize,
     has_environment: libc::c_int,
 ) -> *mut libc::c_void {
+    EXEC_INPUT_ERROR.store(PCNTL_EXEC_INPUT_OK, Ordering::Relaxed);
+    if bytes_contain_nul(path, path_len) {
+        EXEC_INPUT_ERROR.store(PCNTL_EXEC_INPUT_PATH_NUL, Ordering::Relaxed);
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return std::ptr::null_mut();
+    }
     let Some(path) = copy_c_string(path, path_len) else {
         return std::ptr::null_mut();
     };
@@ -95,6 +121,11 @@ pub unsafe extern "C" fn elephc_pcntl_exec_add_arg(
         LAST_ERROR.store(libc::EFAULT, Ordering::Relaxed);
         return 0;
     };
+    if bytes_contain_nul(value, value_len) {
+        EXEC_INPUT_ERROR.store(PCNTL_EXEC_INPUT_ARG_NUL, Ordering::Relaxed);
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return 0;
+    }
     let Some(value) = copy_c_string(value, value_len) else {
         return 0;
     };
@@ -127,16 +158,26 @@ pub unsafe extern "C" fn elephc_pcntl_exec_add_env(
         LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
         return 0;
     };
+    if bytes_contain_nul(value, value_len) {
+        EXEC_INPUT_ERROR.store(PCNTL_EXEC_INPUT_ENV_VALUE_NUL, Ordering::Relaxed);
+        LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+        return 0;
+    }
+    let Some(value) = copy_c_string(value, value_len) else {
+        return 0;
+    };
     let key = if key_high == -1 {
         (key_low as i64).to_string().into_bytes()
     } else {
+        if bytes_contain_nul(key_low as *const u8, key_high as usize) {
+            EXEC_INPUT_ERROR.store(PCNTL_EXEC_INPUT_ENV_NAME_NUL, Ordering::Relaxed);
+            LAST_ERROR.store(libc::EINVAL, Ordering::Relaxed);
+            return 0;
+        }
         let Some(key) = copy_c_string(key_low as *const u8, key_high as usize) else {
             return 0;
         };
         key.into_bytes()
-    };
-    let Some(value) = copy_c_string(value, value_len) else {
-        return 0;
     };
     let mut pair = Vec::with_capacity(key.len() + value.as_bytes().len() + 1);
     pair.extend_from_slice(&key);
@@ -148,6 +189,17 @@ pub unsafe extern "C" fn elephc_pcntl_exec_add_env(
     };
     environment.push(pair);
     1
+}
+
+/// Checks a borrowed byte range for an embedded null byte without allocating.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len` is nonzero.
+unsafe fn bytes_contain_nul(ptr: *const u8, len: usize) -> bool {
+    if ptr.is_null() || len == 0 {
+        return false;
+    }
+    std::slice::from_raw_parts(ptr, len).contains(&0)
 }
 
 /// Executes and consumes one fully staged `pcntl_exec()` builder.

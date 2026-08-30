@@ -122,6 +122,15 @@ fn test_error_pcntl_waitid_info_must_be_variable() {
     );
 }
 
+/// Verifies PHP 8.5 `pcntl_waitid()` rejects a non-variable resource-usage output.
+#[test]
+fn test_error_pcntl_waitid_resource_usage_must_be_variable() {
+    expect_error(
+        "<?php pcntl_waitid(P_ALL, null, $info, WEXITED, []);",
+        "pcntl_waitid(): Argument #5 ($resource_usage) could not be passed by reference",
+    );
+}
+
 /// Verifies PCNTL signal sets require indexed integer array storage.
 #[test]
 fn test_error_pcntl_signal_mask_requires_integer_array() {

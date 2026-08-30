@@ -1,6 +1,6 @@
 ---
 title: "pcntl_waitid()"
-description: "Waits for a child state change and writes its signal information."
+description: "Waits for a child state change and writes signal information plus optional PHP 8.5 resource usage."
 sidebar:
   order: 351
 ---
@@ -8,16 +8,17 @@ sidebar:
 ## pcntl_waitid()
 
 ```php
-function pcntl_waitid(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4): bool
+function pcntl_waitid(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool
 ```
 
-Waits for a child state change and writes its signal information.
+Waits for a child state change and writes signal information plus optional PHP 8.5 resource usage.
 
 **Parameters**:
 - `$idtype` (`int`), default `0`, optional
 - `$id` (`int`), default `null`, optional
 - `$info` (`mixed`), passed by reference, default `[]`, optional
 - `$flags` (`int`), default `4`, optional
+- `$resource_usage` (`mixed`), passed by reference, default `[]`, optional
 
 **Returns**: `bool`
 

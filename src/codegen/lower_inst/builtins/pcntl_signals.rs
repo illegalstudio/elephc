@@ -18,7 +18,7 @@ use crate::ir::{Instruction, LocalSlotId};
 use crate::types::PhpType;
 
 use super::pcntl::{
-    pcntl_output_local_slot, pcntl_siginfo_output_local_slot, store_pcntl_siginfo_array,
+    pcntl_optional_output_local_slot, pcntl_siginfo_output_local_slot, store_pcntl_siginfo_array,
 };
 use super::strings::load_as_int;
 use super::{ensure_arg_count_between, expect_operand, store_if_result};
@@ -44,12 +44,10 @@ pub(super) fn lower_sigprocmask(
     inst: &Instruction,
 ) -> Result<()> {
     ensure_arg_count_between(inst, "pcntl_sigprocmask", 2, 3)?;
-    let old_slot = inst
-        .operands
-        .get(2)
-        .copied()
-        .map(|value| pcntl_signal_array_output_local_slot(ctx, value, "pcntl_sigprocmask"))
-        .transpose()?;
+    let old_slot = match inst.operands.get(2).copied() {
+        Some(value) => pcntl_signal_array_output_local_slot(ctx, value, "pcntl_sigprocmask")?,
+        None => None,
+    };
     let failure = ctx.next_label("pcntl_sigprocmask_failure");
     let done = ctx.next_label("pcntl_sigprocmask_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, MASK_FRAME_BYTES);
@@ -155,12 +153,10 @@ pub(super) fn lower_signal_wait(
         "pcntl_sigwaitinfo"
     };
     ensure_arg_count_between(inst, name, 1, if timed { 4 } else { 2 })?;
-    let info_slot = inst
-        .operands
-        .get(1)
-        .copied()
-        .map(|value| pcntl_siginfo_output_local_slot(ctx, value, name))
-        .transpose()?;
+    let info_slot = match inst.operands.get(1).copied() {
+        Some(value) => pcntl_siginfo_output_local_slot(ctx, value, name)?,
+        None => None,
+    };
     let failure = ctx.next_label("pcntl_signal_wait_failure");
     let done = ctx.next_label("pcntl_signal_wait_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, WAIT_FRAME_BYTES);
@@ -418,15 +414,17 @@ fn pcntl_signal_array_output_local_slot(
     ctx: &FunctionContext<'_>,
     value: crate::ir::ValueId,
     name: &str,
-) -> Result<LocalSlotId> {
-    let slot = pcntl_output_local_slot(ctx, value, name, "old_signals")?;
+) -> Result<Option<LocalSlotId>> {
+    let Some(slot) = pcntl_optional_output_local_slot(ctx, value)? else {
+        return Ok(None);
+    };
     match ctx.local_php_type(slot)?.codegen_repr() {
         PhpType::Array(element)
             if matches!(&*element, PhpType::Int | PhpType::Never) =>
         {
-            Ok(slot)
+            Ok(Some(slot))
         }
-        PhpType::Mixed => Ok(slot),
+        PhpType::Mixed => Ok(Some(slot)),
         other => Err(CodegenIrError::unsupported(format!(
             "{name} old_signals local with incompatible storage {other:?}",
         ))),

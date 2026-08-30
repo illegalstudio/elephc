@@ -180,12 +180,46 @@ fn fork_waitid_populates_stable_siginfo() {
 
     let mut info = ElephcPcntlSigInfo::default();
     let success = unsafe {
-        elephc_pcntl_waitid(libc::P_PID as libc::c_int, pid, &mut info, libc::WEXITED)
+        elephc_pcntl_waitid(
+            libc::P_PID as libc::c_int,
+            pid,
+            &mut info,
+            libc::WEXITED,
+            std::ptr::null_mut(),
+        )
     };
     assert_eq!(success, 1);
     assert_eq!(info.pid, pid);
     assert_eq!(info.status, 29);
     assert_ne!(info.present & SIGINFO_STATUS, 0);
+}
+
+/// Reaps a real child through Linux raw `waitid` and copies PHP 8.5 resource usage.
+#[cfg(target_os = "linux")]
+#[test]
+fn fork_waitid_populates_stable_resource_usage() {
+    let _guard = PROCESS_TEST_LOCK.lock().expect("process test lock poisoned");
+    let pid = elephc_pcntl_fork();
+    assert!(pid >= 0, "fork failed with errno {}", elephc_pcntl_get_last_error());
+    if pid == 0 {
+        unsafe { libc::_exit(0) };
+    }
+
+    let mut info = ElephcPcntlSigInfo::default();
+    let mut usage = ElephcPcntlRUsage::default();
+    let success = unsafe {
+        elephc_pcntl_waitid(
+            libc::P_PID as libc::c_int,
+            pid,
+            &mut info,
+            libc::WEXITED,
+            &mut usage,
+        )
+    };
+    assert_eq!(success, 1);
+    assert_eq!(info.pid, pid);
+    assert!(usage.ru_utime_tv_sec >= 0);
+    assert!(usage.ru_stime_tv_sec >= 0);
 }
 
 /// Blocks one signal through the stable array ABI, returns the prior mask, and restores it.

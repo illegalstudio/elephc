@@ -466,12 +466,10 @@ fn lower_wait(
     ensure_arg_count_between(inst, name, min_args, max_args)?;
     let status_value = expect_operand(inst, status_index)?;
     let status_slot = pcntl_int_output_local_slot(ctx, status_value, name)?;
-    let usage_slot = inst
-        .operands
-        .get(usage_index)
-        .copied()
-        .map(|value| pcntl_rusage_output_local_slot(ctx, value, name))
-        .transpose()?;
+    let usage_slot = match inst.operands.get(usage_index).copied() {
+        Some(value) => pcntl_rusage_output_local_slot(ctx, value, name)?,
+        None => None,
+    };
     let output_frame_size = if usage_slot.is_some() { 160 } else { 16 };
     let usage_from_result = ctx.next_label("pcntl_wait_usage_from_result");
     let usage_ready = ctx.next_label("pcntl_wait_usage_ready");
@@ -601,63 +599,117 @@ fn lower_wait(
 
 /// Lowers `pcntl_waitid()` through a stable bridge siginfo record and conditional writeback.
 fn lower_waitid(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "pcntl_waitid", 0, 4)?;
-    let info_slot = inst
-        .operands
-        .get(2)
-        .copied()
-        .map(|value| pcntl_siginfo_output_local_slot(ctx, value, "pcntl_waitid"))
-        .transpose()?;
+    const INFO_OFFSET: usize = 0;
+    const USAGE_OFFSET: usize = 96;
+    const IDTYPE_OFFSET: usize = 232;
+    const ID_OFFSET: usize = 240;
+    const RESULT_OFFSET: usize = 248;
+    const FRAME_BYTES: usize = 256;
+
+    ensure_arg_count_between(inst, "pcntl_waitid", 0, 5)?;
+    let info_slot = match inst.operands.get(2).copied() {
+        Some(value) => pcntl_siginfo_output_local_slot(ctx, value, "pcntl_waitid")?,
+        None => None,
+    };
+    let usage_slot = if ctx.emitter.target.platform == Platform::Linux {
+        match inst.operands.get(4).copied() {
+            Some(value) => pcntl_rusage_output_local_slot(ctx, value, "pcntl_waitid")?,
+            None => None,
+        }
+    } else {
+        None
+    };
     let no_writeback = ctx.next_label("pcntl_waitid_no_info_writeback");
+    let usage_from_result = ctx.next_label("pcntl_waitid_usage_from_result");
+    let usage_ready = ctx.next_label("pcntl_waitid_usage_ready");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("sub sp, sp, #128");                        // reserve stable siginfo, scalar inputs, and result storage
+            ctx.emitter.instruction(&format!("sub sp, sp, #{FRAME_BYTES}"));    // reserve stable siginfo, rusage, scalar inputs, and result storage
             load_optional_int(ctx, inst.operands.first().copied(), 0, "pcntl_waitid idtype")?;
-            ctx.emitter.instruction("str x0, [sp, #96]");                       // preserve idtype while materializing the remaining inputs
+            abi::emit_store_to_sp(ctx.emitter, "x0", IDTYPE_OFFSET);
             load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_waitid id")?;
-            ctx.emitter.instruction("str x0, [sp, #104]");                      // preserve selected id
+            abi::emit_store_to_sp(ctx.emitter, "x0", ID_OFFSET);
             load_optional_int(ctx, inst.operands.get(3).copied(), 4, "pcntl_waitid flags")?;
             ctx.emitter.instruction("mov x3, x0");                              // C arg3 = wait flags
-            ctx.emitter.instruction("ldr x0, [sp, #96]");                       // C arg0 = id type
-            ctx.emitter.instruction("ldr x1, [sp, #104]");                      // C arg1 = selected id
-            ctx.emitter.instruction("mov x2, sp");                              // C arg2 = stable siginfo output
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", IDTYPE_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", ID_OFFSET);
+            abi::emit_temporary_stack_address(ctx.emitter, "x2", INFO_OFFSET);
+            if usage_slot.is_some() {
+                abi::emit_temporary_stack_address(ctx.emitter, "x4", USAGE_OFFSET);
+            } else {
+                ctx.emitter.instruction("mov x4, #0");                          // C arg4 = omitted PHP 8.5 usage output
+            }
             ctx.emitter.bl_c("elephc_pcntl_waitid");
-            ctx.emitter.instruction("str x0, [sp, #112]");                      // preserve boolean result across optional array creation
+            abi::emit_store_to_sp(ctx.emitter, "x0", RESULT_OFFSET);
             if let Some(slot) = info_slot {
                 ctx.emitter.instruction(&format!("cbz x0, {no_writeback}"));    // leave caller output unchanged on failure
                 ctx.release_local_before_refcounted_writeback(slot)?;
-                ctx.emitter.instruction("mov x0, sp");                          // pass the stable siginfo record to the array builder
+                abi::emit_temporary_stack_address(ctx.emitter, "x0", INFO_OFFSET);
                 abi::emit_call_label(ctx.emitter, "__rt_pcntl_siginfo_array");
                 store_pcntl_siginfo_array(ctx, slot)?;
                 ctx.emitter.label(&no_writeback);
             }
-            ctx.emitter.instruction("ldr x0, [sp, #112]");                      // restore boolean success result
-            ctx.emitter.instruction("add sp, sp, #128");                        // release stable output storage
+            if let Some(slot) = usage_slot {
+                ctx.release_local_before_refcounted_writeback(slot)?;
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", RESULT_OFFSET);
+                ctx.emitter.instruction(&format!("cbnz x9, {usage_from_result}")); // successful waitid always publishes all 17 usage fields
+                ctx.emitter.instruction("mov x0, #8");                          // failed Linux waitid initializes the by-ref output to []
+                ctx.emitter.instruction("mov x1, #0");                          // hash value type = Int
+                abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+                ctx.emitter.instruction(&format!("b {usage_ready}"));           // store the empty failure array
+                ctx.emitter.label(&usage_from_result);
+                abi::emit_temporary_stack_address(ctx.emitter, "x0", USAGE_OFFSET);
+                abi::emit_call_label(ctx.emitter, "__rt_pcntl_rusage_array");
+                ctx.emitter.label(&usage_ready);
+                store_pcntl_rusage_array(ctx, slot)?;
+            }
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", RESULT_OFFSET);
+            ctx.emitter.instruction(&format!("add sp, sp, #{FRAME_BYTES}"));    // release stable output storage
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("sub rsp, 128");                            // reserve stable siginfo, scalar inputs, and result storage
+            ctx.emitter.instruction(&format!("sub rsp, {FRAME_BYTES}"));        // reserve stable siginfo, rusage, scalar inputs, and result storage
             load_optional_int(ctx, inst.operands.first().copied(), 0, "pcntl_waitid idtype")?;
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 96], rax");           // preserve idtype while materializing the remaining inputs
+            abi::emit_store_to_sp(ctx.emitter, "rax", IDTYPE_OFFSET);
             load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_waitid id")?;
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 104], rax");          // preserve selected id
+            abi::emit_store_to_sp(ctx.emitter, "rax", ID_OFFSET);
             load_optional_int(ctx, inst.operands.get(3).copied(), 4, "pcntl_waitid flags")?;
             ctx.emitter.instruction("mov ecx, eax");                            // C arg3 = wait flags
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 96]");           // C arg0 = id type
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 104]");          // C arg1 = selected id
-            ctx.emitter.instruction("mov rdx, rsp");                            // C arg2 = stable siginfo output
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", IDTYPE_OFFSET);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", ID_OFFSET);
+            abi::emit_temporary_stack_address(ctx.emitter, "rdx", INFO_OFFSET);
+            if usage_slot.is_some() {
+                abi::emit_temporary_stack_address(ctx.emitter, "r8", USAGE_OFFSET);
+            } else {
+                ctx.emitter.instruction("xor r8d, r8d");                        // C arg4 = omitted PHP 8.5 usage output
+            }
             ctx.emitter.bl_c("elephc_pcntl_waitid");
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 112], rax");          // preserve boolean result across optional array creation
+            abi::emit_store_to_sp(ctx.emitter, "rax", RESULT_OFFSET);
             if let Some(slot) = info_slot {
                 ctx.emitter.instruction("test eax, eax");                       // leave caller output unchanged on failure
                 ctx.emitter.instruction(&format!("jz {no_writeback}"));         // preserve caller output when waitid fails
                 ctx.release_local_before_refcounted_writeback(slot)?;
-                ctx.emitter.instruction("mov rdi, rsp");                        // pass the stable siginfo record to the array builder
+                abi::emit_temporary_stack_address(ctx.emitter, "rdi", INFO_OFFSET);
                 abi::emit_call_label(ctx.emitter, "__rt_pcntl_siginfo_array");
                 store_pcntl_siginfo_array(ctx, slot)?;
                 ctx.emitter.label(&no_writeback);
             }
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 112]");          // restore boolean success result
-            ctx.emitter.instruction("add rsp, 128");                            // release stable output storage
+            if let Some(slot) = usage_slot {
+                ctx.release_local_before_refcounted_writeback(slot)?;
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "r9", RESULT_OFFSET);
+                ctx.emitter.instruction("test r9, r9");                         // distinguish a successful raw waitid syscall
+                ctx.emitter.instruction(&format!("jnz {usage_from_result}"));   // successful WNOHANG also publishes 17 zero fields
+                ctx.emitter.instruction("mov rdi, 8");                          // failed Linux waitid initializes the by-ref output to []
+                ctx.emitter.instruction("xor esi, esi");                        // hash value type = Int
+                abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+                ctx.emitter.instruction(&format!("jmp {usage_ready}"));         // store the empty failure array
+                ctx.emitter.label(&usage_from_result);
+                abi::emit_temporary_stack_address(ctx.emitter, "rdi", USAGE_OFFSET);
+                abi::emit_call_label(ctx.emitter, "__rt_pcntl_rusage_array");
+                ctx.emitter.label(&usage_ready);
+                store_pcntl_rusage_array(ctx, slot)?;
+            }
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", RESULT_OFFSET);
+            ctx.emitter.instruction(&format!("add rsp, {FRAME_BYTES}"));        // release stable output storage
         }
     }
     store_if_result(ctx, inst)
@@ -705,15 +757,17 @@ fn pcntl_rusage_output_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     name: &str,
-) -> Result<LocalSlotId> {
-    let slot = pcntl_output_local_slot(ctx, value, name, "resource_usage")?;
+) -> Result<Option<LocalSlotId>> {
+    let Some(slot) = pcntl_optional_output_local_slot(ctx, value)? else {
+        return Ok(None);
+    };
     match ctx.local_php_type(slot)?.codegen_repr() {
         PhpType::AssocArray { key, value }
             if key.codegen_repr() == PhpType::Str && value.codegen_repr() == PhpType::Int =>
         {
-            Ok(slot)
+            Ok(Some(slot))
         }
-        PhpType::Mixed => Ok(slot),
+        PhpType::Mixed => Ok(Some(slot)),
         other => Err(CodegenIrError::unsupported(format!(
             "{name} resource_usage local with incompatible storage {other:?}",
         ))),
@@ -725,53 +779,54 @@ pub(super) fn pcntl_siginfo_output_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
     name: &str,
-) -> Result<LocalSlotId> {
-    let slot = pcntl_output_local_slot(ctx, value, name, "info")?;
+) -> Result<Option<LocalSlotId>> {
+    let Some(slot) = pcntl_optional_output_local_slot(ctx, value)? else {
+        return Ok(None);
+    };
     match ctx.local_php_type(slot)?.codegen_repr() {
         PhpType::AssocArray { key, value }
             if key.codegen_repr() == PhpType::Str
                 && matches!(value.codegen_repr(), PhpType::Int | PhpType::Mixed) =>
         {
-            Ok(slot)
+            Ok(Some(slot))
         }
-        PhpType::Mixed => Ok(slot),
+        PhpType::Mixed => Ok(Some(slot)),
         other => Err(CodegenIrError::unsupported(format!(
             "{name} info local with incompatible storage {other:?}",
         ))),
     }
 }
 
-/// Resolves one write-only PCNTL operand to its source local slot.
-pub(super) fn pcntl_output_local_slot(
+/// Resolves a synthesized optional output operand to `None`, or returns its source local slot.
+///
+/// Shared named/spread planning materializes interior defaults when a later
+/// parameter is supplied. Those default arrays are not caller lvalues and must
+/// remain semantically omitted; direct source arguments have already been
+/// checked as variables before reaching EIR lowering.
+pub(super) fn pcntl_optional_output_local_slot(
     ctx: &FunctionContext<'_>,
     value: ValueId,
-    name: &str,
-    parameter: &str,
-) -> Result<LocalSlotId> {
+) -> Result<Option<LocalSlotId>> {
     let value_ref = ctx
         .function
         .value(value)
         .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
     let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Err(CodegenIrError::unsupported(format!(
-            "{name} {parameter} argument that is not a local variable",
-        )));
+        return Ok(None);
     };
     let inst_ref = ctx
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
     if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
-        return Err(CodegenIrError::unsupported(format!(
-            "{name} {parameter} argument that is not a local variable",
-        )));
+        return Ok(None);
     }
     let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
-        return Err(CodegenIrError::invalid_module(format!(
-            "{name} {parameter} load missing local slot",
-        )));
+        return Err(CodegenIrError::invalid_module(
+            "PCNTL output load missing local slot",
+        ));
     };
-    Ok(slot)
+    Ok(Some(slot))
 }
 
 /// Stores a fresh resource-usage hash into its typed or boxed PHP output local.

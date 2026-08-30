@@ -39,13 +39,13 @@ sidebar:
 ## Signature summary
 
 ```php
-function pcntl_waitid(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4): bool
+function pcntl_waitid(int $idtype = 0, int $id = null, mixed $info = [], int $flags = 4, mixed $resource_usage = []): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 0–4 arguments (4 optional).
-- **By-reference parameters**: `$info`.
+- **Arity**: takes 0–5 arguments (5 optional).
+- **By-reference parameters**: `$info`, `$resource_usage`.
 
 ## Eval interpreter (magician)
 
@@ -53,7 +53,7 @@ function pcntl_waitid(int $idtype = 0, int $id = null, mixed $info = [], int $fl
 - **Execution**: Magician interpreter adapter.
 - **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `direct`, `values`
-- **By-reference parameters**: `$info`.
+- **By-reference parameters**: `$info`, `$resource_usage`.
 
 ## Cross-references
 

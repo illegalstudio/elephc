@@ -27,7 +27,11 @@ const EXEC_FRAME_BYTES: usize = 64;
 /// Lowers one process-replacing `pcntl_exec()` call; only the failure path returns false.
 pub(super) fn lower_exec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "pcntl_exec", 1, 3)?;
-    let conversion_failure = ctx.next_label("pcntl_exec_conversion_failure");
+    let input_failure = ctx.next_label("pcntl_exec_input_failure");
+    let path_nul = ctx.next_label("pcntl_exec_path_nul");
+    let argument_nul = ctx.next_label("pcntl_exec_argument_nul");
+    let environment_name_nul = ctx.next_label("pcntl_exec_environment_name_nul");
+    let environment_value_nul = ctx.next_label("pcntl_exec_environment_value_nul");
     let failure = ctx.next_label("pcntl_exec_failure");
     let os_failure = ctx.next_label("pcntl_exec_os_failure");
     abi::emit_reserve_temporary_stack(ctx.emitter, EXEC_FRAME_BYTES);
@@ -49,17 +53,17 @@ pub(super) fn lower_exec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         BUILDER_OFFSET,
     );
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x0, {failure}")), // return false if builder allocation fails
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x0, {input_failure}")), // classify path NUL separately from allocation failure
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // inspect builder allocation success
-            ctx.emitter.instruction(&format!("jz {failure}"));                  // return false if builder allocation fails
+            ctx.emitter.instruction(&format!("jz {input_failure}"));            // classify path NUL separately from allocation failure
         }
     }
     if let Some(arguments) = inst.operands.get(1).copied() {
-        emit_string_array(ctx, arguments, false, &conversion_failure)?;
+        emit_string_array(ctx, arguments, false, &input_failure)?;
     }
     if let Some(environment) = inst.operands.get(2).copied() {
-        emit_string_array(ctx, environment, true, &conversion_failure)?;
+        emit_string_array(ctx, environment, true, &input_failure)?;
     }
     load_builder_argument(ctx);
     ctx.emitter.bl_c("elephc_pcntl_exec_run");
@@ -68,19 +72,69 @@ pub(super) fn lower_exec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {os_failure}")),  // warn after the failed process replacement
     }
 
-    ctx.emitter.label(&conversion_failure);
+    ctx.emitter.label(&input_failure);
     load_builder_argument(ctx);
     ctx.emitter.bl_c("elephc_pcntl_exec_free");
+    ctx.emitter.bl_c("elephc_pcntl_exec_input_error");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("b {failure}")),      // return false without an OS warning
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {failure}")),     // return false without an OS warning
+        Arch::AArch64 => {
+            for (classification, label) in [
+                (1, &path_nul),
+                (2, &argument_nul),
+                (3, &environment_name_nul),
+                (4, &environment_value_nul),
+            ] {
+                ctx.emitter.instruction(&format!("cmp w0, #{classification}")); // select PHP's precise embedded-NUL ValueError
+                ctx.emitter.instruction(&format!("b.eq {label}"));              // throw for the matching source argument
+            }
+            ctx.emitter.instruction(&format!("b {failure}"));                   // non-validation conversion failures return false
+        }
+        Arch::X86_64 => {
+            for (classification, label) in [
+                (1, &path_nul),
+                (2, &argument_nul),
+                (3, &environment_name_nul),
+                (4, &environment_value_nul),
+            ] {
+                ctx.emitter.instruction(&format!("cmp eax, {classification}")); // select PHP's precise embedded-NUL ValueError
+                ctx.emitter.instruction(&format!("je {label}"));                // throw for the matching source argument
+            }
+            ctx.emitter.instruction(&format!("jmp {failure}"));                 // non-validation conversion failures return false
+        }
     }
+    emit_exec_input_value_error(
+        ctx,
+        &path_nul,
+        "pcntl_exec(): Argument #1 ($path) must not contain any null bytes",
+    );
+    emit_exec_input_value_error(
+        ctx,
+        &argument_nul,
+        "pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes",
+    );
+    emit_exec_input_value_error(
+        ctx,
+        &environment_name_nul,
+        "pcntl_exec(): Argument #3 ($env_vars) name for environment variable must not contain null bytes",
+    );
+    emit_exec_input_value_error(
+        ctx,
+        &environment_value_nul,
+        "pcntl_exec(): Argument #3 ($env_vars) value for environment variable must not contain null bytes",
+    );
     ctx.emitter.label(&os_failure);
     emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_EXEC);
     ctx.emitter.label(&failure);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     abi::emit_release_temporary_stack(ctx.emitter, EXEC_FRAME_BYTES);
     store_if_result(ctx, inst)
+}
+
+/// Releases the exec staging frame and throws one precise embedded-NUL `ValueError`.
+fn emit_exec_input_value_error(ctx: &mut FunctionContext<'_>, label: &str, message: &str) {
+    ctx.emitter.label(label);
+    abi::emit_release_temporary_stack(ctx.emitter, EXEC_FRAME_BYTES);
+    super::super::exceptions::emit_value_error(ctx, message);
 }
 
 /// Traverses one indexed or associative string array and stages argv or envp entries.

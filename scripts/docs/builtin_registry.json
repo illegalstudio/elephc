@@ -61362,7 +61362,7 @@
     },
     "name": "pcntl_exec",
     "semantics": {
-      "argument_lowering": "pcntl_exec",
+      "argument_lowering": "pcntl_preserve_omitted",
       "callable": {
         "kind": "static_only",
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
@@ -61373,6 +61373,7 @@
           "reads_heap",
           "reads_process",
           "writes_process",
+          "may_throw",
           "may_warn"
         ]
       },
@@ -62826,7 +62827,7 @@
     },
     "name": "pcntl_signal",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "pcntl_preserve_omitted",
       "callable": {
         "kind": "static_only",
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
@@ -63232,7 +63233,7 @@
     },
     "name": "pcntl_sigprocmask",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "pcntl_preserve_omitted",
       "callable": {
         "kind": "static_only",
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
@@ -63419,7 +63420,7 @@
     },
     "name": "pcntl_sigtimedwait",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "pcntl_preserve_omitted",
       "callable": {
         "kind": "static_only",
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
@@ -63584,7 +63585,7 @@
     },
     "name": "pcntl_sigwaitinfo",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "pcntl_preserve_omitted",
       "callable": {
         "kind": "static_only",
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
@@ -64003,7 +64004,7 @@
     },
     "name": "pcntl_wait",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "pcntl_preserve_omitted",
       "callable": {
         "kind": "static_only",
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
@@ -64109,6 +64110,13 @@
           "name": "flags",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": true,
+          "default": [],
+          "name": "resource_usage",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 0,
@@ -64118,7 +64126,7 @@
     },
     "area": "Misc",
     "canonical_name": "pcntl_waitid",
-    "description": "Waits for a child state change and writes its signal information.",
+    "description": "Waits for a child state change and writes signal information plus optional PHP 8.5 resource usage.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "pcntl",
@@ -64157,6 +64165,13 @@
           "name": "flags",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": true,
+          "default": "[]",
+          "name": "resource_usage",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 0,
@@ -64188,7 +64203,7 @@
     },
     "name": "pcntl_waitid",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "pcntl_preserve_omitted",
       "callable": {
         "kind": "static_only",
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"
@@ -64262,6 +64277,13 @@
           "name": "flags",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": true,
+          "default": "[]",
+          "name": "resource_usage",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -64380,7 +64402,7 @@
     },
     "name": "pcntl_waitpid",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "pcntl_preserve_omitted",
       "callable": {
         "kind": "static_only",
         "reason": "PCNTL callbacks use a dedicated process-runtime ABI"

@@ -125,7 +125,7 @@ fn eval_pcntl_bound_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if name == "pcntl_exec" {
-        return eval_pcntl_exec_result(args, values);
+        return eval_pcntl_exec_result(args, context, values);
     }
     if let Some(result) = eval_pcntl_wait_result(name, args, mode, context, values)? {
         return Ok(result);

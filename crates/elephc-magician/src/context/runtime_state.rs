@@ -12,43 +12,23 @@
 use super::*;
 
 impl ElephcEvalContext {
-    /// Returns the eval-owned handler registered for one signal.
-    pub fn pcntl_signal_handler(&self, signal: i32) -> Option<EvalPcntlSignalHandler> {
-        self.pcntl_signal_handlers.get(&signal).copied()
-    }
-
-    /// Replaces one eval-owned signal handler and returns the previous entry.
-    pub fn set_pcntl_signal_handler(
+    /// Retains the foreign owner metadata needed to invoke one exported PCNTL handler callable.
+    pub(crate) fn retain_pcntl_foreign_callable(
         &mut self,
-        signal: i32,
-        handler: EvalPcntlSignalHandler,
-    ) -> Option<EvalPcntlSignalHandler> {
-        self.pcntl_signal_handlers.insert(signal, handler)
+        callback: RuntimeCellHandle,
+        owner: pcntl_runtime::EvalPcntlContextLease,
+    ) {
+        self.pcntl_foreign_callables
+            .insert(callback.as_ptr() as usize, owner);
     }
 
-    /// Returns whether Magician dispatches queued signal handlers at statement safe points.
-    pub const fn pcntl_async_signals(&self) -> bool {
-        self.pcntl_async_signals
-    }
-
-    /// Changes automatic signal dispatch and returns its prior state.
-    pub fn set_pcntl_async_signals(&mut self, enabled: bool) -> bool {
-        std::mem::replace(&mut self.pcntl_async_signals, enabled)
-    }
-
-    /// Enters the non-reentrant signal-dispatch region and reports whether entry succeeded.
-    pub fn begin_pcntl_dispatch(&mut self) -> bool {
-        if self.pcntl_dispatching {
-            false
-        } else {
-            self.pcntl_dispatching = true;
-            true
-        }
-    }
-
-    /// Leaves the signal-dispatch region after normal completion or exception cleanup.
-    pub fn end_pcntl_dispatch(&mut self) {
-        self.pcntl_dispatching = false;
+    /// Returns the retained owner lease for a PCNTL callable exported into this context.
+    pub(crate) fn pcntl_foreign_callable_owner(
+        &self,
+        callback: RuntimeCellHandle,
+    ) -> Option<&pcntl_runtime::EvalPcntlContextLease> {
+        self.pcntl_foreign_callables
+            .get(&(callback.as_ptr() as usize))
     }
 
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.

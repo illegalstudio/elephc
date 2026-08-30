@@ -154,13 +154,20 @@ fn eval_pcntl_waitid(
     let id = eval_pcntl_optional_int(eval_pcntl_arg(args, 1), 0, values)?;
     let info_arg = eval_pcntl_arg(args, 2);
     let flags = eval_pcntl_optional_int(eval_pcntl_arg(args, 3), 4, values)?;
+    let usage_arg = eval_pcntl_arg(args, 4);
     let mut info = ElephcPcntlSigInfo::default();
+    let mut usage = ElephcPcntlRUsage::default();
     let success = unsafe {
         elephc_pcntl::elephc_pcntl_waitid(
             id_type as libc::c_int,
             id,
             &mut info,
             flags as libc::c_int,
+            if cfg!(target_os = "linux") && usage_arg.is_some() {
+                &mut usage
+            } else {
+                std::ptr::null_mut()
+            },
         )
     } != 0;
     if success {
@@ -177,6 +184,24 @@ fn eval_pcntl_waitid(
                 values,
             )?;
         }
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(usage_arg) = usage_arg {
+        let usage = if success {
+            eval_pcntl_rusage_array(&usage, values)?
+        } else {
+            values.assoc_new(0)?
+        };
+        eval_pcntl_write_ref(
+            "pcntl_waitid",
+            5,
+            "resource_usage",
+            usage_arg,
+            usage,
+            mode,
+            context,
+            values,
+        )?;
     }
     values.bool_value(success)
 }

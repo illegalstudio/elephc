@@ -11,5 +11,8 @@ builtin! {
     contract: "pcntl_signal",
     check: super::pcntl_signal_support::check_signal,
     lazy_check: true,
-    semantics: crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::Signal),
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::Signal),
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted,
+    ),
 }

@@ -88,7 +88,7 @@ pub(super) fn lower_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
             lower_json_decode_args(ctx, sig, args)
         }
-        crate::builtins::semantics::BuiltinArgumentLowering::PcntlExec => {
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted => {
             lower_args_with_signature_trimming_trailing_defaults(ctx, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback
@@ -202,6 +202,10 @@ fn prepare_pcntl_output_local(
         ("pcntl_waitid", 2) => PhpType::AssocArray {
             key: Box::new(PhpType::Str),
             value: Box::new(PhpType::Mixed),
+        },
+        ("pcntl_waitid", 4) => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Int),
         },
         ("pcntl_sigprocmask", 2) => PhpType::Array(Box::new(PhpType::Int)),
         ("pcntl_sigwaitinfo", 1) | ("pcntl_sigtimedwait", 1) => PhpType::AssocArray {

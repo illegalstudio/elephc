@@ -161,8 +161,8 @@ pub enum BuiltinArgumentLowering {
     Date,
     /// Preserve JSON decode's source-sensitive option handling.
     JsonDecode,
-    /// Keep omitted trailing `pcntl_exec()` defaults absent after named/spread planning.
-    PcntlExec,
+    /// Keep source-sensitive omitted PCNTL defaults absent after named/spread planning.
+    PcntlPreserveOmitted,
     /// Lower a statically known callback descriptor before its subject.
     PregReplaceCallback,
     /// Keep positional regex operands in raw source order.

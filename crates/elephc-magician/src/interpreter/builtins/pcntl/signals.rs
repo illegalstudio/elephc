@@ -9,8 +9,22 @@
 //! - PHP callbacks execute synchronously through Magician after delivery returns to safe code.
 
 use super::*;
-use crate::context::EvalPcntlSignalHandler;
+use crate::context::{pcntl_runtime, EvalPcntlSignalHandler};
 use elephc_pcntl::{ElephcPcntlSigInfo, ElephcPcntlSignalMask};
+
+/// Pins one handler-owner context across every fallible step of callback dispatch.
+struct EvalHandlerDispatchGuard(*mut ElephcEvalContext);
+
+impl Drop for EvalHandlerDispatchGuard {
+    /// Releases the active-dispatch pin and finalizes a now-unreferenced detached context.
+    fn drop(&mut self) {
+        if pcntl_runtime::end_handler_dispatch(self.0) {
+            unsafe {
+                crate::ffi::context::drop_eval_context_now(self.0);
+            }
+        }
+    }
+}
 
 /// Evaluates signal-related PCNTL functions.
 pub(super) fn eval_pcntl_signal_result(
@@ -52,7 +66,7 @@ pub(in crate::interpreter) fn eval_pcntl_maybe_dispatch(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if context.pcntl_async_signals() {
+    if pcntl_runtime::async_signals() {
         eval_pcntl_dispatch_pending(context, values)?;
     }
     Ok(())
@@ -61,19 +75,20 @@ pub(in crate::interpreter) fn eval_pcntl_maybe_dispatch(
 /// Queries or changes automatic signal dispatch and returns the prior state.
 fn eval_pcntl_async_signals(
     args: &[Option<EvaluatedCallArg>],
-    context: &mut ElephcEvalContext,
+    _context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if args.len() > 1 {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let previous = match eval_pcntl_arg(args, 0) {
+    let requested = match eval_pcntl_arg(args, 0) {
         Some(enable) if !values.is_null(enable.value)? => {
             let enabled = values.truthy(enable.value)?;
-            context.set_pcntl_async_signals(enabled)
+            Some(enabled)
         }
-        Some(_) | None => context.pcntl_async_signals(),
+        Some(_) | None => None,
     };
+    let previous = pcntl_runtime::update_async_signals(requested);
     values.bool_value(previous)
 }
 
@@ -147,10 +162,12 @@ fn eval_pcntl_signal(
         ))?;
         return values.bool_value(false);
     }
-    if let Some(previous) = context.set_pcntl_signal_handler(signal as libc::c_int, stored) {
-        if let EvalPcntlSignalHandler::Callable(previous) = previous {
-            values.release(previous)?;
-        }
+    if let Some(previous) = pcntl_runtime::replace_signal_handler(
+        signal as libc::c_int,
+        context as *mut ElephcEvalContext,
+        stored,
+    ) {
+        release_replaced_pcntl_handler(previous, values)?;
     }
     values.bool_value(true)
 }
@@ -177,9 +194,23 @@ fn eval_pcntl_signal_get_handler(
             values,
         );
     }
-    match context.pcntl_signal_handler(signal as libc::c_int) {
-        Some(EvalPcntlSignalHandler::Callable(handler)) => values.retain(handler),
-        Some(EvalPcntlSignalHandler::Disposition(disposition)) => values.int(disposition),
+    match pcntl_runtime::signal_handler(signal as libc::c_int) {
+        Some(entry @ pcntl_runtime::EvalPcntlSignalEntry {
+            handler: EvalPcntlSignalHandler::Callable(handler),
+            ..
+        }) => {
+            let retained = values.retain(handler)?;
+            if !std::ptr::eq(entry.context, context as *mut ElephcEvalContext) {
+                if let Some(owner) = pcntl_runtime::begin_callable_use(handler, context) {
+                    context.retain_pcntl_foreign_callable(handler, owner);
+                }
+            }
+            Ok(retained)
+        }
+        Some(pcntl_runtime::EvalPcntlSignalEntry {
+            handler: EvalPcntlSignalHandler::Disposition(disposition),
+            ..
+        }) => values.int(disposition),
         None => values.int(0),
     }
 }
@@ -365,12 +396,12 @@ fn eval_pcntl_dispatch_pending(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    if !context.begin_pcntl_dispatch() {
+    if !pcntl_runtime::begin_dispatch() {
         return Ok(true);
     }
     let mut previous_mask = ElephcPcntlSignalMask::default();
     if unsafe { elephc_pcntl::elephc_pcntl_dispatch_begin(&mut previous_mask) } == 0 {
-        context.end_pcntl_dispatch();
+        pcntl_runtime::end_dispatch();
         return Ok(false);
     }
     let published = values.set_pcntl_dispatching(true);
@@ -382,7 +413,7 @@ fn eval_pcntl_dispatch_pending(
         eval_pcntl_discard_masked_snapshot();
     }
     let restored = unsafe { elephc_pcntl::elephc_pcntl_dispatch_end(&previous_mask) } != 0;
-    context.end_pcntl_dispatch();
+    pcntl_runtime::end_dispatch();
     let unpublished = values.set_pcntl_dispatching(false);
     match result {
         Ok(success) => {
@@ -414,18 +445,61 @@ fn eval_pcntl_dispatch_masked_snapshot(
             0 => return Ok(true),
             _ => {}
         }
-        let Some(EvalPcntlSignalHandler::Callable(handler)) =
-            context.pcntl_signal_handler(info.signo as libc::c_int)
+        let Some(entry) = pcntl_runtime::begin_handler_dispatch(info.signo as libc::c_int)
         else {
+            continue;
+        };
+        let _dispatch_guard = EvalHandlerDispatchGuard(entry.context);
+        let EvalPcntlSignalHandler::Callable(handler) = entry.handler else {
             continue;
         };
         let callback = values.retain(handler)?;
         let signal = values.int(info.signo)?;
         let info = eval_pcntl_siginfo_array(&info, values)?;
-        let result = eval_call_user_func_with_values(vec![callback, signal, info], context, values);
-        values.release(callback)?;
-        values.release(result?)?;
+        let current_context = context as *mut ElephcEvalContext;
+        let owner_context = if entry.context.is_null() {
+            current_context
+        } else {
+            entry.context
+        };
+        let result = unsafe {
+            eval_call_user_func_with_values(
+                vec![callback, signal, info],
+                &mut *owner_context,
+                values,
+            )
+        };
+        let result = match result {
+            Ok(result) => values.release(result),
+            Err(status) => {
+                if owner_context != current_context {
+                    if let Some(thrown) = unsafe { &mut *owner_context }.take_pending_throw() {
+                        context.set_pending_throw(thrown);
+                    }
+                }
+                Err(status)
+            }
+        };
+        let callback_release = values.release(callback);
+        callback_release?;
+        result?;
     }
+}
+
+/// Releases a replaced callable and reclaims its detached owner after the last handler leaves it.
+fn release_replaced_pcntl_handler(
+    previous: pcntl_runtime::EvalPcntlSignalEntry,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let EvalPcntlSignalHandler::Callable(callback) = previous.handler {
+        values.release(callback)?;
+    }
+    if pcntl_runtime::take_collectable_context(previous.context) {
+        unsafe {
+            crate::ffi::context::drop_eval_context_now(previous.context);
+        }
+    }
+    Ok(())
 }
 
 /// Discards the rest of a masked snapshot after one handler propagates a Throwable.

@@ -459,9 +459,15 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: Some(DefaultSpec::Int(4)),
                 by_ref: false,
             },
+            ParamSpec {
+                name: "resource_usage",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: true,
+            },
         ],
         TypeSpec::Bool,
-        "Waits for a child state change and writes its signal information.",
+        "Waits for a child state change and writes signal information plus optional PHP 8.5 resource usage.",
     ),
     pcntl_contract(
         "pcntl_waitpid",

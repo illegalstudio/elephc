@@ -11,5 +11,8 @@ builtin! {
     contract: "pcntl_sigwaitinfo",
     check: super::pcntl_signal_support::check_sigwaitinfo,
     lazy_check: true,
-    semantics: crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::SignalWaitInfo),
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::pcntl_semantics(crate::ir::PcntlRuntime::SignalWaitInfo),
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted,
+    ),
 }

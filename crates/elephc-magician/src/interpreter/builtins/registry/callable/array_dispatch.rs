@@ -17,6 +17,17 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_evaluated_callable_with_call_array_args(
+                callback,
+                evaluated_args,
+                owner_context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_callable_with_call_array_args(name, evaluated_args, context, values)
         }
