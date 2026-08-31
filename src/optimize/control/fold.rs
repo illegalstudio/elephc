@@ -369,14 +369,74 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
 pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
     body.into_iter()
         .flat_map(|stmt| {
+            let target_dependent_if = match &stmt.kind {
+                StmtKind::If {
+                    condition,
+                    elseif_clauses,
+                    ..
+                } => {
+                    target_dependent_condition(condition)
+                        || elseif_clauses
+                            .iter()
+                            .any(|(condition, _)| target_dependent_condition(condition))
+                }
+                _ => false,
+            };
             let stmt = fold_stmt(stmt);
-            if active_fold_target().is_some() {
+            if active_fold_target().is_some() && target_dependent_if {
                 prune_target_boolean_if(stmt)
             } else {
                 vec![stmt]
             }
         })
         .collect()
+}
+
+/// Detects conditions whose compile-time value depends on the selected output target.
+///
+/// Only these conditions may be structurally pruned before type checking. Ordinary constant
+/// conditions remain intact until the regular post-check optimizer so warning analysis still
+/// observes the source control-flow shape.
+fn target_dependent_condition(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::ConstRef(name) => matches!(
+            name.as_canonical().trim_start_matches('\\'),
+            "PHP_OS" | "PHP_OS_FAMILY"
+        ),
+        ExprKind::FunctionCall { name, args }
+            if name
+                .as_canonical()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("function_exists") =>
+        {
+            matches!(
+                args.as_slice(),
+                [Expr {
+                    kind: ExprKind::StringLiteral(candidate),
+                    ..
+                }] if crate::builtins::registry::lookup(candidate.trim_start_matches('\\')).is_some()
+            )
+        }
+        ExprKind::BinaryOp { left, right, .. } => {
+            target_dependent_condition(left) || target_dependent_condition(right)
+        }
+        ExprKind::Not(inner)
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::ErrorSuppress(inner) => target_dependent_condition(inner),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            target_dependent_condition(condition)
+                || target_dependent_condition(then_expr)
+                || target_dependent_condition(else_expr)
+        }
+        ExprKind::ShortTernary { value, default } => {
+            target_dependent_condition(value) || target_dependent_condition(default)
+        }
+        _ => false,
+    }
 }
 
 /// Removes only `if` arms whose target-dependent condition already folded to a boolean.
