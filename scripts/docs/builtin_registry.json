@@ -62840,7 +62840,7 @@
           "reads_process",
           "writes_process",
           "may_throw",
-          "may_warn"
+          "may_fatal"
         ]
       },
       "lowering": {

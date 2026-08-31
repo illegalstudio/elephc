@@ -119,13 +119,17 @@ The native OS handler only enqueues a stable record. PHP callables run later at
 - starting, resuming, throwing into, or suspending a Fiber from a handler throws
   `FiberError` because switching execution contexts during dispatch is unsafe.
 
-`pcntl_signal_get_handler()` returns the registered callable or integer
-disposition. A later eval context may fetch and invoke an eval handler, or wrap
-it with `Closure::fromCallable()`, while the owning context remains pinned. That
-foreign descriptor cannot cross from eval into compiled storage: direct results and
-nested array/object/global values that contain it are refused. An invalid signal
-number throws `ValueError`. If the OS rejects a valid registration,
-`pcntl_signal()` emits `E_WARNING` and returns `false`.
+`pcntl_signal_get_handler()` returns the registered callable in its original PHP
+shape: named handlers remain strings, method handlers remain arrays, and closures
+remain `Closure` objects. `SIG_DFL`, `SIG_IGN`, and never-configured signals return
+their integer dispositions. A later eval context may fetch and invoke an eval
+handler, or wrap it with `Closure::fromCallable()`, while the owning context
+remains pinned. That foreign descriptor cannot cross from eval into compiled
+storage: direct results and nested array/object/global values that contain it are
+refused. An invalid signal number throws `ValueError`. If the OS rejects a valid
+registration, including attempts to handle `SIGKILL` or `SIGSTOP`,
+`pcntl_signal()` raises PHP's unsuppressible fatal error and terminates the
+process.
 
 An eval context detached by a registered handler can therefore remain alive for
 the rest of the process. It is reclaimed only after its last handler is
