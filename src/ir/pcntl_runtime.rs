@@ -89,7 +89,7 @@ impl PcntlRuntime {
             Self::SetNs => (0, Some(2)),
             Self::SetProcessGroup => (2, Some(2)),
             Self::SetPriority => (1, Some(3)),
-            Self::SetQosClass => (0, Some(1)),
+            Self::SetQosClass => (1, Some(1)),
             Self::SetSession => (0, Some(0)),
             Self::Signal => (2, Some(3)),
             Self::SignalMask => (2, Some(3)),

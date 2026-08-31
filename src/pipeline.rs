@@ -480,7 +480,8 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
-    let ast = optimize::fold_constants(ast);
+    let ast = optimize::fold_constants_for_target(ast, target);
+    let ast = optimize::prune_constant_control_flow(ast, HashSet::new());
     timings.record_since("opt-fold", phase_started);
 
     crate::progress::phase("typecheck");

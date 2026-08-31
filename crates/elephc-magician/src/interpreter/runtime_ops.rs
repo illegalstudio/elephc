@@ -511,6 +511,14 @@ pub trait RuntimeValueOps {
         Ok(())
     }
 
+    /// Retains an AOT-installed signal handler value for eval introspection when available.
+    fn pcntl_aot_signal_handler(
+        &mut self,
+        _signal: i64,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 

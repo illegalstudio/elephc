@@ -73,7 +73,14 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_pcntl_setqos_class_wrong_args,
     "<?php pcntl_setqos_class(Pcntl\\QosClass::Default, Pcntl\\QosClass::Utility);",
-    "pcntl_setqos_class() takes at most 1 argument"
+    "pcntl_setqos_class() takes exactly 1 argument"
+);
+
+#[cfg(target_os = "macos")]
+expect_builtin_arity_error!(
+    test_error_pcntl_setqos_class_requires_argument,
+    "<?php pcntl_setqos_class();",
+    "pcntl_setqos_class() takes exactly 1 argument"
 );
 
 /// Verifies Darwin QoS selection accepts only the platform-injected enum type.
@@ -158,12 +165,12 @@ fn test_error_pcntl_exec_requires_argument_array() {
     );
 }
 
-/// Verifies `pcntl_exec()` rejects array values outside its supported string storage.
+/// Verifies `pcntl_exec()` rejects array values that PHP cannot coerce to strings.
 #[test]
 fn test_error_pcntl_exec_requires_string_array_values() {
     expect_error(
-        "<?php pcntl_exec('/bin/echo', [1]);",
-        "pcntl_exec() array values must use string storage",
+        "<?php pcntl_exec('/bin/echo', [[1]]);",
+        "pcntl_exec() array values must be coercible to string",
     );
 }
 

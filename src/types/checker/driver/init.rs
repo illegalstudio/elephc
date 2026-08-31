@@ -48,6 +48,7 @@ impl Checker {
     pub(super) fn new(target: Target) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
         // The PHP version surface. Only the TYPES are declared here — the values are baked per
         // compilation from `--php-version` / `--web` by `codegen::prescan::collect_constants`,
         // exactly as `PHP_OS`'s value is baked from the target platform.

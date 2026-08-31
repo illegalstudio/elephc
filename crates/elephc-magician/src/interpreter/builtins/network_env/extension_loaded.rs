@@ -32,6 +32,8 @@ const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "date",
     "ctype",
     "mbstring",
+    "pcntl",
+    "posix",
     "Reflection",
     "Zend OPcache",
 ];

@@ -5,7 +5,8 @@
 //! - `super::pcntl::lower()` for the typed `PcntlRuntime::Exec` operation.
 //!
 //! Key details:
-//! - Indexed and associative string arrays are traversed in PHP insertion order.
+//! - Indexed and associative arrays are traversed in PHP insertion order and scalar values
+//!   are coerced with PHP string rules before the bridge copies them.
 //! - The third argument's presence selects `execve`; omission preserves the host environment.
 
 use crate::codegen::context::FunctionContext;
@@ -22,6 +23,8 @@ const BUILDER_OFFSET: usize = 0;
 const CONTAINER_OFFSET: usize = 8;
 const CURSOR_OFFSET: usize = 16;
 const INDEX_OFFSET: usize = 24;
+const KEY_LOW_OFFSET: usize = 32;
+const KEY_HIGH_OFFSET: usize = 40;
 const EXEC_FRAME_BYTES: usize = 64;
 
 /// Lowers one process-replacing `pcntl_exec()` call; only the failure path returns false.
@@ -146,14 +149,13 @@ fn emit_string_array(
 ) -> Result<()> {
     let ty = ctx.value_php_type(value)?.codegen_repr();
     match ty {
-        PhpType::Array(element) if matches!(*element, PhpType::Never | PhpType::Void) => Ok(()),
-        PhpType::Array(element) if matches!(*element, PhpType::Str) => {
-            emit_indexed_string_array(ctx, value, environment, failure)
+        PhpType::Array(element) if matches!(*element, PhpType::Never) => Ok(()),
+        PhpType::Array(element) if exec_array_value_type_supported(&element) => {
+            emit_indexed_string_array(ctx, value, &element, environment, failure)
         }
-        PhpType::AssocArray { value: element, .. }
-            if matches!(*element, PhpType::Str | PhpType::Never | PhpType::Void) =>
-        {
-            emit_assoc_string_array(ctx, value, environment, failure)
+        PhpType::AssocArray { value: element, .. } if matches!(*element, PhpType::Never) => Ok(()),
+        PhpType::AssocArray { value: element, .. } if exec_array_value_type_supported(&element) => {
+            emit_assoc_string_array(ctx, value, &element, environment, failure)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "pcntl_exec array storage {other:?}",
@@ -161,10 +163,27 @@ fn emit_string_array(
     }
 }
 
+/// Returns whether one array storage type can follow PHP's scalar string conversion path.
+fn exec_array_value_type_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Str
+            | PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::TaggedScalar
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
+}
+
 /// Stages values from one packed PHP string array, using numeric environment keys when needed.
 fn emit_indexed_string_array(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
+    element: &PhpType,
     environment: bool,
     failure: &str,
 ) -> Result<()> {
@@ -190,10 +209,23 @@ fn emit_indexed_string_array(
             ctx.emitter.instruction("ldr x11, [x9]");                           // load the packed array's logical length
             ctx.emitter.instruction("cmp x10, x11");                            // compare the current index with the element count
             ctx.emitter.instruction(&format!("b.ge {done}"));                   // finish after the final packed entry
-            ctx.emitter.instruction("lsl x11, x10, #4");                        // string slots occupy sixteen bytes
+            let shift = if matches!(element.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
+                4
+            } else {
+                3
+            };
+            ctx.emitter.instruction(&format!("lsl x11, x10, #{shift}"));        // scale by the selected packed element width
             ctx.emitter.instruction("add x11, x9, x11");                        // advance to the selected string slot
             ctx.emitter.instruction("add x11, x11, #24");                       // skip the packed-array header
-            ctx.emitter.instruction("ldp x3, x4, [x11]");                       // load the borrowed value pointer and length
+            if element.codegen_repr() == PhpType::Str {
+                ctx.emitter.instruction("ldp x3, x4, [x11]");                   // load the borrowed string pointer and length
+            } else {
+                ctx.emitter.instruction("ldr x3, [x11]");                      // load one scalar or boxed Mixed array slot
+                if element.codegen_repr() == PhpType::TaggedScalar {
+                    ctx.emitter.instruction("ldr x5, [x11, #8]");               // load the inline nullable-scalar runtime tag
+                }
+                emit_loaded_exec_value_as_string(ctx, element)?;
+            }
             if environment {
                 ctx.emitter.instruction("mov x1, x10");                         // numeric environment key = packed index
                 ctx.emitter.instruction("mov x2, #-1");                         // key-high -1 marks an integer key
@@ -218,11 +250,23 @@ fn emit_indexed_string_array(
             ctx.emitter.instruction("cmp r10, r11");                            // compare the current index with the element count
             ctx.emitter.instruction(&format!("jge {done}"));                    // finish after the final packed entry
             ctx.emitter.instruction("mov r11, r10");                            // copy the index before scaling it
-            ctx.emitter.instruction("shl r11, 4");                              // string slots occupy sixteen bytes
+            let shift = if matches!(element.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
+                4
+            } else {
+                3
+            };
+            ctx.emitter.instruction(&format!("shl r11, {shift}"));              // scale by the selected packed element width
             ctx.emitter.instruction("add r11, r9");                             // advance to the selected string slot
             ctx.emitter.instruction("add r11, 24");                             // skip the packed-array header
-            ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                // load the borrowed value pointer
-            ctx.emitter.instruction("mov r8, QWORD PTR [r11 + 8]");             // load the borrowed value length
+            ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                // load the borrowed string pointer or scalar payload
+            if element.codegen_repr() == PhpType::Str {
+                ctx.emitter.instruction("mov r8, QWORD PTR [r11 + 8]");         // load the borrowed string length
+            } else {
+                if element.codegen_repr() == PhpType::TaggedScalar {
+                    ctx.emitter.instruction("mov r9, QWORD PTR [r11 + 8]");     // load the inline nullable-scalar runtime tag
+                }
+                emit_loaded_exec_value_as_string(ctx, element)?;
+            }
             if environment {
                 ctx.emitter.instruction("mov rsi, r10");                        // numeric environment key = packed index
                 ctx.emitter.instruction("mov rdx, -1");                         // key-high -1 marks an integer key
@@ -250,6 +294,7 @@ fn emit_indexed_string_array(
 fn emit_assoc_string_array(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
+    element: &PhpType,
     environment: bool,
     failure: &str,
 ) -> Result<()> {
@@ -277,6 +322,19 @@ fn emit_assoc_string_array(
             ctx.emitter.instruction(&format!("b.eq {done}"));                   // finish after the terminal cursor
             abi::emit_store_to_sp(ctx.emitter, "x0", CURSOR_OFFSET);
             if environment {
+                abi::emit_store_to_sp(ctx.emitter, "x1", KEY_LOW_OFFSET);
+                abi::emit_store_to_sp(ctx.emitter, "x2", KEY_HIGH_OFFSET);
+            }
+            if element.codegen_repr() != PhpType::Str {
+                if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                    emit_exec_assoc_mixed_string(ctx)?;
+                } else {
+                    emit_loaded_exec_value_as_string(ctx, element)?;
+                }
+            }
+            if environment {
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", KEY_LOW_OFFSET);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", KEY_HIGH_OFFSET);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", BUILDER_OFFSET);
                 ctx.emitter.bl_c("elephc_pcntl_exec_add_env");
             } else {
@@ -296,7 +354,19 @@ fn emit_assoc_string_array(
             ctx.emitter.instruction(&format!("je {done}"));                     // finish after the terminal cursor
             abi::emit_store_to_sp(ctx.emitter, "rax", CURSOR_OFFSET);
             if environment {
-                ctx.emitter.instruction("mov rsi, rdi");                        // move the iterator key into bridge key-low
+                abi::emit_store_to_sp(ctx.emitter, "rdi", KEY_LOW_OFFSET);
+                abi::emit_store_to_sp(ctx.emitter, "rdx", KEY_HIGH_OFFSET);
+            }
+            if element.codegen_repr() != PhpType::Str {
+                if matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                    emit_exec_assoc_mixed_string(ctx)?;
+                } else {
+                    emit_loaded_exec_value_as_string(ctx, element)?;
+                }
+            }
+            if environment {
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", KEY_LOW_OFFSET);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", KEY_HIGH_OFFSET);
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", BUILDER_OFFSET);
                 ctx.emitter.bl_c("elephc_pcntl_exec_add_env");
             } else {
@@ -312,6 +382,256 @@ fn emit_assoc_string_array(
     }
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Converts a raw array value in `x3`/`rcx` (plus hash tag `x5`/`r9`) to string regs.
+fn emit_loaded_exec_value_as_string(
+    ctx: &mut FunctionContext<'_>,
+    element: &PhpType,
+) -> Result<()> {
+    match element.codegen_repr() {
+        PhpType::Int => emit_exec_int_string(ctx),
+        PhpType::Float => emit_exec_float_string(ctx),
+        PhpType::Bool | PhpType::False => emit_exec_bool_string(ctx),
+        PhpType::Void => emit_exec_empty_string(ctx),
+        PhpType::TaggedScalar => emit_exec_tagged_scalar_string(ctx),
+        PhpType::Mixed | PhpType::Union(_) => emit_exec_mixed_string(ctx),
+        other => Err(CodegenIrError::unsupported(format!(
+            "pcntl_exec scalar string coercion for {other:?}",
+        ))),
+    }
+}
+
+/// Converts an inline nullable integer, whose tag is in `x5`/`r9`, to PHP string registers.
+fn emit_exec_tagged_scalar_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let null = ctx.next_label("pcntl_exec_tagged_null");
+    let done = ctx.next_label("pcntl_exec_tagged_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x5, #8");
+            ctx.emitter.instruction(&format!("b.eq {null}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp r9, 8");
+            ctx.emitter.instruction(&format!("je {null}"));
+        }
+    }
+    emit_exec_int_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null);
+    emit_exec_empty_string(ctx)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Materializes PHP's empty-string conversion into the exec staging value registers.
+fn emit_exec_empty_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let (label, _) = ctx.data.add_string(b"");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x3", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x4", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rcx", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
+        }
+    }
+    Ok(())
+}
+
+/// Converts the loaded integer payload to the target's temporary string pair.
+fn emit_exec_int_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x3"),
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rcx"),
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    move_exec_string_result(ctx);
+    Ok(())
+}
+
+/// Converts the loaded float bits to the target's temporary string pair.
+fn emit_exec_float_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("fmov d0, x3"),
+        Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rcx"),
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    move_exec_string_result(ctx);
+    Ok(())
+}
+
+/// Converts the loaded boolean payload using PHP's `true => "1"`, `false => ""` rule.
+fn emit_exec_bool_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let false_label = ctx.next_label("pcntl_exec_bool_false");
+    let done = ctx.next_label("pcntl_exec_bool_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x3, {false_label}")),
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rcx, rcx");
+            ctx.emitter.instruction(&format!("jz {false_label}"));
+        }
+    }
+    emit_exec_int_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&false_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, xzr");
+            ctx.emitter.instruction("mov x4, xzr");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor ecx, ecx");
+            ctx.emitter.instruction("xor r8d, r8d");
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Converts one boxed Mixed array payload or throws when PHP cannot stringify its runtime tag.
+fn emit_exec_mixed_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let from_int = ctx.next_label("pcntl_exec_mixed_int");
+    let from_string = ctx.next_label("pcntl_exec_mixed_string");
+    let from_float = ctx.next_label("pcntl_exec_mixed_float");
+    let from_bool = ctx.next_label("pcntl_exec_mixed_bool");
+    let from_null = ctx.next_label("pcntl_exec_mixed_null");
+    let done = ctx.next_label("pcntl_exec_mixed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x3");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            for (tag, label) in [(0, &from_int), (1, &from_string), (2, &from_float), (3, &from_bool), (8, &from_null)] {
+                ctx.emitter.instruction(&format!("cmp x0, #{tag}"));
+                ctx.emitter.instruction(&format!("b.eq {label}"));
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rcx");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            for (tag, label) in [(0, &from_int), (1, &from_string), (2, &from_float), (3, &from_bool), (8, &from_null)] {
+                ctx.emitter.instruction(&format!("cmp rax, {tag}"));
+                ctx.emitter.instruction(&format!("je {label}"));
+            }
+        }
+    }
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "pcntl_exec(): array value could not be converted to string",
+    );
+    ctx.emitter.label(&from_int);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x3, x1"),
+        Arch::X86_64 => ctx.emitter.instruction("mov rcx, rdi"),
+    }
+    emit_exec_int_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&from_string);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x1");
+            ctx.emitter.instruction("mov x4, x2");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rdi");
+            ctx.emitter.instruction("mov r8, rdx");
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&from_float);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x3, x1"),
+        Arch::X86_64 => ctx.emitter.instruction("mov rcx, rdi"),
+    }
+    emit_exec_float_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&from_bool);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x3, x1"),
+        Arch::X86_64 => ctx.emitter.instruction("mov rcx, rdi"),
+    }
+    emit_exec_bool_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&from_null);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, xzr");
+            ctx.emitter.instruction("mov x4, xzr");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor ecx, ecx");
+            ctx.emitter.instruction("xor r8d, r8d");
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Converts one hash-iterator Mixed payload whose tag is already in `x5`/`r9`.
+fn emit_exec_assoc_mixed_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let from_int = ctx.next_label("pcntl_exec_assoc_mixed_int");
+    let from_string = ctx.next_label("pcntl_exec_assoc_mixed_string");
+    let from_float = ctx.next_label("pcntl_exec_assoc_mixed_float");
+    let from_bool = ctx.next_label("pcntl_exec_assoc_mixed_bool");
+    let from_null = ctx.next_label("pcntl_exec_assoc_mixed_null");
+    let done = ctx.next_label("pcntl_exec_assoc_mixed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            for (tag, label) in [(0, &from_int), (1, &from_string), (2, &from_float), (3, &from_bool), (8, &from_null)] {
+                ctx.emitter.instruction(&format!("cmp x5, #{tag}"));
+                ctx.emitter.instruction(&format!("b.eq {label}"));
+            }
+        }
+        Arch::X86_64 => {
+            for (tag, label) in [(0, &from_int), (1, &from_string), (2, &from_float), (3, &from_bool), (8, &from_null)] {
+                ctx.emitter.instruction(&format!("cmp r9, {tag}"));
+                ctx.emitter.instruction(&format!("je {label}"));
+            }
+        }
+    }
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "pcntl_exec(): array value could not be converted to string",
+    );
+    ctx.emitter.label(&from_int);
+    emit_exec_int_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&from_string);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&from_float);
+    emit_exec_float_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&from_bool);
+    emit_exec_bool_string(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&from_null);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, xzr");
+            ctx.emitter.instruction("mov x4, xzr");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("xor ecx, ecx");
+            ctx.emitter.instruction("xor r8d, r8d");
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Moves the canonical string result into the bridge's value pointer/length registers.
+fn move_exec_string_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x1");
+            ctx.emitter.instruction("mov x4, x2");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");
+            ctx.emitter.instruction("mov r8, rdx");
+        }
+    }
 }
 
 /// Loads the staged builder into the target's first C argument register.

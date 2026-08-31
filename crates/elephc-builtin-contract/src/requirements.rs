@@ -31,6 +31,7 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
         &[
             "pcntl_alarm",
             "pcntl_async_signals",
+            "pcntl_daemon",
             "pcntl_exec",
             "pcntl_errno",
             "pcntl_fork",
@@ -61,6 +62,8 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "pcntl_wifstopped",
             "pcntl_wstopsig",
             "pcntl_wtermsig",
+            "posix_setpgid",
+            "posix_setsid",
         ],
     ) {
         return PCNTL;

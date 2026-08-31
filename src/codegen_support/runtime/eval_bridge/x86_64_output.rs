@@ -218,6 +218,15 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal retain register
     emitter.instruction("jmp __rt_incref");                                     // retain one eval-owned boxed Mixed cell
 
+    label_c_global(emitter, "__elephc_eval_pcntl_aot_signal_handler");
+    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
+    emitter.instruction("mov rax, QWORD PTR [r10 + rdi*8]");                    // load the AOT table's original boxed PHP handler
+    emitter.instruction("test rax, rax");                                      // untouched entries have no handler owner
+    emitter.instruction("jz __elephc_eval_pcntl_aot_signal_handler_none_x86");  // return null for an empty table entry
+    emitter.instruction("jmp __rt_incref");                                    // give eval an independent owner of the handler value
+    emitter.label("__elephc_eval_pcntl_aot_signal_handler_none_x86");
+    emitter.instruction("ret");                                                // return the null pointer already held in rax
+
     label_c_global(emitter, "__elephc_eval_value_final_object_identity");
     emitter.instruction("mov rax, rdi");                                        // inspect the C boxed Mixed argument without changing refcounts
     emitter.instruction("test rax, rax");                                       // null handles cannot release an object

@@ -196,6 +196,14 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_retain");
     emitter.instruction("b __rt_incref");                                       // retain one eval-owned boxed Mixed cell
 
+    label_c_global(emitter, "__elephc_eval_pcntl_aot_signal_handler");
+    abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_handler_value");
+    emitter.instruction("ldr x0, [x9, x0, lsl #3]");                           // load the AOT table's original boxed PHP handler
+    emitter.instruction("cbz x0, __elephc_eval_pcntl_aot_signal_handler_none"); // untouched entries have no handler owner
+    emitter.instruction("b __rt_incref");                                      // give eval an independent owner of the handler value
+    emitter.label("__elephc_eval_pcntl_aot_signal_handler_none");
+    emitter.instruction("ret");                                                // return null for an empty AOT table entry
+
     label_c_global(emitter, "__elephc_eval_value_final_object_identity");
     emitter.instruction("cbz x0, __elephc_eval_value_final_object_none");       // null handles cannot release an object
     emitter.label("__elephc_eval_value_final_object_loop");

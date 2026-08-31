@@ -14,6 +14,11 @@ use elephc_pcntl::{ElephcPcntlRUsage, ElephcPcntlSigInfo};
 /// Copies an eval indexed array into widened native integers.
 pub(super) fn eval_pcntl_int_array(
     array: RuntimeCellHandle,
+    name: &str,
+    argument: usize,
+    parameter: &str,
+    element_name: &str,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<i64>, EvalStatus> {
     if !values.is_array_like(array)? {
@@ -24,6 +29,19 @@ pub(super) fn eval_pcntl_int_array(
     for position in 0..len {
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
+        let tag = values.type_tag(value)?;
+        if tag == EVAL_TAG_STRING
+            && !eval_is_numeric_string(&values.string_bytes(value)?)
+        {
+            let _: RuntimeCellHandle = eval_throw_type_error(
+                &format!(
+                    "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, string given"
+                ),
+                context,
+                values,
+            )?;
+            return Err(EvalStatus::RuntimeFatal);
+        }
         result.push(eval_int_value(value, values)?);
     }
     Ok(result)

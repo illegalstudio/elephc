@@ -122,11 +122,23 @@ fn eval_pcntl_getpriority(
     let process_id = eval_pcntl_optional_int(eval_pcntl_arg(args, 0), 0, values)?;
     let mode = eval_pcntl_optional_int(eval_pcntl_arg(args, 1), 0, values)?;
     eval_validate_priority_mode("pcntl_getpriority", 2, mode, context, values)?;
+    eval_validate_darwin_thread_process_id(
+        "pcntl_getpriority",
+        1,
+        2,
+        process_id,
+        mode,
+        context,
+        values,
+    )?;
     let mut priority = 0;
     let success = unsafe {
         elephc_pcntl::elephc_pcntl_getpriority(process_id, mode as libc::c_int, &mut priority)
     };
     if success == 0 {
+        values.warning(&elephc_pcntl::pcntl_last_error_warning(
+            elephc_pcntl::PCNTL_WARNING_GETPRIORITY,
+        ))?;
         values.bool_value(false)
     } else {
         values.int(i64::from(priority))
@@ -143,13 +155,71 @@ fn eval_pcntl_setpriority(
     let process_id = eval_pcntl_optional_int(eval_pcntl_arg(args, 1), 0, values)?;
     let mode = eval_pcntl_optional_int(eval_pcntl_arg(args, 2), 0, values)?;
     eval_validate_priority_mode("pcntl_setpriority", 3, mode, context, values)?;
-    values.bool_value(
-        elephc_pcntl::elephc_pcntl_setpriority(
-            priority as libc::c_int,
-            process_id,
-            mode as libc::c_int,
-        ) != 0,
-    )
+    eval_validate_darwin_thread_process_id(
+        "pcntl_setpriority",
+        2,
+        3,
+        process_id,
+        mode,
+        context,
+        values,
+    )?;
+    let success = elephc_pcntl::elephc_pcntl_setpriority(
+        priority as libc::c_int,
+        process_id,
+        mode as libc::c_int,
+    ) != 0;
+    if !success {
+        values.warning(&elephc_pcntl::pcntl_last_error_warning(
+            elephc_pcntl::PCNTL_WARNING_SETPRIORITY,
+        ))?;
+    }
+    values.bool_value(success)
+}
+
+/// Enforces Darwin's current-thread-only process id rule for `PRIO_DARWIN_THREAD`.
+fn eval_validate_darwin_thread_process_id(
+    name: &str,
+    argument: usize,
+    mode_argument: usize,
+    process_id: i64,
+    mode: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    #[cfg(target_os = "macos")]
+    if mode == 3 && process_id != 0 {
+        let _: RuntimeCellHandle = eval_throw_builtin_value_error(
+            &format!(
+                "{name}(): Argument #{argument} ($process_id) must be 0 (zero) if PRIO_DARWIN_THREAD is provided as {} parameter",
+                ordinal_parameter(mode_argument)
+            ),
+            context,
+            values,
+        )?;
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (
+        name,
+        argument,
+        mode_argument,
+        process_id,
+        mode,
+        context,
+        values,
+    );
+    Ok(())
+}
+
+/// Returns the ordinal word PHP uses for a one-based parameter position.
+#[cfg(target_os = "macos")]
+fn ordinal_parameter(position: usize) -> &'static str {
+    match position {
+        2 => "second",
+        3 => "third",
+        _ => "selected",
+    }
 }
 
 /// Raises PHP's target-specific `ValueError` for an unsupported priority selector.
@@ -263,7 +333,15 @@ fn eval_pcntl_setcpuaffinity(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let process_id = eval_pcntl_optional_int(eval_pcntl_arg(args, 0), 0, values)?;
-    let cpus = eval_pcntl_int_array(eval_pcntl_required_arg(args, 1)?.value, values)?;
+    let cpus = eval_pcntl_int_array(
+        eval_pcntl_required_arg(args, 1)?.value,
+        "pcntl_setcpuaffinity",
+        2,
+        "cpu_ids",
+        "CPU id",
+        context,
+        values,
+    )?;
     let result = unsafe {
         elephc_pcntl::elephc_pcntl_setcpuaffinity(process_id, cpus.as_ptr(), cpus.len())
     };

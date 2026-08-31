@@ -14,6 +14,7 @@ use crate::parser::ast::{
     InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
 use crate::span::Span;
+use crate::codegen_support::platform::Target;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -50,6 +51,7 @@ thread_local! {
     static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<Rc<InstanceDispatchMetadata>>> = const { RefCell::new(None) };
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
 }
 
 /// Borrows the active function-effect summary without cloning its whole map.
@@ -91,6 +93,24 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 pub fn fold_constants(program: Program) -> Program {
     let program = crate::superglobals::seed_cli_populated_superglobals(program);
     program.into_iter().map(fold_stmt).collect()
+}
+
+/// Folds constants whose values or builtin availability depend on the compile target.
+///
+/// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and
+/// `function_exists()` guards can remove branches containing target-unavailable builtins.
+pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
+    ACTIVE_FOLD_TARGET.with(|slot| {
+        let previous = slot.replace(Some(target));
+        let folded = fold_constants(program);
+        slot.replace(previous);
+        folded
+    })
+}
+
+/// Borrows the target selected for the current constant-folding pass.
+pub(in crate::optimize) fn active_fold_target() -> Option<Target> {
+    ACTIVE_FOLD_TARGET.with(|slot| *slot.borrow())
 }
 
 /// Propagates scalar constants across statements and control flow.

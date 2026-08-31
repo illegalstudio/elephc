@@ -50,6 +50,10 @@ pub const PCNTL_WARNING_SETNS: libc::c_int = 3;
 pub const PCNTL_WARNING_UNSHARE: libc::c_int = 4;
 /// Selects PHP's CPU-affinity failure warning in the stable formatting ABI.
 pub const PCNTL_WARNING_CPU_AFFINITY: libc::c_int = 5;
+/// Selects PHP's `pcntl_getpriority()` failure warning in the stable formatting ABI.
+pub const PCNTL_WARNING_GETPRIORITY: libc::c_int = 6;
+/// Selects PHP's `pcntl_setpriority()` failure warning in the stable formatting ABI.
+pub const PCNTL_WARNING_SETPRIORITY: libc::c_int = 7;
 
 /// Reads the current thread's OS errno without mutating PCNTL state.
 fn current_errno() -> libc::c_int {
@@ -236,6 +240,25 @@ pub fn pcntl_last_error_warning(kind: libc::c_int) -> String {
                 _ => format!("Error {error}"),
             };
             format!("Warning: pcntl_setcpuaffinity(): {detail}\n")
+        }
+        PCNTL_WARNING_GETPRIORITY => match error {
+            libc::ESRCH => format!(
+                "Warning: pcntl_getpriority(): Error {error}: No process was located using the given parameters\n"
+            ),
+            _ => format!(
+                "Warning: pcntl_getpriority(): Unknown error {error} has occurred\n"
+            ),
+        },
+        PCNTL_WARNING_SETPRIORITY => {
+            let detail = match error {
+                libc::ESRCH => "No process was located using the given parameters",
+                libc::EPERM => "A process was located, but neither its effective nor real user ID matched the effective user ID of the caller",
+                libc::EACCES => "Only a super user may attempt to increase the process priority",
+                _ => return format!(
+                    "Warning: pcntl_setpriority(): Unknown error {error} has occurred\n"
+                ),
+            };
+            format!("Warning: pcntl_setpriority(): Error {error}: {detail}\n")
         }
         _ => "Warning: PCNTL operation failed\n".to_string(),
     }

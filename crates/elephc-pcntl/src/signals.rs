@@ -28,6 +28,7 @@ const SIGNAL_OVERFLOW_CAPACITY: usize = 4096;
 static SIGNAL_PIPES: OnceLock<SignalPipes> = OnceLock::new();
 static OVERFLOW_QUEUES: [OverflowQueue; SIGNAL_OWNER_COUNT] =
     [const { OverflowQueue::new() }; SIGNAL_OWNER_COUNT];
+static SIGNAL_OWNERS: [AtomicI32; 128] = [const { AtomicI32::new(0) }; 128];
 
 /// Backend-specific descriptor pairs used to keep AOT and eval drains independent.
 struct SignalPipes {
@@ -537,6 +538,18 @@ pub extern "C" fn elephc_pcntl_signal_limit() -> libc::c_int {
     signal_limit()
 }
 
+/// Returns the backend that most recently installed the selected signal disposition.
+#[no_mangle]
+pub extern "C" fn elephc_pcntl_signal_owner(signal: libc::c_int) -> libc::c_int {
+    let Ok(index) = usize::try_from(signal) else {
+        return 0;
+    };
+    SIGNAL_OWNERS
+        .get(index)
+        .map(|owner| owner.load(Ordering::Acquire))
+        .unwrap_or(0)
+}
+
 /// Installs a default, ignored, or queued PCNTL signal disposition.
 ///
 /// `disposition` uses the bridge-private values zero for `SIG_DFL`, one for `SIG_IGN`, and two
@@ -581,6 +594,7 @@ pub extern "C" fn elephc_pcntl_signal(
         record_errno();
         return 0;
     }
+    SIGNAL_OWNERS[signal as usize].store(owner, Ordering::Release);
     1
 }
 

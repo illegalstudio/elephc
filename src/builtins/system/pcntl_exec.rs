@@ -5,7 +5,7 @@
 //! - `crate::builtins::registry` while collecting AOT builtin homes.
 //!
 //! Key details:
-//! - Argument and environment values use homogeneous string storage (or an empty array).
+//! - Argument and environment values accept PHP scalar-to-string coercion.
 //! - Successful execution replaces the process; false is the only returning result.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -43,11 +43,23 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 ));
             }
         };
-        if !matches!(value_ty, PhpType::Str | PhpType::Never) {
+        if !matches!(
+            value_ty.codegen_repr(),
+            PhpType::Str
+                | PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::False
+                | PhpType::Void
+                | PhpType::Never
+                | PhpType::TaggedScalar
+                | PhpType::Mixed
+                | PhpType::Union(_)
+        ) {
             return Err(CompileError::new(
                 value.span,
                 &format!(
-                    "pcntl_exec() array values must use string storage, {value_ty:?} given"
+                    "pcntl_exec() array values must be coercible to string, {value_ty:?} given"
                 ),
             ));
         }

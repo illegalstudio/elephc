@@ -64,6 +64,59 @@ fn test_pcntl_scalar_bridge_and_extension_loading() {
     assert_eq!(out, "message|0|0:0|loaded");
 }
 
+/// Preserves checker-resolved PCNTL result types when an untyped closure returns them directly.
+#[test]
+fn test_pcntl_untyped_closure_preserves_builtin_return_type() {
+    let out = compile_and_run(
+        "<?php
+        $message = function () { return pcntl_strerror(22); };
+        $registered = function () { return pcntl_signal(SIGUSR1, SIG_IGN); };
+        echo gettype($message()) . ':' . (strlen($message()) > 0 ? 'message' : 'empty') . '|';
+        echo gettype($registered()) . ':' . ($registered() ? 'true' : 'false');
+        pcntl_signal(SIGUSR1, SIG_DFL);",
+    );
+    assert_eq!(out, "string:message|boolean:true");
+}
+
+/// Reports both PCNTL and POSIX as loaded surfaces when their shared bridge is linked.
+#[test]
+fn test_pcntl_bridge_reports_posix_extension_surface() {
+    let out = compile_and_run(
+        "<?php $signal = SIGCHLD;
+        echo extension_loaded('pcntl') ? 'pcntl|' : 'bad|';
+        echo extension_loaded('posix') ? 'posix' : 'bad';",
+    );
+    assert_eq!(out, "pcntl|posix");
+}
+
+/// Exposes PHP's target-derived OS family constant alongside `PHP_OS`.
+#[test]
+fn test_pcntl_php_os_family_matches_host() {
+    let out = compile_and_run("<?php echo PHP_OS . '|' . PHP_OS_FAMILY;");
+    #[cfg(target_os = "macos")]
+    assert_eq!(out, "Darwin|Darwin");
+    #[cfg(target_os = "linux")]
+    assert_eq!(out, "Linux|Linux");
+}
+
+/// Prunes target-unavailable PCNTL calls behind literal availability and OS-family guards.
+#[test]
+fn test_pcntl_target_guards_prune_unavailable_calls_before_typecheck() {
+    #[cfg(target_os = "linux")]
+    let source = "<?php
+        if (function_exists('pcntl_getqos_class')) { pcntl_getqos_class(); }
+        else { echo 'function|'; }
+        if (PHP_OS_FAMILY === 'Darwin') { pcntl_getqos_class(); }
+        else { echo 'family'; }";
+    #[cfg(target_os = "macos")]
+    let source = "<?php
+        if (function_exists('pcntl_getcpu')) { pcntl_getcpu(); }
+        else { echo 'function|'; }
+        if (PHP_OS_FAMILY === 'Linux') { pcntl_getcpu(); }
+        else { echo 'family'; }";
+    assert_eq!(compile_and_run(source), "function|family");
+}
+
 /// Returns the previous alarm's remaining time while cancelling it.
 #[test]
 fn test_pcntl_alarm_returns_previous_remaining_seconds() {
@@ -200,6 +253,31 @@ fn test_pcntl_priority_rejects_dynamic_invalid_modes() {
     assert_eq!(out, "get|set|eval-get|eval-set");
 }
 
+/// Emits php-src's warnings before returning false for missing priority targets.
+#[test]
+fn test_pcntl_priority_os_failures_emit_warnings() {
+    let output = compile_and_run_capture(
+        "<?php
+        var_dump(pcntl_getpriority(999999));
+        var_dump(pcntl_setpriority(0, 999999));",
+    );
+    assert_eq!(output.stdout, "bool(false)\nbool(false)\n");
+    assert!(
+        output.stderr.contains(
+            "Warning: pcntl_getpriority(): Error 3: No process was located using the given parameters"
+        ),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains(
+            "Warning: pcntl_setpriority(): Error 3: No process was located using the given parameters"
+        ),
+        "{}",
+        output.stderr
+    );
+}
+
 /// Reapplies the current process priority without requiring elevated privileges.
 #[test]
 fn test_pcntl_setpriority_reapplies_current_priority() {
@@ -224,6 +302,32 @@ fn test_pcntl_signal_mask_round_trip() {
         echo (pcntl_sigprocmask(SIG_SETMASK, $old) ? 'restored' : 'bad');",
     );
     assert_eq!(out, "blocked|array|restored");
+}
+
+/// Coerces numeric strings and ignores associative keys in literal PCNTL signal sets.
+#[test]
+fn test_pcntl_signal_masks_accept_php_coercible_literal_arrays() {
+    let out = compile_and_run(
+        "<?php
+        echo pcntl_sigprocmask(SIG_BLOCK, ['9']) ? 'numeric|' : 'bad|';
+        echo pcntl_sigprocmask(SIG_BLOCK, ['term' => SIGTERM]) ? 'assoc|' : 'bad|';
+        echo pcntl_sigprocmask(SIG_UNBLOCK, ['term' => SIGTERM]) ? 'done' : 'bad';",
+    );
+    assert_eq!(out, "numeric|assoc|done");
+}
+
+/// Throws `TypeError`, rather than a signal-range `ValueError`, for eval nonnumeric strings.
+#[test]
+fn test_pcntl_eval_signal_mask_rejects_nonnumeric_string_with_type_error() {
+    let out = compile_and_run(
+        r#"<?php echo eval('
+            try { pcntl_sigprocmask(SIG_BLOCK, ["abc"]); }
+            catch (TypeError $error) { return "type"; }
+            catch (ValueError $error) { return "value"; }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(out, "type");
 }
 
 /// Keeps named optional PCNTL outputs absent instead of lowering default arrays as lvalues.
@@ -319,6 +423,37 @@ array|1|1|0"
     );
 }
 
+/// Lets eval introspect the original PHP value installed by compiled AOT signal code.
+#[test]
+fn test_pcntl_eval_reads_aot_installed_handler_value() {
+    let out = compile_and_run(
+        r#"<?php
+        function crossBackendHandler(int $signal): void {}
+        pcntl_signal(SIGUSR1, 'crossBackendHandler');
+        echo eval('
+            $handler = pcntl_signal_get_handler(SIGUSR1);
+            echo gettype($handler) . "|" . (int) is_string($handler);
+            return is_callable($handler) ? "|1" : "|0";
+        ');
+        pcntl_signal(SIGUSR1, SIG_DFL);"#,
+    );
+    assert_eq!(out, "string|1|1");
+}
+
+/// Turns an unknown runtime handler name into PHP's catchable `TypeError`.
+#[test]
+fn test_pcntl_signal_unknown_runtime_handler_is_catchable() {
+    let out = compile_and_run(
+        "<?php
+        function knownSignalHandler(int $signal): void {}
+        $handler = 'missingSignalHandler';
+        try { pcntl_signal(SIGUSR1, $handler); }
+        catch (TypeError $error) { echo get_class($error) . '|'; }
+        echo 'still-alive';",
+    );
+    assert_eq!(out, "TypeError|still-alive");
+}
+
 /// Preserves the SIGALRM-aware restart default for a named call that omits the third argument.
 #[test]
 fn test_pcntl_signal_named_omitted_restart_uses_signal_aware_default() {
@@ -375,9 +510,83 @@ fn test_pcntl_signal_rejects_boolean_handler() {
     );
     assert_eq!(
         out,
-        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given|\
-pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given"
+        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, true given|\
+pcntl_signal(): Argument #2 ($handler) must be of type callable|int, false given"
     );
+}
+
+/// Raises a catchable PHP type error for a non-scalar restart-syscalls argument.
+#[test]
+fn test_pcntl_signal_rejects_array_restart_flag_without_backend_error() {
+    let out = compile_and_run(
+        "<?php
+        try { pcntl_signal(SIGUSR1, SIG_IGN, []); }
+        catch (TypeError $error) { echo get_class($error); }",
+    );
+    assert_eq!(out, "TypeError");
+}
+
+/// Coerces integer and heterogeneous argv values before replacing the forked process.
+#[test]
+fn test_pcntl_exec_coerces_scalar_argument_values() {
+    let out = compile_and_run(
+        r#"<?php
+        $child = pcntl_fork();
+        if ($child === 0) { pcntl_exec('/bin/echo', [1, 2]); exit(1); }
+        pcntl_waitpid($child, $status);
+        $child = pcntl_fork();
+        if ($child === 0) { $port = 123; pcntl_exec('/bin/echo', ['port', $port]); exit(1); }
+        pcntl_waitpid($child, $status);"#,
+    );
+    assert_eq!(out, "1 2\nport 123\n");
+}
+
+/// Coerces nullable indexed-array storage without dropping null entries from argv.
+#[test]
+fn test_pcntl_exec_coerces_nullable_argument_values() {
+    let out = compile_and_run(
+        r#"<?php
+        function replace_with_nullable_echo(?int $value): void {
+            pcntl_exec('/bin/echo', [$value, 3]);
+        }
+        $child = pcntl_fork();
+        if ($child === 0) { replace_with_nullable_echo(null); exit(1); }
+        pcntl_waitpid($child, $status);"#,
+    );
+    assert_eq!(out, " 3\n");
+}
+
+/// Coerces associative environment values before `execve` copies them.
+#[test]
+fn test_pcntl_exec_coerces_scalar_environment_values() {
+    let out = compile_and_run(
+        r#"<?php
+        $child = pcntl_fork();
+        if ($child === 0) { pcntl_exec('/usr/bin/env', [], ['K' => 123, 'EMPTY' => null]); exit(1); }
+        pcntl_waitpid($child, $status);"#,
+    );
+    assert_eq!(out, "K=123\nEMPTY=\n");
+}
+
+/// Enforces PHP's current-thread-only Darwin priority selector rule in AOT and eval.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_pcntl_darwin_thread_priority_requires_zero_process_id() {
+    let out = compile_and_run(
+        r#"<?php
+        try { pcntl_getpriority(5, PRIO_DARWIN_THREAD); }
+        catch (ValueError $error) { echo 'aot-get|'; }
+        try { pcntl_setpriority(0, 5, PRIO_DARWIN_THREAD); }
+        catch (ValueError $error) { echo 'aot-set|'; }
+        echo eval('
+            try { pcntl_getpriority(5, PRIO_DARWIN_THREAD); }
+            catch (ValueError $error) { echo "eval-get|"; }
+            try { pcntl_setpriority(0, 5, PRIO_DARWIN_THREAD); }
+            catch (ValueError $error) { return "eval-set"; }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(out, "aot-get|aot-set|eval-get|eval-set");
 }
 
 /// Automatically dispatches a pending signal after a normal EIR safe point.

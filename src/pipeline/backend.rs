@@ -182,6 +182,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
                 linked_extensions.push(ext.to_string());
             }
         }
+        if lib == "elephc_pcntl"
+            && !linked_extensions.iter().any(|existing| existing == "posix")
+        {
+            linked_extensions.push("posix".to_string());
+        }
     }
     for surface in linked_php_surfaces {
         if !linked_extensions.iter().any(|existing| existing == surface) {

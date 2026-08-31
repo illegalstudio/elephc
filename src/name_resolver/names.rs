@@ -306,7 +306,7 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS" | "SID") {
+        if matches!(name.as_str(), "PHP_OS" | "PHP_OS_FAMILY" | "SID") {
             return name.as_canonical();
         }
         if let Some(alias) = name
@@ -352,6 +352,7 @@ fn is_builtin_global_constant(name: &str) -> bool {
     if matches!(
             name,
             "PHP_OS"
+                | "PHP_OS_FAMILY"
                 // The PHP version surface, baked per compilation from `--php-version` / `--web`
                 // by `codegen::prescan::collect_constants` — same mechanism as `PHP_OS`.
                 | "PHP_VERSION"

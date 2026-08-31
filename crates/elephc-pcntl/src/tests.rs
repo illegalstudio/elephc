@@ -49,6 +49,26 @@ fn exec_failure_warning_contains_errno_and_native_message() {
     assert!(warning.ends_with('\n'));
 }
 
+/// Formats php-src's missing-process priority warnings for both priority operations.
+#[test]
+fn priority_failure_warnings_name_the_operation_and_errno() {
+    LAST_ERROR.store(libc::ESRCH, Ordering::Relaxed);
+    assert_eq!(
+        pcntl_last_error_warning(PCNTL_WARNING_GETPRIORITY),
+        format!(
+            "Warning: pcntl_getpriority(): Error {}: No process was located using the given parameters\n",
+            libc::ESRCH
+        )
+    );
+    assert_eq!(
+        pcntl_last_error_warning(PCNTL_WARNING_SETPRIORITY),
+        format!(
+            "Warning: pcntl_setpriority(): Error {}: No process was located using the given parameters\n",
+            libc::ESRCH
+        )
+    );
+}
+
 /// Reads the current Linux CPU and affinity mask through the stable bridge ABI.
 #[cfg(target_os = "linux")]
 #[test]

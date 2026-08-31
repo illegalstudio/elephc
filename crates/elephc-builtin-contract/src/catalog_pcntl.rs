@@ -253,20 +253,16 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         TypeSpec::Bool,
         "Changes a process, process-group, or user scheduling priority.",
     ),
-    pcntl_contract_with_min_args(
+    pcntl_contract(
         "pcntl_setqos_class",
         &[ParamSpec {
             name: "qos_class",
             ty: TypeSpec::Mixed,
-            default: Some(DefaultSpec::ClassConstant {
-                class: "Pcntl\\QosClass",
-                name: "Default",
-            }),
+            default: None,
             by_ref: false,
         }],
         TypeSpec::Void,
         "Changes the current macOS thread quality-of-service class.",
-        None,
     ),
     pcntl_contract(
         "pcntl_signal",

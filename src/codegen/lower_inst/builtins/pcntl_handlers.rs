@@ -338,24 +338,24 @@ fn emit_push_handler_kind_and_descriptor(
             emit_normalize_integer_disposition(ctx);
             emit_push_integer_handler_pair(ctx);
         }
-        PhpType::Bool | PhpType::False => {
-            super::super::exceptions::emit_type_error(
-                ctx,
-                "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given",
-            );
-        }
+        PhpType::Bool => emit_handler_bool_type_error(ctx, handler)?,
+        PhpType::False => super::super::exceptions::emit_type_error(
+            ctx,
+            "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, false given",
+        ),
         PhpType::Callable => {
             ctx.load_value_to_result(handler)?;
             callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
             emit_push_callable_handler_pair(ctx);
         }
         PhpType::Str => {
-            callables::emit_runtime_string_descriptor_value(
+            callables::emit_runtime_string_descriptor_value_with_type_error(
                 ctx,
                 handler,
                 abi::int_result_reg(ctx.emitter),
                 "pcntl_signal",
                 super::super::instruction_strict_php_profile(inst),
+                "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, string given",
             )?;
             emit_push_callable_handler_pair(ctx);
         }
@@ -427,11 +427,12 @@ fn emit_push_mixed_handler_pair(
             ctx.emitter.instruction(&format!("je {bool_error}"));               // throw the callable-or-int type error
         }
     }
-    callables::emit_runtime_mixed_callable_descriptor_value(
+    callables::emit_runtime_mixed_callable_descriptor_value_with_string_type_error(
         ctx,
         handler,
         "pcntl_signal",
         true,
+        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, string given",
     )?;
     emit_push_callable_handler_pair(ctx);
     abi::emit_jump(ctx.emitter, &done);
@@ -444,10 +445,7 @@ fn emit_push_mixed_handler_pair(
     emit_push_integer_handler_pair(ctx);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&bool_error);
-    super::super::exceptions::emit_type_error(
-        ctx,
-        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given",
-    );
+    emit_unboxed_handler_bool_type_error(ctx);
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -503,7 +501,21 @@ fn emit_signal_restart_flag(
     inst: &Instruction,
 ) -> Result<()> {
     if let Some(restart) = inst.operands.get(2).copied() {
-        load_as_int(ctx, restart, "pcntl_signal restart_syscalls")?;
+        match ctx.value_php_type(restart)?.codegen_repr() {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => {
+                super::super::exceptions::emit_type_error(
+                    ctx,
+                    "pcntl_signal(): Argument #3 ($restart_syscalls) must be of type ?bool, array given",
+                );
+            }
+            PhpType::Object(_) => {
+                super::super::exceptions::emit_type_error(
+                    ctx,
+                    "pcntl_signal(): Argument #3 ($restart_syscalls) must be of type ?bool, object given",
+                );
+            }
+            _ => load_as_int(ctx, restart, "pcntl_signal restart_syscalls")?,
+        }
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction("cmp x0, #0");                          // normalize the explicit restart flag
@@ -531,6 +543,47 @@ fn emit_signal_restart_flag(
     }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())
+}
+
+/// Throws PHP's literal-specific handler error for a statically boolean value.
+fn emit_handler_bool_type_error(
+    ctx: &mut FunctionContext<'_>,
+    handler: crate::ir::ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(handler)?;
+    let false_label = ctx.next_label("pcntl_signal_false_handler");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &false_label);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, true given",
+    );
+    ctx.emitter.label(&false_label);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, false given",
+    );
+    Ok(())
+}
+
+/// Throws PHP's literal-specific handler error from the bool payload returned by Mixed unboxing.
+fn emit_unboxed_handler_bool_type_error(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("pcntl_signal_mixed_false_handler");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbz x1, {false_label}")),
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");
+            ctx.emitter.instruction(&format!("jz {false_label}"));
+        }
+    }
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, true given",
+    );
+    ctx.emitter.label(&false_label);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, false given",
+    );
 }
 
 /// Replaces one AArch64 handler-table entry and releases its prior descriptor ownership.

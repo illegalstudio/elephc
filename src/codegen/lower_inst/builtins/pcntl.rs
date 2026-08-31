@@ -31,6 +31,8 @@ pub(super) const PCNTL_WARNING_EXEC: i64 = 1;
 const PCNTL_WARNING_SETNS: i64 = 3;
 const PCNTL_WARNING_UNSHARE: i64 = 4;
 const PCNTL_WARNING_CPU_AFFINITY: i64 = 5;
+const PCNTL_WARNING_GETPRIORITY: i64 = 6;
+const PCNTL_WARNING_SETPRIORITY: i64 = 7;
 
 /// Dispatches one typed PCNTL operation without consulting its PHP source name.
 pub(crate) fn lower(
@@ -192,42 +194,29 @@ fn lower_getqos_class(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
 fn lower_setqos_class(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     const ENUM_NAME: &str = "Pcntl\\QosClass";
 
-    ensure_arg_count_between(inst, "pcntl_setqos_class", 0, 1)?;
-    if let Some(value) = inst.operands.first().copied() {
-        let ty = ctx.load_value_to_result(value)?.codegen_repr();
-        if !matches!(ty, PhpType::Object(ref name) if crate::names::php_symbol_key(name) == crate::names::php_symbol_key(ENUM_NAME)) {
-            return Err(CodegenIrError::unsupported(format!(
-                "pcntl_setqos_class enum storage {ty:?}",
-            )));
+    ensure_arg_count(inst, "pcntl_setqos_class", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.load_value_to_result(value)?.codegen_repr();
+    if !matches!(ty, PhpType::Object(ref name) if crate::names::php_symbol_key(name) == crate::names::php_symbol_key(ENUM_NAME)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "pcntl_setqos_class enum storage {ty:?}",
+        )));
+    }
+    let name_offset = ctx
+        .module
+        .class_infos
+        .get(ENUM_NAME)
+        .and_then(|info| info.property_offsets.get("name"))
+        .copied()
+        .ok_or_else(|| CodegenIrError::missing_entry("Pcntl\\QosClass name property", 0))?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x1, [x0, #{}]", name_offset + 8)); // C arg1 = enum case-name length
+            ctx.emitter.instruction(&format!("ldr x0, [x0, #{}]", name_offset)); // C arg0 = enum case-name bytes
         }
-        let name_offset = ctx
-            .module
-            .class_infos
-            .get(ENUM_NAME)
-            .and_then(|info| info.property_offsets.get("name"))
-            .copied()
-            .ok_or_else(|| CodegenIrError::missing_entry("Pcntl\\QosClass name property", 0))?;
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("ldr x1, [x0, #{}]", name_offset + 8)); // C arg1 = enum case-name length
-                ctx.emitter.instruction(&format!("ldr x0, [x0, #{}]", name_offset)); // C arg0 = enum case-name bytes
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("mov rsi, QWORD PTR [rax + {}]", name_offset + 8)); // C arg1 = enum case-name length
-                ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {}]", name_offset)); // C arg0 = enum case-name bytes
-            }
-        }
-    } else {
-        let (default_label, default_len) = ctx.data.add_string(b"Default");
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                abi::emit_symbol_address(ctx.emitter, "x0", &default_label);
-                abi::emit_load_int_immediate(ctx.emitter, "x1", default_len as i64);
-            }
-            Arch::X86_64 => {
-                abi::emit_symbol_address(ctx.emitter, "rdi", &default_label);
-                abi::emit_load_int_immediate(ctx.emitter, "rsi", default_len as i64);
-            }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov rsi, QWORD PTR [rax + {}]", name_offset + 8)); // C arg1 = enum case-name length
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {}]", name_offset)); // C arg0 = enum case-name bytes
         }
     }
     ctx.emitter.bl_c("elephc_pcntl_setqos_class");
@@ -1191,12 +1180,14 @@ fn lower_getpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve process id while materializing mode
             load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_getpriority mode")?;
             emit_validate_priority_mode(ctx, "pcntl_getpriority", 2);
+            emit_validate_darwin_thread_process_id(ctx, "pcntl_getpriority", 1, 2, 0);
             ctx.emitter.instruction("mov x1, x0");                              // C arg1 = priority selector mode
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // C arg0 = process id
             ctx.emitter.instruction("add x2, sp, #8");                          // C arg2 = writable priority output
             ctx.emitter.bl_c("elephc_pcntl_getpriority");
             ctx.emitter.instruction(&format!("cbnz x0, {success}"));            // branch when the bridge distinguished a successful -1/value
             ctx.emitter.instruction("add sp, sp, #16");                         // release output storage before boxing false
+            emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_GETPRIORITY);
             abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
             ctx.emitter.instruction(&format!("b {done}"));                      // skip successful integer boxing
@@ -1211,6 +1202,7 @@ fn lower_getpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve process id while materializing mode
             load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_getpriority mode")?;
             emit_validate_priority_mode(ctx, "pcntl_getpriority", 2);
+            emit_validate_darwin_thread_process_id(ctx, "pcntl_getpriority", 1, 2, 0);
             ctx.emitter.instruction("mov esi, eax");                            // C arg1 = priority selector mode
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // C arg0 = process id
             ctx.emitter.instruction("lea rdx, [rsp + 8]");                      // C arg2 = writable priority output
@@ -1218,6 +1210,7 @@ fn lower_getpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             ctx.emitter.instruction("test eax, eax");                           // test the separate bridge success status
             ctx.emitter.instruction(&format!("jnz {success}"));                 // preserve valid negative priority values
             ctx.emitter.instruction("add rsp, 16");                             // release output storage before boxing false
+            emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_GETPRIORITY);
             abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
             ctx.emitter.instruction(&format!("jmp {done}"));                    // skip successful integer boxing
@@ -1240,6 +1233,7 @@ fn lower_setpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_optional_int(ctx, inst.operands.get(2).copied(), 0, "pcntl_setpriority mode")?;
     emit_validate_priority_mode(ctx, "pcntl_setpriority", 3);
+    emit_validate_darwin_thread_process_id(ctx, "pcntl_setpriority", 2, 3, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x2, x0");                              // C arg2 = priority selector mode
@@ -1253,7 +1247,62 @@ fn lower_setpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         }
     }
     ctx.emitter.bl_c("elephc_pcntl_setpriority");
+    let success = ctx.next_label("pcntl_setpriority_success");
+    let done = ctx.next_label("pcntl_setpriority_done");
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &success);
+    emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_SETPRIORITY);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&success);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
+}
+
+/// Rejects Darwin's thread-priority selector when PHP receives a nonzero process id.
+fn emit_validate_darwin_thread_process_id(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    argument: usize,
+    mode_argument: usize,
+    process_id_stack_offset: usize,
+) {
+    if ctx.emitter.target.platform != Platform::MacOS {
+        return;
+    }
+    let valid = ctx.next_label("pcntl_darwin_thread_process_id_valid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                             // only PRIO_DARWIN_THREAD constrains the process id
+            ctx.emitter.instruction(&format!("b.ne {valid}"));                 // other priority selectors accept their normal id domain
+            ctx.emitter.instruction(&format!(
+                "ldr x9, [sp, #{}]",
+                process_id_stack_offset
+            ));                                                                 // recover the staged process id
+            ctx.emitter.instruction(&format!("cbz x9, {valid}"));              // Darwin thread priority addresses only the current thread
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                             // only PRIO_DARWIN_THREAD constrains the process id
+            ctx.emitter.instruction(&format!("jne {valid}"));                  // other priority selectors accept their normal id domain
+            ctx.emitter.instruction(&format!(
+                "cmp QWORD PTR [rsp + {}], 0",
+                process_id_stack_offset
+            ));                                                                 // inspect the staged process id
+            ctx.emitter.instruction(&format!("je {valid}"));                   // zero denotes the current thread
+        }
+    }
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!(
+            "{name}(): Argument #{argument} ($process_id) must be 0 (zero) if PRIO_DARWIN_THREAD is provided as {} parameter",
+            match mode_argument {
+                2 => "second",
+                3 => "third",
+                _ => "selected",
+            }
+        ),
+    );
+    ctx.emitter.label(&valid);
 }
 
 /// Raises PHP's target-specific `ValueError` when a priority selector is unsupported.

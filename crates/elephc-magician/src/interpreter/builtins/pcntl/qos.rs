@@ -40,16 +40,12 @@ pub(super) fn eval_pcntl_qos_result(
                 .ok_or(EvalStatus::RuntimeFatal)?
         }
         "pcntl_setqos_class" => {
-            if args.len() > 1 {
+            if args.len() != 1 || eval_pcntl_arg(args, 0).is_none() {
                 return Err(EvalStatus::RuntimeFatal);
             }
-            let name = match eval_pcntl_arg(args, 0) {
-                Some(qos) => {
-                    let name = values.property_get(qos.value, "name")?;
-                    values.string_bytes(name)?
-                }
-                None => b"Default".to_vec(),
-            };
+            let qos = eval_pcntl_required_arg(args, 0)?;
+            let name = values.property_get(qos.value, "name")?;
+            let name = values.string_bytes(name)?;
             let success = unsafe {
                 elephc_pcntl::elephc_pcntl_setqos_class(name.as_ptr(), name.len())
             };

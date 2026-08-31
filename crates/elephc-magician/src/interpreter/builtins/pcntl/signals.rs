@@ -123,8 +123,11 @@ fn eval_pcntl_signal(
         .unwrap_or_else(|| default_restart_syscalls(signal));
     let handler_tag = values.type_tag(handler)?;
     if handler_tag == EVAL_TAG_BOOL {
+        let literal = if values.truthy(handler)? { "true" } else { "false" };
         return eval_throw_type_error(
-            "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, bool given",
+            &format!(
+                "pcntl_signal(): Argument #2 ($handler) must be of type callable|int, {literal} given"
+            ),
             context,
             values,
         );
@@ -194,6 +197,14 @@ fn eval_pcntl_signal_get_handler(
             values,
         );
     }
+    if elephc_pcntl::elephc_pcntl_signal_owner(signal as libc::c_int)
+        == elephc_pcntl::PCNTL_SIGNAL_OWNER_AOT
+    {
+        return match values.pcntl_aot_signal_handler(signal)? {
+            Some(handler) => Ok(handler),
+            None => values.int(0),
+        };
+    }
     match pcntl_runtime::signal_handler(signal as libc::c_int) {
         Some(entry @ pcntl_runtime::EvalPcntlSignalEntry {
             handler: EvalPcntlSignalHandler::Callable(handler),
@@ -223,7 +234,15 @@ fn eval_pcntl_sigprocmask(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let how = eval_int_value(eval_pcntl_required_arg(args, 0)?.value, values)?;
-    let signals = eval_pcntl_int_array(eval_pcntl_required_arg(args, 1)?.value, values)?;
+    let signals = eval_pcntl_int_array(
+        eval_pcntl_required_arg(args, 1)?.value,
+        "pcntl_sigprocmask",
+        2,
+        "signals",
+        "signals",
+        context,
+        values,
+    )?;
     if !matches!(
         how as libc::c_int,
         libc::SIG_BLOCK | libc::SIG_UNBLOCK | libc::SIG_SETMASK
@@ -286,12 +305,20 @@ fn eval_pcntl_signal_wait(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let signals = eval_pcntl_int_array(eval_pcntl_required_arg(args, 0)?.value, values)?;
     let name = if timed {
         "pcntl_sigtimedwait"
     } else {
         "pcntl_sigwaitinfo"
     };
+    let signals = eval_pcntl_int_array(
+        eval_pcntl_required_arg(args, 0)?.value,
+        name,
+        1,
+        "signals",
+        "signals",
+        context,
+        values,
+    )?;
     eval_validate_pcntl_signal_set(name, 1, &signals, false, context, values)?;
     let info_arg = eval_pcntl_arg(args, 1);
     let mut info = ElephcPcntlSigInfo::default();
