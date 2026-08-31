@@ -92,7 +92,7 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 /// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
     let program = crate::superglobals::seed_cli_populated_superglobals(program);
-    program.into_iter().map(fold_stmt).collect()
+    fold_block(program)
 }
 
 /// Folds constants whose values or builtin availability depend on the compile target.

@@ -295,7 +295,6 @@ fn try_compile_source_to_asm_with_defines_repr(
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
-    let resolved = elephc::optimize::prune_constant_control_flow(resolved, HashSet::new());
     let mut check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     set_fixture_linked_extensions(&check_result.required_libraries);

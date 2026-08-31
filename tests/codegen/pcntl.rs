@@ -104,17 +104,27 @@ fn test_pcntl_php_os_family_matches_host() {
 fn test_pcntl_target_guards_prune_unavailable_calls_before_typecheck() {
     #[cfg(target_os = "linux")]
     let source = "<?php
+        function guarded_target_call(): string {
+            if (function_exists('pcntl_getqos_class')) { pcntl_getqos_class(); return 'bad'; }
+            return 'nested';
+        }
         if (function_exists('pcntl_getqos_class')) { pcntl_getqos_class(); }
         else { echo 'function|'; }
         if (PHP_OS_FAMILY === 'Darwin') { pcntl_getqos_class(); }
-        else { echo 'family'; }";
+        else { echo 'family|'; }
+        echo guarded_target_call();";
     #[cfg(target_os = "macos")]
     let source = "<?php
+        function guarded_target_call(): string {
+            if (function_exists('pcntl_getcpu')) { pcntl_getcpu(); return 'bad'; }
+            return 'nested';
+        }
         if (function_exists('pcntl_getcpu')) { pcntl_getcpu(); }
         else { echo 'function|'; }
         if (PHP_OS_FAMILY === 'Linux') { pcntl_getcpu(); }
-        else { echo 'family'; }";
-    assert_eq!(compile_and_run(source), "function|family");
+        else { echo 'family|'; }
+        echo guarded_target_call();";
+    assert_eq!(compile_and_run(source), "function|family|nested");
 }
 
 /// Returns the previous alarm's remaining time while cancelling it.

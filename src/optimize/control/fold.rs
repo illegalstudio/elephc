@@ -367,5 +367,83 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
 /// - `body`: A vector of statements representing a block body.
 /// Returns a new `Vec<Stmt>` with each statement folded.
 pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
-    body.into_iter().map(fold_stmt).collect()
+    body.into_iter()
+        .flat_map(|stmt| {
+            let stmt = fold_stmt(stmt);
+            if active_fold_target().is_some() {
+                prune_target_boolean_if(stmt)
+            } else {
+                vec![stmt]
+            }
+        })
+        .collect()
+}
+
+/// Removes only `if` arms whose target-dependent condition already folded to a boolean.
+///
+/// This intentionally avoids the global effect and callable analyses used by the normal
+/// post-typecheck pruning pass. Large injected preludes can be deeply recursive, while this
+/// pre-check step only needs to hide statically unavailable target branches from the checker.
+fn prune_target_boolean_if(stmt: Stmt) -> Vec<Stmt> {
+    let Stmt {
+        kind,
+        span,
+        source_mode,
+        strict_types,
+        attributes,
+    } = stmt;
+    let StmtKind::If {
+        condition,
+        then_body,
+        mut elseif_clauses,
+        else_body,
+    } = kind
+    else {
+        return vec![Stmt {
+            kind,
+            span,
+            source_mode,
+            strict_types,
+            attributes,
+        }];
+    };
+    match &condition.kind {
+        ExprKind::BoolLiteral(true) => then_body,
+        ExprKind::BoolLiteral(false) => {
+            while !elseif_clauses.is_empty() {
+                let (condition, body) = elseif_clauses.remove(0);
+                match &condition.kind {
+                    ExprKind::BoolLiteral(false) => continue,
+                    ExprKind::BoolLiteral(true) => return body,
+                    _ => {
+                        return vec![Stmt {
+                            kind: StmtKind::If {
+                                condition,
+                                then_body: body,
+                                elseif_clauses,
+                                else_body,
+                            },
+                            span,
+                            source_mode,
+                            strict_types,
+                            attributes,
+                        }];
+                    }
+                }
+            }
+            else_body.unwrap_or_default()
+        }
+        _ => vec![Stmt {
+            kind: StmtKind::If {
+                condition,
+                then_body,
+                elseif_clauses,
+                else_body,
+            },
+            span,
+            source_mode,
+            strict_types,
+            attributes,
+        }],
+    }
 }
