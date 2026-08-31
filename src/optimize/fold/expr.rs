@@ -195,13 +195,23 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 {
                     let candidate = candidate.trim_start_matches('\\');
                     if crate::builtins::registry::lookup(candidate).is_some() {
-                        ExprKind::BoolLiteral(
-                            crate::types::checker::builtins::is_php_visible_builtin_function_for_target(
-                                candidate,
-                                crate::strict_php::is_enabled(),
-                                target,
-                            ),
-                        )
+                        let user_function = active_fold_user_function_exists(candidate);
+                        let profile_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
+                            candidate,
+                            crate::strict_php::is_enabled(),
+                        );
+                        if user_function || profile_builtin {
+                            ExprKind::BoolLiteral(
+                                user_function
+                                    || crate::types::checker::builtins::is_php_visible_builtin_function_for_target(
+                                        candidate,
+                                        crate::strict_php::is_enabled(),
+                                        target,
+                                    ),
+                            )
+                        } else {
+                            ExprKind::FunctionCall { name, args }
+                        }
                     } else {
                         ExprKind::FunctionCall { name, args }
                     }

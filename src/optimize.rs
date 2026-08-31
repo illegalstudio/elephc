@@ -52,6 +52,7 @@ thread_local! {
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
+    static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
 }
 
 /// Borrows the active function-effect summary without cloning its whole map.
@@ -102,7 +103,11 @@ pub fn fold_constants(program: Program) -> Program {
 pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
     ACTIVE_FOLD_TARGET.with(|slot| {
         let previous = slot.replace(Some(target));
+        let user_functions = collect_top_level_user_functions(&program);
+        let previous_functions =
+            ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
         let folded = fold_constants(program);
+        ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
         slot.replace(previous);
         folded
     })
@@ -111,6 +116,43 @@ pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
 /// Borrows the target selected for the current constant-folding pass.
 pub(in crate::optimize) fn active_fold_target() -> Option<Target> {
     ACTIVE_FOLD_TARGET.with(|slot| *slot.borrow())
+}
+
+/// Returns whether the target-folding program declares a top-level function with this name.
+pub(in crate::optimize) fn active_fold_user_function_exists(name: &str) -> bool {
+    let key = php_symbol_key(name);
+    ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|functions| functions.contains(&key))
+    })
+}
+
+/// Collects unconditional user functions that can shadow a builtin during `function_exists()`.
+fn collect_top_level_user_functions(program: &[Stmt]) -> HashSet<String> {
+    let mut functions = HashSet::new();
+    collect_top_level_user_functions_from_block(program, &mut functions);
+    functions
+}
+
+/// Walks declaration-transparent compiler wrappers without treating conditional PHP blocks as eager.
+fn collect_top_level_user_functions_from_block(
+    program: &[Stmt],
+    functions: &mut HashSet<String>,
+) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } | StmtKind::FunctionVariantGroup { name, .. } => {
+                functions.insert(php_symbol_key(name));
+            }
+            StmtKind::Synthetic(body)
+            | StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_top_level_user_functions_from_block(body, functions);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Propagates scalar constants across statements and control flow.
