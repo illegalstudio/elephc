@@ -95,7 +95,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_switch_during_pcntl_dispatch(
+                class_name,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => {
                 eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                     native_class,
@@ -128,6 +135,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_call_array_args(
                     values,
                 ),
             },
+            }
         },
     }
 }

@@ -91,6 +91,39 @@ fn eval_handler_cannot_switch_fibers_through_call_user_func() {
     );
 }
 
+/// Rejects a Fiber switch reached through a static-method `call_user_func` callback.
+#[test]
+fn eval_handler_cannot_switch_fibers_through_call_user_func_static() {
+    let _guard = PCNTL_TEST_LOCK.lock().expect("PCNTL test lock poisoned");
+    let register = parse_fragment(
+        br#"pcntl_signal(SIGUSR1, function(): void {
+    try { call_user_func(["Fiber", "suspend"]); }
+    catch (FiberError $error) { echo $error->getMessage(); }
+});"#,
+    )
+    .expect("parse static Fiber registration");
+    let dispatch =
+        parse_fragment(b"pcntl_signal_dispatch();").expect("parse PCNTL dispatch");
+    let cleanup = parse_fragment(b"pcntl_signal(SIGUSR1, SIG_DFL);")
+        .expect("parse PCNTL cleanup");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program_with_context(&mut context, &register, &mut scope, &mut values)
+        .expect("register static Fiber handler");
+    assert_eq!(unsafe { libc::raise(libc::SIGUSR1) }, 0);
+    execute_program_with_context(&mut context, &dispatch, &mut scope, &mut values)
+        .expect("dispatch static Fiber handler");
+    execute_program_with_context(&mut context, &cleanup, &mut scope, &mut values)
+        .expect("restore default signal disposition");
+
+    assert_eq!(
+        values.output,
+        "Cannot switch fibers in current execution context"
+    );
+}
+
 /// Rejects switching method names on an eval-declared class whose receiver is named Fiber.
 #[test]
 fn eval_handler_cannot_switch_eval_declared_fiber_class() {

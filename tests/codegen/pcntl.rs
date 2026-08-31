@@ -869,6 +869,24 @@ fn test_pcntl_handler_cannot_switch_fibers() {
     assert_eq!(out, "Cannot switch fibers in current execution context");
 }
 
+/// Rejects Fiber switches reached through object-method `call_user_func` while dispatching.
+#[test]
+fn test_pcntl_handler_cannot_switch_fibers_through_call_user_func() {
+    let out = compile_and_run(
+        "<?php
+        pcntl_signal(SIGALRM, function(): void {
+            $fiber = new Fiber(function(): void {});
+            try { call_user_func([$fiber, 'start']); }
+            catch (FiberError $error) { echo $error->getMessage(); }
+        });
+        pcntl_alarm(1);
+        sleep(2);
+        pcntl_signal_dispatch();
+        pcntl_signal(SIGALRM, SIG_DFL);",
+    );
+    assert_eq!(out, "Cannot switch fibers in current execution context");
+}
+
 /// Defers signals raised by a handler until the next explicit snapshot dispatch.
 #[test]
 fn test_pcntl_dispatch_defers_nested_signal_arrivals() {
@@ -1374,6 +1392,25 @@ fn test_pcntl_eval_handler_cannot_switch_fibers() {
         echo eval('
             pcntl_signal(SIGALRM, function(): void {
                 start_fiber_from_eval_handler();
+            });
+            pcntl_alarm(1);
+            sleep(2);
+            pcntl_signal_dispatch();
+            pcntl_signal(SIGALRM, SIG_DFL);
+        ');"#,
+    );
+    assert_eq!(out, "Cannot switch fibers in current execution context");
+}
+
+/// Rejects Fiber switches from an eval handler through static `call_user_func` Fiber entry points.
+#[test]
+fn test_pcntl_eval_handler_cannot_switch_fibers_through_call_user_func_static() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            pcntl_signal(SIGALRM, function(): void {
+                try { call_user_func(["Fiber", "suspend"]); }
+                catch (FiberError $error) { echo $error->getMessage(); }
             });
             pcntl_alarm(1);
             sleep(2);
