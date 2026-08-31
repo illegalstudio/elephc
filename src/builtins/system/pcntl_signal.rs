@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Integer dispositions and AOT callable descriptors share one target-neutral handler table.
+//! - Native installation failures are unsuppressible fatals, matching PHP PCNTL.
 
 builtin! {
     contract: "pcntl_signal",

@@ -51,6 +51,7 @@ pub(crate) fn emit_pcntl_data() -> String {
     out.push_str("    .balign 8\n");
     out.push_str(".globl __rt_pcntl_handler_kind\n__rt_pcntl_handler_kind:\n    .zero 1024\n");
     out.push_str(".globl __rt_pcntl_handler_descriptor\n__rt_pcntl_handler_descriptor:\n    .zero 1024\n");
+    out.push_str(".globl __rt_pcntl_handler_value\n__rt_pcntl_handler_value:\n    .zero 1024\n");
     out.push_str(".globl __rt_pcntl_async_enabled\n__rt_pcntl_async_enabled:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_dispatching\n__rt_pcntl_dispatching:\n    .quad 0\n");
     out.push_str(".globl __rt_pcntl_dispatch_mask\n__rt_pcntl_dispatch_mask:\n    .zero 128\n");

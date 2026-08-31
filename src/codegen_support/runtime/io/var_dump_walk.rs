@@ -757,6 +757,100 @@ pub fn emit_var_dump_emit_null_line(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// Emits a callable descriptor as an empty PHP `Closure` object with its shared object handle.
+///
+/// Input: AArch64 x0 / x86_64 rdi = callable descriptor pointer.
+pub fn emit_var_dump_emit_callable(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_var_dump_emit_callable_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: var_dump_emit_callable ---");
+    emitter.label_global("__rt_var_dump_emit_callable");
+    emitter.instruction("sub sp, sp, #32");                                     // allocate the Closure rendering frame
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the Closure rendering frame
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the callable descriptor across writes
+
+    emitter.instruction("bl __rt_vd_pad");                                      // indent the Closure header line
+    abi::emit_symbol_address(emitter, "x1", "_vd_object_prefix");
+    emitter.instruction("mov x2, #7");                                          // pass len("object(") to the var_dump sink
+    emitter.instruction("bl __rt_vd_write");                                    // write the object prefix
+    abi::emit_symbol_address(emitter, "x1", "_sprintf_closure_class_name");
+    emitter.instruction("mov x2, #7");                                          // pass len("Closure") to the var_dump sink
+    emitter.instruction("bl __rt_vd_write");                                    // write the Closure class name
+    abi::emit_symbol_address(emitter, "x1", "_vd_object_mid");
+    emitter.instruction("mov x2, #2");                                          // pass len(")#") to the var_dump sink
+    emitter.instruction("bl __rt_vd_write");                                    // write the object-handle separator
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the callable descriptor for handle lookup
+    emitter.instruction("bl __rt_object_handle_of");                            // resolve the shared PHP object handle
+    emitter.instruction("bl __rt_itoa");                                        // format the handle as decimal digits
+    emitter.instruction("bl __rt_vd_write");                                    // write the object handle
+    abi::emit_symbol_address(emitter, "x1", "_vd_object_count_open");
+    emitter.instruction("mov x2, #2");                                          // pass len(" (") to the var_dump sink
+    emitter.instruction("bl __rt_vd_write");                                    // open the Closure property count
+    emitter.instruction("mov x0, #0");                                          // Closures expose no descriptor-internal properties
+    emitter.instruction("bl __rt_itoa");                                        // format the zero property count
+    emitter.instruction("bl __rt_vd_write");                                    // write the Closure property count
+    abi::emit_symbol_address(emitter, "x1", "_vd_brace_open");
+    emitter.instruction("mov x2, #4");                                          // pass len(") {\n") to the var_dump sink
+    emitter.instruction("bl __rt_vd_write");                                    // open the empty Closure body
+    emitter.instruction("bl __rt_vd_pad");                                      // align the closing brace with the header
+    abi::emit_symbol_address(emitter, "x1", "_vd_brace_close");
+    emitter.instruction("mov x2, #2");                                          // pass len("}\n") to the var_dump sink
+    emitter.instruction("bl __rt_vd_write");                                    // close the empty Closure body
+
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the Closure rendering frame
+    emitter.instruction("ret");                                                 // return to the value renderer
+}
+
+/// Emits the Linux x86_64 callable-descriptor `Closure` rendering helper.
+fn emit_var_dump_emit_callable_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: var_dump_emit_callable ---");
+    emitter.label_global("__rt_var_dump_emit_callable");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the Closure rendering frame
+    emitter.instruction("sub rsp, 16");                                         // reserve descriptor spill storage
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the callable descriptor across writes
+
+    emitter.instruction("call __rt_vd_pad");                                    // indent the Closure header line
+    abi::emit_symbol_address(emitter, "rsi", "_vd_object_prefix");
+    emitter.instruction("mov edx, 7");                                          // pass len("object(") to the var_dump sink
+    emitter.instruction("call __rt_vd_write");                                  // write the object prefix
+    abi::emit_symbol_address(emitter, "rsi", "_sprintf_closure_class_name");
+    emitter.instruction("mov edx, 7");                                          // pass len("Closure") to the var_dump sink
+    emitter.instruction("call __rt_vd_write");                                  // write the Closure class name
+    abi::emit_symbol_address(emitter, "rsi", "_vd_object_mid");
+    emitter.instruction("mov edx, 2");                                          // pass len(")#") to the var_dump sink
+    emitter.instruction("call __rt_vd_write");                                  // write the object-handle separator
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the callable descriptor for handle lookup
+    emitter.instruction("call __rt_object_handle_of");                          // resolve the shared PHP object handle
+    emitter.instruction("call __rt_itoa");                                      // format the handle as decimal digits
+    emitter.instruction("mov rsi, rax");                                        // pass the handle digits to the var_dump sink
+    emitter.instruction("call __rt_vd_write");                                  // write the object handle
+    abi::emit_symbol_address(emitter, "rsi", "_vd_object_count_open");
+    emitter.instruction("mov edx, 2");                                          // pass len(" (") to the var_dump sink
+    emitter.instruction("call __rt_vd_write");                                  // open the Closure property count
+    emitter.instruction("xor eax, eax");                                        // Closures expose no descriptor-internal properties
+    emitter.instruction("call __rt_itoa");                                      // format the zero property count
+    emitter.instruction("mov rsi, rax");                                        // pass the property-count digits to the var_dump sink
+    emitter.instruction("call __rt_vd_write");                                  // write the Closure property count
+    abi::emit_symbol_address(emitter, "rsi", "_vd_brace_open");
+    emitter.instruction("mov edx, 4");                                          // pass len(") {\n") to the var_dump sink
+    emitter.instruction("call __rt_vd_write");                                  // open the empty Closure body
+    emitter.instruction("call __rt_vd_pad");                                    // align the closing brace with the header
+    abi::emit_symbol_address(emitter, "rsi", "_vd_brace_close");
+    emitter.instruction("mov edx, 2");                                          // pass len("}\n") to the var_dump sink
+    emitter.instruction("call __rt_vd_write");                                  // close the empty Closure body
+
+    emitter.instruction("leave");                                               // release the frame and restore rbp
+    emitter.instruction("ret");                                                 // return to the value renderer
+}
+
 /// `__rt_vd_pad`: write `_vd_indent` ASCII spaces to the var_dump sink in
 /// <=64-byte chunks (the `_pr_spaces` pad is 64 bytes wide).
 ///
@@ -979,8 +1073,8 @@ pub fn emit_var_dump_close_container(emitter: &mut Emitter) {
 /// indent, recurse into `__rt_var_dump_indexed` / `__rt_var_dump_hash`, then
 /// restore the indent and close the block — the mutual recursion is what gives
 /// arbitrary nesting depth. Tag 7 unboxes a Mixed cell and redispatches. A null
-/// container/cell pointer, tag 8 (null) and the currently unsupported tags 6
-/// (object) and 9 (resource) all render `NULL`.
+/// container/cell pointer and tag 8 (null) render `NULL`; tag 10 renders the
+/// callable descriptor through PHP's object-shaped `Closure` presentation.
 ///
 /// Input: AArch64 x0=tag x1=lo x2=hi / x86_64 rdi=tag rsi=lo rdx=hi.
 pub fn emit_var_dump_value(emitter: &mut Emitter) {
@@ -1016,7 +1110,9 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_vd_val_hash");                               // recurse into the hash walker
     emitter.instruction("cmp x0, #6");                                          // tag 6 = object
     emitter.instruction("b.eq __rt_vd_val_obj");                                // recurse into the object walker
-    emitter.instruction("b __rt_vd_val_null");                                  // tag 8 null / 9 resource → NULL
+    emitter.instruction("cmp x0, #10");                                         // tag 10 = callable descriptor
+    emitter.instruction("b.eq __rt_vd_val_callable");                           // render the descriptor as a Closure object
+    emitter.instruction("b __rt_vd_val_null");                                  // unsupported or null tags render NULL
 
     emitter.label("__rt_vd_val_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the integer payload
@@ -1092,6 +1188,11 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_var_dump_emit_recursion_line");                // emit `<indent>*RECURSION*\n`
     emitter.instruction("b __rt_vd_val_done");                                  // value rendered
 
+    emitter.label("__rt_vd_val_callable");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the callable descriptor pointer
+    emitter.instruction("bl __rt_var_dump_emit_callable");                      // emit the descriptor as `object(Closure)#N`
+    emitter.instruction("b __rt_vd_val_done");                                  // value rendered
+
     emitter.label("__rt_vd_val_mixed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // boxed Mixed cell pointer
     emitter.instruction("cbz x0, __rt_vd_val_null");                            // defensive: a null cell renders NULL
@@ -1138,7 +1239,9 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_vd_val_hash_x86");                             // recurse into the hash walker
     emitter.instruction("cmp rax, 6");                                          // tag 6 = object
     emitter.instruction("je __rt_vd_val_obj_x86");                              // recurse into the object walker
-    emitter.instruction("jmp __rt_vd_val_null_x86");                            // tag 8 null / 9 resource → NULL
+    emitter.instruction("cmp rax, 10");                                         // tag 10 = callable descriptor
+    emitter.instruction("je __rt_vd_val_callable_x86");                         // render the descriptor as a Closure object
+    emitter.instruction("jmp __rt_vd_val_null_x86");                            // unsupported or null tags render NULL
 
     emitter.label("__rt_vd_val_int_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the integer payload
@@ -1216,6 +1319,11 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_val_recursion_x86");
     emitter.instruction("call __rt_var_dump_emit_recursion_line");              // emit `<indent>*RECURSION*\n`
+    emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
+
+    emitter.label("__rt_vd_val_callable_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the callable descriptor pointer
+    emitter.instruction("call __rt_var_dump_emit_callable");                    // emit the descriptor as `object(Closure)#N`
     emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
 
     emitter.label("__rt_vd_val_mixed_x86");

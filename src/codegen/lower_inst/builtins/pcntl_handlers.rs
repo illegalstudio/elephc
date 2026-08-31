@@ -5,22 +5,21 @@
 //! - `super::pcntl::lower()` for the callable-aware PCNTL runtime operations.
 //!
 //! Key details:
-//! - The process-wide table owns one retain for every dynamic callable descriptor.
+//! - The process-wide table owns both an invocation descriptor and the original boxed PHP value.
 //! - OS delivery only enqueues stable records; callbacks run through normal runtime safe points.
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::platform::{Arch, Platform};
-use crate::codegen::{
-    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed, CodegenIrError,
-    Result,
+use crate::codegen::{abi, emit_box_current_value_as_mixed, CodegenIrError, Result};
+use crate::codegen_support::runtime::UNCAUGHT_EXIT_STATUS;
+use crate::codegen_support::{
+    callable_descriptor, emit_write_current_string_stderr, emit_write_literal_stderr,
 };
-use crate::codegen_support::callable_descriptor;
 use crate::ir::Instruction;
 use crate::types::PhpType;
 
 use super::super::callables;
 use super::super::predicates;
-use super::pcntl::{emit_pcntl_last_error_warning, PCNTL_WARNING_SIGNAL};
 use super::strings::load_as_int;
 use super::{ensure_arg_count_between, expect_operand, store_if_result};
 
@@ -38,60 +37,62 @@ pub(crate) fn lower_signal(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     emit_validate_signal_number(ctx);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     emit_push_handler_kind_and_descriptor(ctx, inst, handler)?;
+    emit_push_handler_value(ctx, handler)?;
     emit_signal_restart_flag(ctx, inst)?;
 
     let failure = ctx.next_label("pcntl_signal_failure");
     let success = ctx.next_label("pcntl_signal_success");
-    let done = ctx.next_label("pcntl_signal_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x2");
-            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // pass the staged handler disposition
-            ctx.emitter.instruction("ldr x0, [sp, #32]");                       // pass the staged signal number
+            ctx.emitter.instruction("ldr x1, [sp, #32]");                       // pass the staged handler disposition
+            ctx.emitter.instruction("ldr x0, [sp, #48]");                       // pass the staged signal number
             ctx.emitter.instruction("mov x3, #1");                              // route queued records to the generated AOT handler table
             ctx.emitter.bl_c("elephc_pcntl_signal");
-            ctx.emitter.instruction(&format!("cbz x0, {failure}"));             // release staged ownership when registration fails
+            ctx.emitter.instruction(&format!("cbz x0, {failure}"));             // terminate when the OS refuses the signal disposition
             ctx.emitter.instruction(&format!("b {success}"));                   // commit the registered handler
             ctx.emitter.label(&failure);
-            ctx.emitter.instruction("ldr x0, [sp]");                            // recover the staged callable descriptor
-            let warning = ctx.next_label("pcntl_signal_warning");
-            ctx.emitter.instruction(&format!("cbz x0, {warning}"));             // skip release for integer dispositions
-            callable_descriptor::emit_release_current_descriptor(ctx.emitter);
-            ctx.emitter.label(&warning);
-            emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_SIGNAL);
-            ctx.emitter.instruction("mov x0, #0");                              // return false after the warning
-            ctx.emitter.instruction(&format!("b {done}"));                      // bypass successful table replacement
+            emit_signal_installation_fatal(ctx, signal)?;
             ctx.emitter.label(&success);
             emit_replace_handler_table_entry_aarch64(ctx);
             ctx.emitter.instruction("mov x0, #1");                              // return true after registration
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rdx");
-            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // pass the staged handler disposition
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");           // pass the staged signal number
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 32]");           // pass the staged handler disposition
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 48]");           // pass the staged signal number
             ctx.emitter.instruction("mov ecx, 1");                              // route queued records to the generated AOT handler table
             ctx.emitter.bl_c("elephc_pcntl_signal");
             ctx.emitter.instruction("test rax, rax");                           // inspect bridge registration success
-            ctx.emitter.instruction(&format!("jz {failure}"));                  // release staged ownership when registration fails
+            ctx.emitter.instruction(&format!("jz {failure}"));                  // terminate when the OS refuses the signal disposition
             ctx.emitter.instruction(&format!("jmp {success}"));                 // commit the registered handler
             ctx.emitter.label(&failure);
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // recover the staged callable descriptor
-            ctx.emitter.instruction("test rax, rax");                           // distinguish callables from integer dispositions
-            let warning = ctx.next_label("pcntl_signal_warning");
-            ctx.emitter.instruction(&format!("jz {warning}"));                  // skip release for integer dispositions
-            callable_descriptor::emit_release_current_descriptor(ctx.emitter);
-            ctx.emitter.label(&warning);
-            emit_pcntl_last_error_warning(ctx, PCNTL_WARNING_SIGNAL);
-            ctx.emitter.instruction("xor eax, eax");                            // return false after the warning
-            ctx.emitter.instruction(&format!("jmp {done}"));                    // bypass successful table replacement
+            emit_signal_installation_fatal(ctx, signal)?;
             ctx.emitter.label(&success);
             emit_replace_handler_table_entry_x86_64(ctx);
             ctx.emitter.instruction("mov eax, 1");                              // return true after registration
         }
     }
-    ctx.emitter.label(&done);
-    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    abi::emit_release_temporary_stack(ctx.emitter, 64);
     store_if_result(ctx, inst)
+}
+
+/// Writes PHP's unsuppressible signal-installation fatal and exits with status 255.
+fn emit_signal_installation_fatal(
+    ctx: &mut FunctionContext<'_>,
+    signal: crate::ir::ValueId,
+) -> Result<()> {
+    let (prefix, prefix_len) = ctx
+        .data
+        .add_string(b"Fatal error: Error installing signal handler for ");
+    let (newline, newline_len) = ctx.data.add_string(b"\n");
+    emit_write_literal_stderr(ctx.emitter, &prefix, prefix_len);
+    ctx.load_value_to_result(signal)?;
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    emit_write_current_string_stderr(ctx.emitter);
+    emit_write_literal_stderr(ctx.emitter, &newline, newline_len);
+    abi::emit_exit(ctx.emitter, UNCAUGHT_EXIT_STATUS);
+    Ok(())
 }
 
 /// Validates a dynamic signal number with PHP's target-specific `ValueError` diagnostics.
@@ -182,7 +183,7 @@ fn emit_initialize_signal_bridge_slots(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Lowers `pcntl_signal_get_handler()` to an owned boxed callable or integer disposition.
+/// Lowers `pcntl_signal_get_handler()` to an owned copy of the registered PHP value.
 pub(crate) fn lower_signal_get_handler(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -190,7 +191,7 @@ pub(crate) fn lower_signal_get_handler(
     ensure_arg_count_between(inst, "pcntl_signal_get_handler", 1, 1)?;
     let signal = expect_operand(inst, 0)?;
     load_as_int(ctx, signal, "pcntl_signal_get_handler signal")?;
-    let callable = ctx.next_label("pcntl_signal_get_handler_callable");
+    let registered = ctx.next_label("pcntl_signal_get_handler_registered");
     let invalid = ctx.next_label("pcntl_signal_get_handler_invalid");
     let done = ctx.next_label("pcntl_signal_get_handler_done");
     let invalid_message = match ctx.emitter.target.platform {
@@ -213,18 +214,15 @@ pub(crate) fn lower_signal_get_handler(
             ctx.emitter.instruction(&format!("b.lt {invalid}"));                // reject values below the supported range
             ctx.emitter.instruction("cmp x9, x0");                              // compare against the target signal limit
             ctx.emitter.instruction(&format!("b.ge {invalid}"));                // reject values beyond the target range
-            abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_handler_kind");
-            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the registered handler kind
-            ctx.emitter.instruction("cmp x0, #2");                              // distinguish callable descriptors from dispositions
-            ctx.emitter.instruction(&format!("b.eq {callable}"));               // box a callable descriptor through its owned path
+            abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_handler_value");
+            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the preserved PHP handler value
+            ctx.emitter.instruction(&format!("cbnz x0, {registered}"));         // return an independent reference when a value was registered
+            ctx.emitter.instruction("mov x0, #0");                              // an untouched signal has PHP's SIG_DFL disposition
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
             ctx.emitter.instruction(&format!("b {done}"));                      // return the boxed integer disposition
-            ctx.emitter.label(&callable);
-            abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_handler_descriptor");
-            ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");               // load the registered callable descriptor
-            callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
-            emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Callable);
-            ctx.emitter.instruction(&format!("b {done}"));                      // return the retained callable descriptor
+            ctx.emitter.label(&registered);
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            ctx.emitter.instruction(&format!("b {done}"));                      // return the retained boxed PHP handler value
             ctx.emitter.label(&invalid);
             super::super::exceptions::emit_value_error(ctx, invalid_message);
         }
@@ -236,18 +234,16 @@ pub(crate) fn lower_signal_get_handler(
             ctx.emitter.instruction(&format!("jl {invalid}"));                  // reject values below the supported range
             ctx.emitter.instruction("cmp r9, rax");                             // compare against the target signal limit
             ctx.emitter.instruction(&format!("jge {invalid}"));                 // reject values beyond the target range
-            abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_kind");
-            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");         // load the registered handler kind
-            ctx.emitter.instruction("cmp rax, 2");                              // distinguish callable descriptors from dispositions
-            ctx.emitter.instruction(&format!("je {callable}"));                 // box a callable descriptor through its owned path
+            abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_value");
+            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");         // load the preserved PHP handler value
+            ctx.emitter.instruction("test rax, rax");                           // distinguish registered values from untouched SIG_DFL
+            ctx.emitter.instruction(&format!("jnz {registered}"));              // return an independent reference when a value was registered
+            ctx.emitter.instruction("xor eax, eax");                            // an untouched signal has PHP's SIG_DFL disposition
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
             ctx.emitter.instruction(&format!("jmp {done}"));                    // return the boxed integer disposition
-            ctx.emitter.label(&callable);
-            abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_descriptor");
-            ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");         // load the registered callable descriptor
-            callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
-            emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Callable);
-            ctx.emitter.instruction(&format!("jmp {done}"));                    // return the retained callable descriptor
+            ctx.emitter.label(&registered);
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // return the retained boxed PHP handler value
             ctx.emitter.label(&invalid);
             super::super::exceptions::emit_value_error(ctx, invalid_message);
         }
@@ -388,6 +384,23 @@ fn emit_push_handler_kind_and_descriptor(
     Ok(())
 }
 
+/// Pushes an owned boxed copy of the original PHP handler value for later introspection.
+fn emit_push_handler_value(
+    ctx: &mut FunctionContext<'_>,
+    handler: crate::ir::ValueId,
+) -> Result<()> {
+    let handler_ty = ctx.value_php_type(handler)?.codegen_repr();
+    ctx.load_value_to_result(handler)?;
+    match handler_ty {
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        }
+        other => emit_box_current_value_as_mixed(ctx.emitter, &other),
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    Ok(())
+}
+
 /// Classifies a boxed handler as an integer disposition or a runtime callable descriptor.
 fn emit_push_mixed_handler_pair(
     ctx: &mut FunctionContext<'_>,
@@ -505,12 +518,12 @@ fn emit_signal_restart_flag(
     } else {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("ldr x0, [sp, #32]");                   // recover the staged signal number
+                ctx.emitter.instruction("ldr x0, [sp, #48]");                   // recover the staged signal number
                 ctx.emitter.instruction(&format!("cmp x0, #{SIGALRM}"));        // apply SIGALRM's non-restarting default
                 ctx.emitter.instruction("cset x0, ne");                         // restart syscalls for every other signal by default
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("cmp QWORD PTR [rsp + 32], 14");        // apply SIGALRM's non-restarting default
+                ctx.emitter.instruction("cmp QWORD PTR [rsp + 48], 14");        // apply SIGALRM's non-restarting default
                 ctx.emitter.instruction("setne al");                            // restart syscalls for every other signal by default
                 ctx.emitter.instruction("movzx eax, al");                       // widen the flag for the bridge ABI
             }
@@ -522,41 +535,62 @@ fn emit_signal_restart_flag(
 
 /// Replaces one AArch64 handler-table entry and releases its prior descriptor ownership.
 fn emit_replace_handler_table_entry_aarch64(ctx: &mut FunctionContext<'_>) {
-    ctx.emitter.instruction("ldr x9, [sp, #32]");                               // recover the staged signal number
+    ctx.emitter.instruction("ldr x9, [sp, #48]");                               // recover the staged signal number
     abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_handler_kind");
     ctx.emitter.instruction("ldr x11, [x10, x9, lsl #3]");                      // inspect the previous handler kind
     ctx.emitter.instruction("cmp x11, #2");                                     // detect an owned callable descriptor
-    let skip_release = ctx.next_label("pcntl_signal_no_old_descriptor");
-    ctx.emitter.instruction(&format!("b.ne {skip_release}"));                   // preserve non-callable dispositions
+    let skip_descriptor_release = ctx.next_label("pcntl_signal_no_old_descriptor");
+    ctx.emitter.instruction(&format!("b.ne {skip_descriptor_release}"));        // preserve non-callable dispositions
     abi::emit_symbol_address(ctx.emitter, "x11", "__rt_pcntl_handler_descriptor");
     ctx.emitter.instruction("ldr x0, [x11, x9, lsl #3]");                       // load the descriptor being replaced
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
-    ctx.emitter.label(&skip_release);
-    ctx.emitter.instruction("ldr x9, [sp, #32]");                               // recover the staged signal number after release
-    ctx.emitter.instruction("ldr x11, [sp, #16]");                              // recover the new handler kind
+    ctx.emitter.label(&skip_descriptor_release);
+    ctx.emitter.instruction("ldr x9, [sp, #48]");                               // recover the staged signal number after descriptor release
+    abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_handler_value");
+    ctx.emitter.instruction("ldr x0, [x10, x9, lsl #3]");                       // load the prior PHP handler value
+    let skip_value_release = ctx.next_label("pcntl_signal_no_old_value");
+    ctx.emitter.instruction(&format!("cbz x0, {skip_value_release}"));          // untouched signals have no boxed value owner
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&skip_value_release);
+    ctx.emitter.instruction("ldr x9, [sp, #48]");                               // recover the staged signal number after value release
+    ctx.emitter.instruction("ldr x11, [sp, #32]");                              // recover the new handler kind
     abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_handler_kind");
     ctx.emitter.instruction("str x11, [x10, x9, lsl #3]");                      // publish the new handler kind
-    ctx.emitter.instruction("ldr x11, [sp]");                                   // recover the new callable descriptor
+    ctx.emitter.instruction("ldr x11, [sp, #16]");                              // recover the new callable descriptor
     abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_handler_descriptor");
     ctx.emitter.instruction("str x11, [x10, x9, lsl #3]");                      // transfer descriptor ownership to the table
+    ctx.emitter.instruction("ldr x11, [sp]");                                   // recover the preserved PHP handler value
+    abi::emit_symbol_address(ctx.emitter, "x10", "__rt_pcntl_handler_value");
+    ctx.emitter.instruction("str x11, [x10, x9, lsl #3]");                      // transfer PHP-value ownership to the table
 }
 
 /// Replaces one x86_64 handler-table entry and releases its prior descriptor ownership.
 fn emit_replace_handler_table_entry_x86_64(ctx: &mut FunctionContext<'_>) {
-    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 32]");                    // recover the staged signal number
+    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 48]");                    // recover the staged signal number
     abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_kind");
     ctx.emitter.instruction("cmp QWORD PTR [r10 + r9*8], 2");                   // detect an owned callable descriptor
-    let skip_release = ctx.next_label("pcntl_signal_no_old_descriptor");
-    ctx.emitter.instruction(&format!("jne {skip_release}"));                    // preserve non-callable dispositions
+    let skip_descriptor_release = ctx.next_label("pcntl_signal_no_old_descriptor");
+    ctx.emitter.instruction(&format!("jne {skip_descriptor_release}"));         // preserve non-callable dispositions
     abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_descriptor");
     ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");                 // load the descriptor being replaced
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
-    ctx.emitter.label(&skip_release);
-    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 32]");                    // recover the staged signal number after release
-    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 16]");                   // recover the new handler kind
+    ctx.emitter.label(&skip_descriptor_release);
+    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 48]");                    // recover the staged signal number after descriptor release
+    abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_value");
+    ctx.emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");                 // load the prior PHP handler value
+    ctx.emitter.instruction("test rax, rax");                                   // untouched signals have no boxed value owner
+    let skip_value_release = ctx.next_label("pcntl_signal_no_old_value");
+    ctx.emitter.instruction(&format!("jz {skip_value_release}"));               // skip release for an empty value slot
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&skip_value_release);
+    ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 48]");                    // recover the staged signal number after value release
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 32]");                   // recover the new handler kind
     abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_kind");
     ctx.emitter.instruction("mov QWORD PTR [r10 + r9*8], r11");                 // publish the new handler kind
-    ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                        // recover the new callable descriptor
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 16]");                   // recover the new callable descriptor
     abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_descriptor");
     ctx.emitter.instruction("mov QWORD PTR [r10 + r9*8], r11");                 // transfer descriptor ownership to the table
+    ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                        // recover the preserved PHP handler value
+    abi::emit_symbol_address(ctx.emitter, "r10", "__rt_pcntl_handler_value");
+    ctx.emitter.instruction("mov QWORD PTR [r10 + r9*8], r11");                 // transfer PHP-value ownership to the table
 }

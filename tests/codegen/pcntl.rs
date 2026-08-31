@@ -283,6 +283,42 @@ fn test_pcntl_signal_handler_dispatch_and_lookup() {
     assert_eq!(out, "set|callable|handled:14:14|dispatched|reset");
 }
 
+/// Preserves the PHP-visible string, Closure, and array shapes returned by handler lookup.
+#[test]
+fn test_pcntl_signal_get_handler_preserves_callable_value_shape() {
+    let out = compile_and_run(
+        r#"<?php
+        function namedHandler(int $signal): void {}
+        pcntl_signal(SIGUSR1, 'namedHandler');
+        $named = pcntl_signal_get_handler(SIGUSR1);
+        var_dump($named);
+        echo gettype($named) . '|' . (int) is_string($named) . '|'
+            . (int) is_callable($named) . '|' . (int) ($named === null) . "\n";
+
+        $closure = function(int $signal): void {};
+        pcntl_signal(SIGUSR1, $closure);
+        $returnedClosure = pcntl_signal_get_handler(SIGUSR1);
+        var_dump($returnedClosure);
+        echo gettype($returnedClosure) . '|' . (int) is_object($returnedClosure) . '|'
+            . (int) is_callable($returnedClosure) . '|' . (int) ($returnedClosure === null) . "\n";
+
+        class SignalFixture { public static function handle(int $signal): void {} }
+        pcntl_signal(SIGUSR1, ['SignalFixture', 'handle']);
+        $method = pcntl_signal_get_handler(SIGUSR1);
+        echo gettype($method) . '|' . (int) is_array($method) . '|'
+            . (int) is_callable($method) . '|' . (int) ($method === null);
+        pcntl_signal(SIGUSR1, SIG_DFL);"#,
+    );
+    assert_eq!(
+        out,
+        "string(12) \"namedHandler\"\n\
+string|1|1|0\n\
+object(Closure)#1 (0) {\n}\n\
+object|1|1|0\n\
+array|1|1|0"
+    );
+}
+
 /// Preserves the SIGALRM-aware restart default for a named call that omits the third argument.
 #[test]
 fn test_pcntl_signal_named_omitted_restart_uses_signal_aware_default() {
@@ -668,19 +704,37 @@ pcntl_exec(): Argument #3 ($env_vars) value for environment variable must not co
     );
 }
 
-/// Emits a warning when the OS rejects a valid but uncatchable signal disposition.
+/// Terminates fatally, even under suppression, when the OS rejects an uncatchable signal.
 #[test]
-fn test_pcntl_signal_os_failure_warns_and_returns_false() {
-    let out = compile_and_run_capture(
-        "<?php echo pcntl_signal(SIGKILL, SIG_IGN) ? 'bad' : 'false';",
+fn test_pcntl_signal_uncatchable_signal_is_fatal() {
+    for (signal, number) in [("SIGKILL", libc::SIGKILL), ("SIGSTOP", libc::SIGSTOP)] {
+        let out = compile_and_run_capture(&format!(
+            "<?php @pcntl_signal({signal}, function() {{}}); echo 'still alive';"
+        ));
+        assert!(!out.success, "{signal} registration unexpectedly succeeded");
+        assert_eq!(out.stdout, "");
+        assert!(
+            out.stderr.contains(&format!(
+                "Fatal error: Error installing signal handler for {number}"
+            )),
+            "unexpected stderr for {signal}: {}",
+            out.stderr
+        );
+    }
+
+    let eval = compile_and_run_capture(
+        r#"<?php eval('pcntl_signal(SIGKILL, function() {}); echo "still alive";');
+        echo "outer survived";"#,
     );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "false");
+    assert!(!eval.success, "eval SIGKILL registration unexpectedly succeeded");
+    assert_eq!(eval.stdout, "");
     assert!(
-        out.stderr
-            .contains("Warning: pcntl_signal(): Error assigning signal"),
-        "unexpected stderr: {}",
-        out.stderr
+        eval.stderr.contains(&format!(
+            "Fatal error: Error installing signal handler for {}",
+            libc::SIGKILL
+        )),
+        "unexpected eval stderr: {}",
+        eval.stderr
     );
 }
 

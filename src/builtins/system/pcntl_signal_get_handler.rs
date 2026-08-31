@@ -5,7 +5,7 @@
 //! - `crate::builtins::registry` while collecting AOT builtin homes.
 //!
 //! Key details:
-//! - Callable descriptors are retained before they are boxed into the returned `Mixed` value.
+//! - Lookup returns an owned copy of the original PHP handler shape, not its invocation descriptor.
 
 builtin! {
     contract: "pcntl_signal_get_handler",

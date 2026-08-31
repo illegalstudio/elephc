@@ -46,17 +46,13 @@ pub(in crate::codegen::lower_inst) fn emit_duplicate_define_warning(ctx: &mut Fu
         Arch::AArch64 => {
             ctx.emitter.adrp("x1", "_diag_define_already_defined_msg");
             ctx.emitter.add_lo12("x1", "x1", "_diag_define_already_defined_msg");
-            ctx.emitter.instruction(
-                &format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len())
-            );                                                                  // pass the duplicate-define warning byte length
+            let length = format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len());
+            ctx.emitter.instruction(&length);                                   // pass the duplicate-define warning byte length
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
-                "lea rdi, [rip + _diag_define_already_defined_msg]"
-            );                                                                  // pass the duplicate-define warning pointer
-            ctx.emitter.instruction(
-                &format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len())
-            );                                                                  // pass the duplicate-define warning byte length
+            ctx.emitter.instruction("lea rdi, [rip + _diag_define_already_defined_msg]"); // pass the duplicate-define warning pointer
+            let length = format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len());
+            ctx.emitter.instruction(&length);                                   // pass the duplicate-define warning byte length
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
@@ -122,6 +118,7 @@ pub(in crate::codegen::lower_inst) fn emit_mixed_gettype(ctx: &mut FunctionConte
     emit_branch_on_gettype_mixed_tag(ctx, 4, &array_case);
     emit_branch_on_gettype_mixed_tag(ctx, 5, &array_case);
     emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 10, &object_case);
     emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
     abi::emit_jump(ctx.emitter, &null_case);
 
@@ -169,7 +166,7 @@ pub(in crate::codegen::lower_inst) fn static_gettype_name(ty: &PhpType) -> Optio
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             Some(b"array".as_slice())
         }
-        PhpType::Callable => Some(b"callable".as_slice()),
+        PhpType::Callable => Some(b"object".as_slice()),
         PhpType::Object(_) => Some(b"object".as_slice()),
         PhpType::Pointer(_) => Some(b"pointer".as_slice()),
         PhpType::Buffer(_) => Some(b"buffer".as_slice()),

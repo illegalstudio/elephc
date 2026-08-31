@@ -313,15 +313,14 @@ pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
-/// Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
-/// runtime tag is an object (6).
+/// Lowers `is_object()`: true for objects and Closures, including boxed runtime tags 6 and 10.
 pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_object", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
-        PhpType::Object(_) => emit_static_bool(ctx, true),
+        PhpType::Object(_) | PhpType::Callable => emit_static_bool(ctx, true),
         PhpType::Mixed | PhpType::Union(_) => {
-            predicates::emit_mixed_tag_membership(ctx, value, &[6])?;
+            predicates::emit_mixed_tag_membership(ctx, value, &[6, 10])?;
         }
         _ => emit_static_bool(ctx, false),
     }
@@ -357,4 +356,3 @@ pub(in crate::codegen::lower_inst) fn mixed_type_predicate_tag(expected: &PhpTyp
         _ => None,
     }
 }
-

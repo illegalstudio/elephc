@@ -63,6 +63,14 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(())
     }
 
+    /// Emits one unsuppressible PHP fatal through the generated runtime and terminates.
+    fn fatal(&mut self, message: &str) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_fatal(message.as_ptr(), message.len() as u64);
+        }
+        Err(EvalStatus::RuntimeFatal)
+    }
+
     /// Mirrors eval handler execution into the generated runtime Fiber-switch guard.
     fn set_pcntl_dispatching(&mut self, active: bool) -> Result<(), EvalStatus> {
         crate::context::pcntl_runtime::set_fiber_dispatching(active);

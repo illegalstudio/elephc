@@ -140,6 +140,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_var_dump_emit_object_key(emitter);
     io::emit_var_dump_emit_uninit_line(emitter);
     io::emit_var_dump_emit_recursion_line(emitter);
+    io::emit_var_dump_emit_callable(emitter);
     io::emit_vd_obj_desc(emitter);
     io::emit_vd_obj_count(emitter);
     io::emit_vd_seen_find(emitter);

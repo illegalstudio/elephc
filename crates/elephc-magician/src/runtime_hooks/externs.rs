@@ -309,6 +309,7 @@ unsafe extern "C" {
     /// Returns the PHP object handle (`spl_object_id`) for object-tagged eval values.
     pub(super) fn __elephc_eval_value_object_handle(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
+    pub(super) fn __elephc_eval_fatal(message_ptr: *const u8, message_len: u64);
     /// Mirrors Magician's signal-dispatch region into the generated runtime Fiber guard.
     pub(super) fn __elephc_eval_set_pcntl_dispatching(active: u64);
     pub(super) fn __elephc_eval_value_null() -> *mut RuntimeCell;

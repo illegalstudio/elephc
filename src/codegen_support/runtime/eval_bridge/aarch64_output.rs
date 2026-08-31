@@ -231,6 +231,13 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
     emitter.instruction("b __rt_diag_warning");                                 // emit or suppress one eval runtime warning
 
+    label_c_global(emitter, "__elephc_eval_fatal");
+    emitter.instruction("mov x2, x1");                                          // move fatal length into the stderr write-length register
+    emitter.instruction("mov x1, x0");                                          // move fatal pointer into the stderr write-buffer register
+    emitter.instruction("mov x0, #2");                                          // select stderr for the unsuppressible fatal diagnostic
+    emitter.syscall(4);
+    abi::emit_exit(emitter, UNCAUGHT_EXIT_STATUS);
+
     label_c_global(emitter, "__elephc_eval_set_pcntl_dispatching");
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
     emitter.instruction("str x0, [x9]");                                        // publish Magician handler execution to the Fiber guard

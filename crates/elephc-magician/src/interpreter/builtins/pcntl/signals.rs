@@ -157,10 +157,10 @@ fn eval_pcntl_signal(
         if let EvalPcntlSignalHandler::Callable(handler) = stored {
             values.release(handler)?;
         }
-        values.warning(&elephc_pcntl::pcntl_last_error_warning(
-            elephc_pcntl::PCNTL_WARNING_SIGNAL,
+        values.fatal(&format!(
+            "Fatal error: Error installing signal handler for {signal}\n"
         ))?;
-        return values.bool_value(false);
+        return Err(EvalStatus::RuntimeFatal);
     }
     if let Some(previous) = pcntl_runtime::replace_signal_handler(
         signal as libc::c_int,

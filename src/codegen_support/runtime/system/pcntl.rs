@@ -710,7 +710,7 @@ fn emit_pcntl_release_handlers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_pcntl_release_handlers_state");              // finish with global dispatch state
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
     emitter.instruction("ldr x11, [x10, x9, lsl #3]");                          // inspect the registered handler kind
-    emitter.instruction("cbz x11, __rt_pcntl_release_handlers_next");           // skip default dispositions
+    emitter.instruction("cbz x11, __rt_pcntl_release_handlers_zero");           // a default disposition needs only PHP-value cleanup
     emitter.instruction("mov x0, x9");                                          // bridge arg0 = signal number
     emitter.instruction("mov x1, #0");                                          // bridge arg1 = default disposition
     emitter.instruction("mov x2, #1");                                          // bridge arg2 = restart-syscalls flag
@@ -729,10 +729,18 @@ fn emit_pcntl_release_handlers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release the handler-table ownership
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after release
     emitter.label("__rt_pcntl_release_handlers_zero");
+    abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_value");
+    emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the preserved PHP handler value
+    emitter.instruction("cbz x0, __rt_pcntl_release_handlers_clear");           // untouched signals own no boxed value
+    emitter.instruction("bl __rt_decref_any");                                  // release the table's PHP-value ownership
+    emitter.instruction("ldr x9, [sp, #96]");                                   // reload the table index after value release
+    emitter.label("__rt_pcntl_release_handlers_clear");
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_kind");
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the handler-kind entry
     abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_descriptor");
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the descriptor entry
+    abi::emit_symbol_address(emitter, "x10", "__rt_pcntl_handler_value");
+    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the PHP handler-value entry
     emitter.label("__rt_pcntl_release_handlers_next");
     emitter.instruction("ldr x9, [sp, #96]");                                   // reload the completed table index
     emitter.instruction("add x9, x9, #1");                                      // advance to the next signal
@@ -774,7 +782,7 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_pcntl_release_handlers_state_x86");           // finish with global dispatch state
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
     emitter.instruction("cmp QWORD PTR [r10 + r9*8], 0");                       // inspect the registered handler kind
-    emitter.instruction("je __rt_pcntl_release_handlers_next_x86");             // skip default dispositions
+    emitter.instruction("je __rt_pcntl_release_handlers_zero_x86");             // a default disposition needs only PHP-value cleanup
     emitter.instruction("mov rdi, r9");                                         // bridge arg0 = signal number
     emitter.instruction("xor esi, esi");                                        // bridge arg1 = default disposition
     emitter.instruction("mov edx, 1");                                          // bridge arg2 = restart-syscalls flag
@@ -793,10 +801,19 @@ fn emit_pcntl_release_handlers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_callable_descriptor_release");               // release the handler-table ownership
     emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after release
     emitter.label("__rt_pcntl_release_handlers_zero_x86");
+    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
+    emitter.instruction("mov rax, QWORD PTR [r10 + r9*8]");                     // load the preserved PHP handler value
+    emitter.instruction("test rax, rax");                                       // untouched signals own no boxed value
+    emitter.instruction("jz __rt_pcntl_release_handlers_clear_x86");            // skip release for an empty value slot
+    emitter.instruction("call __rt_decref_any");                                // release the table's PHP-value ownership
+    emitter.instruction("mov r9, QWORD PTR [rbp - 104]");                       // reload the table index after value release
+    emitter.label("__rt_pcntl_release_handlers_clear_x86");
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_kind");
     emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");                       // clear the handler-kind entry
     abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_descriptor");
     emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");                       // clear the descriptor entry
+    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
+    emitter.instruction("mov QWORD PTR [r10 + r9*8], 0");                       // clear the PHP handler-value entry
     emitter.label("__rt_pcntl_release_handlers_next_x86");
     emitter.instruction("add QWORD PTR [rbp - 104], 1");                        // advance and preserve the next signal index
     emitter.instruction("jmp __rt_pcntl_release_handlers_loop_x86");            // continue scanning registered handlers

@@ -204,6 +204,14 @@ impl PcntlRuntime {
                     | E::WRITES_PROCESS.bits()
                     | E::MAY_THROW.bits(),
             ),
+            Self::Signal => E::from_bits_retain(
+                E::READS_PROCESS.bits()
+                    | E::WRITES_PROCESS.bits()
+                    | E::READS_HEAP.bits()
+                    | E::WRITES_HEAP.bits()
+                    | E::MAY_THROW.bits()
+                    | E::MAY_FATAL.bits(),
+            ),
             Self::SetQosClass => E::from_bits_retain(
                 E::READS_PROCESS.bits()
                     | E::WRITES_PROCESS.bits()
@@ -221,7 +229,6 @@ impl PcntlRuntime {
             | Self::SetNs
             | Self::SetProcessGroup
             | Self::SetPriority
-            | Self::Signal
             | Self::SignalMask
             | Self::SignalTimedWait
             | Self::SignalWaitInfo
