@@ -765,7 +765,7 @@ fn test_pcntl_linux_functions_are_not_visible_on_macos() {
     assert_eq!(out, "absent");
 }
 
-/// Exercises Darwin QoS enum injection, getter identity, setter selection, and defaulting.
+/// Exercises Darwin QoS enum injection, getter identity, and explicit setter selection.
 #[cfg(target_os = "macos")]
 #[test]
 fn test_pcntl_macos_qos_class_round_trip() {
@@ -776,7 +776,7 @@ fn test_pcntl_macos_qos_class_round_trip() {
         $before = pcntl_getqos_class();
         pcntl_setqos_class($before);
         echo (pcntl_getqos_class() === $before ? 'same' : 'changed') . '|';
-        pcntl_setqos_class();
+        pcntl_setqos_class(Pcntl\\QosClass::Default);
         echo (pcntl_getqos_class() === Pcntl\\QosClass::Default ? 'default' : 'bad');",
     );
     assert_eq!(out, "enum|5|same|default");
@@ -1785,16 +1785,16 @@ fn test_pcntl_eval_setns_rejects_explicit_zero_pid() {
     );
 }
 
-/// Exercises Darwin QoS enum defaults through eval and confirms Linux-only metadata stays absent.
+/// Exercises explicit Darwin QoS selection through eval and keeps Linux metadata absent.
 #[cfg(target_os = "macos")]
 #[test]
-fn test_pcntl_eval_macos_qos_default_and_target_surface() {
+fn test_pcntl_eval_macos_qos_explicit_default_and_target_surface() {
     let out = compile_and_run(
         r#"<?php
         echo eval('
             $before = pcntl_getqos_class();
             pcntl_setqos_class($before);
-            pcntl_setqos_class();
+            pcntl_setqos_class(Pcntl\\QosClass::Default);
             return (function_exists("pcntl_getqos_class") ? "visible" : "missing") . "|"
                 . (function_exists("pcntl_getcpu") ? "linux" : "no-linux") . "|"
                 . (pcntl_getqos_class() === Pcntl\\QosClass::Default ? "default" : "bad");
