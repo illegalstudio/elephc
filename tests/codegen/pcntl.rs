@@ -334,7 +334,7 @@ fn test_pcntl_signal_named_omitted_restart_uses_signal_aware_default() {
     #[cfg(target_arch = "aarch64")]
     assert!(user_asm.contains("cmp x0, #14"));
     #[cfg(target_arch = "x86_64")]
-    assert!(user_asm.contains("cmp QWORD PTR [rsp + 32], 14"));
+    assert!(user_asm.contains("cmp QWORD PTR [rsp + 48], 14"));
 }
 
 /// Returns integer signal dispositions exactly as registered.
