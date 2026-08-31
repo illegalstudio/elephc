@@ -92,6 +92,10 @@ fn eval_handler_cannot_switch_fibers_through_call_user_func() {
 }
 
 /// Rejects a Fiber switch reached through a static-method `call_user_func` callback.
+///
+/// Registers `Fiber::suspend` as a native AOT static so dispatch takes the
+/// `EvaluatedCallable::StaticMethod` native path instead of
+/// `eval_static_method_call_result_resolved`, which already rejected.
 #[test]
 fn eval_handler_cannot_switch_fibers_through_call_user_func_static() {
     let _guard = PCNTL_TEST_LOCK.lock().expect("PCNTL test lock poisoned");
@@ -107,6 +111,11 @@ fn eval_handler_cannot_switch_fibers_through_call_user_func_static() {
     let cleanup = parse_fragment(b"pcntl_signal(SIGUSR1, SIG_DFL);")
         .expect("parse PCNTL cleanup");
     let mut context = ElephcEvalContext::new();
+    assert!(context.define_native_static_method_signature(
+        "Fiber",
+        "suspend",
+        NativeCallableSignature::new(0),
+    ));
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
