@@ -18,7 +18,8 @@ only discoverable at runtime, for example through opaque dynamic `eval()`:
 elephc --with-pcntl worker.php
 ```
 
-`extension_loaded('pcntl')` reports `true` whenever the bridge is linked.
+`extension_loaded('pcntl')` and `extension_loaded('posix')` report `true`
+whenever the shared bridge is linked.
 
 PCNTL is intentionally unavailable for both `ios-arm64` and `ios-sim-arm64`, and
 for `--emit cdylib` or `--emit staticlib`. A hosted library shares its embedding
@@ -69,6 +70,7 @@ available. The usual status helpers are available: `pcntl_wifexited`,
 
 `pcntl_exec()` replaces the current process and never returns on success. Its
 argument and environment arrays are copied into native `argv`/`envp` storage;
+scalar values are converted to strings with PHP's normal weak coercion rules;
 an omitted environment inherits the current process environment, while an
 explicit empty array clears it. Embedded null bytes raise PHP's position-specific
 `ValueError` before entering the OS. Other OS failures emit PHP's warning,
@@ -145,6 +147,8 @@ Signal masks use `pcntl_sigprocmask()`. Linux additionally provides
 Invalid dynamic mask modes, empty signal sets, out-of-range signals, and invalid
 timed-wait durations raise the same `ValueError` cases as PHP; they are not
 collapsed into a silent `false` result.
+Signal-set array keys are ignored, and numeric-string values are coerced to
+integers before validation, matching PHP.
 
 ## Target-specific surface
 
@@ -156,26 +160,34 @@ collapsed into a silent `false` result.
 Function availability and PCNTL constants are selected from the compilation
 target, not from the machine running the compiler. Linux-only functions are
 undefined in macOS output, and the macOS QoS API is undefined in Linux output.
+`function_exists()`, `PHP_OS`, and `PHP_OS_FAMILY` target guards are folded
+before availability checks, so one portable source can isolate those calls.
 Linux namespace and CPU-affinity argument failures are classified separately
 from OS permission/resource failures: invalid values raise `ValueError`, while
 operating-system failures emit a suppressible PHP warning and return `false`.
 Invalid priority selector modes likewise raise target-specific `ValueError`s on
 all supported targets.
+The Linux target triples are GNU/glibc targets, so `SIGRTMIN` and `SIGRTMAX`
+follow glibc. musl is not part of the supported target matrix.
 `pcntl_rfork()` and `pcntl_forkx()` belong to operating systems outside
 elephc's supported target matrix and are intentionally absent.
 
 ## Eval and current limits
 
 Dynamic `eval()` uses the same native bridge, errno state, process signal
-dispositions, dispatch masking, wait outputs, and warning behavior as AOT code.
+dispositions, dispatch masking, wait outputs, and direct-call warning behavior
+as AOT code. Generic `call_user_func()` by-reference degradation is tracked
+separately in [issue #820](https://github.com/illegalstudio/elephc/issues/820).
 Callable descriptors remain owned by the backend that registered them:
 Magician retains eval handlers in a process-global registry that keeps their
 owning eval context alive across generated function-frame teardown, while
 compiled handlers remain in AOT runtime storage. Pending records are routed
 into separate AOT and eval queues, so dispatching from the other backend cannot
 consume or drop them. An eval handler is therefore invoked by an eval dispatch,
-and a compiled handler by a compiled dispatch; registrations cannot be
-inspected as the other backend's incompatible callable representation.
+and a compiled handler by a compiled dispatch. Eval may inspect the original
+PHP value of an AOT registration through `pcntl_signal_get_handler()`; an eval
+callable still cannot escape into compiled storage because its descriptor owns
+eval-context state that AOT cannot safely retain.
 
 The native `sigaction` disposition is still process-wide. If AOT and Magician
 both install a handler for the same signal, the later installer owns future OS

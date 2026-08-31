@@ -50,7 +50,7 @@ function posix_setsid(): int
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/pcntl/posix_setsid.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/posix_setsid.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `runtime-state-or-resource`.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

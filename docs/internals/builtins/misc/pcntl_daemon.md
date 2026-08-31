@@ -50,7 +50,7 @@ function pcntl_daemon(bool $no_chdir = false, bool $no_close = false): bool
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_daemon.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_daemon.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `runtime-state-or-resource`.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

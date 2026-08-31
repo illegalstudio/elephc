@@ -61040,7 +61040,7 @@
     "canonical_name": "pcntl_daemon",
     "description": "Detaches the surviving child into a background daemon process.",
     "eval": {
-      "adapter_reason": "runtime-state-or-resource",
+      "adapter_reason": "capability-dependent",
       "area": "pcntl",
       "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_daemon.rs",
@@ -62606,17 +62606,13 @@
       "params": [
         {
           "by_ref": false,
-          "default": {
-            "class": "Pcntl\\QosClass",
-            "kind": "class_constant",
-            "name": "Default"
-          },
+          "default": null,
           "name": "qos_class",
-          "optional": true,
+          "optional": false,
           "type": "mixed"
         }
       ],
-      "required_param_count": 0,
+      "required_param_count": 1,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -62637,13 +62633,13 @@
       "params": [
         {
           "by_ref": false,
-          "default": "Pcntl\\QosClass::Default",
+          "default": null,
           "name": "qos_class",
-          "optional": true,
+          "optional": false,
           "type": "mixed"
         }
       ],
-      "required_param_count": 0,
+      "required_param_count": 1,
       "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
@@ -62719,9 +62715,9 @@
       "params": [
         {
           "by_ref": false,
-          "default": "Pcntl\\QosClass::Default",
+          "default": null,
           "name": "qos_class",
-          "optional": true,
+          "optional": false,
           "type": "mixed"
         }
       ],
@@ -66103,7 +66099,7 @@
     "canonical_name": "posix_setpgid",
     "description": "Moves a process into a process group for job control.",
     "eval": {
-      "adapter_reason": "runtime-state-or-resource",
+      "adapter_reason": "capability-dependent",
       "area": "pcntl",
       "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/pcntl/posix_setpgid.rs",
@@ -66239,7 +66235,7 @@
     "canonical_name": "posix_setsid",
     "description": "Creates a new session and makes the current process its leader.",
     "eval": {
-      "adapter_reason": "runtime-state-or-resource",
+      "adapter_reason": "capability-dependent",
       "area": "pcntl",
       "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/pcntl/posix_setsid.rs",

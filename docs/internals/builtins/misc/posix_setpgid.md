@@ -50,7 +50,7 @@ function posix_setpgid(int $process_id, int $process_group_id): bool
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/pcntl/posix_setpgid.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/posix_setpgid.rs) (`eval_builtin!`)
 - **Execution**: Magician interpreter adapter.
-- **Adapter reason**: `runtime-state-or-resource`.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

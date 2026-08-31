@@ -8,13 +8,13 @@ sidebar:
 ## pcntl_setqos_class()
 
 ```php
-function pcntl_setqos_class(mixed $qos_class = Pcntl\QosClass::Default): void
+function pcntl_setqos_class(mixed $qos_class): void
 ```
 
 Changes the current macOS thread quality-of-service class.
 
 **Parameters**:
-- `$qos_class` (`mixed`), default `Pcntl\QosClass::Default`, optional
+- `$qos_class` (`mixed`)
 
 **Returns**: `void`
 

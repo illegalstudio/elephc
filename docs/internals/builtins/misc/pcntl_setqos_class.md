@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function pcntl_setqos_class(mixed $qos_class = Pcntl\QosClass::Default): void
+function pcntl_setqos_class(mixed $qos_class): void
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 0–1 arguments (1 optional).
+- **Arity**: takes exactly 1 argument.
 
 ## Eval interpreter (magician)
 
