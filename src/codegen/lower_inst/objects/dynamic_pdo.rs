@@ -334,6 +334,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_pdo_statement_initialize(
     );
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    super::super::emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     emit_void_sentinel(ctx);
     store_if_result(ctx, inst)

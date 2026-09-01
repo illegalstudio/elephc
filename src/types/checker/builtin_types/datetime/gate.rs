@@ -33,7 +33,6 @@ pub(crate) const DATETIME_CLASS_NAMES: &[&str] = &[
     "DateMalformedStringException",
     "DateMalformedIntervalStringException",
     "DateMalformedPeriodStringException",
-    "DateUnknownException",
 ];
 
 /// Returns whether `program` can reach any builtin date/time class.
@@ -87,6 +86,25 @@ pub(crate) fn program_may_reference_datetime(program: &[Stmt]) -> bool {
     })
 }
 
+/// Returns whether the program can specifically reach `DatePeriod` and its Iterator contract.
+///
+/// The broader DateTime family gate must not register DatePeriod for a source that only names
+/// `DateTime`: doing so also registers Iterator, whose `next`/`rewind` method contracts can retain
+/// unrelated iterator implementations during declaration reachability. Serialized payloads and
+/// dynamic introspection remain conservative because they can name DatePeriod outside source AST.
+pub(crate) fn program_may_reference_date_period(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    if usage.introspects
+        || DATETIME_PRODUCING_BUILTINS
+            .iter()
+            .any(|name| usage.references(name))
+    {
+        return true;
+    }
+    let key = php_symbol_key("DatePeriod");
+    usage.classes.contains(&key) || usage.literals.contains(&key)
+}
+
 /// Builtins that reach a date/time class without the program naming one.
 ///
 /// `unserialize` builds an object from a class name held in its DATA, where no static walk can
@@ -118,6 +136,20 @@ mod tests {
         assert!(!program_may_reference_datetime(&parse("<?php echo 1;")));
         assert!(!program_may_reference_datetime(&parse(
             "<?php function f(int $x): string { return (string) $x; } echo f(2);"
+        )));
+    }
+
+    /// DatePeriod and its Iterator contract stay gated independently from plain DateTime use.
+    #[test]
+    fn date_period_registration_is_independent() {
+        assert!(!program_may_reference_date_period(&parse(
+            "<?php $date = new DateTime('now');"
+        )));
+        assert!(program_may_reference_date_period(&parse(
+            "<?php $period = new DatePeriod('R1/2024-01-01/P1D');"
+        )));
+        assert!(program_may_reference_date_period(&parse(
+            "<?php unserialize($wire);"
         )));
     }
 

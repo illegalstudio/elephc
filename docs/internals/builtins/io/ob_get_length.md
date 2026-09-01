@@ -2,7 +2,7 @@
 title: "ob_get_length() — internals"
 description: "Compiler internals for ob_get_length(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 205
+  order: 206
 ---
 
 ## `ob_get_length()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_length.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_length.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

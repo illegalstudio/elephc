@@ -10,10 +10,12 @@
 use super::*;
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.
+/// Lowers one trailing indexed spread in a fixed-arity positional call.
 pub(super) fn lower_positional_spread_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
+    spread_overflow_error: Option<&str>,
 ) -> Option<Vec<crate::ir::ValueId>> {
     if sig.variadic.is_some() {
         return None;
@@ -38,10 +40,17 @@ pub(super) fn lower_positional_spread_args_with_signature(
     }
 
     let spread_type = indexed_spread_source_type(ctx, inner)?;
-    let spread = lower_expr(ctx, inner);
-    let temp_name = ctx.declare_hidden_temp(spread_type.clone());
-    store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
-    let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
+    let (spread_expr, cleanup_temp) = if matches!(&inner.kind, ExprKind::Variable(_)) {
+        (inner.as_ref().clone(), None)
+    } else {
+        let spread = lower_expr(ctx, inner);
+        let temp_name = ctx.declare_hidden_temp(spread_type.clone());
+        store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
+        (
+            Expr::new(ExprKind::Variable(temp_name.clone()), inner.span),
+            Some(temp_name),
+        )
+    };
     let spread_value = lower_expr(ctx, &spread_expr);
     emit_positional_spread_min_len_guard(
         ctx,
@@ -84,7 +93,81 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(lower_expr(ctx, &expr).value);
     }
 
+    if let Some(cleanup_temp) = cleanup_temp {
+        if let Some(anchor) = operands.first().copied() {
+            ctx.register_call_arg_temp_cleanup(anchor, cleanup_temp.clone());
+        } else {
+            ctx.clear_hidden_temp(&cleanup_temp, Some(args[spread_idx].span));
+        }
+        if let Some(message) = spread_overflow_error {
+            emit_positional_spread_max_len_type_error_guard(
+                ctx,
+                spread_value.value,
+                regular_param_count - spread_idx,
+                message,
+                Some(&cleanup_temp),
+                args[spread_idx].span,
+            );
+        }
+    } else if let Some(message) = spread_overflow_error {
+        emit_positional_spread_max_len_type_error_guard(
+            ctx,
+            spread_value.value,
+            regular_param_count - spread_idx,
+            message,
+            None,
+            args[spread_idx].span,
+        );
+    }
     Some(operands)
+}
+
+/// Throws an internal-overload `TypeError` when a runtime spread contains excess entries.
+pub(super) fn emit_positional_spread_max_len_type_error_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    spread: crate::ir::ValueId,
+    max_len: usize,
+    message: &str,
+    cleanup_temp: Option<&str>,
+    span: Span,
+) {
+    let len = ctx.emit_value(
+        Op::ArrayLen,
+        vec![spread],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(span),
+    );
+    let max = emit_i64_at_span(ctx, max_len as i64, span);
+    let within_bound = ctx.emit_value(
+        Op::ICmp,
+        vec![len.value, max.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Sle)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(span),
+    );
+    let valid = ctx
+        .builder
+        .create_named_block("call.spread.max.valid", Vec::new());
+    let invalid = ctx
+        .builder
+        .create_named_block("call.spread.max.invalid", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: within_bound.value,
+        then_target: valid,
+        then_args: Vec::new(),
+        else_target: invalid,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(invalid);
+    if let Some(cleanup_temp) = cleanup_temp {
+        ctx.clear_hidden_temp(cleanup_temp, Some(span));
+    }
+    emit_exception_and_terminate(ctx, "TypeError", message, span);
+    ctx.builder.position_at_end(valid);
 }
 
 /// Returns the element count for a statically-known indexed spread source.
@@ -126,6 +209,11 @@ pub(super) fn indexed_spread_source_type(
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
+        ExprKind::FunctionCall { name, .. } => ctx
+            .functions
+            .get(name.as_str())
+            .map(eir_user_function_return_type)
+            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
         _ => infer_expr_type_syntactic(expr),
     }
     .codegen_repr();
@@ -191,4 +279,3 @@ pub(super) fn emit_positional_spread_min_len_guard(
 
     ctx.builder.position_at_end(ok);
 }
-

@@ -56,6 +56,11 @@ pub(super) fn emit_reflection_member_object(
         member.declaring_class_name.as_deref(),
     )?;
     if member_class_name == "ReflectionMethod" {
+        let has_tentative_return_type = member.type_metadata.is_some()
+            && reflection_datetime_method_has_tentative_return_type(
+                member.declaring_class_name.as_deref(),
+                Some(&member.name),
+            );
         emit_reflection_parameter_array_property_by_name(
             ctx,
             member_class_name,
@@ -72,9 +77,29 @@ pub(super) fn emit_reflection_member_object(
             ctx,
             member_class_name,
             "__has_return_type",
-            member.type_metadata.is_some(),
+            member.type_metadata.is_some() && !has_tentative_return_type,
         )?;
-        emit_reflection_owner_type_property(ctx, member_class_name, member.type_metadata.as_ref())?;
+        emit_reflection_owner_type_property(
+            ctx,
+            member_class_name,
+            (!has_tentative_return_type)
+                .then_some(member.type_metadata.as_ref())
+                .flatten(),
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            member_class_name,
+            "__has_tentative_return_type",
+            has_tentative_return_type,
+        )?;
+        emit_reflection_owner_type_property_by_name(
+            ctx,
+            member_class_name,
+            "__tentative_type",
+            has_tentative_return_type
+                .then_some(member.type_metadata.as_ref())
+                .flatten(),
+        )?;
         emit_reflection_owner_bool_property(
             ctx,
             member_class_name,
@@ -232,4 +257,3 @@ pub(super) fn emit_reflection_parameter_object(
     )?;
     emit_reflection_parameter_properties(ctx, parameter)
 }
-

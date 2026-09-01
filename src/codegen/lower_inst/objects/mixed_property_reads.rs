@@ -17,6 +17,9 @@ pub(super) fn lower_union_object_prop_get(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if class_property_is_missing(ctx, class_name, property)? {
+        return lower_union_undefined_property_get(ctx, inst, object, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let object_label = ctx.next_label("union_prop_object");
     let done_label = ctx.next_label("union_prop_done");
@@ -88,11 +91,17 @@ pub(super) fn lower_declared_mixed_prop_get(
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
         let base_reg = abi::int_result_reg(ctx.emitter);
-        if candidate.slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        if let Some(target) =
+            property_hook_get_target(ctx, &candidate.slot.class_name, property)?
+        {
+            emit_property_hook_get_result(ctx, inst, object, base_reg, &candidate.slot, &target)?;
+        } else {
+            if candidate.slot.is_declared {
+                emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+            }
+            emit_property_load(ctx, &candidate.slot, base_reg)?;
+            box_mixed_property_candidate_result(ctx, &candidate.slot.php_type);
         }
-        emit_property_load(ctx, &candidate.slot, base_reg)?;
-        box_mixed_property_candidate_result(ctx, &candidate.slot.php_type);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -101,7 +110,7 @@ pub(super) fn lower_declared_mixed_prop_get(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&miss_label);
-    emit_undefined_property_warning_for_loaded_object(ctx, property);
+    emit_undefined_property_warning_for_loaded_object(ctx, inst, property);
     emit_boxed_null(ctx);
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -356,6 +365,7 @@ pub(super) fn emit_property_on_null_warning(ctx: &mut FunctionContext<'_>, prope
 /// Emits `Warning: Undefined property: Class::$name` for an object already in the result register.
 pub(super) fn emit_undefined_property_warning_for_loaded_object(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     property: &str,
 ) {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
@@ -377,11 +387,16 @@ pub(super) fn emit_undefined_property_warning_for_loaded_object(
         }
     }
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    emit_property_warning_fragment(ctx, b"Warning: Undefined property: ");
+    emit_property_warning_fragment(ctx, b"\nWarning: Undefined property: ");
     match ctx.emitter.target.arch {
         Arch::AArch64 => abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2"),
         Arch::X86_64 => abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi"),
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
-    emit_property_warning_fragment(ctx, format!("::${}\n", property).as_bytes());
+    let source = ctx.module.source_path.as_deref().unwrap_or("Unknown");
+    let line = inst.span.map_or(0, |span| span.line);
+    emit_property_warning_fragment(
+        ctx,
+        format!("::${property} in {source} on line {line}\n").as_bytes(),
+    );
 }

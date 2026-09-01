@@ -9,7 +9,7 @@
 
 use super::*;
 
-/// Lowers a numeric unary operation.
+/// Lowers numeric unary operations after applying PHP scalar coercion.
 pub(super) fn lower_numeric_unary(
     ctx: &mut LoweringContext<'_, '_>,
     inner: &Expr,
@@ -238,4 +238,3 @@ pub(super) fn lower_truthy_bool(
     }
     result
 }
-

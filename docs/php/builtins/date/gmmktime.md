@@ -2,24 +2,24 @@
 title: "gmmktime()"
 description: "Returns the Unix timestamp for a GMT date."
 sidebar:
-  order: 104
+  order: 105
 ---
 
 ## gmmktime()
 
 ```php
-function gmmktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int
+function gmmktime(int $hour, int $minute = null, int $second = null, int $month = null, int $day = null, int $year = null): int
 ```
 
 Returns the Unix timestamp for a GMT date.
 
 **Parameters**:
 - `$hour` (`int`)
-- `$minute` (`int`)
-- `$second` (`int`)
-- `$month` (`int`)
-- `$day` (`int`)
-- `$year` (`int`)
+- `$minute` (`int`), default `null`, optional
+- `$second` (`int`), default `null`, optional
+- `$month` (`int`), default `null`, optional
+- `$day` (`int`), default `null`, optional
+- `$year` (`int`), default `null`, optional
 
 **Returns**: `int`
 

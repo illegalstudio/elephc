@@ -95,6 +95,7 @@ pub(super) struct FakeOps {
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,
+    pub(super) error_reporting: Option<i64>,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
     pub(super) ob_stack: Vec<FakeObLevel>,

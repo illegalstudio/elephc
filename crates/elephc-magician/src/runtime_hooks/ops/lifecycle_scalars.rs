@@ -63,6 +63,20 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(())
     }
 
+    /// Emits one PHP deprecation through the generated runtime diagnostic helper.
+    fn deprecated(&mut self, message: &str) -> Result<(), EvalStatus> {
+        unsafe {
+            __elephc_eval_deprecated(message.as_ptr(), message.len() as u64);
+        }
+        Ok(())
+    }
+
+    /// Reads the shared runtime error mask and optionally replaces it.
+    fn error_reporting(&mut self, level: Option<i64>) -> Result<i64, EvalStatus> {
+        let (level, has_level) = level.map_or((0, 0), |level| (level, 1));
+        Ok(unsafe { __elephc_eval_error_reporting(level, has_level) })
+    }
+
     /// Creates a boxed null Mixed cell through the generated runtime wrapper.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_null() })

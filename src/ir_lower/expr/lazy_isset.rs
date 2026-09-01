@@ -93,10 +93,13 @@ pub(super) fn lower_lazy_isset_operand(
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
+            if is_date_interval_undefined_property_expr(ctx, object, property) {
+                let receiver = lower_expr(ctx, object);
+                release_owning_receiver_temporary(ctx, receiver, arg.span);
+                return Some(emit_bool_literal(ctx, false, Some(arg.span)));
+            }
             lower_lazy_property_isset_operand(ctx, object, property, arg)
         }
-        // A typed static property starts uninitialized and `isset()` must answer false there
-        // rather than take the ordinary read, whose backend guard is fatal.
         ExprKind::StaticPropertyAccess { receiver, property }
             if static_property_can_be_uninitialized(ctx, receiver, property) =>
         {
@@ -112,6 +115,22 @@ pub(super) fn lower_lazy_isset_operand(
         }
         _ => None,
     }
+}
+
+/// Returns whether a property name is absent from a DateInterval-family receiver.
+fn is_date_interval_undefined_property_expr(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    let Some((class_name, _)) = isset_object_expr_class(ctx, object) else {
+        return false;
+    };
+    class_extends_class(ctx, &class_name, "DateInterval")
+        && ctx
+            .classes
+            .get(class_name.trim_start_matches('\\'))
+            .is_some_and(|class_info| class_info.visible_property(property).is_none())
 }
 
 /// Lowers `empty($obj->magicProp)` with PHP's overloaded-property semantics:
@@ -134,6 +153,33 @@ pub(super) fn lower_lazy_empty(
     {
         return None;
     }
+    if let ExprKind::PropertyAccess { object, property }
+        | ExprKind::NullsafePropertyAccess { object, property } = &args[0].kind
+    {
+        if let Some(value) =
+            lower_date_period_virtual_property_empty(ctx, object, property, &args[0])
+        {
+            return Some(value);
+        }
+        if matches!(
+            property_isset_action(ctx, object, property),
+            Some(IssetPropertyAction::Declared)
+        ) {
+            return Some(lower_declared_property_empty(
+                ctx,
+                object,
+                property,
+                &args[0],
+            ));
+        }
+    }
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &args[0].kind {
+        if static_property_can_be_uninitialized(ctx, receiver, property) {
+            return Some(lower_initialized_static_property_empty(
+                ctx, receiver, property, name, &args[0],
+            ));
+        }
+    }
     if let ExprKind::ArrayAccess { array, index } = &args[0].kind {
         let value = lower_array_access_with_missing_warning(ctx, array, index, &args[0], false);
         return Some(emit_builtin_call_value(
@@ -144,31 +190,6 @@ pub(super) fn lower_lazy_empty(
             expr.span,
             None,
         ));
-    }
-    // A typed static property that is still uninitialized is EMPTY in PHP, and reading it the
-    // ordinary way to find that out is fatal — the same reason `isset()` and `??` need the
-    // slot probe. Uninitialized answers true without the read.
-    if let ExprKind::StaticPropertyAccess { receiver, property } = &args[0].kind {
-        if static_property_can_be_uninitialized(ctx, receiver, property) {
-            return Some(lower_initialized_static_property_empty(
-                ctx, receiver, property, name, &args[0],
-            ));
-        }
-    }
-    // The instance twin of the static arm above: an uninitialized typed slot is EMPTY, and the
-    // ordinary read that would say so raises. `property_isset_action` already decides whether the
-    // slot is a declared one worth probing — the same decision `isset()` makes, reused rather than
-    // re-derived so the two constructs cannot drift on which properties they consider declared.
-    if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
-        if matches!(
-            property_isset_action(ctx, object, property),
-            Some(IssetPropertyAction::Initialized)
-        ) {
-            let object = lower_expr(ctx, object);
-            return Some(lower_initialized_property_empty(
-                ctx, object, property, name, &args[0],
-            ));
-        }
     }
     let (exists_call, get_call) = lazy_empty_magic_property_calls(ctx, &args[0])?;
 
@@ -210,6 +231,145 @@ pub(super) fn lower_lazy_empty(
 
     ctx.builder.position_at_end(merge);
     Some(ctx.load_local(&temp_name, Some(expr.span)))
+}
+
+/// Evaluates `empty()` on a declared typed property without reading an uninitialized slot.
+fn lower_declared_property_empty(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: &Expr,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, object_expr);
+    let property_type = property_get_result_type(ctx, object.value, property, Op::PropGet, expr);
+    let property_data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(property_data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let present_block = ctx
+        .builder
+        .create_named_block("empty.declared.present", Vec::new());
+    let absent_block = ctx
+        .builder
+        .create_named_block("empty.declared.absent", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("empty.declared.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: present_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(present_block);
+    let value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(property_data)),
+        property_type,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let truthy = ctx.emit_value(
+        Op::IsTruthy,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsTruthy.default_effects(),
+        Some(expr.span),
+    );
+    let false_value = lower_bool_literal(ctx, false, expr);
+    let empty = ctx.emit_value(
+        Op::ICmp,
+        vec![truthy.value, false_value.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(expr.span),
+    );
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, empty, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(absent_block);
+    let true_value = lower_bool_literal(ctx, true, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, true_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Evaluates `empty()` against DatePeriod's raw virtual-property storage.
+fn lower_date_period_virtual_property_empty(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: &Expr,
+    property: &str,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let (backing, backing_type) = date_period_virtual_property_backing(ctx, object_expr, property)?;
+    let object = lower_expr(ctx, object_expr);
+    let initialized_data = ctx.intern_string("__elephc_initialized");
+    let initialized = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(initialized_data)),
+        PhpType::Bool,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let backing_data = ctx.intern_string(backing);
+    let value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(backing_data)),
+        backing_type,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let truthy = ctx.emit_value(
+        Op::IsTruthy,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsTruthy.default_effects(),
+        Some(expr.span),
+    );
+    let false_value = lower_bool_literal(ctx, false, expr);
+    let not_initialized = ctx.emit_value(
+        Op::ICmp,
+        vec![initialized.value, false_value.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(expr.span),
+    );
+    let not_truthy = ctx.emit_value(
+        Op::ICmp,
+        vec![truthy.value, false_value.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(expr.span),
+    );
+    let result = ctx.emit_value(
+        Op::IBitOr,
+        vec![not_initialized.value, not_truthy.value],
+        None,
+        PhpType::Bool,
+        Op::IBitOr.default_effects(),
+        Some(expr.span),
+    );
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    Some(result)
 }
 
 /// For an `empty()` operand that is an overloaded (magic) property access,
@@ -283,4 +443,3 @@ pub(super) fn property_existence_magic_class(
     }
     class_method_signature(ctx, &class_name, &php_symbol_key(magic)).map(|_| class_name)
 }
-

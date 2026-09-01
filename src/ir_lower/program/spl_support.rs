@@ -12,6 +12,17 @@ use super::*;
 /// Returns true for builtin SPL methods intentionally lowered into EIR today.
 pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str) -> bool {
     match class_name {
+        "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" => {
+            matches!(
+                method_key,
+                "__elephc_debug_dump"
+                    | "__elephc_print_r_dump"
+                    | "__elephc_assert_initialized"
+            )
+        }
+        // DatePeriod is entirely synthetic and its IteratorAggregate surface recursively calls
+        // private helpers. Any referenced method therefore has a valid EIR body to lower.
+        "DatePeriod" => true,
         "SplFileInfo" => matches!(
             method_key,
             "__construct"
@@ -492,4 +503,3 @@ pub(super) fn runtime_intrinsic_method_has_wrapper(
     };
     intrinsic.is_some_and(|intrinsic| intrinsic.runtime_helper().is_some())
 }
-

@@ -29,6 +29,8 @@ pub(super) struct BackendInputs<'a> {
     pub(super) target: Target,
     pub(super) emit: Emit,
     pub(super) heap_size: usize,
+    /// PHP `precision` baked into the cacheable float-formatting runtime.
+    pub(super) float_precision: u8,
     pub(super) gc_stats: bool,
     pub(super) counters: bool,
     pub(super) instrument: crate::codegen::Instrumentation,
@@ -73,6 +75,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         target,
         emit,
         heap_size,
+        float_precision,
         gc_stats,
         counters,
         instrument,
@@ -114,6 +117,8 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         ir_module.probe_key = Some(key);
     }
     let mut runtime_features = ir_module.required_runtime_features;
+    runtime_features.float_precision = float_precision;
+    runtime_features.php_profile = crate::codegen_support::compile_php_version().minor() as u8;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
     // program, so the runtime cache (keyed on the generated assembly hash) keeps the

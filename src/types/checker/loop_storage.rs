@@ -438,7 +438,7 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
             CastType::Float => Some(PhpType::Float),
             CastType::String => Some(PhpType::Str),
             CastType::Bool => Some(PhpType::Bool),
-            CastType::Array => None,
+            CastType::Array | CastType::Void => None,
         },
         ExprKind::ErrorSuppress(inner) => precise_scalar_expr_type(inner),
         _ => None,
@@ -490,6 +490,15 @@ fn collect_value_assignment_stmt<'a>(
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             collect_value_assignments_from_expr(object, out);
+            collect_value_assignments_from_expr(value, out);
+        }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            collect_value_assignments_from_expr(object, out);
+            collect_value_assignments_from_expr(property, out);
             collect_value_assignments_from_expr(value, out);
         }
         StmtKind::PropertyArrayAssign {
@@ -700,6 +709,15 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             collect_growth_calls_from_expr(object, out);
+            collect_growth_calls_from_expr(value, out);
+        }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            collect_growth_calls_from_expr(object, out);
+            collect_growth_calls_from_expr(property, out);
             collect_growth_calls_from_expr(value, out);
         }
         StmtKind::PropertyArrayAssign {

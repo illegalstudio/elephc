@@ -88,6 +88,69 @@ fn test_empty_after_open_tag() {
     assert_eq!(t, vec![Token::OpenTag, Token::Eof]);
 }
 
+/// Verifies close tags terminate PHP statements and inline HTML becomes verbatim echo tokens.
+#[test]
+fn test_close_tag_inline_html_and_reopen() {
+    let t = tokens("<?php echo \"a\" ?>===DONE===<?php echo \"b\";");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("a".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("===DONE===".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("b".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies the short echo reopen tag resumes PHP as an echo expression.
+#[test]
+fn test_close_tag_short_echo_reopen() {
+    let t = tokens("<?php echo \"a\" ?>:<?= \"b\" ?>");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("a".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral(":".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("b".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies PHP close tags absorb the immediately following line ending.
+#[test]
+fn test_close_tag_absorbs_one_line_ending() {
+    let t = tokens("<?php echo \"a\" ?>\r\nvisible");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Echo,
+            Token::StringLiteral("a".into()),
+            Token::Semicolon,
+            Token::Echo,
+            Token::StringLiteral("visible".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
 /// Verifies `<?php` with no trailing whitespace produces `OpenTag` + `Eof`.
 #[test]
 fn test_open_tag_no_trailing_space() {

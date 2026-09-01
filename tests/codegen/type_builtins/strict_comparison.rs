@@ -261,4 +261,32 @@ echo $map["bool_t"] === true ? "1" : "0";
     assert_eq!(out, "100111");
 }
 
+/// Verifies boxed indexed arrays use PHP structural identity instead of container-pointer identity.
+#[test]
+fn test_strict_compare_mixed_indexed_arrays_is_structural() {
+    let out = compile_and_run(
+        r#"<?php
+function compare_arrays($left, $right) {
+    echo $left === $right ? "1" : "0";
+    echo $left !== $right ? "1" : "0";
+    echo "|";
+}
+
+compare_arrays(["alpha", "beta"], ["alpha", "beta"]);
+compare_arrays(["alpha", "beta"], ["beta", "alpha"]);
+compare_arrays(["alpha", "beta"], ["alpha", "gamma"]);
+compare_arrays([1, 2], ["1", "2"]);
+compare_arrays([["alpha"], ["beta"]], [["alpha"], ["beta"]]);
+compare_arrays([["alpha"], ["beta"]], [["alpha"], ["gamma"]]);
+
+$typed = ["alpha", "beta"];
+$mixed = ["alpha", 0];
+$mixed[1] = "beta";
+compare_arrays($typed, $mixed);
+compare_arrays($typed, $typed);
+"#,
+    );
+    assert_eq!(out, "10|01|01|01|10|01|10|10|");
+}
+
 // --- Include / Require ---

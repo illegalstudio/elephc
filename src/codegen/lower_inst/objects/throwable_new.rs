@@ -36,6 +36,26 @@ pub(super) fn lower_builtin_throwable_new(
     store_if_result(ctx, inst)
 }
 
+/// Initializes a preallocated compact Throwable receiver without allocating a replacement object.
+pub(in crate::codegen::lower_inst) fn lower_preallocated_throwable_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 4 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "preallocated Throwable constructor with {} EIR operands",
+            inst.operands.len()
+        )));
+    }
+    ctx.load_value_to_result(inst.operands[0])?;
+    preserve_throwable_for_init(ctx);
+    emit_throwable_message_fields(ctx, inst.operands.get(1).copied())?;
+    emit_throwable_code_field(ctx, inst.operands.get(2).copied())?;
+    emit_throwable_previous_field(ctx, inst.operands.get(3).copied())?;
+    restore_throwable_after_init(ctx);
+    Ok(())
+}
+
 /// Returns true for builtin classes that share PHP's compact Throwable payload.
 pub(super) fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
     matches!(
@@ -69,7 +89,10 @@ pub(super) fn is_builtin_throwable_payload_class(class_name: &str) -> bool {
 }
 
 /// Returns a class id for Throwable-compatible classes that can use the compact payload.
-pub(super) fn throwable_payload_class_id(ctx: &FunctionContext<'_>, class_name: &str) -> Option<u64> {
+pub(in crate::codegen::lower_inst) fn throwable_payload_class_id(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Option<u64> {
     let class_info = ctx.module.class_infos.get(class_name)?;
     if is_builtin_throwable_payload_class(class_name)
         || throwable_payload_compatible_user_class(ctx, class_name, class_info)

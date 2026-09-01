@@ -9,7 +9,7 @@
 
 use super::*;
 
-/// Lowers an assignment expression.
+/// Lowers an assignment expression while preserving target evaluation and result semantics.
 pub(super) fn lower_assignment_expr(
     ctx: &mut LoweringContext<'_, '_>,
     target: &Expr,
@@ -253,15 +253,147 @@ pub(super) fn lower_dynamic_property_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
-    let property = lower_expr(ctx, property);
+    let property_value = lower_expr(ctx, property);
+    let property_value = coerce_to_string(ctx, property_value, property);
     let value = lower_expr(ctx, value);
+    emit_dynamic_property_readonly_guard(ctx, object.value, property_value.value, span);
     ctx.emit_void(
         Op::DynamicPropSet,
-        vec![object.value, property.value, value.value],
+        vec![object.value, property_value.value, value.value],
         None,
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &[property_value.value],
+        None,
+        &ReturnArgAlias::None,
+        span,
+    );
+}
+
+/// Lowers an append through a runtime property name while evaluating every operand once.
+pub(crate) fn lower_dynamic_property_array_push(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    value: &Expr,
+    span: Span,
+) {
+    let object = lower_expr(ctx, object);
+    let property_value = lower_expr(ctx, property);
+    let property_value = coerce_to_string(ctx, property_value, property);
+    let value = lower_expr(ctx, value);
+    emit_dynamic_property_readonly_guard(ctx, object.value, property_value.value, span);
+    let current = ctx.emit_value(
+        Op::DynamicPropGet,
+        vec![object.value, property_value.value],
+        None,
+        PhpType::Mixed,
+        Op::DynamicPropGet.default_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::MixedArrayAppend,
+        vec![current.value, value.value],
+        None,
+        Op::MixedArrayAppend.default_effects(),
+        Some(span),
+    );
+    ctx.emit_void(
+        Op::DynamicPropSet,
+        vec![object.value, property_value.value, current.value],
+        None,
+        Op::DynamicPropSet.default_effects(),
+        Some(span),
+    );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &[property_value.value],
+        None,
+        &ReturnArgAlias::None,
+        span,
+    );
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
+    }
+}
+
+/// Emits runtime-name checks for readonly or get-only visible properties.
+fn emit_dynamic_property_readonly_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: ValueId,
+    property: ValueId,
+    span: Span,
+) {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return;
+    };
+    let candidates = class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter(|(index, (name, _))| class_info.visible_property_index(name) == Some(*index))
+        .filter(|(_, (name, _))| {
+            property_is_accessible_for_ir(ctx, normalized, class_info, name)
+        })
+        .filter_map(|(_, (name, _))| {
+            if ctx.in_own_property_accessor(name) {
+                return None;
+            }
+            let getter = php_symbol_key(&property_hook_get_method(name));
+            let setter = php_symbol_key(&property_hook_set_method(name));
+            let readonly = class_info.readonly_properties.contains(name)
+                || (class_info.methods.contains_key(&getter)
+                    && !class_info.methods.contains_key(&setter));
+            readonly.then(|| {
+                let declaring_class = class_info
+                    .property_declaring_classes
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| normalized.to_string());
+                (name.clone(), declaring_class)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for (name, declaring_class) in candidates {
+        let throw_block = ctx
+            .builder
+            .create_named_block("dynamic.property.readonly", Vec::new());
+        let next_block = ctx
+            .builder
+            .create_named_block("dynamic.property.writable", Vec::new());
+        let name_expr = Expr::new(ExprKind::StringLiteral(name.clone()), span);
+        let expected = lower_string_literal(ctx, &name, &name_expr);
+        let matches = ctx.emit_value(
+            Op::StrictEq,
+            vec![property, expected.value],
+            None,
+            PhpType::Bool,
+            Op::StrictEq.default_effects(),
+            Some(span),
+        );
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: matches.value,
+            then_target: throw_block,
+            then_args: Vec::new(),
+            else_target: next_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(throw_block);
+        crate::ir_lower::stmt::lower_throw_access_error(
+            ctx,
+            &format!("Cannot modify readonly property {}::${}", declaring_class, name),
+            span,
+        );
+        ctx.builder.position_at_end(next_block);
+    }
 }
 
 /// Lowers pre/post increment and decrement expressions.
@@ -338,4 +470,3 @@ pub(super) fn lower_inc_dec(
         ctx.load_local(name, Some(expr.span))
     }
 }
-

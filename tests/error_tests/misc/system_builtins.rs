@@ -127,6 +127,15 @@ fn test_error_putenv_wrong_args() {
     expect_error("<?php putenv();", "putenv() takes exactly 1 argument");
 }
 
+/// Verifies that `setlocale()` requires both a category and at least one locale candidate.
+#[test]
+fn test_error_setlocale_wrong_args() {
+    expect_error(
+        "<?php setlocale(LC_ALL);",
+        "setlocale() takes at least 2 arguments",
+    );
+}
+
 /// Verifies that `phpversion()` with any arguments yields a no-args diagnostic.
 #[test]
 fn test_error_phpversion_wrong_args() {
@@ -138,6 +147,24 @@ fn test_error_phpversion_wrong_args() {
     expect_error(
         "<?php phpversion(1);",
         "phpversion() extension argument must be string",
+    );
+}
+
+/// Verifies `get_extension_funcs()` requires exactly one extension name.
+#[test]
+fn test_error_get_extension_funcs_wrong_args() {
+    expect_error(
+        "<?php get_extension_funcs();",
+        "get_extension_funcs() takes exactly 1 argument",
+    );
+}
+
+/// Verifies dynamic non-string extension names are rejected before backend lowering.
+#[test]
+fn test_error_get_extension_funcs_wrong_type() {
+    expect_error(
+        "<?php $extension = [\"date\"]; get_extension_funcs($extension);",
+        "get_extension_funcs() first argument must be a string in AOT mode",
     );
 }
 
@@ -241,22 +268,16 @@ fn test_error_gmdate_too_many_args() {
 
 /// Verifies `mktime()` arity: PHP 8.0+ accepts 0–6 arguments (omitted ones default to the
 /// corresponding current-time component via the procedural-alias desugar), so seven arguments is
-/// out of range and yields the fixed-arity diagnostic.
+/// out of range and reaches the catchable runtime arity boundary.
 #[test]
-fn test_error_mktime_wrong_args() {
-    expect_error(
-        "<?php mktime(1, 2, 3, 4, 5, 6, 7);",
-        "mktime() takes exactly 6 arguments",
-    );
+fn test_mktime_extra_argument_is_runtime_checked() {
+    expect_no_error("<?php mktime(1, 2, 3, 4, 5, 6, 7);");
 }
 
-/// Verifies that `gmmktime()` rejects more than six arguments, mirroring `mktime()`.
+/// Verifies that `gmmktime()` also reaches its catchable runtime arity boundary.
 #[test]
-fn test_error_gmmktime_wrong_args() {
-    expect_error(
-        "<?php gmmktime(1, 2, 3, 4, 5, 6, 7);",
-        "gmmktime() takes exactly 6 arguments",
-    );
+fn test_gmmktime_extra_argument_is_runtime_checked() {
+    expect_no_error("<?php gmmktime(1, 2, 3, 4, 5, 6, 7);");
 }
 
 /// Verifies that `getdate()` rejects a second argument (it accepts at most one).
@@ -549,13 +570,10 @@ fn test_error_constant_undefined_name() {
     expect_error("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
 }
 
-/// Verifies `constant()` rejects a runtime-computed name in AOT mode.
+/// Verifies `constant()` accepts a runtime-computed name for closed-world selection.
 #[test]
-fn test_error_constant_dynamic_name() {
-    expect_error(
-        "<?php define(\"FOO\", 1); $n = \"FOO\"; echo constant($n);",
-        "constant() first argument must be a string literal in AOT mode",
-    );
+fn test_constant_dynamic_name_is_runtime_selected() {
+    expect_no_error("<?php define(\"FOO\", 1); $n = \"FOO\"; echo constant($n);");
 }
 
 /// Verifies `constant()` rejects a class-constant name.

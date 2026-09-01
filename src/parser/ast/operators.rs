@@ -8,6 +8,8 @@
 //! Key details:
 //! - Variants must stay aligned with lexer tokens and PHP precedence rules in the Pratt table.
 
+use super::{Expr, ExprKind};
+
 // --- Operators ---
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,4 +39,11 @@ pub enum BinOp {
     ShiftRight,
     Spaceship,
     NullCoalesce,
+}
+
+/// Recognizes the direct-AST `operand * 1` marker emitted only for PHP unary plus.
+pub(crate) fn is_synthetic_unary_plus(op: &BinOp, right: &Expr) -> bool {
+    matches!(op, BinOp::Mul)
+        && matches!(right.kind, ExprKind::IntLiteral(1))
+        && !right.span.is_from_source()
 }

@@ -18,9 +18,10 @@ use crate::codegen_support::abi;
 /// is decomposed with `gmtime` (UTC), while `__rt_date` uses `localtime`.
 ///
 /// # Input ABI
-/// - `rax`: Unix timestamp (i64); pass -1 to query current time via libc `time()`.
+/// - `rax`: Unix timestamp (i64), with any value permitted when `rcx` is nonzero.
 /// - `rdi`: pointer to the PHP date format string.
 /// - `rsi`: byte length of the format string.
+/// - `rcx`: timestamp-present flag (`0` = query current time, `1` = use `rax`).
 ///
 /// # Output ABI
 /// - `rax`: pointer to the formatted date string inside the concat buffer.
@@ -65,14 +66,15 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the format-string pointer so the main loop can reload it without depending on caller-saved registers
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the format-string length so the loop bound survives helper calls
     emitter.instruction("mov QWORD PTR [rbp - 72], r10");                       // save the UTC-vs-local decomposition flag across the libc calls below
-    emitter.instruction("cmp rax, -1");                                         // check whether the builtin requested "current time" instead of an explicit timestamp
-    emitter.instruction("jne __rt_date_have_time_linux_x86_64");                // skip the libc time() query when the caller already supplied an explicit Unix timestamp
+    emitter.instruction("test rcx, rcx");                                       // check whether PHP supplied a concrete timestamp argument
+    emitter.instruction("jne __rt_date_have_time_linux_x86_64");                // preserve every explicit timestamp, including the valid value -1
     emitter.instruction("xor edi, edi");                                        // pass NULL to libc time() so it only returns the current Unix timestamp value
     emitter.instruction("call time");                                           // query libc for the current Unix timestamp when PHP date() was called without an explicit timestamp
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // store the current Unix timestamp so the rest of the formatter can treat both code paths uniformly
 
     emitter.label("__rt_date_have_time_linux_x86_64");
     emitter.instruction("call __rt_tz_init_utc");                               // default the timezone to UTC once the timestamp is resolved (PHP-compatible) unless set
+    emitter.instruction("jmp __rt_date_timelib_fallback_linux_x86_64");          // use php-src timelib for every timestamp so historical timezone data and calendar edges remain PHP-compatible
     emitter.instruction("lea rdi, [rbp - 8]");                                  // pass a pointer to the saved Unix timestamp as the first argument to libc localtime()/gmtime()
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the UTC-vs-local decomposition flag
     emitter.instruction("cmp rax, 0");                                          // check whether UTC decomposition was requested
@@ -82,6 +84,14 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_date_use_gmtime_linux_x86_64");
     emitter.instruction("call gmtime");                                         // decompose the Unix timestamp into libc's struct tm fields in UTC
     emitter.label("__rt_date_decomposed_linux_x86_64");
+    emitter.instruction("test rax, rax");                                       // did libc support this signed timestamp?
+    emitter.instruction("jz __rt_date_timelib_fallback_linux_x86_64");          // libc overflow → format through vendored php-src timelib
+    emitter.instruction("mov r8d, DWORD PTR [rax + 20]");                       // load libc tm_year before selecting the bounded fast formatter
+    emitter.instruction("add r8d, 1900");                                       // convert years-since-1900 to the Gregorian year
+    emitter.instruction("cmp r8d, 0");                                          // negative years need php-src's expanded signed formatting
+    emitter.instruction("jl __rt_date_timelib_fallback_linux_x86_64");          // route BCE values through vendored timelib
+    emitter.instruction("cmp r8d, 10000");                                      // detect years whose Y/c/r fields exceed four digits
+    emitter.instruction("jge __rt_date_timelib_fallback_linux_x86_64");         // avoid truncating the high decimal digits
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the returned struct tm pointer so each format-token branch can reload the decomposed calendar fields
 
     abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer offset before appending the formatted date output
@@ -649,6 +659,28 @@ pub(super) fn emit_date_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 160");                                        // release the formatter locals, scratch, and c/r save slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the formatted date string
     emitter.instruction("ret");                                                 // return the formatted date string pointer and length through the standard x86_64 string result registers
+
+    // -- signed-64-bit calendar fallback through vendored timelib --
+    emitter.label("__rt_date_timelib_fallback_linux_x86_64");
+    emitter.instruction("call __rt_date_default_timezone_get");                 // rax/rdx = active PHP timezone pointer/length
+    emitter.instruction("mov r8, rax");                                         // bridge arg 5 = timezone pointer
+    emitter.instruction("mov r9, rdx");                                         // bridge arg 6 = timezone length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // bridge arg 1 = signed Unix timestamp
+    emitter.instruction("xor esi, esi");                                        // bridge arg 2 = procedural date microseconds
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // bridge arg 3 = format pointer
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // bridge arg 4 = format length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the gmdate-vs-date selector
+    emitter.instruction("xor rax, 1");                                          // bridge arg 7: date=localtime, gmdate=UTC
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // place the seventh SysV argument on the stack
+    emitter.bl_c("elephc_tz_format");
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // preserve the bridge string pointer across strlen()
+    emitter.instruction("mov rdi, rax");                                        // strlen argument = formatted string pointer
+    emitter.bl_c("strlen");
+    emitter.instruction("mov rdx, rax");                                        // return the formatted byte length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // return the bridge string pointer
+    emitter.instruction("add rsp, 160");                                        // release the formatter frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the timelib-formatted overflow-safe string
 
     emitter.label("__rt_date_write_2digit_linux_x86_64");
     emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // reload the live output cursor before appending the zero-padded two-digit decimal field

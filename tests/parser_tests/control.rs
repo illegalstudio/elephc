@@ -69,6 +69,77 @@ fn test_for_parses() {
     assert!(matches!(&stmts[0].kind, StmtKind::For { .. }));
 }
 
+/// Verifies a simple `for` initializer keeps the statement-level assignment representation.
+#[test]
+fn test_for_simple_assignment_init_is_canonicalized() {
+    let stmts = parse_source("<?php for ($base = 2; false; $base++) {}");
+    let StmtKind::For { init, .. } = &stmts[0].kind else {
+        panic!("expected For");
+    };
+    assert!(matches!(
+        init.as_deref().map(|stmt| &stmt.kind),
+        Some(StmtKind::Assign {
+            name,
+            value: Expr {
+                kind: ExprKind::IntLiteral(2),
+                ..
+            },
+        }) if name == "base"
+    ));
+}
+
+/// Verifies a method call is accepted as a side-effecting `for` update expression.
+#[test]
+fn test_for_method_call_update_parses() {
+    let stmts = parse_source("<?php for (; $iterator->valid(); $iterator->next()) {}");
+    let StmtKind::For { update, .. } = &stmts[0].kind else {
+        panic!("expected For");
+    };
+    assert!(matches!(
+        update.as_deref().map(|stmt| &stmt.kind),
+        Some(StmtKind::ExprStmt(Expr {
+            kind: ExprKind::MethodCall { .. },
+            ..
+        }))
+    ));
+}
+
+/// Verifies PHP 8.5's `(void)` discard form is accepted in `for` init and update clauses.
+#[test]
+fn test_for_void_discard_clauses_parse() {
+    let stmts = parse_source(
+        "<?php for ((void) strlen('init'); false; (void) strlen('update')) {}",
+    );
+    let StmtKind::For { init, update, .. } = &stmts[0].kind else {
+        panic!("expected For");
+    };
+    for clause in [init, update] {
+        assert!(matches!(
+            clause.as_deref().map(|stmt| &stmt.kind),
+            Some(StmtKind::ExprStmt(Expr {
+                kind: ExprKind::Cast {
+                    target: CastType::Void,
+                    ..
+                },
+                ..
+            }))
+        ));
+    }
+}
+
+/// Verifies `clone` can be used as a standalone expression statement.
+#[test]
+fn test_clone_expression_statement_parses() {
+    let stmts = parse_source("<?php clone $object;");
+    assert!(matches!(
+        &stmts[0].kind,
+        StmtKind::ExprStmt(Expr {
+            kind: ExprKind::Clone(_),
+            ..
+        })
+    ));
+}
+
 /// Verifies that `<?php while (1) { break; }` parses with the `Break(1)` statement nested
 /// inside `While`. The argument 1 means break one level.
 #[test]
@@ -153,6 +224,21 @@ fn test_parse_foreach_key_value() {
     } else {
         panic!("expected Foreach");
     }
+}
+
+/// Verifies bracket destructuring in a foreach value target is lowered into the loop body.
+#[test]
+fn test_parse_foreach_value_destructuring() {
+    let stmts = parse_source("<?php foreach ($pairs as [$left, $right]) { echo $left; }");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach {
+        value_var, body, ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert!(value_var.starts_with("__elephc_foreach_"));
+    assert!(matches!(body[0].kind, StmtKind::ListUnpack { .. }));
 }
 
 /// Verifies that `<?php foreach ($a as $value) {}` parses with no key variable,

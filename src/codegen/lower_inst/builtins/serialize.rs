@@ -197,6 +197,17 @@ pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instructio
             return Ok(());
         }
     }
+    let call_line = inst.span.map_or(0, |span| i64::from(span.line));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x10", call_line);
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x10", "_unser_trace_call_line", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "r10", call_line);
+            abi::emit_store_reg_to_symbol(ctx.emitter, "r10", "_unser_trace_call_line", 0);
+        }
+    }
     // Reset the per-call value registry so r:/R: back-references resolve against
     // this unserialize() call's own pre-order value indices. Static option types
     // are rejected above so every emitted begin has a matching runtime end path.
@@ -238,9 +249,24 @@ pub(crate) fn lower_unserialize(ctx: &mut FunctionContext<'_>, inst: &Instructio
             )));
         }
     }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // preserve the input length across recursive parsing and diagnostics
+            ctx.emitter.instruction("str x2, [sp]");                            // save total serialized byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                              // preserve alignment while reserving diagnostic scratch
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rdx");                // save total serialized byte length
+        }
+    }
+    emit_unserialize_warning_callback(ctx, inst);
     abi::emit_call_label(ctx.emitter, "__rt_unserialize_mixed");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("str x1, [sp, #8]"),            // preserve the parser failure offset across context teardown
+        Arch::X86_64 => ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx"), // preserve the parser failure offset across context teardown
+    }
     abi::emit_call_label(ctx.emitter, "__rt_unserialize_end");
-    box_false_on_unserialize_failure(ctx);
+    box_false_on_unserialize_failure(ctx, inst);
     store_if_result(ctx, inst)
 }
 
@@ -267,25 +293,178 @@ fn unserialize_static_type_name(ty: &PhpType) -> &str {
 /// PHP's `unserialize()` returns `false` on malformed or unsupported input; the
 /// runtime helper signals that with a null Mixed pointer, which this boxes into a
 /// `Mixed(bool=false)` cell so the EIR result stays a valid boxed value.
-fn box_false_on_unserialize_failure(ctx: &mut FunctionContext<'_>) {
+fn box_false_on_unserialize_failure(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
     let done = ctx.next_label("unserialize_done");
+    let warning_done = ctx.next_label("unserialize_warning_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbnz x0, {}", done));             // success returns a boxed Mixed
+            abi::emit_symbol_address(ctx.emitter, "x9", "_unser_warning_emitted");
+            ctx.emitter.instruction("ldr x9, [x9]");                            // did the object parser already report this failure?
+            ctx.emitter.instruction(&format!("cbnz x9, {}", warning_done));     // avoid duplicating the pre-hook warning
+            emit_unserialize_failure_warning(ctx, inst);
+            ctx.emitter.label(&warning_done);
             ctx.emitter.instruction("mov x0, #3");                              // tag = bool
             ctx.emitter.instruction("mov x1, #0");                              // value_lo = false
             ctx.emitter.instruction("mov x2, #0");                              // value_hi unused
             ctx.emitter.instruction("bl __rt_mixed_from_value");                // box the PHP false result
             ctx.emitter.label(&done);
+            ctx.emitter.instruction("add sp, sp, #32");                         // release diagnostic scratch while preserving x0
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // success returns a non-null Mixed pointer
             ctx.emitter.instruction(&format!("jne {}", done));                  // skip false boxing on success
+            abi::emit_symbol_address(ctx.emitter, "r10", "_unser_warning_emitted");
+            ctx.emitter.instruction("cmp QWORD PTR [r10], 0");                  // did the object parser already report this failure?
+            ctx.emitter.instruction(&format!("jne {}", warning_done));          // avoid duplicating the pre-hook warning
+            emit_unserialize_failure_warning(ctx, inst);
+            ctx.emitter.label(&warning_done);
             ctx.emitter.instruction("mov rax, 3");                              // tag = bool
             ctx.emitter.instruction("mov rdi, 0");                              // value_lo = false
             ctx.emitter.instruction("mov rsi, 0");                              // value_hi unused
             ctx.emitter.instruction("call __rt_mixed_from_value");              // box the PHP false result
             ctx.emitter.label(&done);
+            ctx.emitter.instruction("add rsp, 32");                              // release diagnostic scratch while preserving rax
         }
     }
+}
+
+/// Installs a call-site-specific callback that lets the runtime object parser
+/// report a missing closing brace before invoking `__unserialize()`.
+fn emit_unserialize_warning_callback(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    let callback = ctx.next_label("unserialize_warning_callback");
+    let installed = ctx.next_label("unserialize_warning_callback_installed");
+    let dynamic_callback = ctx.next_label("unserialize_dateinterval_dynamic_callback");
+    let dynamic_installed =
+        ctx.next_label("unserialize_dateinterval_dynamic_callback_installed");
+    let source = ctx.module.source_path.as_deref().unwrap_or("Unknown");
+    let line = inst.span.map_or(0, |span| span.line);
+    let dynamic_warning = format!(
+        "\nDeprecated: Creation of dynamic property DateInterval::$ is deprecated in \
+         {source} on line {line}\n"
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x10", &callback);
+            abi::emit_store_reg_to_symbol(
+                ctx.emitter,
+                "x10",
+                "_unser_warning_callback",
+                0,
+            );
+            ctx.emitter.instruction(&format!("b {}", installed));              // skip the out-of-line callback during normal lowering
+            ctx.emitter.label(&callback);
+            ctx.emitter.instruction("sub sp, sp, #32");                         // preserve callback arguments across diagnostics
+            ctx.emitter.instruction("str x0, [sp]");                            // save parser failure offset
+            ctx.emitter.instruction("str x1, [sp, #8]");                        // save total serialized byte length
+            ctx.emitter.instruction("str x30, [sp, #16]");                      // preserve the parser return address across warning calls
+            emit_unserialize_failure_warning(ctx, inst);
+            ctx.emitter.instruction("ldr x30, [sp, #16]");                      // restore the parser return address
+            ctx.emitter.instruction("add sp, sp, #32");                         // release callback scratch
+            ctx.emitter.instruction("ret");                                     // return to the runtime parser before its magic hook
+            ctx.emitter.label(&installed);
+            abi::emit_symbol_address(ctx.emitter, "x10", &dynamic_callback);
+            abi::emit_store_reg_to_symbol(
+                ctx.emitter,
+                "x10",
+                "_unser_dateinterval_dynamic_callback",
+                0,
+            );
+            ctx.emitter.instruction(&format!("b {}", dynamic_installed));       // skip the dynamic-property callback during normal lowering
+            ctx.emitter.label(&dynamic_callback);
+            ctx.emitter.instruction("sub sp, sp, #16");                         // preserve the runtime parser return address
+            ctx.emitter.instruction("str x30, [sp]");                           // save the parser return address across diagnostics
+            emit_unserialize_warning_fragment(ctx, dynamic_warning.as_bytes());
+            ctx.emitter.instruction("ldr x30, [sp]");                           // restore the parser return address
+            ctx.emitter.instruction("add sp, sp, #16");                         // release callback scratch
+            ctx.emitter.instruction("ret");                                     // return after the dynamic-property deprecation
+            ctx.emitter.label(&dynamic_installed);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r10", &callback);
+            abi::emit_store_reg_to_symbol(
+                ctx.emitter,
+                "r10",
+                "_unser_warning_callback",
+                0,
+            );
+            ctx.emitter.instruction(&format!("jmp {}", installed));            // skip the out-of-line callback during normal lowering
+            ctx.emitter.label(&callback);
+            ctx.emitter.instruction("sub rsp, 32");                              // preserve alignment and callback arguments
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdi");             // save parser failure offset
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rsi");                 // save total serialized byte length
+            emit_unserialize_failure_warning(ctx, inst);
+            ctx.emitter.instruction("add rsp, 32");                              // release callback scratch
+            ctx.emitter.instruction("ret");                                     // return to the runtime parser before its magic hook
+            ctx.emitter.label(&installed);
+            abi::emit_symbol_address(ctx.emitter, "r10", &dynamic_callback);
+            abi::emit_store_reg_to_symbol(
+                ctx.emitter,
+                "r10",
+                "_unser_dateinterval_dynamic_callback",
+                0,
+            );
+            ctx.emitter.instruction(&format!("jmp {}", dynamic_installed));     // skip the dynamic-property callback during normal lowering
+            ctx.emitter.label(&dynamic_callback);
+            ctx.emitter.instruction("sub rsp, 8");                               // align the stack for the diagnostic call
+            emit_unserialize_warning_fragment(ctx, dynamic_warning.as_bytes());
+            ctx.emitter.instruction("add rsp, 8");                               // restore the callback stack
+            ctx.emitter.instruction("ret");                                     // return after the dynamic-property deprecation
+            ctx.emitter.label(&dynamic_installed);
+        }
+    }
+}
+
+/// Emits PHP's malformed-serialization warning with the runtime offset/length and source site.
+fn emit_unserialize_failure_warning(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    emit_unserialize_warning_fragment(ctx, b"\nWarning: unserialize(): Error at offset ");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // integer-to-string input = parser failure offset
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");             // integer-to-string input = parser failure offset
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter.instruction("mov rdi, rax");                             // warning fragment pointer = formatted offset
+            ctx.emitter.instruction("mov rsi, rdx");                             // warning fragment length = formatted offset length
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        }
+    }
+    emit_unserialize_warning_fragment(ctx, b" of ");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x0, [sp]");                            // integer-to-string input = total serialized length
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                 // integer-to-string input = total serialized length
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter.instruction("mov rdi, rax");                             // warning fragment pointer = formatted total length
+            ctx.emitter.instruction("mov rsi, rdx");                             // warning fragment length = formatted total length
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        }
+    }
+    let source = ctx.module.source_path.as_deref().unwrap_or("Unknown");
+    let line = inst.span.map_or(0, |span| span.line);
+    let suffix = format!(" bytes in {source} on line {line}\n");
+    emit_unserialize_warning_fragment(ctx, suffix.as_bytes());
+}
+
+/// Writes one static `unserialize()` warning fragment through the suppressible diagnostic channel.
+fn emit_unserialize_warning_fragment(ctx: &mut FunctionContext<'_>, fragment: &[u8]) {
+    let (label, len) = ctx.data.add_string(fragment);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }

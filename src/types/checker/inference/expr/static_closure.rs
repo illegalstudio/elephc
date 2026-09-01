@@ -62,6 +62,11 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_uses_this(object) || expr_uses_this(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_uses_this(object) || expr_uses_this(property) || expr_uses_this(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,
@@ -243,6 +248,15 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_must_not_use_this(object, span)?;
+            expr_must_not_use_this(value, span)
+        }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_must_not_use_this(object, span)?;
+            expr_must_not_use_this(property, span)?;
             expr_must_not_use_this(value, span)
         }
         StmtKind::PropertyArrayAssign {

@@ -100,6 +100,24 @@ fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) {
     }
 }
 
+/// Joins the local types visible after mutually exclusive control-flow paths.
+fn merge_control_flow_envs(checker: &Checker, target: &mut TypeEnv, paths: &[TypeEnv]) {
+    let keys = paths
+        .iter()
+        .flat_map(|path| path.keys().cloned())
+        .collect::<std::collections::BTreeSet<_>>();
+    target.clear();
+    for key in keys {
+        let members = paths
+            .iter()
+            .filter_map(|path| path.get(&key).cloned())
+            .collect::<Vec<_>>();
+        if !members.is_empty() {
+            target.insert(key, checker.normalize_union_type(members));
+        }
+    }
+}
+
 /// Names a `foreach` source that PHP accepts but can never iterate, or `None` when the type
 /// has no PHP-visible spelling and must stay a hard compile error.
 ///
@@ -271,7 +289,16 @@ impl Checker {
                 if let Some(k) = key_var {
                     self.foreach_key_locals.insert(k.clone());
                 }
-                if *value_by_ref && matches!(arr_ty, PhpType::Object(_) | PhpType::Iterable) {
+                let date_period_by_reference = matches!(
+                    &arr_ty,
+                    PhpType::Object(class_name)
+                        if class_name == "DatePeriod"
+                            || self.is_subclass_of(class_name, "DatePeriod")
+                );
+                if *value_by_ref
+                    && matches!(arr_ty, PhpType::Object(_) | PhpType::Iterable)
+                    && !date_period_by_reference
+                {
                     return Err(CompileError::new(
                         stmt.span,
                         "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported; use an array source or remove &",
@@ -541,12 +568,15 @@ impl Checker {
                 finally_body,
             } => {
                 let mut errors = Vec::new();
+                let mut try_env = env.clone();
                 for s in try_body {
-                    if let Err(error) = self.check_stmt(s, env) {
+                    if let Err(error) = self.check_stmt(s, &mut try_env) {
                         errors.extend(error.flatten());
                     }
                 }
+                let mut path_envs = vec![try_env.clone()];
                 for catch_clause in catches {
+                    let mut catch_env = try_env.clone();
                     let mut resolved_types = Vec::new();
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
@@ -571,17 +601,19 @@ impl Checker {
                         resolved_types.push(exception_type);
                     }
                     if let Some(variable) = &catch_clause.variable {
-                        env.insert(
+                        catch_env.insert(
                             variable.clone(),
                             PhpType::Object(self.common_catch_type_name(&resolved_types)),
                         );
                     }
                     for s in &catch_clause.body {
-                        if let Err(error) = self.check_stmt(s, env) {
+                        if let Err(error) = self.check_stmt(s, &mut catch_env) {
                             errors.extend(error.flatten());
                         }
                     }
+                    path_envs.push(catch_env);
                 }
+                merge_control_flow_envs(self, env, &path_envs);
                 if let Some(body) = finally_body {
                     self.finally_break_continue_bases
                         .push(self.break_continue_depth);

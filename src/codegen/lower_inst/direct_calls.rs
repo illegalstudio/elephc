@@ -51,7 +51,14 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    let timezone_offset_trace = function_name.trim_start_matches('\\') == "timezone_offset_get";
+    if timezone_offset_trace {
+        emit_date_special_trace_begin(ctx, inst, 1);
+    }
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
+    if timezone_offset_trace {
+        emit_date_special_trace_end(ctx);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     if let Some(result) = inst.result {
@@ -71,6 +78,27 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Publishes one php-src-compatible ext/date fatal trace around a potentially throwing call.
+pub(super) fn emit_date_special_trace_begin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    kind: i64,
+) {
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    let line = inst.span.map_or(0, |span| i64::from(span.line));
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_date_special_trace_exception_ptr", 0);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, line);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_date_special_trace_line", 0);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, kind);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_date_special_trace_kind", 0);
+}
+
+/// Clears ext/date fatal-trace state after the guarded call returns normally.
+pub(super) fn emit_date_special_trace_end(ctx: &mut FunctionContext<'_>) {
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_date_special_trace_kind", 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_date_special_trace_exception_ptr", 0);
 }
 
 /// Loads SSA operands into ABI argument registers and caller-stack slots for a direct call.
@@ -371,6 +399,16 @@ pub(super) fn materialize_direct_call_arg_for_param(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
             Ok(PhpType::Str)
         }
+        target_ty @ (PhpType::Iterable
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Callable
+        | PhpType::Object(_))
+            if matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) =>
+        {
+            emit_unbox_mixed_to_borrowed_call_arg(ctx);
+            Ok(target_ty)
+        }
         PhpType::Mixed if source_ty.codegen_repr() != PhpType::Mixed => {
             emit_box_current_value_as_mixed(ctx.emitter, source_ty);
             Ok(PhpType::Mixed)
@@ -431,4 +469,3 @@ pub(super) fn emit_mixed_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) 
         }
     }
 }
-

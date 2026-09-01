@@ -87,6 +87,26 @@ pub(super) fn dynamic_new_without_constructor_mixed_candidates(
     Ok(candidates)
 }
 
+/// Returns abstract AOT classes in stable class-id order for constructorless allocation errors.
+pub(super) fn dynamic_new_without_constructor_abstract_classes(
+    ctx: &FunctionContext<'_>,
+) -> Vec<String> {
+    let mut classes = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(class_name, class_info)| {
+            class_info.is_abstract && is_dynamic_new_mixed_aot_candidate(class_name)
+        })
+        .map(|(class_name, class_info)| (class_info.class_id, class_name.clone()))
+        .collect::<Vec<_>>();
+    classes.sort_by_key(|(class_id, _)| *class_id);
+    classes
+        .into_iter()
+        .map(|(_, class_name)| class_name)
+        .collect()
+}
+
 /// The collector type this site would have to fill and the thunk cannot convert to, if any.
 ///
 /// THE ONE JUDGE of that question. Two callers need the answer and must not disagree:
@@ -621,6 +641,7 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     abi::emit_call_label(ctx.emitter, &call_symbol);
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    super::super::emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 

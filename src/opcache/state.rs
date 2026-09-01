@@ -54,9 +54,9 @@ use super::directives::{effective_opcache_directives, DirectiveValue};
 ///
 /// This is the no-override form (the eval interpreter has no `--ini`); the native compiler
 /// calls [`opcache_cache_enabled_with_overrides`] so compile-time `--ini` overrides are honored.
-// `allow(dead_code)`: in `elephc` every caller now routes through the override form, so the
-// no-override wrapper is dead here; it stays live in the `elephc-magician` `#[path]` includes,
-// which call it directly (eval has no `--ini`).
+/// `allow(dead_code)`: in `elephc` every caller now routes through the override form, so the
+/// no-override wrapper is dead here; it stays live in the `elephc-magician` `#[path]` includes,
+/// which call it directly (eval has no `--ini`).
 #[allow(dead_code)]
 pub fn opcache_cache_enabled(version_id: u32, is_web_sapi: bool) -> bool {
     opcache_cache_enabled_with_overrides(version_id, is_web_sapi, &[])
@@ -67,8 +67,8 @@ pub fn opcache_cache_enabled(version_id: u32, is_web_sapi: bool) -> bool {
 /// `--ini opcache.enable=0` reports it disabled under `--web`. Reads the effective directive
 /// table (`effective_opcache_directives`) rather than the raw defaults; passing an empty
 /// override slice is byte-identical to the no-override form.
-// `allow(dead_code)`: dead in the `elephc-magician` `#[path]` includes (eval has no `--ini`),
-// live in `elephc`.
+/// `allow(dead_code)`: dead in the `elephc-magician` `#[path]` includes (eval has no `--ini`),
+/// live in `elephc`.
 #[allow(dead_code)]
 pub fn opcache_cache_enabled_with_overrides(
     version_id: u32,

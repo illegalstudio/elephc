@@ -2,7 +2,7 @@
 title: "is_numeric()"
 description: "Checks whether a variable is a number or a numeric string."
 sidebar:
-  order: 508
+  order: 515
 ---
 
 ## is_numeric()

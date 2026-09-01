@@ -118,7 +118,9 @@ pub(super) fn lower_method_call_with_receiver(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(
+            ctx, None, object, args, expr,
+        );
     }
     let magic_args;
     let (dispatch_method, args) =
@@ -132,7 +134,8 @@ pub(super) fn lower_method_call_with_receiver(
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let mut arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    coerce_datetime_method_arguments(ctx, object.value, dispatch_method, &mut arg_values, expr.span);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -308,6 +311,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
         }
     }
+    ctx.clear_call_arg_temp_cleanups(args, Some(span));
 }
 
 /// Returns true when ABI materialization wraps a concrete argument in fresh Mixed storage.

@@ -2,7 +2,7 @@
 title: "log10()"
 description: "Returns the base-10 logarithm of a number."
 sidebar:
-  order: 301
+  order: 303
 ---
 
 ## log10()

@@ -2,7 +2,7 @@
 title: "ob_list_handlers() — internals"
 description: "Compiler internals for ob_list_handlers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 209
+  order: 210
 ---
 
 ## `ob_list_handlers()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_list_handlers.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_list_handlers.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

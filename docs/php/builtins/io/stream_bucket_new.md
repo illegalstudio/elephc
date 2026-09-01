@@ -2,7 +2,7 @@
 title: "stream_bucket_new()"
 description: "Creates a new bucket for use in a stream filter."
 sidebar:
-  order: 216
+  order: 217
 ---
 
 ## stream_bucket_new()

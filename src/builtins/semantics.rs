@@ -290,6 +290,29 @@ pub trait BuiltinLoweringContext {
         effects: Effects,
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
+
+    /// Materializes the properties visible from the current PHP scope for one object.
+    #[allow(dead_code)]
+    fn emit_get_object_vars(
+        &mut self,
+        object: ValueId,
+        span: Span,
+    ) -> Result<LoweredBuiltinValue, BuiltinLoweringError>;
+
+    /// Reads the last value of a statically typed PHP array and boxes `false` for emptiness.
+    #[allow(dead_code)]
+    fn emit_array_end(
+        &mut self,
+        array: ValueId,
+        span: Span,
+    ) -> Result<LoweredBuiltinValue, BuiltinLoweringError>;
+
+    /// Resolves a runtime string against the compilation's closed-world constant table.
+    fn emit_constant_fetch(
+        &mut self,
+        name: ValueId,
+        span: Span,
+    ) -> Result<LoweredBuiltinValue, BuiltinLoweringError>;
 }
 
 /// Normalized builtin call consumed by backend-neutral EIR lowering.

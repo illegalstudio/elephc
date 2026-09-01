@@ -9,6 +9,25 @@
 
 use crate::support::*;
 
+/// Verifies an untyped PHP local may change scalar/object types while its frame slot widens to
+/// boxed `Mixed` storage and preserves the current runtime value after every reassignment.
+#[test]
+fn test_untyped_local_reassignment_widens_runtime_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 7;
+echo gettype($value), ':', $value, '|';
+$value = "text";
+echo gettype($value), ':', $value, '|';
+$value = new stdClass();
+echo get_class($value), '|';
+$value = 9;
+echo gettype($value), ':', $value;
+"#,
+    );
+    assert_eq!(out, "integer:7|string:text|stdClass|integer:9");
+}
+
 // --- Phase 1: Echo strings ---
 
 /// Verifies basic echo still reaches stdout after the terminal write is routed

@@ -2,7 +2,7 @@
 title: "iconv_strpos() — internals"
 description: "Compiler internals for iconv_strpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 423
+  order: 430
 ---
 
 ## `iconv_strpos()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/iconv_strpos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/iconv_strpos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

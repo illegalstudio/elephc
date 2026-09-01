@@ -101,6 +101,23 @@ impl Checker {
         span: crate::span::Span,
         caller_env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        let bare_name = name
+            .trim_start_matches('\\')
+            .rsplit('\\')
+            .next()
+            .unwrap_or(name)
+            .to_ascii_lowercase();
+        if matches!(bare_name.as_str(), "mktime" | "gmmktime")
+            && (args.is_empty() || args.len() > 6)
+            && !args.iter().any(|arg| {
+                matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+            })
+        {
+            for arg in args {
+                self.infer_type(arg, caller_env)?;
+            }
+            return Ok(PhpType::Int);
+        }
         if let Some(extern_name) = self.canonical_extern_function_name_folded(name) {
             return self.check_extern_function_call(&extern_name, args, span, caller_env);
         }

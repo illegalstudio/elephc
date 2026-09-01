@@ -2,7 +2,7 @@
 title: "str_split()"
 description: "Converts a string into an array of chunks of the given length."
 sidebar:
-  order: 459
+  order: 466
 ---
 
 ## str_split()

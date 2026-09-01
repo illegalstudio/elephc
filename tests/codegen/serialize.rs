@@ -13,6 +13,94 @@
 use crate::support::*;
 use elephc::codegen_support::platform::Target;
 
+/// Verifies invalid native DateTime hydration renders php-src's internal-hook trace.
+#[test]
+fn test_unserialize_datetime_invalid_state_reports_php_trace() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+try {
+    unserialize('O:8:"DateTime":0:{}');
+} catch (Exception $e) {
+}
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Uncaught Error: Invalid serialization data for DateTime object in "),
+        "{err}"
+    );
+    assert!(
+        err.contains("Stack trace:\n#0 [internal function]: DateTime->__unserialize(Array)\n#1 "),
+        "{err}"
+    );
+    assert!(
+        err.contains(": unserialize('O:8:\"DateTime\":...')\n#2 {main}\n  thrown in "),
+        "{err}"
+    );
+    assert!(err.contains("/test.php:3"), "{err}");
+    assert!(err.ends_with(" on line 3\n"), "{err}");
+}
+
+/// Verifies a genuinely caught native DateTime hydration error cannot taint a later fatal.
+#[test]
+fn test_unserialize_datetime_caught_error_clears_php_trace_state() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+try {
+    unserialize('O:8:"DateTime":0:{}');
+} catch (Error $e) {
+}
+throw new Exception("later");
+"#,
+    );
+    assert!(err.contains("Fatal error: Uncaught Exception: later"), "{err}");
+    assert!(!err.contains("Invalid serialization data for DateTime object"), "{err}");
+}
+
+/// Verifies a `finally` replacement preserves php-src's pending DateTime exception chain.
+#[test]
+fn test_unserialize_datetime_finally_replacement_preserves_previous_chain() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+try {
+    try {
+        unserialize('O:8:"DateTime":0:{}');
+    } catch (Exception $e) {
+    }
+} finally {
+    throw new Exception("replacement");
+}
+"#,
+    );
+    assert!(
+        err.contains("Fatal error: Uncaught Error: Invalid serialization data for DateTime object"),
+        "{err}"
+    );
+    assert!(err.contains("Next Exception: replacement"), "{err}");
+}
+
+/// Verifies implicit `finally` chaining is reflected by `Throwable::getPrevious()`.
+#[test]
+fn test_unserialize_datetime_finally_replacement_sets_previous_object() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    try {
+        unserialize('O:8:"DateTime":0:{}');
+    } finally {
+        throw new Exception("replacement");
+    }
+} catch (Throwable $e) {
+    echo get_class($e), ":", $e->getMessage(), "|";
+    echo get_class($e->getPrevious()), ":", $e->getPrevious()->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Exception:replacement|Error:Invalid serialization data for DateTime object"
+    );
+}
+
 /// Verifies `serialize()` formats each scalar type exactly like PHP's wire format.
 #[test]
 fn test_serialize_scalars_match_php_wire_format() {
@@ -353,6 +441,21 @@ echo $arr[0]->x, $arr[1], "\n";
 "#,
     );
     assert_eq!(out, "1\nidentity\nhi|1|2|1.5\nBD\n1tail\n");
+}
+
+/// Verifies a class referenced only by its serialized wire name remains available to
+/// `unserialize()`, including its NUL-mangled private-property descriptor.
+#[test]
+fn test_unserialize_retains_wire_only_declared_class_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+class I { private int $var1 = 0; }
+$wire = 'O:1:"I":1:{s:7:"!I!var1";i:1;}';
+$restored = unserialize(str_replace('!', chr(0), $wire));
+echo serialize($restored);
+"#,
+    );
+    assert_eq!(out, "O:1:\"I\":1:{s:7:\"\0I\0var1\";i:1;}");
 }
 
 /// Verifies object serialization via the `__serialize()` magic method (Stage C):

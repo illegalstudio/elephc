@@ -909,8 +909,9 @@ before every eval dispatch, exactly as it forwards `--strict-php`. A binary
 compiled `--php-version 8.2` therefore reports `PHP_VERSION` `"8.2.0"`,
 `PHP_VERSION_ID` `80200` and `phpversion()` `"8.2.0"` from inside `eval()`, the
 same values it reports natively. `PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and
-`PHP_EXTRA_VERSION` are invariant across the maintained profiles (`8`, `0` and
-the empty string), so they need no forwarding.
+`PHP_EXTRA_VERSION` are invariant except for the frozen 8.5 oracle profile,
+which reports `8.5.10-dev`, `80510`, release `10`, and extra `-dev` natively and
+inside `eval()`.
 
 `PHP_SAPI` is the one part of the surface that still diverges: it moves with
 `--web` rather than with the version, and eval reports `"cli"` inside a `--web`

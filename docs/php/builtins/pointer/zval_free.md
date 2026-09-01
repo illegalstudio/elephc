@@ -2,7 +2,7 @@
 title: "zval_free()"
 description: "Frees a PHP zval pointer allocated by `zval_pack`."
 sidebar:
-  order: 350
+  order: 357
 ---
 
 ## zval_free()

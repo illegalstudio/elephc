@@ -203,6 +203,23 @@ pub(super) fn lower(
         RuntimeFnId::Wordwrap => Some({
             crate::codegen::lower_inst::builtins::strings::lower_wordwrap(ctx, inst)
         }),
+        RuntimeFnId::ElephcDiagWarning => Some({
+            crate::codegen::lower_inst::builtins::system::lower_elephc_diag_warning(ctx, inst)
+        }),
+        RuntimeFnId::ElephcPrintRObjectProperties => Some({
+            crate::codegen::lower_inst::builtins::debug::lower_print_r_object_properties(ctx, inst)
+        }),
+        RuntimeFnId::ElephcVarDumpIndent => Some({
+            crate::codegen::lower_inst::builtins::debug::lower_var_dump_indent(ctx, inst)
+        }),
+        RuntimeFnId::ElephcVarDumpObjectProperties => Some({
+            crate::codegen::lower_inst::builtins::debug::lower_var_dump_object_properties(ctx, inst)
+        }),
+        RuntimeFnId::ElephcVarDumpObjectPropertyCount => Some({
+            crate::codegen::lower_inst::builtins::debug::lower_var_dump_object_property_count(
+                ctx, inst,
+            )
+        }),
         RuntimeFnId::ElephcGmmktimeRaw => Some({
             crate::codegen::lower_inst::builtins::system::lower_gmmktime(ctx, inst)
         }),

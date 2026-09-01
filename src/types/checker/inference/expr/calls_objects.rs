@@ -171,6 +171,7 @@ impl Checker {
                         self.check_clone_visibility(&class_name, expr.span)?;
                         Ok(PhpType::Object(class_name))
                     }
+                    PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(expr.span, "clone requires an object value")),
                 }
             }

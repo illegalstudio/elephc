@@ -194,7 +194,7 @@ At statement level, parsing is split between `parser/mod.rs` and the `stmt/` sub
 | `[` | List destructuring (`[$a, $b] = expr;`) |
 | `Variable` / `This` / `Identifier` / `Backslash` / `Self_` / `Parent` / `Static::...` / `Question` / `New` / `LParen` / `Match` / soft-keyword `Enum` | Assignment, property write, call, typed assignment, or generic expression statement |
 
-This is intentionally narrower than full PHP statement syntax. In the current subset, expression statements only enter through the token arms handled by `stmt::parse_stmt()` above; starting a statement with tokens such as `fn`, a literal, or a unary `-` / `!` / `~` operator still produces an "unexpected token at statement position" parser error unless that construct appears inside another statement form. Statements starting with `match`, `new`, or `(` are accepted through the expression-statement arm.
+This is intentionally narrower than full PHP statement syntax. In the current subset, expression statements only enter through the token arms handled by `stmt::parse_stmt()` above; starting a statement with tokens such as `fn`, a literal, or a unary `+` / `-` / `!` / `~` operator still produces an "unexpected token at statement position" parser error unless that construct appears inside another statement form. Statements starting with `match`, `new`, or `(` are accepted through the expression-statement arm. PHP 8.5's `(void) expression` discard form is accepted at a statement root and in the initializer/update clauses of `for`, but remains rejected in value-producing contexts such as assignment, arguments, `echo`, loop conditions, nested parentheses, and `@`.
 
 ## Error recovery
 
@@ -297,7 +297,7 @@ assignment          7          6         RIGHT (lvalue targets)
 + -                29         30         left
 * / %              31         32         left
 instanceof         35         special    left, named-or-dynamic RHS
-unary (- ! ~ @ clone)  35                prefix
+unary (+ - ! ~ @ clone)  35              prefix
 **                 37         36         RIGHT (r < l)
 ```
 
@@ -386,6 +386,7 @@ Before looking for infix operators, the parser handles **prefix** constructs —
 | `throw` | Parse the following expression at the lowest precedence and wrap it in `ExprKind::Throw` |
 | `print` | Parse the operand at ternary-level precedence (bp=7, above word logical operators) and wrap it in `ExprKind::Print` |
 | `yield` | Parse `yield`, `yield expr`, `yield key => value`, or contextual `yield from expr` |
+| `+` (plus) | Parse inner expr at unary precedence (bp=35), then emit a direct-AST `operand * 1` marker; checker/EIR lowering preserve Zend's int/float numeric-string conversion, warning, and catchable `TypeError` semantics without parsing generated PHP source |
 | `-` (minus) | Parse inner expr at unary precedence (bp=35), return `Negate` |
 | `!` (not) | Parse inner expr at unary precedence (bp=35), return `Not` |
 | `~` (bitwise not) | Parse inner expr at unary precedence (bp=35), return `BitNot` |

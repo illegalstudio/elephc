@@ -41,7 +41,7 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ctx.load_value_to_result(value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
         }
-        PhpType::Resource(_) => {
+        PhpType::Object(_) | PhpType::Resource(_) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
         other => {

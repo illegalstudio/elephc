@@ -320,6 +320,15 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             property,
             value: fold_expr(value),
         },
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => StmtKind::DynamicPropertyArrayPush {
+            object: Box::new(fold_expr(*object)),
+            property: Box::new(fold_expr(*property)),
+            value: fold_expr(value),
+        },
         StmtKind::PropertyArrayAssign {
             object,
             property,

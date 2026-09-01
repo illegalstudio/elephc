@@ -2,7 +2,7 @@
 title: "stream_get_filters()"
 description: "Retrieves list of registered filters."
 sidebar:
-  order: 228
+  order: 229
 ---
 
 ## stream_get_filters()

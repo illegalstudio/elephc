@@ -12,6 +12,14 @@ use crate::codegen_support::platform::Arch;
 use crate::codegen_support::try_handlers::TRY_HANDLER_JMP_BUF_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter};
 
+use super::uncaught_date_traces::{
+    emit_uncaught_date_special_trace_aarch64, emit_uncaught_date_special_trace_x86_64,
+    emit_uncaught_dateperiod_trace_aarch64, emit_uncaught_dateperiod_trace_x86_64,
+    emit_uncaught_unserialize_chained_trace_aarch64,
+    emit_uncaught_unserialize_chained_trace_x86_64,
+    emit_uncaught_unserialize_trace_aarch64, emit_uncaught_unserialize_trace_x86_64,
+};
+
 /// Emits `__rt_throw_current`, the runtime helper that propagates an exception upward through
 /// the handler stack. Saves callee-saved registers, retrieves the top handler record from
 /// `_exc_handler_top`, runs `__rt_exception_cleanup_frames` to unwind all activation frames,
@@ -83,7 +91,28 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // install the throw helper's frame pointer
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "x19", "_exc_handler_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_date_special_trace_kind", 0);
+    emitter.instruction("cbz x20, __rt_throw_current_date_special_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_date_special_trace_exception_ptr", 0);
+    emitter.instruction("cbnz x20, __rt_throw_current_date_special_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_exc_value", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x20", "_date_special_trace_exception_ptr", 0);
+    emitter.label("__rt_throw_current_date_special_trace_captured");
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_unser_trace_active", 0);
+    emitter.instruction("cbz x20, __rt_throw_current_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_unser_trace_exception_ptr", 0);
+    emitter.instruction("cbnz x20, __rt_throw_current_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_exc_value", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x20", "_unser_trace_exception_ptr", 0);
+    emitter.label("__rt_throw_current_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_dateperiod_foreach_trace_active", 0);
+    emitter.instruction("cbz x20, __rt_throw_current_dateperiod_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_dateperiod_foreach_trace_exception_ptr", 0);
+    emitter.instruction("cbnz x20, __rt_throw_current_dateperiod_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_exc_value", 0);
+    abi::emit_store_reg_to_symbol(emitter, "x20", "_dateperiod_foreach_trace_exception_ptr", 0);
+    emitter.label("__rt_throw_current_dateperiod_trace_captured");
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
     emitter.instruction("bl __rt_exception_cleanup_frames");                    // run cleanup callbacks for every unwound activation frame
     abi::emit_store_reg_to_symbol(emitter, "xzr", "_concat_off", 0);
@@ -93,7 +122,46 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
 
     // -- uncaught exceptions terminate the process with a fatal message --
     emitter.label("__rt_throw_current_uncaught");
-    emitter.instruction("b __rt_report_uncaught_exception");                    // report the Throwable's class and message, then exit 255 like PHP
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_date_special_trace_kind", 0);
+    emitter.instruction("cbz x20, __rt_throw_current_uncaught_unserialize");
+    abi::emit_load_symbol_to_reg(emitter, "x19", "_date_special_trace_exception_ptr", 0);
+    emitter.instruction("cbz x19, __rt_throw_current_uncaught_date_special_traced");
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
+    emitter.instruction("cmp x19, x9");
+    emitter.instruction("b.ne __rt_throw_current_uncaught_unserialize");
+    emitter.label("__rt_throw_current_uncaught_date_special_traced");
+    emit_uncaught_date_special_trace_aarch64(emitter);
+    emitter.label("__rt_throw_current_uncaught_unserialize");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_unser_trace_active", 0);
+    emitter.instruction("cbz x20, __rt_throw_current_uncaught_dateperiod");
+    abi::emit_load_symbol_to_reg(emitter, "x19", "_unser_trace_exception_ptr", 0);
+    emitter.instruction("cbz x19, __rt_throw_current_uncaught_traced");
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
+    emitter.instruction("cmp x19, x9");
+    emitter.instruction("b.eq __rt_throw_current_uncaught_traced");
+    emitter.instruction("ldr x10, [x9, #40]");                                 // start at the replacement Throwable's previous pointer
+    emitter.label("__rt_throw_current_uncaught_unserialize_chain_scan");
+    emitter.instruction("cbz x10, __rt_throw_current_uncaught_dateperiod");    // stale trace state is unrelated to the active exception
+    emitter.instruction("cmp x10, x19");                                       // did the chain reach the preserved native DateTime error?
+    emitter.instruction("b.eq __rt_throw_current_uncaught_unserialize_chained");
+    emitter.instruction("ldr x10, [x10, #40]");                                // continue through explicit previous exceptions
+    emitter.instruction("b __rt_throw_current_uncaught_unserialize_chain_scan");
+    emitter.label("__rt_throw_current_uncaught_traced");
+    emit_uncaught_unserialize_trace_aarch64(emitter);
+    emitter.label("__rt_throw_current_uncaught_unserialize_chained");
+    emit_uncaught_unserialize_chained_trace_aarch64(emitter);
+    emitter.label("__rt_throw_current_uncaught_dateperiod");
+    abi::emit_load_symbol_to_reg(emitter, "x20", "_dateperiod_foreach_trace_active", 0);
+    emitter.instruction("cbz x20, __rt_throw_current_uncaught_legacy");
+    abi::emit_load_symbol_to_reg(emitter, "x19", "_dateperiod_foreach_trace_exception_ptr", 0);
+    emitter.instruction("cbz x19, __rt_throw_current_uncaught_dateperiod_traced");
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
+    emitter.instruction("cmp x19, x9");
+    emitter.instruction("b.ne __rt_throw_current_uncaught_legacy");
+    emitter.label("__rt_throw_current_uncaught_dateperiod_traced");
+    emit_uncaught_dateperiod_trace_aarch64(emitter);
+    emitter.label("__rt_throw_current_uncaught_legacy");
+    emitter.instruction("b __rt_report_uncaught_exception");
 }
 
 /// Emits `__rt_throw_current` for Linux x86_64. Uses the System V AMD64 ABI: preserves rbp as
@@ -113,8 +181,35 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // preserve the scratch callee-saved register used for the fatal path
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_date_special_trace_kind", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jz __rt_throw_current_date_special_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_date_special_trace_exception_ptr", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jnz __rt_throw_current_date_special_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_exc_value", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r13", "_date_special_trace_exception_ptr", 0);
+    emitter.label("__rt_throw_current_date_special_trace_captured");
     emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?
     emitter.instruction("jz __rt_throw_current_uncaught");                      // fall back to a fatal uncaught-exception path when no handler exists
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_unser_trace_active", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jz __rt_throw_current_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_unser_trace_exception_ptr", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jnz __rt_throw_current_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_exc_value", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r13", "_unser_trace_exception_ptr", 0);
+    emitter.label("__rt_throw_current_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_dateperiod_foreach_trace_active", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jz __rt_throw_current_dateperiod_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_dateperiod_foreach_trace_exception_ptr", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jnz __rt_throw_current_dateperiod_trace_captured");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_exc_value", 0);
+    abi::emit_store_reg_to_symbol(emitter, "r13", "_dateperiod_foreach_trace_exception_ptr", 0);
+    emitter.label("__rt_throw_current_dateperiod_trace_captured");
     emitter.instruction("mov rdi, QWORD PTR [r12 + 8]");                        // rdi = activation record that should survive this catch
     emitter.instruction("call __rt_exception_cleanup_frames");                  // run cleanup callbacks for every unwound activation frame
     abi::emit_store_zero_to_symbol(emitter, "_concat_off", 0);
@@ -123,7 +218,53 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
 
     emitter.label("__rt_throw_current_uncaught");
-    emitter.instruction("jmp __rt_report_uncaught_exception");                  // report the Throwable's class and message, then exit 255 like PHP
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_date_special_trace_kind", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jz __rt_throw_current_uncaught_unserialize");
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_date_special_trace_exception_ptr", 0);
+    emitter.instruction("test r12, r12");
+    emitter.instruction("jz __rt_throw_current_uncaught_date_special_traced");
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
+    emitter.instruction("cmp r12, rax");
+    emitter.instruction("jne __rt_throw_current_uncaught_unserialize");
+    emitter.label("__rt_throw_current_uncaught_date_special_traced");
+    emit_uncaught_date_special_trace_x86_64(emitter);
+    emitter.label("__rt_throw_current_uncaught_unserialize");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_unser_trace_active", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jz __rt_throw_current_uncaught_dateperiod");
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_unser_trace_exception_ptr", 0);
+    emitter.instruction("test r12, r12");
+    emitter.instruction("jz __rt_throw_current_uncaught_traced");
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
+    emitter.instruction("cmp r12, rax");
+    emitter.instruction("je __rt_throw_current_uncaught_traced");
+    emitter.instruction("mov r13, QWORD PTR [rax + 40]");                      // start at the replacement Throwable's previous pointer
+    emitter.label("__rt_throw_current_uncaught_unserialize_chain_scan_x");
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jz __rt_throw_current_uncaught_dateperiod");          // stale trace state is unrelated to the active exception
+    emitter.instruction("cmp r13, r12");                                       // did the chain reach the preserved native DateTime error?
+    emitter.instruction("je __rt_throw_current_uncaught_unserialize_chained_x");
+    emitter.instruction("mov r13, QWORD PTR [r13 + 40]");                      // continue through explicit previous exceptions
+    emitter.instruction("jmp __rt_throw_current_uncaught_unserialize_chain_scan_x");
+    emitter.label("__rt_throw_current_uncaught_traced");
+    emit_uncaught_unserialize_trace_x86_64(emitter);
+    emitter.label("__rt_throw_current_uncaught_unserialize_chained_x");
+    emit_uncaught_unserialize_chained_trace_x86_64(emitter);
+    emitter.label("__rt_throw_current_uncaught_dateperiod");
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_dateperiod_foreach_trace_active", 0);
+    emitter.instruction("test r13, r13");
+    emitter.instruction("jz __rt_throw_current_uncaught_legacy");
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_dateperiod_foreach_trace_exception_ptr", 0);
+    emitter.instruction("test r12, r12");
+    emitter.instruction("jz __rt_throw_current_uncaught_dateperiod_traced");
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
+    emitter.instruction("cmp r12, rax");
+    emitter.instruction("jne __rt_throw_current_uncaught_legacy");
+    emitter.label("__rt_throw_current_uncaught_dateperiod_traced");
+    emit_uncaught_dateperiod_trace_x86_64(emitter);
+    emitter.label("__rt_throw_current_uncaught_legacy");
+    emitter.instruction("jmp __rt_report_uncaught_exception");
 }
 
 #[cfg(test)]
@@ -162,6 +303,30 @@ mod tests {
             assert!(guarded, "{platform:?}/{arch:?} calls the hook unguarded:\n{asm}");
             let indirect = asm.contains("blr x10") || asm.contains("call rax");
             assert!(indirect, "{platform:?}/{arch:?} does not call through the slot:\n{asm}");
+        }
+    }
+
+    /// Both supported architectures capture and dispatch the specialized ext/date trace state.
+    #[test]
+    fn ext_date_uncaught_trace_dispatch_is_target_complete() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emitted(platform, arch);
+            assert!(
+                asm.contains("_date_special_trace_exception_ptr"),
+                "{platform:?}/{arch:?} never captures the ext/date exception:\n{asm}"
+            );
+            assert!(
+                asm.contains("_uncaught_timezone_offset_stack_suffix"),
+                "{platform:?}/{arch:?} omits the timezone_offset_get trace:\n{asm}"
+            );
+            assert!(
+                asm.contains("_uncaught_datetime_format_stack_suffix"),
+                "{platform:?}/{arch:?} omits the DateTime::format trace:\n{asm}"
+            );
         }
     }
 

@@ -403,6 +403,7 @@ impl Checker {
                             PhpType::Mixed | PhpType::Union(_)
                         ) => PhpType::Mixed,
                     CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    CastType::Void => PhpType::Void,
                 })
             }
             _ => unreachable!("non-basic expression routed to basic inference"),

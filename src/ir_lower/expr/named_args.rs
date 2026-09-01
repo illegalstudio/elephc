@@ -90,7 +90,10 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
     let prefix_type = ctx.builder.value_php_type(prefix.value);
     let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
     store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
-    let prefix_temp = Expr::new(ExprKind::Variable(prefix_temp_name), prefix_expr.span);
+    let prefix_temp = Expr::new(
+        ExprKind::Variable(prefix_temp_name.clone()),
+        prefix_expr.span,
+    );
 
     let mut source_values = vec![None; plan.source_args.len()];
     for (source_index, source_arg) in plan.source_args.iter().enumerate().skip(first_named_pos) {
@@ -152,6 +155,11 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
         }
     }
     operands.push(lower_variadic_tail_array(ctx, sig, &[]).value);
+    if let Some(anchor) = operands.first().copied() {
+        ctx.register_call_arg_temp_cleanup(anchor, prefix_temp_name);
+    } else {
+        ctx.clear_hidden_temp(&prefix_temp_name, Some(call_span));
+    }
     Some(operands)
 }
 
@@ -249,7 +257,10 @@ pub(super) fn lower_named_args_with_spread_plan(
     let prefix_temp_name = ctx.declare_hidden_temp(prefix_type.clone());
     store_value_into_temp(ctx, &prefix_temp_name, prefix_type, prefix, prefix_expr.span);
     let single_prefix_spread = !matches!(prefix_expr.kind, ExprKind::ArrayLiteral(_));
-    let prefix_temp = Expr::new(ExprKind::Variable(prefix_temp_name), prefix_expr.span);
+    let prefix_temp = Expr::new(
+        ExprKind::Variable(prefix_temp_name.clone()),
+        prefix_expr.span,
+    );
 
     let mut source_values = vec![None; plan.source_args.len()];
     for (source_index, source_arg) in plan.source_args.iter().enumerate().skip(first_named_pos) {
@@ -343,6 +354,10 @@ pub(super) fn lower_named_args_with_spread_plan(
         );
         operands.push(tail.value);
     }
+    if let Some(anchor) = operands.first().copied() {
+        ctx.register_call_arg_temp_cleanup(anchor, prefix_temp_name);
+    } else {
+        ctx.clear_hidden_temp(&prefix_temp_name, Some(call_span));
+    }
     Some(operands)
 }
-

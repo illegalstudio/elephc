@@ -2,7 +2,7 @@
 title: "iconv_substr() — internals"
 description: "Compiler internals for iconv_substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 425
+  order: 432
 ---
 
 ## `iconv_substr()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/iconv_substr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/iconv_substr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

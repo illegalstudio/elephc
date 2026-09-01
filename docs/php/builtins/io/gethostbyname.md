@@ -2,7 +2,7 @@
 title: "gethostbyname()"
 description: "Gets the IPv4 address corresponding to the given Internet host name."
 sidebar:
-  order: 191
+  order: 192
 ---
 
 ## gethostbyname()

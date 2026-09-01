@@ -2,7 +2,7 @@
 title: "bcceil()"
 description: "Rounds an arbitrary-precision decimal number up to an integer."
 sidebar:
-  order: 268
+  order: 269
 ---
 
 ## bcceil()

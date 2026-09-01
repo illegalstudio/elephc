@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **483 / 2030** (24%).
+Overall builtin coverage: **490 / 2030** (24%).
 
 ## Builtin coverage by PHP module
 
@@ -19,7 +19,7 @@ Overall builtin coverage: **483 / 2030** (24%).
 | `bcmath` | 14 / 14 | 100% | 14 | 14 |
 | `bz2` | 0 / 10 | 0% | 0 | 0 |
 | `calendar`† | 0 / 18 | 0% | 0 | 0 |
-| `core` | 32 / 59 | 54% | 29 | 30 |
+| `core` | 36 / 59 | 61% | 33 | 32 |
 | `ctype` | 4 / 11 | 36% | 4 | 4 |
 | `curl` | 0 / 33 | 0% | 0 | 0 |
 | `date`† | 11 / 48 | 23% | 11 | 11 |
@@ -46,7 +46,7 @@ Overall builtin coverage: **483 / 2030** (24%).
 | `pdo`† | 0 / 1 | 0% | 0 | 0 |
 | `pgsql` | 0 / 122 | 0% | 0 | 0 |
 | `posix` | 0 / 40 | 0% | 0 | 0 |
-| `random` | 3 / 9 | 33% | 3 | 3 |
+| `random` | 4 / 9 | 44% | 4 | 3 |
 | `readline` | 1 / 13 | 8% | 1 | 1 |
 | `session`† | 0 / 23 | 0% | 0 | 0 |
 | `shmop` | 0 / 6 | 0% | 0 | 0 |
@@ -55,7 +55,7 @@ Overall builtin coverage: **483 / 2030** (24%).
 | `sockets` | 0 / 37 | 0% | 0 | 0 |
 | `sodium` | 0 / 110 | 0% | 0 | 0 |
 | `spl` | 15 / 15 | 100% | 15 | 15 |
-| `standard` | 364 / 542 | 67% | 364 | 339 |
+| `standard` | 366 / 542 | 68% | 366 | 340 |
 | `sysvmsg` | 0 / 7 | 0% | 0 | 0 |
 | `sysvsem` | 0 / 4 | 0% | 0 | 0 |
 | `sysvshm` | 0 / 7 | 0% | 0 | 0 |

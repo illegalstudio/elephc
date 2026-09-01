@@ -376,6 +376,15 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             audit_expr(object, errors);
             audit_expr(value, errors);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            audit_expr(object, errors);
+            audit_expr(property, errors);
+            audit_expr(value, errors);
+        }
         StmtKind::PropertyArrayAssign {
             object,
             property: _,

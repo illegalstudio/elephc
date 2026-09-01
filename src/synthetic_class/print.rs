@@ -711,6 +711,16 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::IntLiteral(i64::MIN) => ("PHP_INT_MIN".to_string(), ATOM),
         ExprKind::IntLiteral(number) => (number.to_string(), ATOM),
         ExprKind::FloatLiteral(number) => {
+            if number.is_infinite() {
+                return if number.is_sign_positive() {
+                    ("INF".to_string(), ATOM)
+                } else {
+                    ("-INF".to_string(), 85)
+                };
+            }
+            if number.is_nan() {
+                return ("NAN".to_string(), ATOM);
+            }
             let rendered = format!("{:?}", number);
             let text =
                 if rendered.contains('.') || rendered.contains('e') || rendered.contains("inf") {
@@ -722,10 +732,15 @@ fn render(value: &Expr) -> (String, u8) {
         }
         ExprKind::StringLiteral(text) => (string_literal(text), ATOM),
         ExprKind::Variable(name) => (format!("${name}"), ATOM),
+        ExprKind::NamedArg { name, value } => {
+            (format!("{name}: {}", expression(value)), ATOM)
+        }
         ExprKind::ConstRef(name) => (name_source(name), ATOM),
         ExprKind::PostIncrement(name) => (format!("${name}++"), ATOM),
         ExprKind::Negate(inner) => (format!("-{}", at(inner, 85)), 85),
         ExprKind::Not(inner) => (format!("!{}", at(inner, 75)), 75),
+        ExprKind::ErrorSuppress(inner) => (format!("@{}", at(inner, 85)), 85),
+        ExprKind::Clone(inner) => (format!("clone {}", at(inner, 85)), 85),
         ExprKind::Cast { target, expr } => {
             (format!("({}) {}", cast_type(target), at(expr, 85)), 85)
         }
@@ -783,6 +798,9 @@ fn render(value: &Expr) -> (String, u8) {
         }
         ExprKind::PropertyAccess { object, property } => {
             (format!("{}->{property}", at(object, ATOM)), ATOM)
+        }
+        ExprKind::ObjectClassName { object } => {
+            (format!("{}::class", at(object, ATOM)), ATOM)
         }
         ExprKind::DynamicPropertyAccess { object, property } => (
             format!("{}->{{{}}}", at(object, ATOM), expression(property)),
@@ -910,6 +928,7 @@ fn cast_type(target: &CastType) -> &'static str {
         CastType::String => "string",
         CastType::Bool => "bool",
         CastType::Array => "array",
+        CastType::Void => "void",
     }
 }
 

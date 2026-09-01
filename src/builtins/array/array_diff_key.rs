@@ -13,6 +13,9 @@
 //!   associative array, and the result preserves that first-operand type. A check hook
 //!   is required because the return type depends on the inferred first-argument type.
 
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
@@ -20,9 +23,23 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_diff_key",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayDiffKey,
-    ),
+    semantics: array_diff_key_semantics(),
+}
+
+/// Builds semantics that preserve the first operand's concrete container representation.
+const fn array_diff_key_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayDiffKey);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the first operand type because filtering keys preserves its storage shape.
+fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
+    input
+        .arg_types
+        .first()
+        .cloned()
+        .unwrap_or(PhpType::Mixed)
 }
 
 /// Validates the first argument is an array and returns its (preserved) type.

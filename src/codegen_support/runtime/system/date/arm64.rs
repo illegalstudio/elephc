@@ -17,9 +17,10 @@ use crate::codegen_support::emit::Emitter;
 /// decomposed with `gmtime` (UTC), while `__rt_date` sets `x3=0` for `localtime`.
 ///
 /// Input registers:
-/// - `x0`: timestamp (i64), or -1 for current time
+/// - `x0`: timestamp (i64), with any value permitted when `x4` is nonzero
 /// - `x1`: format string pointer
 /// - `x2`: format string length
+/// - `x4`: timestamp-present flag (`0` = query current time, `1` = use `x0`)
 ///
 /// Output registers:
 /// - `x1`: pointer to formatted result in concat buffer
@@ -70,9 +71,9 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save format len
     emitter.instruction("str x3, [sp, #56]");                                   // save UTC flag across libc calls
 
-    // -- if timestamp is -1, get current time --
-    emitter.instruction("cmn x0, #1");                                          // compare x0 with -1 (cmn adds 1, checks if zero)
-    emitter.instruction("b.ne __rt_date_have_time");                            // skip if timestamp provided (not -1)
+    // -- query current time only when the optional timestamp was omitted/null --
+    emitter.instruction("cmp x4, #0");                                          // did PHP supply a concrete timestamp argument?
+    emitter.instruction("b.ne __rt_date_have_time");                            // preserve every explicit timestamp, including the valid value -1
     emitter.instruction("mov x0, #0");                                          // NULL argument
     emitter.bl_c("time");                                            // time(NULL) → x0=current timestamp
     emitter.instruction("str x0, [sp, #0]");                                    // save current timestamp
@@ -80,6 +81,7 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     // -- decompose timestamp via localtime (local) or gmtime (UTC) --
     emitter.label("__rt_date_have_time");
     emitter.instruction("bl __rt_tz_init_utc");                                 // default the timezone to UTC once the timestamp is resolved (PHP-compatible) unless set
+    emitter.instruction("b __rt_date_timelib_fallback");                        // use php-src timelib for every timestamp so historical timezone data and calendar edges remain PHP-compatible
     emitter.instruction("add x0, sp, #0");                                      // x0 = pointer to timestamp on stack
     emitter.instruction("ldr x4, [sp, #56]");                                   // reload the UTC-vs-local decomposition flag
     emitter.instruction("cmp x4, #0");                                          // check whether UTC decomposition was requested
@@ -89,6 +91,14 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.label("__rt_date_use_gmtime");
     emitter.bl_c("gmtime");                                          // gmtime(&timestamp) → x0=struct tm (UTC)
     emitter.label("__rt_date_decomposed");
+    emitter.instruction("cbz x0, __rt_date_timelib_fallback");                  // libc overflow → format through vendored php-src timelib
+    emitter.instruction("ldr w8, [x0, #20]");                                   // load libc tm_year before selecting the bounded fast formatter
+    emitter.instruction("add w8, w8, #1900");                                   // convert years-since-1900 to the Gregorian year
+    emitter.instruction("cmp w8, #0");                                          // negative years need php-src's expanded signed formatting
+    emitter.instruction("b.lt __rt_date_timelib_fallback");                     // route BCE values through vendored timelib
+    emitter.instruction("mov w9, #10000");                                      // upper bound of the four-digit libc fast path
+    emitter.instruction("cmp w8, w9");                                          // detect years whose Y/c/r fields exceed four digits
+    emitter.instruction("b.ge __rt_date_timelib_fallback");                     // avoid truncating the high decimal digits
     emitter.instruction("str x0, [sp, #24]");                                   // save tm pointer
 
     // -- set up output buffer in concat_buf --
@@ -430,6 +440,15 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     // -- format: U (Unix timestamp) --
     emitter.label("__rt_date_fmt_U");
     emitter.instruction("ldr x0, [sp, #0]");                                    // load original timestamp
+    emitter.instruction("cmp x0, #0");                                          // does the signed timestamp need a minus sign?
+    emitter.instruction("b.ge __rt_date_fmt_U_digits");                         // non-negative timestamps can be written directly
+    emitter.instruction("ldr x9, [sp, #32]");                                   // load the live output position
+    emitter.instruction("mov w10, #45");                                        // ASCII '-'
+    emitter.instruction("strb w10, [x9]");                                      // append the signed timestamp's minus sign
+    emitter.instruction("add x9, x9, #1");                                      // advance past the sign
+    emitter.instruction("str x9, [sp, #32]");                                   // publish the advanced output position
+    emitter.instruction("neg x0, x0");                                          // convert to unsigned magnitude (PHP_INT_MIN stays 2^63)
+    emitter.label("__rt_date_fmt_U_digits");
     emitter.instruction("bl __rt_date_write_uint");                             // write as decimal digits to the live output position
     emitter.instruction("b __rt_date_next");                                    // continue
 
@@ -808,6 +827,26 @@ pub(super) fn emit_date_arm64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- signed-64-bit calendar fallback through vendored timelib --
+    emitter.label("__rt_date_timelib_fallback");
+    emitter.instruction("bl __rt_date_default_timezone_get");                   // x1/x2 = active PHP timezone pointer/length
+    emitter.instruction("mov x4, x1");                                          // bridge arg 5 = timezone pointer
+    emitter.instruction("mov x5, x2");                                          // bridge arg 6 = timezone length
+    emitter.instruction("ldr x0, [sp, #0]");                                    // bridge arg 1 = signed Unix timestamp
+    emitter.instruction("mov x1, #0");                                          // bridge arg 2 = procedural date microseconds
+    emitter.instruction("ldr x2, [sp, #8]");                                    // bridge arg 3 = format pointer
+    emitter.instruction("ldr x3, [sp, #16]");                                   // bridge arg 4 = format length
+    emitter.instruction("ldr x6, [sp, #56]");                                   // reload the gmdate-vs-date selector
+    emitter.instruction("eor x6, x6, #1");                                      // bridge arg 7: date=localtime, gmdate=UTC
+    emitter.bl_c("elephc_tz_format");
+    emitter.instruction("str x0, [sp, #104]");                                  // preserve the bridge string pointer across strlen()
+    emitter.bl_c("strlen");
+    emitter.instruction("mov x2, x0");                                          // return the formatted byte length
+    emitter.instruction("ldr x1, [sp, #104]");                                  // return the bridge string pointer
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // deallocate the formatter frame
+    emitter.instruction("ret");                                                 // return the timelib-formatted overflow-safe string
 
     // -- helper: write 2-digit zero-padded number from x0 to output --
     //

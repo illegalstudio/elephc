@@ -23,20 +23,23 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     runtime_value_tag, CodegenIrError, Result, UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
 };
-use crate::ir::{Immediate, Instruction, Op, TraitMethodInfo, ValueDef, ValueId};
+use crate::ir::{
+    Immediate, Instruction, LocalSlotId, Op, Terminator, TraitMethodInfo, ValueDef, ValueId,
+};
 use crate::names::{
     php_symbol_key, property_hook_get_method, property_hook_set_method,
     static_property_symbol,
 };
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, TypeExpr, Visibility};
 use crate::types::{
-    is_php_integer_array_key, AttrArgEntry, EnumCaseInfo, EnumCaseValue, FunctionSig,
-    InterfaceInfo, PhpType,
+    is_php_integer_array_key, AttrArgEntry, AttrArgValue, AttrKey, EnumCaseInfo, EnumCaseValue,
+    FunctionSig, InterfaceInfo, PhpType,
 };
 
 use super::super::super::context::FunctionContext;
 
 mod owner_dispatch;
+mod constructorless_usage;
 mod owner_emission;
 mod class_metadata;
 mod callable_metadata;
@@ -61,6 +64,7 @@ mod type_object_emit;
 mod flags_offsets;
 
 use owner_emission::*;
+use constructorless_usage::*;
 use class_metadata::*;
 use callable_metadata::*;
 use property_metadata::*;
@@ -324,6 +328,7 @@ struct ReflectionMemberFlags {
     is_readonly: bool,
     is_promoted: bool,
     is_virtual: bool,
+    is_dynamic: bool,
 }
 
 /// Runtime class candidate used when object reflection must dispatch by object class id.

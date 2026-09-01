@@ -111,6 +111,15 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             property,
             value: walk_expr(value, pass),
         },
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => StmtKind::DynamicPropertyArrayPush {
+            object: Box::new(walk_expr(*object, pass)),
+            property: Box::new(walk_expr(*property, pass)),
+            value: walk_expr(value, pass),
+        },
         StmtKind::PropertyArrayAssign {
             object,
             property,

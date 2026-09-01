@@ -11,7 +11,10 @@
 mod arm64;
 mod linux_x86_64;
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{
+    emit::Emitter,
+    platform::{Arch, Platform},
+};
 
 /// __rt_date: format a Unix timestamp according to a PHP date format string.
 /// Input:  x0=timestamp (-1 = use current time), x1=format_ptr, x2=format_len
@@ -27,6 +30,12 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// struct tm layout: tm_sec(+0), tm_min(+4), tm_hour(+8), tm_mday(+12),
 ///                   tm_mon(+16), tm_year(+20), tm_wday(+24), tm_yday(+28), tm_isdst(+32)
 pub(crate) fn emit_date(emitter: &mut Emitter) {
+    match emitter.platform {
+        Platform::MacOS => emitter.raw(".weak_reference _elephc_tz_format"),
+        Platform::Linux => emitter.raw(".weak elephc_tz_format"),
+        Platform::Windows => {}
+    }
+
     if emitter.target.arch == Arch::X86_64 {
         linux_x86_64::emit_date_linux_x86_64(emitter);
         return;

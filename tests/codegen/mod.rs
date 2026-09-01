@@ -63,6 +63,8 @@ mod arrays;
 mod calendar;
 mod call_counters;
 mod callables;
+mod date_extreme_years;
+mod date_php_src_residuals;
 mod system;
 mod json;
 mod serialize;

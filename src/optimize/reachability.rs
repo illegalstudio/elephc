@@ -26,6 +26,8 @@ pub use inventory::PreludeInventory;
 pub struct PruneOptions<'a> {
     pub inventory: &'a PreludeInventory,
     pub forced_groups: &'a HashSet<String>,
+    /// Compiler-owned dependencies retained without promoting dynamic lookup hazards globally.
+    pub structural_groups: &'a HashSet<String>,
     pub exported_functions: &'a HashSet<String>,
     pub eval_forced: bool,
 }
@@ -36,6 +38,11 @@ pub fn prune_unreachable_declarations(
     check_result: &mut CheckResult,
     options: PruneOptions<'_>,
 ) -> Program {
+    if crate::types::checker::set_state_contract_error(&program).is_some()
+        || !crate::types::checker::set_state_visibility_warnings(&program).is_empty()
+    {
+        return program;
+    }
     let original_builtin_libraries = usage::scan_program(&program).required_libraries;
     let reachability = graph::compute(&program, check_result, &options);
     let declaration_index = graph::DeclarationIndex::build(&program, check_result);

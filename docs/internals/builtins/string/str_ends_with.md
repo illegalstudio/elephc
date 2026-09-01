@@ -2,7 +2,7 @@
 title: "str_ends_with() — internals"
 description: "Compiler internals for str_ends_with(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 454
+  order: 461
 ---
 
 ## `str_ends_with()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_ends_with.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_ends_with.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

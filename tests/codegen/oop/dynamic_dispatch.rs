@@ -228,3 +228,40 @@ fn test_inferred_mixed_receiver_method_in_concat() {
     );
     assert_eq!(out, "hello world");
 }
+
+/// Verifies repeated calls through an array-widened `mixed` receiver release the temporary box
+/// created for a concrete object argument after the callee has retained anything it needs.
+#[test]
+fn test_mixed_receiver_method_releases_boxed_object_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class CleanupArgument {}
+class CleanupReceiver {
+    public function consume(CleanupArgument $argument): self {
+        if ($argument instanceof CleanupArgument) {
+            return $this;
+        }
+        return $this;
+    }
+}
+for ($seed = 0; $seed < 2; $seed++) {
+    $receivers[$seed] = new CleanupReceiver();
+}
+for ($i = 0; $i < 1200; $i++) {
+    $receiver = $receivers[0];
+    $argument = new CleanupArgument();
+    $receiver->consume($argument);
+    unset($receiver);
+    unset($argument);
+}
+echo "ok";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "ok");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected mixed-receiver argument temporaries to be balanced, got: {}",
+        out.stderr
+    );
+}

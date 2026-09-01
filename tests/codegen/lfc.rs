@@ -81,6 +81,10 @@ fn compile_lfc_eval_project_and_run(
         .expect("CLI should emit LFC eval assembly");
     let runtime_features = elephc::codegen::RuntimeFeatures {
         regex: true,
+        float_precision: 14,
+        php_profile: 5,
+        // Eval can dispatch the timelib-backed date surface and the fixture links elephc_tz.
+        timelib: true,
         mb_strlen: false,
         phar_archive: false,
         descriptor_invoker: true,

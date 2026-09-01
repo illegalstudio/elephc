@@ -9,6 +9,38 @@
 
 use super::*;
 
+/// Allocates a compact Reflection owner and initializes only its reflected-name slot.
+pub(super) fn emit_reflection_owner_name_only(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    reflected_name: Option<&str>,
+) -> Result<()> {
+    let (class_id, property_count, uninitialized_marker_offsets) = {
+        let class_info = ctx
+            .module
+            .class_infos
+            .get(class_name)
+            .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", class_name)))?;
+        (
+            class_info.class_id,
+            class_info.properties.len(),
+            super::super::uninitialized_property_marker_offsets(class_info),
+        )
+    };
+    super::super::emit_object_allocation(
+        ctx,
+        class_id,
+        property_count,
+        false,
+        &uninitialized_marker_offsets,
+        &[],
+    )?;
+    if let Some(reflected_name) = reflected_name {
+        emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
+    }
+    Ok(())
+}
+
 /// Allocates and populates one builtin Reflection owner object from metadata.
 pub(super) fn emit_reflection_owner_object(
     ctx: &mut FunctionContext<'_>,
@@ -237,6 +269,11 @@ pub(super) fn emit_reflection_owner_object(
     }
     if matches!(class_name, "ReflectionFunction" | "ReflectionMethod") {
         let is_internal = reflection_function_or_method_is_internal(class_name, &metadata);
+        let has_tentative_return_type = metadata.type_metadata.is_some()
+            && reflection_datetime_method_has_tentative_return_type(
+                metadata.parent_class_name.as_deref(),
+                metadata.reflected_name.as_deref(),
+            );
         emit_reflection_owner_bool_property(ctx, class_name, "__is_internal", is_internal)?;
         emit_reflection_owner_bool_property(
             ctx,
@@ -260,9 +297,29 @@ pub(super) fn emit_reflection_owner_object(
             ctx,
             class_name,
             "__has_return_type",
-            metadata.type_metadata.is_some(),
+            metadata.type_metadata.is_some() && !has_tentative_return_type,
         )?;
-        emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
+        emit_reflection_owner_type_property(
+            ctx,
+            class_name,
+            (!has_tentative_return_type)
+                .then_some(metadata.type_metadata.as_ref())
+                .flatten(),
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__has_tentative_return_type",
+            has_tentative_return_type,
+        )?;
+        emit_reflection_owner_type_property_by_name(
+            ctx,
+            class_name,
+            "__tentative_type",
+            has_tentative_return_type
+                .then_some(metadata.type_metadata.as_ref())
+                .flatten(),
+        )?;
         emit_reflection_owner_bool_property(
             ctx,
             class_name,
@@ -292,6 +349,12 @@ pub(super) fn emit_reflection_owner_object(
             class_name,
             "__has_type",
             metadata.type_metadata.is_some(),
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__is_deprecated",
+            metadata.is_deprecated,
         )?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
     }
@@ -474,4 +537,3 @@ pub(super) fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
         None => ("", reflected_name),
     }
 }
-

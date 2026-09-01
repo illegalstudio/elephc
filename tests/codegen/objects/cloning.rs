@@ -68,6 +68,24 @@ echo $a->label . "|" . $b->label;
     assert_eq!(out, "A|A:copy");
 }
 
+/// Verifies a cloned string property remains valid after the source owner is released.
+#[test]
+fn test_clone_string_property_survives_source_release() {
+    let out = compile_and_run(
+        r#"<?php
+class LabelOwner {
+    public string $label = "";
+}
+$a = new LabelOwner();
+$a->label = date_default_timezone_get();
+$b = clone $a;
+unset($a);
+echo $b->label;
+"#,
+    );
+    assert_eq!(out, "UTC");
+}
+
 /// Verifies object-valued properties are shallow-copied, so nested object mutations remain shared.
 #[test]
 fn test_clone_keeps_nested_objects_shared() {
@@ -105,4 +123,54 @@ echo $a->name . "|" . $b->name . "|" . (isset($a->extra) ? "Y" : "N");
 "#,
     );
     assert_eq!(out, "source|copy|N");
+}
+
+/// Verifies a discarded standalone clone expression still runs the clone operation safely.
+#[test]
+fn test_standalone_clone_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class StandaloneClone {}
+$object = new StandaloneClone();
+clone $object;
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies clone recursively resolves case-insensitive class names in its operand.
+#[test]
+fn test_clone_resolves_case_insensitive_new_object_name() {
+    let out = compile_and_run(
+        r#"<?php
+class CloneCaseProbe {}
+$copy = clone new Clonecaseprobe();
+echo get_class($copy);
+"#,
+    );
+    assert_eq!(out, "CloneCaseProbe");
+}
+
+/// Verifies a clone operand widened to boxed `Mixed` is checked at runtime, cloned through its
+/// concrete object class, and remains independent from the original DateTime payload.
+#[test]
+fn test_clone_runtime_mixed_datetime_object() {
+    let out = compile_and_run(
+        r#"<?php
+function obscure_clone_value(mixed $value): mixed {
+    return $value;
+}
+$source = new DateTime("2024-01-01T00:00:00Z");
+$copy = clone obscure_clone_value($source);
+$copy->modify("+1 day");
+echo $source->format("Y-m-d"), "|", $copy->format("Y-m-d"), "|";
+try {
+    clone obscure_clone_value(7);
+} catch (TypeError $error) {
+    echo get_class($error);
+}
+"#,
+    );
+    assert_eq!(out, "2024-01-01|2024-01-02|TypeError");
 }

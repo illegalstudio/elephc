@@ -2,7 +2,7 @@
 title: "get_class_methods() — internals"
 description: "Compiler internals for get_class_methods(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 85
+  order: 86
 ---
 
 ## `get_class_methods()` — internals

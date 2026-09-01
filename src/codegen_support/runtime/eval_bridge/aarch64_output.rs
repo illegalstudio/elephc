@@ -227,9 +227,35 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return zero to Rust
 
     label_c_global(emitter, "__elephc_eval_warning");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_error_reporting", 0); // load the PHP diagnostic mask shared with static code
+    emitter.instruction("tbz x9, #1, __elephc_eval_warning_done");              // suppress eval E_WARNING output when its mask bit is disabled
     emitter.instruction("mov x2, x1");                                          // move warning length into the runtime diagnostic length register
     emitter.instruction("mov x1, x0");                                          // move warning pointer into the runtime diagnostic buffer register
     emitter.instruction("b __rt_diag_warning");                                 // emit or suppress one eval runtime warning
+    emitter.label("__elephc_eval_warning_done");
+    emitter.instruction("ret");                                                 // return without output when E_WARNING is disabled
+
+    label_c_global(emitter, "__elephc_eval_deprecated");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "x9", "_rt_error_reporting", 0); // load the PHP diagnostic mask shared with static code
+    emitter.instruction("tbz x9, #13, __elephc_eval_deprecated_done");          // suppress eval E_DEPRECATED output when its mask bit is disabled
+    emitter.instruction("mov x2, x1");                                          // move deprecation length into the runtime diagnostic length register
+    emitter.instruction("mov x1, x0");                                          // move deprecation pointer into the runtime diagnostic buffer register
+    emitter.instruction("b __rt_diag_write");                                   // emit or suppress one eval runtime deprecation
+    emitter.label("__elephc_eval_deprecated_done");
+    emitter.instruction("ret");                                                 // return without output when E_DEPRECATED is disabled
+
+    label_c_global(emitter, "__elephc_eval_error_reporting");
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_error_reporting", 0); // preserve the previous PHP diagnostic mask outside symbol-address scratch x9
+    crate::codegen::abi::emit_load_symbol_to_reg(emitter, "x11", "_rt_diag_suppression", 0); // load the active nested @ depth
+    emitter.instruction("mov x12, #4437");                                      // PHP's fatal-only mask exposed during @
+    emitter.instruction("and x12, x10, x12");                                  // retain only fatal levels from the current user mask
+    emitter.instruction("cmp x11, #0");                                        // is eval running inside a suppressed expression?
+    emitter.instruction("csel x10, x10, x12, eq");                             // return the ordinary mask outside @ and fatal-only mask inside
+    emitter.instruction("cbz x1, __elephc_eval_error_reporting_done");          // a missing/null level is a query only
+    crate::codegen::abi::emit_store_reg_to_symbol(emitter, "x0", "_rt_error_reporting", 0); // publish the replacement PHP diagnostic mask
+    emitter.label("__elephc_eval_error_reporting_done");
+    emitter.instruction("mov x0, x10");                                         // return the previous mask to the eval interpreter
+    emitter.instruction("ret");                                                 // return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("b __rt_decref_mixed");                                 // release one eval-owned boxed Mixed cell

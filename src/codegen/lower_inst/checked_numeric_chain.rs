@@ -96,7 +96,7 @@ fn expect_operations(inst: &Instruction) -> Result<&[MixedNumericOp]> {
                 && chain
                     .operations()
                     .iter()
-                    .all(|op| !matches!(op, MixedNumericOp::Pow)) =>
+                    .all(|op| !matches!(op, MixedNumericOp::Pow | MixedNumericOp::UnaryPlus)) =>
         {
             Ok(chain.operations())
         }
@@ -159,7 +159,9 @@ fn emit_aarch64_checked_step(
             ctx.emitter.instruction(&compare);                                  // compare the high product with the low half's sign extension
             ctx.emitter.instruction(&format!("b.ne {}", overflow_label));       // enter float semantics when the product does not fit in I64
         }
-        MixedNumericOp::Pow => unreachable!("validated checked chains exclude pow"),
+        MixedNumericOp::Pow | MixedNumericOp::UnaryPlus => {
+            unreachable!("validated checked chains exclude pow and unary plus")
+        }
     }
 }
 
@@ -229,7 +231,9 @@ fn integer_mnemonic(operation: MixedNumericOp, arch: Arch) -> &'static str {
         (MixedNumericOp::Add, Arch::X86_64) => "add",
         (MixedNumericOp::Sub, Arch::X86_64) => "sub",
         (MixedNumericOp::Mul, Arch::X86_64) => "imul",
-        (MixedNumericOp::Pow, _) => unreachable!("validated checked chains exclude pow"),
+        (MixedNumericOp::Pow | MixedNumericOp::UnaryPlus, _) => {
+            unreachable!("validated checked chains exclude pow and unary plus")
+        }
     }
 }
 
@@ -242,6 +246,8 @@ fn float_mnemonic(operation: MixedNumericOp, arch: Arch) -> &'static str {
         (MixedNumericOp::Add, Arch::X86_64) => "addsd",
         (MixedNumericOp::Sub, Arch::X86_64) => "subsd",
         (MixedNumericOp::Mul, Arch::X86_64) => "mulsd",
-        (MixedNumericOp::Pow, _) => unreachable!("validated checked chains exclude pow"),
+        (MixedNumericOp::Pow | MixedNumericOp::UnaryPlus, _) => {
+            unreachable!("validated checked chains exclude pow and unary plus")
+        }
     }
 }

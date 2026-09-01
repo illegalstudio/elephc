@@ -15,7 +15,13 @@ pub(super) fn lower_break(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx.builder.terminate(Terminator::Unreachable);
         return;
     };
-    terminate_branch(ctx, frame.break_block, loop_cleanup_count_for_branch(level));
+    terminate_branch(
+        ctx,
+        frame.break_block,
+        loop_cleanup_count_for_branch(level),
+        level,
+        LoopExitKind::Break,
+    );
 }
 
 /// Lowers a `continue` terminator.
@@ -28,7 +34,16 @@ pub(super) fn lower_continue(ctx: &mut LoweringContext<'_, '_>, level: usize) {
         ctx,
         frame.continue_block,
         loop_cleanup_count_for_branch(level),
+        level,
+        LoopExitKind::Continue,
     );
+}
+
+/// Kind of loop edge used to decide which lexical try handlers the edge exits.
+#[derive(Clone, Copy)]
+enum LoopExitKind {
+    Break,
+    Continue,
 }
 
 /// Lowers a return statement using the current function return contract.
@@ -40,6 +55,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     if ctx.by_ref_return {
         if let Some(Expr { kind: ExprKind::PropertyAccess { object, property }, .. }) = value_expr {
             let object = lower_expr(ctx, object);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
+            }
             let data = ctx.intern_string(property);
             let result_ty = ctx.return_php_type.clone();
             let cell_ptr = ctx.emit_value(
@@ -57,6 +75,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     if ctx.return_type == IrType::Void {
         if let Some(value_expr) = value_expr {
             lower_expr(ctx, value_expr);
+            if ctx.builder.insertion_block_is_terminated() {
+                return;
+            }
         }
         terminate_return(ctx, None);
         return;
@@ -66,6 +87,9 @@ pub(super) fn lower_return(ctx: &mut LoweringContext<'_, '_>, value_expr: Option
     } else {
         emit_null_value(ctx, Some(span))
     };
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
     let value = coerce_to_return_type(ctx, value, Some(span));
     let value = acquire_borrowed_return_value(ctx, value, span);
     let value = acquire_returned_this(ctx, value_expr, value, span);
@@ -165,9 +189,20 @@ pub(super) fn acquire_borrowed_return_value(
 
 /// Terminates with a return after running active finally bodies from inner to outer.
 pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<crate::ir::ValueId>) {
+    let handler_count = ctx.try_handler_stack.len();
+    terminate_return_with_handlers(ctx, value, handler_count);
+}
+
+/// Terminates a return while unwinding lexical catch handlers in nesting order with finalizers.
+fn terminate_return_with_handlers(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: Option<crate::ir::ValueId>,
+    handler_count: usize,
+) {
+    let handler_count = emit_try_handler_pops_before_finally(ctx, handler_count, |_| true);
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_return(ctx, value);
+            terminate_return_with_handlers(ctx, value, handler_count);
         }
         return;
     }
@@ -177,10 +212,52 @@ pub(super) fn terminate_return(ctx: &mut LoweringContext<'_, '_>, value: Option<
 }
 
 /// Terminates with a branch after running active finally bodies from inner to outer.
-pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockId, loop_cleanup_count: usize) {
+fn terminate_branch(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: BlockId,
+    loop_cleanup_count: usize,
+    level: usize,
+    kind: LoopExitKind,
+) {
+    let handler_count = ctx.try_handler_stack.len();
+    terminate_branch_with_handlers(
+        ctx,
+        target,
+        loop_cleanup_count,
+        level,
+        kind,
+        handler_count,
+    );
+}
+
+/// Terminates a loop edge while unwinding only the catch handlers that edge leaves.
+fn terminate_branch_with_handlers(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: BlockId,
+    loop_cleanup_count: usize,
+    level: usize,
+    kind: LoopExitKind,
+    handler_count: usize,
+) {
+    let loop_depth = ctx.loop_stack.len();
+    let remaining_loop_depth = loop_depth.saturating_sub(level);
+    let target_loop_depth = remaining_loop_depth.saturating_add(1);
+    let handler_count = emit_try_handler_pops_before_finally(ctx, handler_count, |frame| {
+        match kind {
+            LoopExitKind::Break => frame.loop_depth > remaining_loop_depth,
+            LoopExitKind::Continue => frame.loop_depth >= target_loop_depth,
+        }
+    });
     if run_innermost_finally(ctx, false) {
         if !ctx.builder.insertion_block_is_terminated() {
-            terminate_branch(ctx, target, loop_cleanup_count);
+            terminate_branch_with_handlers(
+                ctx,
+                target,
+                loop_cleanup_count,
+                level,
+                kind,
+                handler_count,
+            );
         }
         return;
     }
@@ -189,6 +266,29 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
         target,
         args: Vec::new(),
     });
+}
+
+/// Pops the innermost exited catch handlers that are nested inside the next active finalizer.
+fn emit_try_handler_pops_before_finally(
+    ctx: &mut LoweringContext<'_, '_>,
+    handler_count: usize,
+    exits_handler: impl Fn(&TryHandlerFrame) -> bool,
+) -> usize {
+    let finally_depth = ctx.finally_stack.len();
+    let mut remaining = handler_count.min(ctx.try_handler_stack.len());
+    let mut popped = Vec::new();
+    while remaining > 0 {
+        let frame = ctx.try_handler_stack[remaining - 1];
+        if frame.finally_depth < finally_depth || !exits_handler(&frame) {
+            break;
+        }
+        popped.push(frame);
+        remaining -= 1;
+    }
+    for frame in popped {
+        emit_try_pop_handler(ctx, frame.handler_token, frame.span);
+    }
+    remaining
 }
 
 /// Terminates with a throw after running finally bodies that apply to uncaught throws.

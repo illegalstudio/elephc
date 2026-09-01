@@ -309,6 +309,15 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
             label
         })
         .collect::<Vec<_>>();
+    let abstract_classes = dynamic_new_without_constructor_abstract_classes(ctx);
+    let abstract_labels = abstract_classes
+        .iter()
+        .map(|class_name| {
+            let label = ctx.next_label("dynamic_new_no_ctor_mixed_abstract");
+            emit_branch_if_dynamic_new_mixed_class_name_matches(ctx, class_name, &label);
+            label
+        })
+        .collect::<Vec<_>>();
     abi::emit_jump(ctx.emitter, &fallback_label);
 
     for (candidate, label) in candidates.iter().zip(case_labels.iter()) {
@@ -316,6 +325,15 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         emit_dynamic_new_without_constructor_mixed_candidate(ctx, candidate, result)?;
         abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    for (class_name, label) in abstract_classes.iter().zip(abstract_labels.iter()) {
+        ctx.emitter.label(label);
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        super::super::exceptions::emit_error(
+            ctx,
+            &format!("Cannot instantiate abstract class {}", class_name),
+        );
     }
 
     ctx.emitter.label(&fallback_label);

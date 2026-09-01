@@ -2,7 +2,7 @@
 title: "is_finite() — internals"
 description: "Compiler internals for is_finite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 297
+  order: 299
 ---
 
 ## `is_finite()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_finite.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_finite.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

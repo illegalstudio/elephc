@@ -7,7 +7,7 @@
 $config = opcache_get_configuration();
 
 echo $config['version']['opcache_product_name'], "\n"; // Zend OPcache
-echo $config['version']['version'], "\n";               // 8.5.0 (default target)
+echo $config['version']['version'], "\n";               // 8.5.10-dev (default target)
 
 $directives = $config['directives'];
 echo $directives['opcache.enable'] ? "enabled\n" : "disabled\n";     // enabled

@@ -2,7 +2,7 @@
 title: "openssl_encrypt() — internals"
 description: "Compiler internals for openssl_encrypt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 440
+  order: 447
 ---
 
 ## `openssl_encrypt()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/openssl_encrypt.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/openssl_encrypt.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

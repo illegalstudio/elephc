@@ -13,12 +13,15 @@ use std::collections::HashMap;
 use crate::codegen_support::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STR_CONSTANTS};
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
+use crate::types::locale_constants::{
+    LINUX_LOCALE_INT_CONSTANTS, MACOS_LOCALE_INT_CONSTANTS,
+};
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
@@ -239,6 +242,17 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    let locale_constants = match target_platform {
+        Platform::MacOS => MACOS_LOCALE_INT_CONSTANTS,
+        Platform::Linux => LINUX_LOCALE_INT_CONSTANTS,
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    for (name, value) in locale_constants {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     for (name, value) in STREAM_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
@@ -257,6 +271,12 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in DATE_STR_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::StringLiteral((*value).to_string()), PhpType::Str),
+        );
+    }
     for (name, value) in SESSION_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
@@ -264,9 +284,14 @@ pub(crate) fn collect_constants(
         );
     }
     for (name, value) in ERROR_LEVEL_CONSTANTS {
+        let value = crate::types::error_constants::error_level_value_for_version(
+            name,
+            *value,
+            php_version,
+        );
         constants.insert(
             (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
+            (ExprKind::IntLiteral(value), PhpType::Int),
         );
     }
     // Lexer-tokenized numeric / math constants (also reachable via `use const` aliases).

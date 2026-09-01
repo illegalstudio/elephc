@@ -575,6 +575,7 @@ fn test_private_method_access_uncaught_is_fatal() {
     // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
     // STDOUT: PHP writes its uncaught report there, and elephc now matches — measured by capturing
     // the two streams into separate files, where stderr came back empty.
+    assert_eq!(output.exit_code, Some(255));
     assert!(
         output
             .stdout
@@ -593,6 +594,7 @@ fn test_readonly_property_write_uncaught_is_fatal() {
     assert!(!output.success, "expected a fatal exit");
     // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
     // See above: the report is on stdout.
+    assert_eq!(output.exit_code, Some(255));
     assert!(
         output
             .stdout
@@ -600,6 +602,14 @@ fn test_readonly_property_write_uncaught_is_fatal() {
         "expected a fatal diagnostic naming the class and message, got: {}",
         output.stdout
     );
+}
+
+/// Verifies an explicit `exit(1)` keeps its caller-selected status after fatal exits move to 255.
+#[test]
+fn test_explicit_exit_one_preserves_status() {
+    let output = compile_and_run_capture("<?php exit(1);");
+    assert!(!output.success, "expected an explicit non-zero exit");
+    assert_eq!(output.exit_code, Some(1));
 }
 
 /// Verifies that `getMessage()` on a caught private-method `Error` returns the
@@ -742,6 +752,47 @@ fn test_nullable_throwable_get_message_via_previous() {
         "<?php function show(?Throwable $t): string { return $t === null ? 'null' : $t->getMessage(); } $inner = new ValueError('inner'); $outer = new Exception('outer', 0, $inner); echo show($outer->getPrevious());",
     );
     assert_eq!(out, "inner");
+}
+
+/// Verifies a `finally` replacement appends the pending Throwable after an explicit chain.
+#[test]
+fn test_finally_replacement_appends_pending_exception_to_previous_chain() {
+    let out = compile_and_run(
+        r#"<?php
+$explicit = new Exception("explicit");
+try {
+    try { throw new Error("old"); }
+    finally { throw new RuntimeException("new", 0, $explicit); }
+} catch (Throwable $e) {
+    $explicitPrevious = $e->getPrevious();
+    $pendingPrevious = $explicitPrevious->getPrevious();
+    echo get_class($e), ":", $e->getMessage(), "|";
+    echo get_class($explicitPrevious), ":", $explicitPrevious->getMessage(), "|";
+    echo get_class($pendingPrevious), ":", $pendingPrevious->getMessage(), "|";
+    echo $pendingPrevious->getPrevious() === null ? "end" : "more";
+}
+"#,
+    );
+    assert_eq!(out, "RuntimeException:new|Exception:explicit|Error:old|end");
+}
+
+/// Verifies implicit chaining does not duplicate an explicitly supplied pending Throwable.
+#[test]
+fn test_finally_replacement_does_not_cycle_existing_previous_exception() {
+    let out = compile_and_run(
+        r#"<?php
+$old = new Error("old");
+try {
+    try { throw $old; }
+    finally { throw new Exception("new", 0, $old); }
+} catch (Throwable $e) {
+    echo $e->getPrevious() === $old ? "same" : "other";
+    echo "|";
+    echo $e->getPrevious()->getPrevious() === null ? "end" : "cycle";
+}
+"#,
+    );
+    assert_eq!(out, "same|end");
 }
 
 /// Verifies exception edges preserve register-allocated values that remain live

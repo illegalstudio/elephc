@@ -106,6 +106,10 @@ use crate::opcache::state::opcache_cache_enabled_with_overrides;
 /// gating; duplicating the exhaustive AST traversal would be a second thing to keep correct.
 pub(crate) mod detect;
 
+/// Internal CLI dispatch helper used by the name resolver to preserve the source line of a
+/// direct `ini_set()` call while keeping the public function's two-parameter reflection shape.
+pub(crate) const CLI_INI_SET_DISPATCH_HELPER: &str = "__elephc_cli_ini_set_dispatch";
+
 /// The declaration SHAPES, built as AST. The modules below decide WHAT a binary needs and
 /// compute the values baked into it; `build` spells out the bodies those values go into.
 pub(crate) mod build;

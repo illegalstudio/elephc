@@ -2,7 +2,7 @@
 title: "__elephc_mktime_raw() — internals"
 description: "Compiler internals for __elephc_mktime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 525
+  order: 533
 ---
 
 ## `__elephc_mktime_raw()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_mktime_raw.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_mktime_raw.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -30,7 +30,7 @@ sidebar:
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

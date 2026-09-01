@@ -163,7 +163,7 @@ pub(super) fn emit_reflection_named_type_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_named_type_object(ctx, type_metadata)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_append_reflection_member_object(ctx);
+        emit_append_reflection_member_object(ctx, "ReflectionNamedType");
     }
     Ok(())
 }
@@ -225,18 +225,26 @@ pub(super) fn emit_reflection_indexed_array(ctx: &mut FunctionContext<'_>, capac
     abi::emit_call_label(ctx.emitter, "__rt_array_new");
 }
 
-/// Appends the stacked member object to the stacked member array and leaves the array in result.
-pub(super) fn emit_append_reflection_member_object(ctx: &mut FunctionContext<'_>) {
+/// Retains and appends the stacked member object, then releases its temporary owner.
+pub(super) fn emit_append_reflection_member_object(
+    ctx: &mut FunctionContext<'_>,
+    member_class_name: &str,
+) {
+    let member_type = PhpType::Object(member_class_name.to_string());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x1");
             abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            abi::emit_push_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+            emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &member_type);
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rsi");
             abi::emit_pop_reg(ctx.emitter, "rdi");
-            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+            abi::emit_push_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_refcounted");
+            emit_release_pushed_refcounted_temp_after_array_push(ctx.emitter, &member_type);
         }
     }
 }
@@ -290,4 +298,3 @@ pub(super) fn emit_reflection_string_array_fill_x86_64(ctx: &mut FunctionContext
     ctx.emitter.instruction("add rsp, 8");                                      // drop the temporary alignment slot
     ctx.emitter.instruction("pop rax");                                         // restore the final metadata-name array as the result
 }
-

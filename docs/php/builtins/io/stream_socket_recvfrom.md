@@ -2,7 +2,7 @@
 title: "stream_socket_recvfrom()"
 description: "Receives data from a socket, connected or not."
 sidebar:
-  order: 247
+  order: 248
 ---
 
 ## stream_socket_recvfrom()

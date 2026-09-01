@@ -134,7 +134,7 @@ mod tests {
     /// Verifies the shared catalog validates and exposes every compiler/eval surface.
     #[test]
     fn catalog_is_valid_and_complete_for_all_contract_surfaces() {
-        assert_eq!(contracts().len(), 554);
+        assert_eq!(contracts().len(), 567);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

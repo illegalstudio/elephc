@@ -1531,22 +1531,9 @@ fn debug_info_projection_may_rename_reorder_and_be_empty() {
     );
 }
 
-/// KNOWN DIVERGENCE — a `__debugInfo()` body that is NOT a property projection is
-/// IGNORED, and the declared properties are printed instead.
-///
-/// elephc folds `__debugInfo()` statically, so it can only honour bodies that reduce to
-/// "print these property slots under these names". A body that COMPUTES a value has no
-/// property slot to point at and falls back to the declared-property list — which is
-/// exactly what elephc did for every class before the projection support landed, so the
-/// fallback introduces no new failure and turns no compiling program into an error.
-///
-/// Reference PHP 8.5.6 prints `object(C)#1 (1) { ["n"]=> int(2) }` for this program.
-/// This assertion is elephc's ACTUAL output with PHP's spelled out beside it: it is a
-/// divergence pin, NOT parity, and it must never be read as one. Implementing it
-/// faithfully requires calling the method from `__rt_var_dump_object`, which is
-/// hand-written assembly on every target.
+/// Verifies a computed `__debugInfo()` result replaces the declared-property dump like php-src.
 #[test]
-fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
+fn computed_debug_info_is_used_instead_of_declared_properties() {
     let out = run_php(
         "debuginfo_computed_divergence",
         concat!(
@@ -1558,18 +1545,12 @@ fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
             "var_dump(new C());\n",
         ),
     );
-    // Reference PHP 8.5.6 prints:  object(C)#1 (1) { ["n"]=> int(2) }
     assert_eq!(
         out,
         concat!(
             "object(C)#1 (1) {\n",
-            "  [\"items\"]=>\n",
-            "  array(2) {\n",
-            "    [0]=>\n",
-            "    int(1)\n",
-            "    [1]=>\n",
-            "    int(2)\n",
-            "  }\n",
+            "  [\"n\"]=>\n",
+            "  int(2)\n",
             "}\n",
         )
     );

@@ -2,7 +2,7 @@
 title: "getservbyport()"
 description: "Gets the Internet service that corresponds to a port and protocol."
 sidebar:
-  order: 196
+  order: 197
 ---
 
 ## getservbyport()

@@ -197,6 +197,7 @@ fn record_statements(group: &mut PreludeGroup, statements: &[Stmt], namespace: O
             | StmtKind::Global { .. }
             | StmtKind::StaticVar { .. }
             | StmtKind::PropertyAssign { .. }
+            | StmtKind::DynamicPropertyArrayPush { .. }
             | StmtKind::StaticPropertyAssign { .. }
             | StmtKind::StaticPropertyArrayPush { .. }
             | StmtKind::StaticPropertyArrayAssign { .. }

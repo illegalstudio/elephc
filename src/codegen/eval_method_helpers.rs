@@ -1997,7 +1997,7 @@ fn emit_aarch64_cast_eval_arg(
             emit_aarch64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
         PhpType::Array(_) => {
-            emit_aarch64_cast_eval_array_arg(emitter, 4, fail_label);
+            emit_aarch64_cast_eval_php_array_arg(emitter, label_prefix, fail_label);
         }
         PhpType::AssocArray { .. } => {
             emit_aarch64_cast_eval_array_arg(emitter, 5, fail_label);
@@ -2059,6 +2059,23 @@ fn emit_aarch64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fa
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
     emitter.instruction("mov x0, x1");                                          // place the unboxed array pointer in the result register
+}
+
+/// Accepts both runtime array layouts for a PHP `array` parameter on ARM64.
+fn emit_aarch64_cast_eval_php_array_arg(
+    emitter: &mut Emitter,
+    label_prefix: &str,
+    fail_label: &str,
+) {
+    let payload_ok = format!("{}_array_payload", label_prefix);
+    emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for PHP array unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete array tag and payload pointer
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("b.eq {}", payload_ok));                       // indexed arrays satisfy PHP array parameters
+    emitter.instruction("cmp x0, #5");                                          // runtime tag 5 means associative array
+    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject non-array payloads
+    emitter.label(&payload_ok);
+    emitter.instruction("mov x0, x1");                                          // place either array payload pointer in the result register
 }
 
 /// Validates and unboxes one ARM64 iterable-typed eval argument for native method dispatch.
@@ -2165,7 +2182,7 @@ fn emit_x86_64_cast_eval_arg(
             emit_x86_64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
         PhpType::Array(_) => {
-            emit_x86_64_cast_eval_array_arg(emitter, 4, fail_label);
+            emit_x86_64_cast_eval_php_array_arg(emitter, label_prefix, fail_label);
         }
         PhpType::AssocArray { .. } => {
             emit_x86_64_cast_eval_array_arg(emitter, 5, fail_label);
@@ -2228,6 +2245,23 @@ fn emit_x86_64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fai
     emitter.instruction("mov rax, rdi");                                        // place the unboxed array pointer in the result register
 }
 
+/// Accepts both runtime array layouts for a PHP `array` parameter on x86_64.
+fn emit_x86_64_cast_eval_php_array_arg(
+    emitter: &mut Emitter,
+    label_prefix: &str,
+    fail_label: &str,
+) {
+    let payload_ok = format!("{}_array_payload", label_prefix);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for PHP array unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete array tag and payload pointer
+    emitter.instruction("cmp rax, 4");                                          // runtime tag 4 means indexed array
+    emitter.instruction(&format!("je {}", payload_ok));                         // indexed arrays satisfy PHP array parameters
+    emitter.instruction("cmp rax, 5");                                          // runtime tag 5 means associative array
+    emitter.instruction(&format!("jne {}", fail_label));                        // reject non-array payloads
+    emitter.label(&payload_ok);
+    emitter.instruction("mov rax, rdi");                                        // place either array payload pointer in the result register
+}
+
 /// Validates and unboxes one x86_64 iterable-typed eval argument for native method dispatch.
 fn emit_x86_64_cast_eval_iterable_arg(
     module: &Module,
@@ -2288,6 +2322,11 @@ fn emit_box_method_result(module: &Module, emitter: &mut Emitter, return_ty: &Ph
     if return_ty.codegen_repr() == PhpType::Void {
         let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
         abi::emit_call_label(emitter, &null_symbol);
+    } else if matches!(return_ty.codegen_repr(), PhpType::Array(_)) {
+        // A PHP `array` return declaration does not distinguish indexed arrays
+        // from associative hashes. Probe the concrete heap kind at this eval
+        // boundary so hash-returning methods are not mislabeled as tag 4.
+        emit_box_current_value_as_mixed(emitter, &PhpType::Iterable);
     } else {
         emit_box_current_value_as_mixed(emitter, return_ty);
     }

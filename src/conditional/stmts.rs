@@ -431,6 +431,15 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             property,
             value: rewrite_expr(value, defines),
         },
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => StmtKind::DynamicPropertyArrayPush {
+            object: Box::new(rewrite_expr(*object, defines)),
+            property: Box::new(rewrite_expr(*property, defines)),
+            value: rewrite_expr(value, defines),
+        },
         StmtKind::PropertyArrayAssign {
             object,
             property,

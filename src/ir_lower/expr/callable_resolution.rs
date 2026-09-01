@@ -325,7 +325,7 @@ pub(crate) fn lower_bound_closure_for_assignment(
 
 /// Resolves the statically-known class name of an object expression used as an instance-call
 /// receiver, including declared property and chained-call results.
-pub(super) fn instance_callable_object_class(
+pub(crate) fn instance_callable_object_class(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> Option<String> {

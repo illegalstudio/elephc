@@ -225,12 +225,15 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ja __rt_unser_validate_at_fail_x");                    // declared length overruns the input
     emitter.instruction("add r8, r11");                                         // closing quote position
     emitter.instruction("cmp BYTE PTR [rdi + r8], 34");                         // exact closing quote
-    emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // payload must end at the declared length
+    emitter.instruction("jne __rt_unser_validate_string_close_fail_x");         // payload must end at the declared length
     emitter.instruction("add r8, 1");                                           // semicolon position
     emitter.instruction("cmp BYTE PTR [rdi + r8], 59");                         // terminating semicolon
     emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // unterminated string envelope
     emitter.instruction("lea rdx, [r8 + 1]");                                   // position after semicolon
     emitter.instruction("jmp __rt_unser_validate_at_ok_x");                     // string value fully bounded
+    emitter.label("__rt_unser_validate_string_close_fail_x");
+    emitter.instruction("mov rsi, r8");                                        // PHP reports the declared closing-quote position
+    emitter.instruction("jmp __rt_unser_validate_at_fail_x");                  // return the precise malformed-string offset
 
     emitter.label("__rt_unser_validate_array_x");
     emitter.instruction("lea r8, [rsi + 1]");                                   // colon after a
@@ -306,6 +309,20 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("sub r10, 2");                                          // room left for name bytes alone
     emitter.instruction("cmp r11, r10");                                        // declared class name fits?
     emitter.instruction("ja __rt_unser_validate_at_fail_x");                    // declared length overruns the input
+    emitter.instruction("xor r13d, r13d");                                     // class-name control-byte scan cursor
+    emitter.label("__rt_unser_validate_object_name_scan_x");
+    emitter.instruction("cmp r13, r11");                                       // scanned the full declared class name?
+    emitter.instruction("jae __rt_unser_validate_object_name_scan_done_x");    // continue with the closing quote
+    emitter.instruction("lea r14, [r8 + r13]");                                // source offset of this class-name byte
+    emitter.instruction("movzx r12d, BYTE PTR [rdi + r14]");                   // load one already bounded class-name byte
+    emitter.instruction("cmp r12d, 32");                                       // serialized class names cannot contain ASCII controls
+    emitter.instruction("jb __rt_unser_validate_object_name_invalid_x");       // fail at the object's marker like php-src
+    emitter.instruction("add r13, 1");                                         // scan the next byte
+    emitter.instruction("jmp __rt_unser_validate_object_name_scan_x");         // continue the bounded scan
+    emitter.label("__rt_unser_validate_object_name_invalid_x");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                      // report the malformed object's starting offset
+    emitter.instruction("jmp __rt_unser_validate_at_fail_x");                  // reject the invalid class name
+    emitter.label("__rt_unser_validate_object_name_scan_done_x");
     emitter.instruction("add r8, r11");                                         // closing quote
     emitter.instruction("cmp BYTE PTR [rdi + r8], 34");                         // exact closing quote
     emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // name must end at the declared length
@@ -357,7 +374,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_unser_validate_container_close_x");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // closing-brace position
     emitter.instruction("cmp rdx, QWORD PTR [rbp - 24]");                       // require the closing brace byte
-    emitter.instruction("jae __rt_unser_validate_at_fail_x");                   // truncated container body
+    emitter.instruction("je __rt_unser_validate_at_ok_x");                     // a missing final brace is allocation-safe; let hydration run PHP hooks before failing
+    emitter.instruction("ja __rt_unser_validate_at_fail_x");                   // reject a cursor that escaped the bounded source
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload base for the brace check
     emitter.instruction("cmp BYTE PTR [rdi + rdx], 125");                       // exact closing brace
     emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // body must end exactly at the brace
@@ -385,7 +403,14 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return success and the new cursor to the caller
     emitter.label("__rt_unser_validate_at_fail_x");
     emitter.instruction("xor eax, eax");                                        // report malformed/truncated wire data
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // preserve original position on failure
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_unser_failure_offset");
+    emitter.instruction("mov r10, QWORD PTR [r11]");                           // first failure cursor recorded by the innermost validator frame
+    emitter.instruction("cmp r10, -1");                                        // is the no-failure sentinel still present?
+    emitter.instruction("jne __rt_unser_validate_at_fail_offset_ready_x");     // recursive parents must preserve the original failure point
+    emitter.instruction("mov r10, rsi");                                       // capture the bounded cursor at the first grammar failure
+    emitter.instruction("mov QWORD PTR [r11], r10");                           // publish it for recursive propagation
+    emitter.label("__rt_unser_validate_at_fail_offset_ready_x");
+    emitter.instruction("mov rdx, r10");                                       // return the first failure offset to the caller
     emitter.instruction("leave");                                               // restore the frame on the failure path
     emitter.instruction("ret");                                                 // return the failure flag to the caller
 }

@@ -2,7 +2,7 @@
 title: "fseek()"
 description: "Seeks on a file pointer."
 sidebar:
-  order: 184
+  order: 185
 ---
 
 ## fseek()

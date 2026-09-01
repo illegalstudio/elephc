@@ -2,7 +2,7 @@
 title: "gmmktime() — internals"
 description: "Compiler internals for gmmktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 104
+  order: 105
 ---
 
 ## `gmmktime()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/gmmktime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gmmktime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function gmmktime(int $hour, int $minute, int $second, int $month, int $day, int $year): int
+function gmmktime(int $hour, int $minute = null, int $second = null, int $month = null, int $day = null, int $year = null): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 6 arguments.
+- **Arity**: takes 1–6 arguments (5 optional).
 
 ## Eval interpreter (magician)
 

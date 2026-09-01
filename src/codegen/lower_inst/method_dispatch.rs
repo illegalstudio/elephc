@@ -65,6 +65,21 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
+    let preallocated_constructor = method_name == "__construct"
+        && inst.operands.first().is_some_and(|receiver| {
+            ctx.function
+                .value(*receiver)
+                .and_then(|value| match value.def {
+                    ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+                    _ => None,
+                })
+                .is_some_and(|receiver_inst| receiver_inst.op == Op::ObjectNewWithoutConstructor)
+        });
+    if preallocated_constructor
+        && objects::throwable_new::throwable_payload_class_id(ctx, &class_name).is_some()
+    {
+        return objects::throwable_new::lower_preallocated_throwable_constructor(ctx, inst);
+    }
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
     param_types.extend(target.params.iter().map(|param| param.codegen_repr()));
@@ -80,19 +95,58 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(slot) = target.dynamic_slot {
-        emit_dynamic_instance_method_call(ctx, slot);
-    } else {
-        abi::emit_call_label(
-            ctx.emitter,
-            &method_symbol(&target.impl_class, &target.method_key),
-        );
+    let dateperiod_foreach_trace = method_name == "__elephc_assert_iterable_initialized";
+    let datetime_format_trace = method_name.eq_ignore_ascii_case("format")
+        && target.impl_class.eq_ignore_ascii_case("DateTime");
+    if dateperiod_foreach_trace {
+        emit_dateperiod_foreach_trace_begin(ctx, inst);
+    }
+    if datetime_format_trace {
+        emit_date_special_trace_begin(ctx, inst, 2);
+    }
+    match target.dynamic_slot {
+        Some(slot) if !preallocated_constructor => emit_dynamic_instance_method_call(ctx, slot),
+        _ => abi::emit_call_label(
+                ctx.emitter,
+                &method_symbol(&target.impl_class, &target.method_key),
+            ),
+    }
+    if dateperiod_foreach_trace {
+        emit_dateperiod_foreach_trace_end(ctx);
+    }
+    if datetime_format_trace {
+        emit_date_special_trace_end(ctx);
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Publishes the user-visible foreach location for DatePeriod's iterator initialization guard.
+fn emit_dateperiod_foreach_trace_begin(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
+    let scratch = abi::temp_int_reg(ctx.emitter.target);
+    let line = inst.span.map_or(0, |span| i64::from(span.line));
+    abi::emit_store_zero_to_symbol(
+        ctx.emitter,
+        "_dateperiod_foreach_trace_exception_ptr",
+        0,
+    );
+    abi::emit_load_int_immediate(ctx.emitter, scratch, line);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_dateperiod_foreach_trace_line", 0);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_dateperiod_foreach_trace_active", 0);
+}
+
+/// Clears DatePeriod's foreach trace after the initialization guard returns normally.
+fn emit_dateperiod_foreach_trace_end(ctx: &mut FunctionContext<'_>) {
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_dateperiod_foreach_trace_active", 0);
+    abi::emit_store_zero_to_symbol(
+        ctx.emitter,
+        "_dateperiod_foreach_trace_exception_ptr",
+        0,
+    );
 }
 
 /// Rejects the raw null-container representation before a static object method dispatch.
@@ -152,6 +206,19 @@ pub(super) fn lower_mixed_method_call(
     ctx.load_value_to_result(object)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_mixed_method_object_payload_or_fatal(ctx, receiver_reg, &non_object_label);
+    // Retain the unboxed object payload for the duration of the method call. The mixed cell owns
+    // the original reference; the unbox is a borrow. A mutating method (e.g. `DateTime::modify`)
+    // writes through `$this`, and the method body may release other references that drop the mixed
+    // cell's refcount to zero before the call returns — without this retain the object would be
+    // freed mid-call. The retain is balanced by the decref after the candidate dispatch below.
+    move_reg_to_int_result(ctx, receiver_reg);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object("".to_string()));
+    move_int_result_to_reg(ctx, receiver_reg);
+    // Generated PHP methods may use `nested_call_reg` for their own nested calls, so it cannot
+    // preserve the receiver across the candidate call despite being callee-saved by the platform
+    // ABI. Keep the call-scoped retain in a stack slot and reload it at the common exit instead.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_store_to_sp(ctx.emitter, receiver_reg, 0);
     emit_mixed_method_class_dispatch(
         ctx,
         receiver_reg,
@@ -178,7 +245,27 @@ pub(super) fn lower_mixed_method_call(
     emit_method_call_on_null_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
+    // Balance the retain emitted after `__rt_mixed_unbox`: release the borrowed object payload now
+    // that the method call and result boxing are complete. The original mixed cell still owns its
+    // own reference, so this decref drops only the call-scoped retain.
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Object("".to_string()));
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// Moves the canonical integer result register back into a scratch register.
+fn move_int_result_to_reg(ctx: &mut FunctionContext<'_>, dest_reg: &str) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    if dest_reg == result_reg {
+        return;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 | Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov {}, {}", dest_reg, result_reg)); // restore the unboxed receiver pointer after an incref/decref helper call
+        }
+    }
 }
 
 /// Emits one concrete class branch for a `Mixed` receiver method call.
@@ -230,7 +317,8 @@ pub(super) fn lower_mixed_method_candidate_call(
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_method_call_result(ctx, inst, &candidate.target)?;
+    store_mixed_method_call_result(ctx, inst, &candidate.target)?;
+    emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
@@ -319,4 +407,3 @@ pub(super) fn emit_mixed_method_class_dispatch(
 /// non-alphanumeric byte collapses to `_`, so `a_b` and `aéb` collide. A second copy here
 /// invited use where uniqueness matters; there is now one definition carrying that warning.
 pub(super) use crate::names::label_fragment;
-

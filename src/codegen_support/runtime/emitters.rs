@@ -151,14 +151,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_php_uname(emitter);
     system::emit_getenv(emitter);
     system::emit_shell_exec(emitter);
-    system::emit_date(emitter);
+    if features.timelib {
+        system::emit_date(emitter);
+    }
     system::emit_date_default_timezone(emitter);
     system::emit_checkdate(emitter);
     system::emit_getdate(emitter);
     system::emit_localtime(emitter);
     system::emit_hrtime(emitter);
     system::emit_mktime(emitter);
-    system::emit_strtotime(emitter);
+    system::emit_strtotime(emitter, features.timelib);
     system::emit_json_encode_bool(emitter);
     system::emit_json_encode_null(emitter);
     system::emit_json_encode_str(emitter);

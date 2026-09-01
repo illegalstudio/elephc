@@ -86,7 +86,7 @@ fn build_and_run(dir: &Path, sub: &str, extra_args: &[&str]) -> String {
 #[test]
 fn bare_file_needs_no_manifest() {
     let dir = make_test_dir("elephc_resolve_bare");
-    assert_eq!(build_and_run(&dir, "", &[]), "8.5.0|80500");
+    assert_eq!(build_and_run(&dir, "", &[]), "8.5.10-dev|80510");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -121,7 +121,7 @@ fn a_malformed_manifest_compiles_and_explains_itself() {
     let run = Command::new(dir.join("prog"))
         .output()
         .expect("failed to run compiled program");
-    assert_eq!(String::from_utf8_lossy(&run.stdout), "8.5.0|80500");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "8.5.10-dev|80510");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -180,7 +180,7 @@ fn explicit_flag_still_wins() {
     .unwrap();
     assert_eq!(
         build_and_run(&dir, "", &["--php-version", "8.5"]),
-        "8.5.0|80500"
+        "8.5.10-dev|80510"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -190,6 +190,6 @@ fn explicit_flag_still_wins() {
 fn require_constraint_leaves_the_default() {
     let dir = make_test_dir("elephc_resolve_require");
     fs::write(dir.join("composer.json"), r#"{"require":{"php":"^8.2"}}"#).unwrap();
-    assert_eq!(build_and_run(&dir, "", &[]), "8.5.0|80500");
+    assert_eq!(build_and_run(&dir, "", &[]), "8.5.10-dev|80510");
     let _ = fs::remove_dir_all(&dir);
 }

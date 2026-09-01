@@ -64,14 +64,39 @@ pub(super) fn lower_static_method_call(
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
-    let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let coerce_date_interval_null =
+        static_call_is_date_interval_procedural_from_string(receiver, dispatch_method)
+            && call_args
+                .first()
+                .is_some_and(|argument| matches!(argument.kind, ExprKind::Null));
+    if coerce_date_interval_null {
+        emit_date_interval_procedural_null_deprecation(ctx, expr.span);
+    }
+    let coerced_call_args;
+    let lowered_call_args = if coerce_date_interval_null {
+        coerced_call_args = call_args
+            .iter()
+            .enumerate()
+            .map(|(index, argument)| {
+                if index == 0 {
+                    Expr::new(ExprKind::StringLiteral(String::new()), argument.span)
+                } else {
+                    argument.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        coerced_call_args.as_slice()
+    } else {
+        call_args
+    };
+    let operands = lower_args_with_signature(ctx, sig.as_ref(), lowered_call_args);
     let operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
     let data = ctx.intern_string(&name);
     let result_type = sig
         .as_ref()
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))
         .unwrap_or_else(|| {
             if ctx.has_eval_barrier() && matches!(receiver, StaticReceiver::Named(_)) {
                 PhpType::Mixed
@@ -107,6 +132,42 @@ pub(super) fn lower_static_method_call(
         expr.span,
     );
     call
+}
+
+/// Returns whether name resolution rewrote the procedural DateInterval parser call.
+fn static_call_is_date_interval_procedural_from_string(
+    receiver: &StaticReceiver,
+    method: &str,
+) -> bool {
+    matches!(
+        receiver,
+        StaticReceiver::Named(name)
+            if name.as_str().trim_start_matches('\\') == "DateInterval"
+    ) && php_symbol_key(method) == "__elephc_create_from_date_string"
+}
+
+/// Emits php-src's weak-null deprecation for date_interval_create_from_date_string().
+fn emit_date_interval_procedural_null_deprecation(
+    ctx: &mut LoweringContext<'_, '_>,
+    span: Span,
+) {
+    let message_text = "\nDeprecated: date_interval_create_from_date_string(): Passing null to parameter #1 ($datetime) of type string is deprecated";
+    let message_expr = Expr::new(
+        ExprKind::StringLiteral(message_text.to_string()),
+        span,
+    );
+    let message = lower_string_literal(ctx, message_text, &message_expr);
+    let line = emit_i64_at_span(ctx, span.line as i64, span);
+    let level = emit_i64_at_span(ctx, 8192, span);
+    let warning = emit_builtin_call_value(
+        ctx,
+        "__elephc_diag_warning",
+        vec![message.value, line.value, level.value],
+        PhpType::Void,
+        span,
+        None,
+    );
+    let _ = warning;
 }
 
 /// Returns preserved late-static return syntax for EIR static dispatch.
@@ -380,7 +441,7 @@ pub(in crate::ir_lower) fn static_method_call_expr_type_for_ir(
 ) -> Option<PhpType> {
     let nominal = static_method_implementation_signature(ctx, receiver, method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
-        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))?;
+        .map(|signature| normalize_value_php_type(signature.return_type.clone()))?;
     match (
         static_method_late_static_return_for_ir(ctx, receiver, method),
         static_late_binding_receiver_type_for_ir(ctx, receiver),
@@ -422,4 +483,3 @@ pub(super) fn static_receiver_class_name(
         }
     }
 }
-

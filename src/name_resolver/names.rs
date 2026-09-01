@@ -420,4 +420,11 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
         .chain(crate::types::iconv_constants::ICONV_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
+        || crate::types::locale_constants::LOCALE_CONSTANT_NAMES.contains(&name)
+        || crate::types::date_constants::DATE_INT_CONSTANTS
+            .iter()
+            .any(|(constant_name, _)| *constant_name == name)
+        || crate::types::date_constants::DATE_STR_CONSTANTS
+            .iter()
+            .any(|(constant_name, _)| *constant_name == name)
 }

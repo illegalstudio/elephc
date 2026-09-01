@@ -17,10 +17,27 @@ pub(super) fn resolve_method_call_target(
     operand_count: usize,
 ) -> Result<MethodCallTarget> {
     let normalized = class_name.trim_start_matches('\\');
-    let class_info = ctx.module.class_infos.get(normalized).ok_or_else(|| {
+    let receiver_info = ctx.module.class_infos.get(normalized).ok_or_else(|| {
         CodegenIrError::unsupported(format!("method call on unknown class {}", normalized))
     })?;
     let method_key = php_symbol_key(method_name);
+    let mut method_owner = normalized;
+    let mut class_info = receiver_info;
+    while !class_info.methods.contains_key(&method_key) {
+        let Some(parent_name) = class_info.parent.as_deref() else {
+            return Err(CodegenIrError::unsupported(format!(
+                "method call to unknown method {}::{}",
+                normalized, method_name
+            )));
+        };
+        method_owner = parent_name;
+        class_info = ctx.module.class_infos.get(parent_name).ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "method call parent metadata missing for {}",
+                parent_name
+            ))
+        })?;
+    }
     let callee_sig = class_info.methods.get(&method_key).ok_or_else(|| {
         CodegenIrError::unsupported(format!(
             "method call to unknown method {}::{}",
@@ -38,8 +55,8 @@ pub(super) fn resolve_method_call_target(
         .method_impl_classes
         .get(&method_key)
         .cloned()
-        .unwrap_or_else(|| normalized.to_string());
-    let dynamic_slot = class_info.vtable_slots.get(&method_key).copied();
+        .unwrap_or_else(|| method_owner.to_string());
+    let dynamic_slot = receiver_info.vtable_slots.get(&method_key).copied();
     let has_direct_body = class_method_already_emitted(ctx, &impl_class, &method_key, false);
     if !has_direct_body && dynamic_slot.is_none() {
         return Err(CodegenIrError::unsupported(format!(
@@ -162,6 +179,35 @@ pub(super) fn store_method_call_result(
     store_call_result(ctx, inst, &target.return_ty)
 }
 
+/// Stores a dynamically dispatched Mixed-receiver result without retaining an owned return twice.
+pub(super) fn store_mixed_method_call_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: &MethodCallTarget,
+) -> Result<()> {
+    if target.by_ref_return {
+        return store_method_call_result(ctx, inst, target);
+    }
+    let Some(result) = inst.result else {
+        return Ok(());
+    };
+    let result_ty = ctx.value_php_type(result)?.codegen_repr();
+    let return_ty = target.return_ty.codegen_repr();
+    if matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
+        && return_ty != PhpType::Mixed
+        && return_ty.is_refcounted()
+    {
+        // Generated methods return an owned refcounted result (including acquired `$this`
+        // aliases). Move that owner into the fresh Mixed cell. The ordinary boxer retains its
+        // input and is reserved for borrowed results; using it here leaks one callee acquisition
+        // per dynamic call.
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty);
+        ctx.store_result_value(result)?;
+        return Ok(());
+    }
+    store_call_result(ctx, inst, &target.return_ty)
+}
+
 /// Resolves an instruction data immediate as a method name.
 pub(super) fn method_name_data<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruction) -> Result<&'a str> {
     let data = expect_data(inst)?;
@@ -172,4 +218,3 @@ pub(super) fn method_name_data<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruct
         .map(String::as_str)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
-

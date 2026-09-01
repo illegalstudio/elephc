@@ -2,7 +2,7 @@
 title: "bcmul()"
 description: "Multiplies two arbitrary-precision decimal numbers."
 sidebar:
-  order: 274
+  order: 275
 ---
 
 ## bcmul()

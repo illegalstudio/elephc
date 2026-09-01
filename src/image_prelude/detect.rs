@@ -560,6 +560,11 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_image(object) || expr_refs_image(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_refs_image(object) || expr_refs_image(property) || expr_refs_image(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,

@@ -88,6 +88,13 @@ pub(super) fn emit_unserialize_context_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x9]");                                       // default to direct-string list representation
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_count");
     emitter.instruction("str xzr, [x9]");                                       // reset this call's reference-registry count
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_warning_emitted");
+    emitter.instruction("str xzr, [x9]");                                       // no warning emitted for this call
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_force_failure");
+    emitter.instruction("str xzr, [x9]");                                       // no post-hook forced failure
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_failure_offset");
+    emitter.instruction("mov x10, #-1");                                       // use an out-of-band sentinel so offset zero remains reportable
+    emitter.instruction("str x10, [x9]");                                      // no validator failure offset recorded for this call
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_depth");
     emitter.instruction("str xzr, [x9]");                                       // reset this call's recursive parser depth
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and return address
@@ -228,6 +235,9 @@ pub(super) fn emit_unserialize_context_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list], 0");        // this call starts without an owned allow-list
     emitter.instruction("mov QWORD PTR [rip + _unser_allowed_list_mixed], 0");  // default to direct-string list representation
     emitter.instruction("mov QWORD PTR [rip + _unser_count], 0");               // reset this call's reference-registry count
+    emitter.instruction("mov QWORD PTR [rip + _unser_warning_emitted], 0");      // no warning emitted for this call
+    emitter.instruction("mov QWORD PTR [rip + _unser_force_failure], 0");        // no post-hook forced failure
+    emitter.instruction("mov QWORD PTR [rip + _unser_failure_offset], -1");    // no validator failure offset recorded for this call
     emitter.instruction("mov QWORD PTR [rip + _unser_depth], 0");               // reset this call's recursive parser depth
     emitter.instruction("leave");                                               // restore the caller frame after begin setup
     emitter.instruction("ret");                                                 // enter the new isolated unserialize call

@@ -2,7 +2,7 @@
 title: "fscanf() — internals"
 description: "Compiler internals for fscanf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 183
+  order: 184
 ---
 
 ## `fscanf()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fscanf.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fscanf.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

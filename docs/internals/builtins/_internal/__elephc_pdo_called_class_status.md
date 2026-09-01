@@ -2,7 +2,7 @@
 title: "__elephc_pdo_called_class_status() — internals"
 description: "Compiler internals for __elephc_pdo_called_class_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 533
+  order: 542
 ---
 
 ## `__elephc_pdo_called_class_status()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_pdo_called_class_status.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_pdo_called_class_status.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

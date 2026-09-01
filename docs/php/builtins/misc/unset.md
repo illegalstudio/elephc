@@ -2,7 +2,7 @@
 title: "unset()"
 description: "Unsets the given variables."
 sidebar:
-  order: 332
+  order: 339
 ---
 
 ## unset()

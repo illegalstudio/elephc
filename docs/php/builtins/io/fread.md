@@ -2,7 +2,7 @@
 title: "fread()"
 description: "Binary-safe file read."
 sidebar:
-  order: 182
+  order: 183
 ---
 
 ## fread()

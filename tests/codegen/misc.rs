@@ -605,3 +605,17 @@ echo constant("APP_X"), "|", \constant("APP_X");
     );
     assert_eq!(out, "11|11");
 }
+
+/// Verifies `constant()` selects a prescanned global from a runtime string name.
+#[test]
+fn test_constant_runtime_computed_name() {
+    let out = compile_and_run(
+        r#"<?php
+define("DYNAMIC_CONSTANT", 17);
+$prefix = "DYNAMIC_";
+$name = $prefix . "CONSTANT";
+echo constant($name);
+"#,
+    );
+    assert_eq!(out, "17");
+}

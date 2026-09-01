@@ -2,7 +2,7 @@
 title: "strtotime()"
 description: "Parses an English textual datetime description into a Unix timestamp."
 sidebar:
-  order: 109
+  order: 110
 ---
 
 ## strtotime()

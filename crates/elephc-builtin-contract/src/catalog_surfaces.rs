@@ -63,7 +63,75 @@ macro_rules! surface {
     (@bool) => { false };
 }
 
+macro_rules! registry_contract {
+    (
+        $name:literal, $area:ident, [$($param:expr),* $(,)?], $variadic:expr,
+        $returns:ident, $summary:literal, $internal:expr, $min:expr, $max:expr
+    ) => {
+        BuiltinContract {
+            id: BuiltinId::from_canonical_name($name),
+            name: $name,
+            area: Area::$area,
+            kind: BuiltinKind::Function,
+            params: &[$($param),*],
+            variadic: $variadic,
+            min_args: $min,
+            max_args: $max,
+            arity_error: None,
+            returns: TypeSpec::$returns,
+            by_ref_return: false,
+            summary: $summary,
+            examples: &[],
+            php_manual: None,
+            deprecation: None,
+            extension: false,
+            internal: $internal,
+            requirements: &[],
+        }
+    };
+}
+
 pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
+    registry_contract!(
+        "__elephc_print_r_object_properties", Io, [param!("object", Mixed)], None,
+        Void, "Renders user-declared ext/date object properties for print_r.", true, None, None
+    ),
+    registry_contract!(
+        "__elephc_var_dump_object_properties", Io, [param!("object", Mixed)], None,
+        Void, "Renders user-declared ext/date object properties for var_dump.", true, None, None
+    ),
+    registry_contract!(
+        "__elephc_var_dump_object_property_count", Io, [param!("object", Mixed)], None,
+        Int, "Counts initialized user-declared ext/date object properties.", true, None, None
+    ),
+    registry_contract!(
+        "error_reporting", System, [param!("error_level", Int = DefaultSpec::Null)], None,
+        Int, "Gets or sets the active error-reporting mask.", false, None, None
+    ),
+    registry_contract!(
+        "gc_collect_cycles", System, [], None, Int,
+        "Forces collection of existing garbage cycles.", false, None, None
+    ),
+    registry_contract!(
+        "gc_enable", System, [], None, Void,
+        "Enables the circular-reference collector.", false, None, None
+    ),
+    registry_contract!(
+        "get_extension_funcs", System, [param!("extension", Str)], None, Mixed,
+        "Returns functions exported by a loaded extension.", false, None, None
+    ),
+    registry_contract!(
+        "getrandmax", Math, [], None, Int,
+        "Returns the largest possible random value.", false, None, None
+    ),
+    registry_contract!(
+        "setlocale", System, [param!("category", Int), param!("locales", Mixed)], Some("rest"),
+        Mixed, "Sets locale information from ordered candidates.", false, None, None
+    ),
+    registry_contract!(
+        "sizeof", Array, [param!("value", Mixed), param!("mode", Int = DefaultSpec::Int(0))], None,
+        Int, "Alias of count.", false, None, None
+    ),
     surface!(
         "buffer_new",
         Pointers,

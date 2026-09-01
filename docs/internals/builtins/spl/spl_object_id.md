@@ -2,7 +2,7 @@
 title: "spl_object_id() — internals"
 description: "Compiler internals for spl_object_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 382
+  order: 389
 ---
 
 ## `spl_object_id()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_object_id.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_object_id.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

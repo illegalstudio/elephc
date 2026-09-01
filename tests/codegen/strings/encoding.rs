@@ -70,8 +70,10 @@ fn test_chr() {
 /// Verifies `addslashes()` escapes double quotes and apostrophes with backslashes.
 #[test]
 fn test_addslashes() {
-    let out = compile_and_run(r#"<?php echo addslashes("He said \"hi\" and it's ok");"#);
-    assert_eq!(out, r#"He said \"hi\" and it\'s ok"#);
+    let out = compile_and_run(
+        r#"<?php echo addslashes("He said \"hi\" and it's ok" . chr(0) . "end");"#,
+    );
+    assert_eq!(out, r#"He said \"hi\" and it\'s ok\0end"#);
 }
 
 /// Verifies `stripslashes()` removes backslash escaping from \" and \' sequences.

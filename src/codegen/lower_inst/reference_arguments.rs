@@ -101,6 +101,12 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
             "receiver-register method call with scalar-to-mixed by-reference writebacks",
         ));
     }
+    let cleanup_slots =
+        plan_call_arg_temp_cleanups(ctx, operands, param_types, ref_params, &[])?;
+    let cleanup_bytes = cleanup_slots.len() * 16;
+    if cleanup_bytes > 0 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, cleanup_bytes);
+    }
     let abi_param_types = abi_param_types_for_refs(param_types, ref_params);
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &abi_param_types, 0);
@@ -129,6 +135,12 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
             let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
+            if let Some(cleanup) = cleanup_slots
+                .iter()
+                .find(|cleanup| cleanup.param_index == param_index)
+            {
+                save_call_arg_temp_cleanup(ctx, cleanup, arg_temp_bytes);
+            }
             abi::emit_push_result_value(ctx.emitter, &push_ty);
         }
         arg_temp_bytes += call_arg_temp_slot_size(&abi_param_types[param_index]);
@@ -136,8 +148,8 @@ pub(super) fn materialize_method_call_args_with_receiver_reg_and_refs(
     Ok(CallArgMaterialization {
         overflow_bytes: abi::materialize_outgoing_args(ctx.emitter, &assignments),
         ref_writebacks,
-        cleanup_slots: Vec::new(),
-        cleanup_bytes: 0,
+        cleanup_slots,
+        cleanup_bytes,
         borrowed_stack_arg_bytes: 0,
     })
 }
@@ -338,6 +350,12 @@ pub(super) fn mixed_unbox_low_payload_reg(ctx: &FunctionContext<'_>) -> &'static
         Arch::AArch64 => "x1",
         Arch::X86_64 => "rdi",
     }
+}
+
+/// Unboxes a boxed Mixed/Union payload for a borrowed concrete call argument.
+pub(super) fn emit_unbox_mixed_to_borrowed_call_arg(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
 }
 
 /// Unboxes a boxed Mixed/Union payload and retains it for an owned concrete heap result.

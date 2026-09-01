@@ -71,6 +71,31 @@ fn test_runtime_can_gate_mb_strlen_helper() {
     assert!(included.output().contains("__rt_mb_strlen:"));
 }
 
+/// Verifies the base runtime carries no unresolved timelib formatter reference for libraries
+/// whose program never uses date/time, while a timelib-enabled runtime emits both date entry points.
+#[test]
+fn test_runtime_gates_date_formatter_with_timelib_feature() {
+    let target = Target::new(Platform::MacOS, Arch::AArch64);
+    let mut omitted = Emitter::new(target);
+    emit_runtime(&mut omitted, RuntimeFeatures::none());
+    let omitted = omitted.output();
+    assert!(!omitted.contains("__rt_date:"));
+    assert!(!omitted.contains("elephc_tz_format"));
+
+    let mut included = Emitter::new(target);
+    emit_runtime(
+        &mut included,
+        RuntimeFeatures {
+            timelib: true,
+            ..RuntimeFeatures::none()
+        },
+    );
+    let included = included.output();
+    assert!(included.contains("__rt_date:"));
+    assert!(included.contains("__rt_gmdate:"));
+    assert!(included.contains("_elephc_tz_format"));
+}
+
 /// Verifies that Linux x86_64 uses the shared runtime surface.
 #[test]
 fn test_linux_x86_64_runtime_uses_shared_surface() {
@@ -244,12 +269,14 @@ fn test_macos_dead_strip_no_cross_atom_internal_refs() {
     // name (what `label()` produces under dead stripping). `.alt_entry`
     // helpers stay bare `__rt_*`, so they never match here.
     /// Returns whether an assembly token names a dead-strip-local runtime helper.
+    /// Returns whether an assembly token names a dead-strip-local runtime helper.
     fn is_internal(tok: &str) -> bool {
         tok.starts_with("L__rt_")
     }
     // True when `s` is a bare label definition body (no whitespace, label
     // characters only, not purely numeric → not an assembler-local `N:`).
     /// Returns whether a token can be a non-numeric assembly label definition.
+    /// Returns whether a token can serve as a non-numeric assembly label name.
     fn is_label_name(s: &str) -> bool {
         !s.is_empty()
             && !s.bytes().all(|b| b.is_ascii_digit())

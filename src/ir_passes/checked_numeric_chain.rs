@@ -129,11 +129,14 @@ fn collect_chain(
         }
         Op::MixedNumericBinop => {
             let lhs = *definition.operands.first()?;
-            let rhs = *definition.operands.get(1)?;
             let Some(Immediate::MixedNumericOp(operation)) = definition.immediate else {
                 return None;
             };
-            if matches!(operation, MixedNumericOp::Pow) || !value_is_i64(function, rhs) {
+            if matches!(operation, MixedNumericOp::Pow | MixedNumericOp::UnaryPlus) {
+                return None;
+            }
+            let rhs = *definition.operands.get(1)?;
+            if !value_is_i64(function, rhs) {
                 return None;
             }
             let mut inner = collect_chain(

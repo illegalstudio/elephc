@@ -183,6 +183,15 @@ pub(super) fn collect_stmt_scope_access(stmt: &Stmt, access: &mut EvalScopeAcces
             collect_expr_scope_access(object, access);
             collect_expr_scope_access(value, access);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            collect_expr_scope_access(object, access);
+            collect_expr_scope_access(property, access);
+            collect_expr_scope_access(value, access);
+        }
         StmtKind::PropertyArrayAssign {
             object,
             index,

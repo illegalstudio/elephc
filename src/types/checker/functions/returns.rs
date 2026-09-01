@@ -366,6 +366,14 @@ impl Checker {
             ));
         }
 
+        // PHP validates declared object returns when the function actually returns. Keep
+        // statically precise values fast, but allow every source shape to reach the runtime
+        // class/interface boundary where null, scalars, and incompatible objects raise the
+        // catchable `TypeError` PHP emits.
+        if matches!(expected, PhpType::Object(_)) {
+            return Ok(());
+        }
+
         if matches!(actual, PhpType::Void) && !Self::return_type_accepts_null(expected) {
             return Err(CompileError::new(
                 span,

@@ -2,7 +2,7 @@
 title: "gzcompress() — internals"
 description: "Compiler internals for gzcompress(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 400
+  order: 407
 ---
 
 ## `gzcompress()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/gzcompress.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/gzcompress.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

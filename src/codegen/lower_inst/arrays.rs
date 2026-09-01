@@ -550,6 +550,12 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
     let value = expect_operand(inst, 2)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_boxed_mixed_array_set(ctx, array, index, value);
+    }
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     let raw_value_ty = ctx.value_php_type(value)?.codegen_repr();
     let value_ty = effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?;
@@ -564,6 +570,37 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         ctx.store_value_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
+    Ok(())
+}
+
+/// Lowers a keyed write through a boxed Mixed array cell with PHP autovivification.
+fn lower_boxed_mixed_array_set(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            prepare_boxed_mixed_value_for_container(ctx, value)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_pop_reg(ctx.emitter, "x3");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            prepare_boxed_mixed_value_for_container(ctx, value)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
     Ok(())
 }
 
@@ -1968,6 +2005,12 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
 
     ctx.emitter.instruction("cmp x1, #0");                                      // reject negative indexes before checking for by-reference markers
     ctx.emitter.instruction(&format!("b.lt {}", runtime_label));                // let the runtime setter drop ignored negative-index writes
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        "x0",
+        "x9",
+        &runtime_label,
+    );
     ctx.emitter.instruction("ldr x9, [x0]");                                    // load the current logical length of the indexed array
     ctx.emitter.instruction("cmp x1, x9");                                      // only existing slots can hold by-reference marker cells
     ctx.emitter.instruction(&format!("b.hs {}", runtime_label));                // delegate appends and gap writes to the runtime setter
@@ -2010,6 +2053,12 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
 
     ctx.emitter.instruction("cmp rsi, 0");                                      // reject negative indexes before checking for by-reference markers
     ctx.emitter.instruction(&format!("jl {}", runtime_label));                  // let the runtime setter drop ignored negative-index writes
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        "rdi",
+        "r9",
+        &runtime_label,
+    );
     ctx.emitter.instruction("mov r9, QWORD PTR [rdi]");                         // load the current logical length of the indexed array
     ctx.emitter.instruction("cmp rsi, r9");                                     // only existing slots can hold by-reference marker cells
     ctx.emitter.instruction(&format!("jae {}", runtime_label));                 // delegate appends and gap writes to the runtime setter

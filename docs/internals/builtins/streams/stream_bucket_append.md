@@ -2,7 +2,7 @@
 title: "stream_bucket_append() — internals"
 description: "Compiler internals for stream_bucket_append(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 385
+  order: 392
 ---
 
 ## `stream_bucket_append()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_bucket_append.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_bucket_append.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

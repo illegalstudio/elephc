@@ -92,7 +92,7 @@ extension, not the cache):
 ```php
 [
     'directives' => [ /* every opcache.* directive, registration order */ ],
-    'version'    => ['version' => '8.5.0', 'opcache_product_name' => 'Zend OPcache'],
+    'version'    => ['version' => '8.5.10-dev', 'opcache_product_name' => 'Zend OPcache'],
     'blacklist'  => [],
 ]
 ```
@@ -103,9 +103,8 @@ extension, not the cache):
 `opcache.optimization_level` as the decimal `2147401727`. Key order is
 registration order, not sorted.
 
-`version.version` is the targeted *language* version (`8.2.0` … `8.5.0`), since
-elephc targets a PHP minor rather than a patch release. `blacklist` is always
-empty.
+`version.version` is the targeted PHP version (`8.2.0` … `8.5.10-dev`) and is
+identical to `PHP_VERSION`. `blacklist` is always empty.
 
 Under `opcache.restrict_api` denial the function warns and returns `false`, so
 its signature is `array|false`; guard with `is_array()`.
@@ -811,7 +810,6 @@ on macOS arm64.
 | `scripts` under preloading | Carries a synthetic `$PRELOAD$` pseudo-entry and `num_cached_scripts` is bumped by one | No such entry | It stands for a shared-memory block an elephc binary never allocates |
 | `opcache_get_configuration()['blacklist']` | Lists the resolved patterns from `opcache.blacklist_filename` | Always `[]` | The directive is reported but not applied |
 | Directives that change engine behavior (`validate_timestamps`, `max_file_size`, `file_cache*`, `huge_code_pages`, `protect_memory`, `blacklist_filename`, …) | Change what the cache does | Reported faithfully, inert | There is no cache for them to act on. `revalidate_freq` is the exception: it feeds the `scripts` map's `revalidate` field |
-| `version.version` | The running patch release (`8.5.6`) | The targeted language version (`8.5.0`) | elephc targets a PHP minor, not a patch. Understating is the safe direction — a caller gating on `>= 8.5.6` applies a redundant workaround rather than skipping a fix elephc may not have. See [System and I/O](system-and-io.md) for the full rationale and its cost |
 | Diagnostics | `Warning: … in <file> on line <n>` | Same text, no ` in <file> on line <n>` suffix | elephc does not synthesize the call-site suffix |
 | `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` out of range | Refuses the store and logs through `zend_accel_error`, which is silent below `opcache.log_verbosity_level = 2` | Refuses the store, silently | The refusal is exact; the verbosity-gated timestamped log channel has no elephc counterpart, so the diagnostic is not reproduced — matching what reference PHP prints at its default verbosity |
 | `ini_get_all()` unfiltered | Every directive of every loaded module (403 on the reference build) | Only the blocks elephc owns — 54 on CLI, 87 under `--web` | The filter *rule* is reproduced; the population is elephc's |

@@ -337,6 +337,15 @@ pub(super) fn collect_scope_reads(
                 collect_expr_reads(object, scope, warnings);
                 collect_expr_reads(value, scope, warnings);
             }
+            StmtKind::DynamicPropertyArrayPush {
+                object,
+                property,
+                value,
+            } => {
+                collect_expr_reads(object, scope, warnings);
+                collect_expr_reads(property, scope, warnings);
+                collect_expr_reads(value, scope, warnings);
+            }
             StmtKind::PropertyArrayAssign {
                 object,
                 index,

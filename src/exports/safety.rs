@@ -103,17 +103,24 @@ pub fn validate_cdylib_call_graph(
                     }
                 }
 
-                if instruction.op == Op::MethodCall
-                    && enqueue_fixed_array_access_method(
+                if instruction.op == Op::MethodCall {
+                    if enqueue_preallocated_constructor(
                         module,
                         function,
                         instruction,
                         &functions,
                         &mut queue,
                         &path,
-                    )
-                {
-                    continue;
+                    ) || enqueue_fixed_array_access_method(
+                        module,
+                        function,
+                        instruction,
+                        &functions,
+                        &mut queue,
+                        &path,
+                    ) {
+                        continue;
+                    }
                 }
 
                 if opaque_dynamic_dispatch(instruction.op) {
@@ -447,6 +454,53 @@ fn enqueue_user_body<'a>(
     callee_path.push(function.name.clone());
     queue.push_back((callee_key, callee_path));
     true
+}
+
+/// Resolves the constructor call paired with a statically known preallocated receiver.
+///
+/// Receiver preallocation deliberately splits one source-level construction into
+/// `ObjectNewWithoutConstructor` followed by `MethodCall("__construct")`. Only that
+/// exact producer/consumer pair is devirtualized here; unrelated method calls remain
+/// opaque and are rejected by the caller.
+fn enqueue_preallocated_constructor<'a>(
+    module: &'a Module,
+    function: &Function,
+    instruction: &crate::ir::Instruction,
+    functions: &HashMap<String, &'a Function>,
+    queue: &mut VecDeque<(String, Vec<String>)>,
+    path: &[String],
+) -> bool {
+    let Some(method) = immediate_string(module, instruction.immediate.as_ref()) else {
+        return false;
+    };
+    if php_symbol_key(method) != "__construct" {
+        return false;
+    }
+    let Some(receiver) = instruction.operands.first().copied() else {
+        return false;
+    };
+    let Some(allocation) = defining_instruction(function, receiver) else {
+        return false;
+    };
+    if allocation.op != Op::ObjectNewWithoutConstructor {
+        return false;
+    }
+    let Some(class_name) = immediate_class_name(module, allocation.immediate.as_ref()) else {
+        return false;
+    };
+    let Some(PhpType::Object(receiver_class)) = function
+        .value(receiver)
+        .map(|value| value.php_type.codegen_repr())
+    else {
+        return false;
+    };
+    if php_symbol_key(&receiver_class) != php_symbol_key(class_name) {
+        return false;
+    }
+    let Some(body) = fixed_class_method(module, class_name, method) else {
+        return false;
+    };
+    enqueue_user_body(functions, queue, path, &body.name)
 }
 
 /// Resolves the synthetic ArrayAccess existence/removal calls that lowering emits as

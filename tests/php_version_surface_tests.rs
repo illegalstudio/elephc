@@ -13,27 +13,18 @@
 //!   (macOS aarch64 local).
 //!
 //! - THE VERSION RULE UNDER TEST. elephc targets a PHP LANGUAGE PROFILE selected by
-//!   `--php-version` (8.2/8.3/8.4/8.5, default 8.5), not an upstream patch release, so it
-//!   reports `8.<minor>.0`. Reference PHP 8.5.6 reports `8.5.6`. This is the SAME deliberate
-//!   `.0` divergence `opcache_get_configuration()['version']['version']` already documents in
-//!   `docs/php/opcache.md`; every assertion below that names a `.0` patch is asserting elephc's
-//!   documented value, not reference's.
+//!   `--php-version` (8.2/8.3/8.4/8.5, default 8.5). The default is pinned to the frozen
+//!   php-src oracle (`8.5.10-dev` / `80510`); older profiles retain `8.<minor>.0` values.
+//!   `PHP_VERSION_ID` uses the reference `major * 10000 + minor * 100 + release` formula.
 //!
-//!   `PHP_VERSION_ID` uses the reference formula, verified on 8.5.6:
-//!   `php -d xdebug.mode=off -r 'echo PHP_VERSION_ID;'` prints `80506` for `8.5.6`, i.e.
-//!   `major * 10000 + minor * 100 + release`. With `release == 0` that gives `80500`, so the
-//!   string and the id agree — which is the property `constants_are_internally_consistent`
-//!   exists to keep true.
-//!
-//! - WHERE REFERENCE IS MATCHED EXACTLY (values captured from `php -d xdebug.mode=off`, 8.5.6):
-//!   `PHP_EXTRA_VERSION` is `""`; `PHP_MAJOR_VERSION` is `8`; `PHP_SAPI` is `cli` for a CLI
+//! - WHERE REFERENCE IS MATCHED EXACTLY (values captured from the frozen php-src oracle):
+//!   `PHP_EXTRA_VERSION` is `"-dev"`; `PHP_MAJOR_VERSION` is `8`; `PHP_SAPI` is `cli` for a CLI
 //!   binary; `phpversion($unknown)` is `false`; extension-name matching is case-insensitive
 //!   (`phpversion('core') === phpversion('Core')`); every bundled extension reports the
-//!   interpreter's own version (`Core`, `json`, `pcre`, `Zend OPcache`, … all `8.5.6` there);
+//!   interpreter's own version (`Core`, `json`, `pcre`, `Zend OPcache`, … all `8.5.10-dev`);
 //!   `ini_restore()` returns `NULL`.
 //!
-//! - WHERE ELEPHC DELIBERATELY DIVERGES: the `.0` patch component of `PHP_VERSION` /
-//!   `phpversion()` / `zend_version()` (see above), and `PHP_SAPI` under `--web`, which is
+//! - WHERE ELEPHC DELIBERATELY DIVERGES: `PHP_SAPI` under `--web`, which is
 //!   `cli-server` — elephc's `--web` binary embeds its own HTTP listener with no external
 //!   server, which is exactly what reference's built-in server is, and it is the only reference
 //!   SAPI name that describes a standalone PHP binary speaking HTTP.
@@ -265,16 +256,14 @@ echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_MAJOR_VERSION, "|", PHP_MINOR_VE
 
 /// Every constant reports the compile target's profile, for every maintained `--php-version`.
 ///
-/// elephc's documented values (NOT reference's, which for 8.5.6 would be
-/// `8.5.6|80506|8|5|6||cli`): the patch component is `0` because `--php-version` selects a
-/// language profile, matching the OPcache surface's `8.5.0`.
+/// The default profile mirrors the frozen php-src snapshot, including its development suffix.
 #[test]
 fn version_constants_follow_the_compile_target_profile() {
     for (profile, expected) in [
         ("8.2", "8.2.0|80200|8|2|0||cli\n"),
         ("8.3", "8.3.0|80300|8|3|0||cli\n"),
         ("8.4", "8.4.0|80400|8|4|0||cli\n"),
-        ("8.5", "8.5.0|80500|8|5|0||cli\n"),
+        ("8.5", "8.5.10-dev|80510|8|5|10|-dev|cli\n"),
     ] {
         let out = run_for_profile("elephc_version_consts", CONSTANTS_PROBE, profile);
         assert_eq!(out, expected, "--php-version {profile}");
@@ -286,14 +275,14 @@ fn version_constants_follow_the_compile_target_profile() {
 fn version_constants_default_to_the_newest_profile() {
     let dir = make_test_dir("elephc_version_default");
     let bin = compile_with_flags(&dir, CONSTANTS_PROBE, "probe", &[]);
-    assert_eq!(run_binary(&bin), "8.5.0|80500|8|5|0||cli\n");
+    assert_eq!(run_binary(&bin), "8.5.10-dev|80510|8|5|10|-dev|cli\n");
 }
 
 /// The constants must never contradict each other inside one binary.
 ///
 /// This is the guard against the failure mode the whole design exists to avoid: a binary
-/// reporting `PHP_VERSION 8.5.0` alongside `PHP_VERSION_ID 80506`. The formula asserted is
-/// reference PHP's, verified on 8.5.6 (`echo PHP_VERSION_ID;` → `80506`), and the string
+/// reporting a version string whose components disagree with `PHP_VERSION_ID`. The formula is
+/// reference PHP's, and the string
 /// equality asserts the components spell out the reported version string. Both are asserted
 /// INSIDE the compiled program, so the check runs against the baked literals.
 #[test]
@@ -349,7 +338,7 @@ var_dump(defined('PHP_VERSION'), defined('PHP_SAPI'), defined('PHP_NOT_A_CONSTAN
     let out = run_for_profile("elephc_version_ns", source, "8.5");
     assert_eq!(
         out,
-        "8.5.0|80500|cli\nbool(true)\nbool(true)\nbool(false)\n"
+        "8.5.10-dev|80510|cli\nbool(true)\nbool(true)\nbool(false)\n"
     );
 }
 
@@ -373,23 +362,20 @@ echo PHP_OS, "|", PHP_OS === "Darwin" || PHP_OS === "Linux" ? "known" : "BAD", "
 /// `phpversion()` reports the PHP language version, not elephc's own package version.
 ///
 /// REGRESSION ANCHOR: `phpversion()` used to return the COMPILER's version (`0.26.2`), which is
-/// the bug this test pins shut. Reference PHP 8.5.6 returns `8.5.6`; elephc returns the
-/// profile's `.0` form.
+/// the bug this test pins shut. The default value is the frozen php-src oracle version.
 #[test]
 fn phpversion_reports_the_language_version_not_the_compiler_version() {
     let source = r#"<?php
 echo phpversion(), "\n";
 "#;
     assert_eq!(run_for_profile("elephc_pv", source, "8.2"), "8.2.0\n");
-    assert_eq!(run_for_profile("elephc_pv", source, "8.5"), "8.5.0\n");
+    assert_eq!(run_for_profile("elephc_pv", source, "8.5"), "8.5.10-dev\n");
 }
 
 /// `phpversion($extension)` answers `string|false` for literal names, case-insensitively.
 ///
-/// Reference PHP 8.5.6 verified: `phpversion('json')`, `phpversion('Core')`,
-/// `phpversion('core')` and `phpversion('Zend OPcache')` all return `'8.5.6'` (every bundled
-/// extension reports the interpreter's own version), and `phpversion('nope_xyz')` returns
-/// `false`. elephc reports the same shape with its `.0` patch.
+/// Every bundled extension reports the interpreter's own version, while an unknown extension
+/// returns `false`.
 ///
 /// REGRESSION ANCHOR: `phpversion($extension)` used to be rejected at compile time with
 /// "phpversion() takes no arguments".
@@ -408,11 +394,11 @@ var_dump(phpversion(""));
     assert_eq!(
         out,
         concat!(
-            "string(5) \"8.5.0\"\n",
-            "string(5) \"8.5.0\"\n",
-            "string(5) \"8.5.0\"\n",
-            "string(5) \"8.5.0\"\n",
-            "string(5) \"8.5.0\"\n",
+            "string(10) \"8.5.10-dev\"\n",
+            "string(10) \"8.5.10-dev\"\n",
+            "string(10) \"8.5.10-dev\"\n",
+            "string(10) \"8.5.10-dev\"\n",
+            "string(10) \"8.5.10-dev\"\n",
             "bool(false)\n",
             "bool(false)\n",
         )
@@ -454,10 +440,10 @@ echo hash("md5", "x"), "\n";
     assert_eq!(
         out,
         concat!(
-            "json|loaded|'8.5.0'|agree\n",
-            "Core|loaded|'8.5.0'|agree\n",
-            "ZEND OPCACHE|loaded|'8.5.0'|agree\n",
-            "hash|loaded|'8.5.0'|agree\n",
+            "json|loaded|'8.5.10-dev'|agree\n",
+            "Core|loaded|'8.5.10-dev'|agree\n",
+            "ZEND OPCACHE|loaded|'8.5.10-dev'|agree\n",
+            "hash|loaded|'8.5.10-dev'|agree\n",
             "PDO|absent|false|agree\n",
             "nope_xyz|absent|false|agree\n",
             "9dd4e461268c8034f5c8564e155c67a6\n",
@@ -514,10 +500,7 @@ fn phpversion_rejects_bad_arguments_at_compile_time() {
 
 /// `zend_version()` reports the Zend Engine track for the compile target.
 ///
-/// Reference PHP 8.5.6 reports `4.5.6`: the Zend Engine major runs four behind PHP's and its
-/// minor moves with PHP's. elephc reports `4.<minor>.0` — the engine major/minor claim is exact,
-/// the patch is `0` under the same rule as `PHP_VERSION` because there is no engine build to
-/// have a patch level.
+/// The default profile mirrors the oracle's `4.5.10-dev`; older profiles retain `.0`.
 #[test]
 fn zend_version_tracks_the_profile() {
     let source = r#"<?php
@@ -526,7 +509,7 @@ echo zend_version(), "\n";
     assert_eq!(run_for_profile("elephc_zend", source, "8.2"), "4.2.0\n");
     assert_eq!(run_for_profile("elephc_zend", source, "8.3"), "4.3.0\n");
     assert_eq!(run_for_profile("elephc_zend", source, "8.4"), "4.4.0\n");
-    assert_eq!(run_for_profile("elephc_zend", source, "8.5"), "4.5.0\n");
+    assert_eq!(run_for_profile("elephc_zend", source, "8.5"), "4.5.10-dev\n");
 }
 
 /// `php_sapi_name()` reports `cli` for a plain binary — exactly as reference PHP does.
@@ -608,7 +591,7 @@ ini_restore('x');
     let out = run_for_profile("elephc_fx", source, "8.5");
     assert_eq!(
         out,
-        "bool(true)\nbool(true)\nbool(true)\nbool(true)\n4.5.0cli\n"
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\n4.5.10-devcli\n"
     );
 }
 
@@ -649,7 +632,7 @@ var_dump(function_exists('zend_version'));
 echo call_user_func('zend_version'), "\n";
 "#;
     let out = run_for_profile("elephc_literal_ref", source, "8.5");
-    assert_eq!(out, "bool(true)\n4.5.0\n");
+    assert_eq!(out, "bool(true)\n4.5.10-dev\n");
 }
 
 /// A user declaration of `ini_restore` wins over the injected one.
@@ -688,11 +671,11 @@ var_dump(phpversion('json'), phpversion('nope_xyz'), ini_restore('precision'));
     stop_server(&mut server, &addr);
 
     assert!(
-        response.contains("cli-server|cli-server|8.5.0|80500|4.5.0|8.5.0\n"),
+        response.contains("cli-server|cli-server|8.5.10-dev|80510|4.5.10-dev|8.5.10-dev\n"),
         "unexpected --web response:\n{response}",
     );
     assert!(
-        response.contains("string(5) \"8.5.0\"\nbool(false)\nNULL\n"),
+        response.contains("string(10) \"8.5.10-dev\"\nbool(false)\nNULL\n"),
         "unexpected --web response:\n{response}",
     );
 }
@@ -718,11 +701,7 @@ echo PHP_SAPI, "|", PHP_VERSION, "|", PHP_VERSION_ID, "|", zend_version(), "\n";
 
 /// The OPcache version surface and the PHP version surface agree inside one binary.
 ///
-/// `opcache_get_configuration()['version']['version']` is the PRECEDENT this whole design
-/// follows — it already reported `8.<minor>.0` before `PHP_VERSION` existed. This test is the
-/// contract that keeps the two from ever splitting.
-///
-/// REGRESSION ANCHOR for the OPcache side: the `.0` value there must not change.
+/// This is the contract that keeps the two surfaces from ever splitting.
 #[test]
 fn opcache_version_and_php_version_agree() {
     let source = r#"<?php
@@ -732,7 +711,7 @@ echo $opcache, "|", PHP_VERSION, "|", $opcache === PHP_VERSION ? "agree" : "DISA
 "#;
     assert_eq!(
         run_for_profile("elephc_opcache_agree", source, "8.5"),
-        "8.5.0|8.5.0|agree\n"
+        "8.5.10-dev|8.5.10-dev|agree\n"
     );
     assert_eq!(
         run_for_profile("elephc_opcache_agree", source, "8.2"),
@@ -756,7 +735,7 @@ var_dump(phpversion("json"), phpversion("nope_xyz"));');
     let out = run_for_profile("elephc_eval_version", source, "8.5");
     assert_eq!(
         out,
-        "8.5.0|80500|8|5|0||cli|8.5.0\nstring(5) \"8.5.0\"\nbool(false)\n"
+        "8.5.10-dev|80510|8|5|10|-dev|cli|8.5.10-dev\nstring(10) \"8.5.10-dev\"\nbool(false)\n"
     );
 }
 

@@ -30,11 +30,268 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
-use crate::ir::{Instruction, ValueId};
+use crate::ir::{Instruction, Module, ValueId};
+use crate::names::php_symbol_key;
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, store_if_result};
+
+/// Renders the user-declared properties of an object inside an already-open
+/// `print_r()` object block.
+pub(crate) fn lower_print_r_object_properties(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::unsupported(format!(
+            "__elephc_print_r_object_properties expected 1 argument, got {}",
+            inst.operands.len()
+        )));
+    }
+    let object = expect_operand(inst, 0)?;
+    let ty = ctx.load_value_to_result(object)?.codegen_repr();
+    if !matches!(ty, PhpType::Object(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "__elephc_print_r_object_properties expected object, got {:?}",
+            ty
+        )));
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_print_r_object_properties");
+    store_if_result(ctx, inst)
+}
+
+/// Renders the filtered user-property descriptor for one ext/date object.
+pub(crate) fn lower_var_dump_object_properties(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    load_var_dump_object_argument(ctx, inst, "__elephc_var_dump_object_properties")?;
+    abi::emit_call_label(ctx.emitter, "__rt_var_dump_object");
+    store_if_result(ctx, inst)
+}
+
+/// Counts initialized user properties in one ext/date var_dump descriptor.
+pub(crate) fn lower_var_dump_object_property_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    load_var_dump_object_argument(ctx, inst, "__elephc_var_dump_object_property_count")?;
+    abi::emit_call_label(ctx.emitter, "__rt_vd_obj_count");
+    store_if_result(ctx, inst)
+}
+
+/// Loads and validates the object argument shared by ext/date var_dump intrinsics.
+fn load_var_dump_object_argument(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    builtin_name: &str,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::unsupported(format!(
+            "{builtin_name} expected 1 argument, got {}",
+            inst.operands.len()
+        )));
+    }
+    let object = expect_operand(inst, 0)?;
+    let ty = ctx.load_value_to_result(object)?.codegen_repr();
+    if !matches!(ty, PhpType::Object(_)) {
+        return Err(CodegenIrError::unsupported(format!(
+            "{builtin_name} expected object, got {ty:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Adjusts `_vd_indent` by the requested delta and returns the resulting depth.
+pub(crate) fn lower_var_dump_indent(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::unsupported(format!(
+            "__elephc_var_dump_indent expected 1 argument, got {}",
+            inst.operands.len()
+        )));
+    }
+    let delta = expect_operand(inst, 0)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(delta, result_reg)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_vd_indent", 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x10");
+            ctx.emitter.instruction("add x0, x0, x10");                         // apply the synthetic renderer's indentation delta
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "r10");
+            ctx.emitter.instruction("add rax, r10");                            // apply the synthetic renderer's indentation delta
+        }
+    }
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_vd_indent", 0);
+    store_if_result(ctx, inst)
+}
+
+/// Emits the program-owned dispatcher used by recursive runtime object dumps.
+///
+/// The shared runtime cannot bake program-specific class ids or EIR method
+/// symbols into its cached object. This thunk bridges that boundary: it returns
+/// one after calling a lowered ext/date debug renderer, or zero so the runtime
+/// falls back to its generic declared-property walker.
+pub(crate) fn emit_datetime_var_dump_dispatcher(emitter: &mut Emitter, module: &Module) {
+    let mut object_handlers: Vec<_> = module
+        .class_infos
+        .iter()
+        .filter_map(|(class_name, class_info)| {
+            let handler = var_dump_object_handler(module, class_name)?;
+            Some((class_name.clone(), class_info.class_id, handler))
+        })
+        .collect();
+    object_handlers.sort_by_key(|(_, class_id, _)| *class_id);
+
+    emitter.blank();
+    emitter.comment("--- program: ext/date recursive var_dump dispatcher ---");
+    emitter.label_global("__elephc_var_dump_datetime_object");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x30, [sp, #-16]!");                        // preserve the runtime caller's return address across method calls
+            emitter.instruction("cbz x0, __elephc_vd_datetime_no_match");       // null object payloads use the generic runtime renderer
+            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rdi, rdi");                               // reject defensive null object payloads
+            emitter.instruction("jz __elephc_vd_datetime_no_match");            // null object payloads use the generic runtime renderer
+            emitter.instruction("mov r11, QWORD PTR [rdi]");                    // load the runtime class id from the object header
+        }
+    }
+    for (index, (_, class_id, _)) in object_handlers.iter().enumerate() {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cmp x9, #{}", class_id));         // compare against one lowered ext/date class id
+                emitter.instruction(&format!("b.eq __elephc_vd_datetime_{}", index)); // dispatch to its synthetic php-src renderer
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("cmp r11, {}", class_id));         // compare against one lowered ext/date class id
+                emitter.instruction(&format!("je __elephc_vd_datetime_{}", index)); // dispatch to its synthetic php-src renderer
+            }
+        }
+    }
+    emitter.label("__elephc_vd_datetime_no_match");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #0");                                  // return false so the shared runtime uses its generic walker
+            emitter.instruction("ldr x30, [sp], #16");                          // restore the runtime caller's return address
+            emitter.instruction("ret");                                         // return to the recursive value renderer
+        }
+        Arch::X86_64 => {
+            emitter.instruction("xor eax, eax");                                // return false so the shared runtime uses its generic walker
+            emitter.instruction("ret");                                         // return to the recursive value renderer
+        }
+    }
+    for (index, (_, _, handler)) in object_handlers.iter().enumerate() {
+        emitter.label(&format!("__elephc_vd_datetime_{}", index));
+        match handler {
+            VarDumpObjectHandler::DateInternal(symbol) => {
+                abi::emit_call_label(emitter, symbol);
+            }
+            VarDumpObjectHandler::UserDebugInfo(symbol) => {
+                emit_dynamic_user_debug_info_dump(emitter, symbol);
+            }
+        }
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, #1");                              // report that the ext/date renderer handled the object
+                emitter.instruction("ldr x30, [sp], #16");                      // restore the runtime caller's return address
+                emitter.instruction("ret");                                     // return to the recursive value renderer
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov eax, 1");                              // report that the ext/date renderer handled the object
+                emitter.instruction("ret");                                     // return to the recursive value renderer
+            }
+        }
+    }
+}
+
+/// Emits the program-owned dispatcher used when `print_r()` reaches a date/time
+/// object through a boxed `Mixed` value.
+///
+/// The cached runtime cannot reference program-specific class ids or method
+/// symbols, so this thunk mirrors the recursive `var_dump()` bridge and calls
+/// the inherited php-src-compatible renderer when the runtime object belongs to
+/// the ext/date family. It returns zero for every other object.
+pub(crate) fn emit_datetime_print_r_dispatcher(emitter: &mut Emitter, module: &Module) {
+    let mut date_classes: Vec<_> = module
+        .class_infos
+        .iter()
+        .filter_map(|(class_name, class_info)| {
+            let implementation = datetime_internal_method_implementation(
+                module,
+                class_name,
+                "__elephc_print_r_dump",
+            )?;
+            let symbol =
+                crate::names::method_symbol(&implementation, "__elephc_print_r_dump");
+            Some((class_name.clone(), class_info.class_id, symbol))
+        })
+        .collect();
+    date_classes.sort_by_key(|(_, class_id, _)| *class_id);
+
+    emitter.blank();
+    emitter.comment("--- program: ext/date recursive print_r dispatcher ---");
+    emitter.label_global("__elephc_print_r_datetime_object");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("str x30, [sp, #-16]!");                        // preserve the runtime caller's return address across method calls
+            emitter.instruction("cbz x0, __elephc_pr_datetime_no_match");       // null object payloads are not rendered
+            emitter.instruction("ldr x9, [x0]");                                // load the runtime class id from the object header
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rdi, rdi");                               // reject defensive null object payloads
+            emitter.instruction("jz __elephc_pr_datetime_no_match");            // null object payloads are not rendered
+            emitter.instruction("mov r11, QWORD PTR [rdi]");                    // load the runtime class id from the object header
+        }
+    }
+    for (index, (_, class_id, _)) in date_classes.iter().enumerate() {
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cmp x9, #{}", class_id));         // compare against one lowered ext/date class id
+                emitter.instruction(&format!("b.eq __elephc_pr_datetime_{}", index)); // dispatch to its synthetic php-src renderer
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("cmp r11, {}", class_id));         // compare against one lowered ext/date class id
+                emitter.instruction(&format!("je __elephc_pr_datetime_{}", index)); // dispatch to its synthetic php-src renderer
+            }
+        }
+    }
+    emitter.label("__elephc_pr_datetime_no_match");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #0");                                  // report that no ext/date renderer matched
+            emitter.instruction("ldr x30, [sp], #16");                          // restore the runtime caller's return address
+            emitter.instruction("ret");                                         // return to the recursive value renderer
+        }
+        Arch::X86_64 => {
+            emitter.instruction("xor eax, eax");                                // report that no ext/date renderer matched
+            emitter.instruction("ret");                                         // return to the recursive value renderer
+        }
+    }
+    for (index, (_, _, symbol)) in date_classes.iter().enumerate() {
+        emitter.label(&format!("__elephc_pr_datetime_{}", index));
+        abi::emit_call_label(emitter, symbol);
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction("mov x0, #1");                              // report that the ext/date renderer handled the object
+                emitter.instruction("ldr x30, [sp], #16");                      // restore the runtime caller's return address
+                emitter.instruction("ret");                                     // return to the recursive value renderer
+            }
+            Arch::X86_64 => {
+                emitter.instruction("mov eax, 1");                              // report that the ext/date renderer handled the object
+                emitter.instruction("ret");                                     // return to the recursive value renderer
+            }
+        }
+    }
+}
 
 /// Lowers `print_r(value, $return = false)` for concrete scalar/resource values
 /// and array/hash shells.
@@ -65,8 +322,7 @@ pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_load_int_immediate(ctx.emitter, zero_reg, 1);
             abi::emit_store_reg_to_symbol(ctx.emitter, zero_reg, "_print_r_mode", 0);
             // -- load the value into result regs and render it into the buffer --
-            let ty = loaded_php_semantic_type(ctx, value)?;
-            emit_print_r_loaded_value(ctx, &ty)?;
+            emit_print_r_value(ctx, inst, value)?;
             // -- finalize the captured bytes into an owned heap string --
             abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
             // -- result is in the platform string result regs (x1/x2 or rax/rdx) --
@@ -75,8 +331,7 @@ pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         PhpType::Bool => {
             ctx.emitter.blank();
             ctx.emitter.comment("print_r()");
-            let ty = loaded_php_semantic_type(ctx, value)?;
-            emit_print_r_loaded_value(ctx, &ty)?;
+            emit_print_r_value(ctx, inst, value)?;
             // PHP `print_r` echo mode always returns true, regardless of the bytes
             // written. The rendering above leaves the syscall/byte-count in the
             // integer result register, so materialize a literal 1 before storing.
@@ -129,8 +384,7 @@ fn lower_print_r_runtime_flag(
     }
     abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_print_r_mode", 0);
     // -- render the value; the write indirection consults the mode per write --
-    let ty = loaded_php_semantic_type(ctx, value)?;
-    emit_print_r_loaded_value(ctx, &ty)?;
+    emit_print_r_value(ctx, inst, value)?;
     // -- branch on the stored mode: finalize the capture or materialize `true` --
     let echo_label = ctx.next_label("print_r_runtime_echo");
     let done_label = ctx.next_label("print_r_runtime_done");
@@ -197,6 +451,12 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             "var_dump() requires at least 1 argument",
         ));
     }
+    // One EIR `var_dump` instruction expands to one or more runtime calls per operand. Snapshot
+    // register-allocated scalars before the first hidden call so later arguments remain intact;
+    // the allocator only sees the enclosing EIR instruction and cannot model those clobbers.
+    for operand in &inst.operands {
+        ctx.spill_allocated_value_to_frame(*operand)?;
+    }
     for (index, operand) in inst.operands.iter().enumerate() {
         ctx.emitter.blank();
         if index > 0 {
@@ -205,7 +465,7 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             ctx.emitter.comment("var_dump()");
         }
         let value = *operand;
-        let ty = loaded_php_semantic_type(ctx, value)?;
+        let ty = loaded_php_semantic_type_from_frame(ctx, value)?;
         match &ty {
             PhpType::Int => emit_var_dump_int(ctx),
             PhpType::TaggedScalar => emit_var_dump_tagged_scalar(ctx),
@@ -220,6 +480,20 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
                 emit_var_dump_array(ctx, &ty)
             }
+            PhpType::Object(class_name)
+                if user_debug_info_implementation(ctx.module, class_name).is_none()
+                    && datetime_debug_method_implementation(ctx.module, class_name).is_some() =>
+            {
+                reset_var_dump_indent(ctx);
+                let mut method_call = inst.clone();
+                method_call.operands = vec![value];
+                super::super::lower_runtime_object_method_call(
+                    ctx,
+                    &method_call,
+                    class_name,
+                    "__elephc_debug_dump",
+                )
+            }
             PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
             PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
             other => Err(CodegenIrError::unsupported(format!(
@@ -229,6 +503,170 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         }?;
     }
     store_if_result(ctx, inst)
+}
+
+/// Loads a snapshotted var_dump operand and returns its user-visible PHP type.
+fn loaded_php_semantic_type_from_frame(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<PhpType> {
+    let loaded_ty = ctx.load_value_from_frame(value)?.codegen_repr();
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    if matches!(raw_ty, PhpType::Resource(_)) {
+        Ok(raw_ty)
+    } else {
+        Ok(loaded_ty)
+    }
+}
+
+/// Returns whether php-src exposes a special date/time debug handler for a class.
+fn matches_datetime_debug_class(class_name: &str) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    normalized.eq_ignore_ascii_case("DateTime")
+        || normalized.eq_ignore_ascii_case("DateTimeImmutable")
+        || normalized.eq_ignore_ascii_case("DateTimeZone")
+        || normalized.eq_ignore_ascii_case("DateInterval")
+        || normalized.eq_ignore_ascii_case("DatePeriod")
+}
+
+/// Resolves the class that implements php-src's special date/time debug renderer for a class,
+/// including user subclasses that inherit the handler from a built-in date/time parent.
+fn datetime_debug_method_implementation(module: &Module, class_name: &str) -> Option<String> {
+    datetime_internal_method_implementation(module, class_name, "__elephc_debug_dump")
+}
+
+/// One program-specific object handler reached before the generic descriptor walker.
+#[derive(Clone)]
+enum VarDumpObjectHandler {
+    DateInternal(String),
+    UserDebugInfo(String),
+}
+
+/// Selects a user `__debugInfo()` hash before the inherited ext/date renderer.
+fn var_dump_object_handler(module: &Module, class_name: &str) -> Option<VarDumpObjectHandler> {
+    if let Some(implementation) = user_debug_info_implementation(module, class_name) {
+        return Some(VarDumpObjectHandler::UserDebugInfo(
+            crate::names::method_symbol(&implementation, &php_symbol_key("__debugInfo")),
+        ));
+    }
+    datetime_debug_method_implementation(module, class_name).map(|implementation| {
+        VarDumpObjectHandler::DateInternal(crate::names::method_symbol(
+            &implementation,
+            "__elephc_debug_dump",
+        ))
+    })
+}
+
+/// Resolves an emitted user `__debugInfo()` whose body returns an associative literal.
+fn user_debug_info_implementation(module: &Module, class_name: &str) -> Option<String> {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key("__debugInfo");
+    let class_info = module.class_infos.get(normalized)?;
+    let implementation = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_else(|| normalized.to_string());
+    let impl_info = module.class_infos.get(&implementation)?;
+    let declaration = impl_info
+        .method_decls
+        .iter()
+        .find(|method| php_symbol_key(&method.name) == method_key)?;
+    let returns_hash = declaration.body.iter().any(|stmt| {
+        matches!(
+            &stmt.kind,
+            crate::parser::ast::StmtKind::Return(Some(expr))
+                if matches!(expr.kind, crate::parser::ast::ExprKind::ArrayLiteralAssoc(_))
+        )
+    });
+    (returns_hash
+        && module_has_datetime_internal_method(module, &implementation, "__debugInfo"))
+    .then_some(implementation)
+}
+
+/// Resolves the inherited implementation of one compiler-only date/time renderer.
+fn datetime_internal_method_implementation(
+    module: &Module,
+    class_name: &str,
+    method_name: &str,
+) -> Option<String> {
+    let normalized = class_name.trim_start_matches('\\');
+    let mut current = Some(normalized);
+    let mut is_date_family = false;
+    while let Some(candidate) = current {
+        if matches_datetime_debug_class(candidate) {
+            is_date_family = true;
+            break;
+        }
+        current = module
+            .class_infos
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    if !is_date_family {
+        return None;
+    }
+    let class_info = module.class_infos.get(normalized)?;
+    let method_key = php_symbol_key(method_name);
+    let implementation = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_else(|| normalized.to_string());
+    module_has_datetime_internal_method(module, &implementation, method_name)
+        .then_some(implementation)
+}
+
+/// Returns whether EIR lowering materialized one compiler-only date/time renderer.
+fn module_has_datetime_internal_method(
+    module: &Module,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let logical_name = format!(
+        "{}::{}",
+        class_name.trim_start_matches('\\'),
+        method_name,
+    );
+    module
+        .class_methods
+        .iter()
+        .any(|function| function.name.eq_ignore_ascii_case(&logical_name))
+}
+
+/// Resets the recursive runtime indentation before a top-level special object dump.
+fn reset_var_dump_indent(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_vd_indent", 0);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+}
+
+/// Loads and renders one `print_r()` operand, including php-src date/time object shapes.
+fn emit_print_r_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<()> {
+    if let PhpType::Object(class_name) = ctx.raw_value_php_type(value)? {
+        if let Some(implementation) = datetime_internal_method_implementation(
+            ctx.module,
+            &class_name,
+            "__elephc_print_r_dump",
+        ) {
+            let mut method_call = inst.clone();
+            method_call.operands = vec![value];
+            return super::super::lower_runtime_object_method_call(
+                ctx,
+                &method_call,
+                &implementation,
+                "__elephc_print_r_dump",
+            );
+        }
+    }
+    let ty = loaded_php_semantic_type(ctx, value)?;
+    emit_print_r_loaded_value(ctx, &ty)
 }
 
 /// Loads a value and returns the PHP type needed for user-visible debug output.
@@ -731,6 +1169,66 @@ fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
 /// preceding dump that aborted mid-walk would otherwise leak its indent into
 /// this one.
 fn emit_var_dump_dynamic_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    reset_var_dump_indent(ctx);
+    let mut object_handlers: Vec<_> = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter_map(|(class_name, class_info)| {
+            var_dump_object_handler(ctx.module, class_name)
+                .map(|handler| (class_name.clone(), class_info.class_id, handler))
+        })
+        .collect();
+    object_handlers.sort_by_key(|(_, class_id, _)| *class_id);
+    let fallback = ctx.next_label("var_dump_object_generic");
+    let done = ctx.next_label("var_dump_object_done");
+    let mut cases = Vec::with_capacity(object_handlers.len());
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", fallback));          // delegate defensive null object payloads to the generic renderer
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the object's runtime class id from its header
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // check for defensive null object payloads
+            ctx.emitter.instruction(&format!("je {}", fallback));               // delegate null object payloads to the generic renderer
+            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the object's runtime class id from its header
+        }
+    }
+    for (_class_name, class_id, handler) in object_handlers {
+        let case = ctx.next_label("var_dump_datetime_object");
+        cases.push((case.clone(), handler));
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp x9, #{}", class_id));     // compare the runtime class id against a date/time class
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp r11, {}", class_id));     // compare the runtime class id against a date/time class
+            }
+        }
+        emit_branch_if_eq(ctx, &case);
+    }
+    abi::emit_jump(ctx.emitter, &fallback);
+    for (case, handler) in cases {
+        ctx.emitter.label(&case);
+        match handler {
+            VarDumpObjectHandler::DateInternal(symbol) => {
+                if ctx.emitter.target.arch == Arch::X86_64 {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the dynamically identified date object as `$this`
+                }
+                abi::emit_call_label(ctx.emitter, &symbol);
+            }
+            VarDumpObjectHandler::UserDebugInfo(symbol) => {
+                if ctx.emitter.target.arch == Arch::X86_64 {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the dynamically identified object as `$this`
+                }
+                emit_dynamic_user_debug_info_dump(ctx.emitter, &symbol);
+            }
+        }
+        abi::emit_jump(ctx.emitter, &done);
+    }
+
+    ctx.emitter.label(&fallback);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
@@ -749,7 +1247,50 @@ fn emit_var_dump_dynamic_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_var_dump_value");
+    ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Calls `__debugInfo()`, renders its returned hash as the object's complete property body,
+/// and releases the temporary hash after the recursive walker has consumed it.
+fn emit_dynamic_user_debug_info_dump(emitter: &mut Emitter, symbol: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(emitter, "x0");                                 // preserve the object pointer across the method call
+            abi::emit_call_label(emitter, symbol);                              // x0 = owned associative debug-info hash
+            abi::emit_push_reg(emitter, "x0");                                 // preserve the hash across header rendering
+            abi::emit_call_label(emitter, "__rt_hash_count");                  // x0 = number of debug-info entries
+            emitter.instruction("mov x1, x0");                                 // supplied count → second header argument
+            emitter.instruction("ldr x0, [sp, #16]");                          // object pointer → first header argument
+            abi::emit_call_label(emitter, "__rt_var_dump_open_debug_object");
+            abi::emit_call_label(emitter, "__rt_vd_indent_push");
+            emitter.instruction("ldr x0, [sp]");                               // reload debug-info hash
+            abi::emit_call_label(emitter, "__rt_var_dump_hash");
+            abi::emit_call_label(emitter, "__rt_vd_indent_pop");
+            abi::emit_call_label(emitter, "__rt_var_dump_close_container");
+            emitter.instruction("ldr x0, [sp]");                               // release the owned debug-info hash
+            abi::emit_call_label(emitter, "__rt_decref_hash");
+            emitter.instruction("add sp, sp, #32");                             // discard hash and object spill slots
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(emitter, "rdi");                                // preserve the object pointer across the method call
+            abi::emit_call_label(emitter, symbol);                              // rax = owned associative debug-info hash
+            abi::emit_push_reg(emitter, "rax");                                // preserve the hash across header rendering
+            emitter.instruction("mov rdi, rax");                               // hash argument for count helper
+            abi::emit_call_label(emitter, "__rt_hash_count");                  // rax = number of debug-info entries
+            emitter.instruction("mov rsi, rax");                               // supplied count → second header argument
+            emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");              // object pointer → first header argument
+            abi::emit_call_label(emitter, "__rt_var_dump_open_debug_object");
+            abi::emit_call_label(emitter, "__rt_vd_indent_push");
+            emitter.instruction("mov rdi, QWORD PTR [rsp]");                   // reload debug-info hash
+            abi::emit_call_label(emitter, "__rt_var_dump_hash");
+            abi::emit_call_label(emitter, "__rt_vd_indent_pop");
+            abi::emit_call_label(emitter, "__rt_var_dump_close_container");
+            emitter.instruction("mov rdi, QWORD PTR [rsp]");                   // release the owned debug-info hash
+            abi::emit_call_label(emitter, "__rt_decref_hash");
+            emitter.instruction("add rsp, 32");                                // discard hash and object spill slots
+        }
+    }
 }
 
 /// Writes a compile-time literal byte string to stdout.

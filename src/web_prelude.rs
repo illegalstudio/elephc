@@ -260,10 +260,7 @@ mod tests {
 
     /// `PHP_VERSION_ID` must be the reference formula applied to the reported components.
     ///
-    /// The formula was verified against reference PHP 8.5.6:
-    /// `php -d xdebug.mode=off -r 'echo PHP_VERSION_ID;'` prints `80506`, i.e.
-    /// `8 * 10000 + 5 * 100 + 6`. This is the test that makes a binary reporting
-    /// `PHP_VERSION 8.5.0` with `PHP_VERSION_ID 80506` impossible.
+    /// This also prevents the string and numeric surfaces from drifting apart.
     #[test]
     fn version_id_matches_components() {
         for profile in ALL_PROFILES {
@@ -291,26 +288,24 @@ mod tests {
                 "{profile:?} version_string must spell out its own components",
             );
             assert_eq!(profile.major(), 8, "every maintained profile is PHP 8.x");
-            assert_eq!(
-                profile.release(),
-                0,
-                "{profile:?} pins the patch component to 0 (see version_string docs)",
-            );
-            assert_eq!(profile.extra_version(), "");
         }
     }
 
     /// `zend_version()` tracks the profile minor on the Zend Engine 4.x track.
     ///
-    /// Reference PHP 8.5.6 reports Zend Engine `4.5.6`; elephc reports `4.5.0` under the same
-    /// patch-is-0 rule as `PHP_VERSION`.
+    /// The default php-src snapshot includes the `-dev` suffix on both surfaces.
     #[test]
     fn zend_version_tracks_profile_minor() {
         for profile in ALL_PROFILES {
             assert_eq!(
                 profile.zend_version(),
-                format!("4.{}.{}", profile.minor(), profile.release()),
-                "{profile:?} zend_version must be 4.<minor>.<release>",
+                format!(
+                    "4.{}.{}{}",
+                    profile.minor(),
+                    profile.release(),
+                    profile.extra_version(),
+                ),
+                "{profile:?} zend_version must track the PHP release and suffix",
             );
         }
     }

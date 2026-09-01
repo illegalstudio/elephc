@@ -9,7 +9,7 @@
 
 use super::*;
 
-/// Lowers native array/hash `isset($array[$key])` without reading the element value.
+/// Lowers native array/hash `isset($array[$key])` without reading the element eagerly.
 pub(super) fn lower_native_isset_offset_probe(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -92,7 +92,8 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                     Some(expr.span),
                 )
             } else {
-                // `isset()` is a silent probe even when the key is absent.
+                // String or mixed key on indexed storage: read through the
+                // mixed-key runtime path and check if the result is null.
                 let read_value = ctx.emit_value(
                     Op::ArrayGetMixedKeySilent,
                     vec![array_value.value, index_value.value],
@@ -187,8 +188,14 @@ pub(super) fn lower_lazy_property_isset_operand(
     property: &str,
     arg: &Expr,
 ) -> Option<LoweredValue> {
+    if let Some(value) = lower_date_period_virtual_property_isset(ctx, object, property, arg) {
+        return Some(value);
+    }
     match property_isset_action(ctx, object, property)? {
         IssetPropertyAction::Fallback => None,
+        IssetPropertyAction::Declared => {
+            Some(lower_declared_property_isset(ctx, object, property, arg))
+        }
         IssetPropertyAction::Magic => {
             let object = lower_expr(ctx, object);
             Some(lower_magic_property_isset(ctx, object, property, arg))
@@ -197,21 +204,173 @@ pub(super) fn lower_lazy_property_isset_operand(
             lower_expr(ctx, object);
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
-        IssetPropertyAction::Initialized => {
-            let object = lower_expr(ctx, object);
-            Some(lower_initialized_property_isset(ctx, object, property, arg))
-        }
+    }
+}
+
+/// Probes a declared typed property without triggering its uninitialized-read error.
+fn lower_declared_property_isset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: &Expr,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let object = lower_expr(ctx, object_expr);
+    let property_type = property_get_result_type(ctx, object.value, property, Op::PropGet, expr);
+    let property_data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(property_data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(expr.span),
+    );
+    if !php_type_allows_null(&property_type) {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return initialized;
+    }
+
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let present_block = ctx
+        .builder
+        .create_named_block("isset.declared.present", Vec::new());
+    let absent_block = ctx
+        .builder
+        .create_named_block("isset.declared.absent", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("isset.declared.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: present_block,
+        then_args: Vec::new(),
+        else_target: absent_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(present_block);
+    let value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(property_data)),
+        property_type,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    let false_value = lower_bool_literal(ctx, false, expr);
+    let present = ctx.emit_value(
+        Op::ICmp,
+        vec![is_null.value, false_value.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(expr.span),
+    );
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, present, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(absent_block);
+    let false_value = lower_bool_literal(ctx, false, expr);
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    ctx.load_local(&temp_name, Some(expr.span))
+}
+
+/// Probes a DatePeriod virtual property without invoking its initialization-guarded getter.
+fn lower_date_period_virtual_property_isset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object_expr: &Expr,
+    property: &str,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let (backing, backing_type) = date_period_virtual_property_backing(ctx, object_expr, property)?;
+    let object = lower_expr(ctx, object_expr);
+    let initialized_data = ctx.intern_string("__elephc_initialized");
+    let initialized = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(initialized_data)),
+        PhpType::Bool,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let backing_data = ctx.intern_string(backing);
+    let value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(backing_data)),
+        backing_type,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        Some(expr.span),
+    );
+    let false_value = lower_bool_literal(ctx, false, expr);
+    let non_null = ctx.emit_value(
+        Op::ICmp,
+        vec![is_null.value, false_value.value],
+        Some(Immediate::CmpPredicate(CmpPredicate::Eq)),
+        PhpType::Bool,
+        Op::ICmp.default_effects(),
+        Some(expr.span),
+    );
+    let result = ctx.emit_value(
+        Op::IBitAnd,
+        vec![initialized.value, non_null.value],
+        None,
+        PhpType::Bool,
+        Op::IBitAnd.default_effects(),
+        Some(expr.span),
+    );
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    Some(result)
+}
+
+/// Resolves one php-src DatePeriod virtual property to its private materialized slot.
+pub(super) fn date_period_virtual_property_backing(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> Option<(&'static str, PhpType)> {
+    let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    if !class_extends_class(ctx, &class_name, "DatePeriod") {
+        return None;
+    }
+    match property {
+        "start" => Some(("_start", PhpType::Object("DateTimeInterface".to_string()))),
+        "current" => Some(("_current", PhpType::Object("DateTimeInterface".to_string()))),
+        "end" => Some(("_end", PhpType::Object("DateTimeInterface".to_string()))),
+        "interval" => Some(("_interval", PhpType::Object("DateInterval".to_string()))),
+        "recurrences" => Some(("_recurrences", PhpType::Int)),
+        "include_start_date" => Some(("_include_start_date", PhpType::Bool)),
+        "include_end_date" => Some(("_include_end_date", PhpType::Bool)),
+        _ => None,
     }
 }
 
 /// Describes how `isset($object->property)` should be lowered for a known receiver class.
 pub(super) enum IssetPropertyAction {
     Fallback,
+    Declared,
     Magic,
     AlwaysFalse,
-    /// A declared (typed) property slot, which can be uninitialized: probe the slot
-    /// before reading it so `isset()` never raises the uninitialized-read error.
-    Initialized,
 }
 
 /// Selects the PHP-visible `isset()` behavior for a statically known object property operand.
@@ -225,13 +384,14 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
-    if class_info.allow_dynamic_properties {
-        return Some(IssetPropertyAction::Fallback);
-    }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
-        if class_info.visible_property_is_declared(property) {
-            return Some(IssetPropertyAction::Initialized);
-        }
+        return Some(if class_info.visible_property_is_declared(property) {
+            IssetPropertyAction::Declared
+        } else {
+            IssetPropertyAction::Fallback
+        });
+    }
+    if class_info.allow_dynamic_properties {
         return Some(IssetPropertyAction::Fallback);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__isset")).is_some() {

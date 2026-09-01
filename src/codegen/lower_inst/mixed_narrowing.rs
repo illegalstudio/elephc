@@ -135,14 +135,230 @@ pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_int(
     store_if_result(ctx, inst)
 }
 
+/// Lowers a declared object return boundary from one owned boxed runtime value.
+pub(in crate::codegen::lower_inst) fn lower_return_boundary_mixed_to_object(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let input = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::unsupported("return_boundary_mixed_to_object without operand".to_string())
+    })?;
+    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "return_boundary_mixed_to_object without target metadata".to_string(),
+        ));
+    };
+    let spec = ctx
+        .module
+        .data
+        .strings
+        .get(data_id.as_raw() as usize)
+        .ok_or_else(|| CodegenIrError::missing_entry("return boundary metadata", data_id.as_raw()))?;
+    let (target_class, prefix) = spec.split_once('\0').ok_or_else(|| {
+        CodegenIrError::unsupported("malformed object return boundary metadata".to_string())
+    })?;
+    let target_class = target_class.to_string();
+    let prefix_bytes = crate::string_bytes::literal_bytes(prefix);
+    let (prefix_label, prefix_len) = ctx.data.add_string(&prefix_bytes);
+    let target = if target_class.is_empty() {
+        None
+    } else if let Some(info) = ctx.module.class_infos.get(&target_class) {
+        Some((info.class_id, 0))
+    } else if let Some(info) = ctx.module.interface_infos.get(&target_class) {
+        Some((info.interface_id, 1))
+    } else {
+        return Err(CodegenIrError::unsupported(format!(
+            "unknown object return boundary target {target_class}"
+        )));
+    };
+
+    ctx.load_value_to_result(input)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let tag_reg = abi::int_result_reg(ctx.emitter);
+    let object_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rdi",
+    };
+    let object = ctx.next_label("ret_boundary_object_value");
+    let success = ctx.next_label("ret_boundary_object_success");
+    let wrong_object = ctx.next_label("ret_boundary_object_wrong_class");
+    let integer = ctx.next_label("ret_boundary_object_int");
+    let string = ctx.next_label("ret_boundary_object_string");
+    let float = ctx.next_label("ret_boundary_object_float");
+    let boolean = ctx.next_label("ret_boundary_object_bool");
+    let array = ctx.next_label("ret_boundary_object_array");
+    let null = ctx.next_label("ret_boundary_object_null");
+    let resource = ctx.next_label("ret_boundary_object_resource");
+    let callable = ctx.next_label("ret_boundary_object_callable");
+    emit_mixed_tag_branch(ctx, tag_reg, 6, &object);
+    emit_mixed_tag_branch(ctx, tag_reg, 0, &integer);
+    emit_mixed_tag_branch(ctx, tag_reg, 1, &string);
+    emit_mixed_tag_branch(ctx, tag_reg, 2, &float);
+    emit_mixed_tag_branch(ctx, tag_reg, 3, &boolean);
+    emit_mixed_tag_branch(ctx, tag_reg, 4, &array);
+    emit_mixed_tag_branch(ctx, tag_reg, 5, &array);
+    emit_mixed_tag_branch(ctx, tag_reg, 8, &null);
+    emit_mixed_tag_branch(ctx, tag_reg, 9, &resource);
+    emit_mixed_tag_branch(ctx, tag_reg, 10, &callable);
+    emit_consuming_return_type_error(ctx, &prefix_label, prefix_len, "unknown returned");
+
+    ctx.emitter.label(&object);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    if let Some((target_id, target_kind)) = target {
+        emit_move_reg(ctx, abi::int_arg_reg_name(ctx.emitter.target, 0), object_reg);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 1),
+            target_id as i64,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 2),
+            target_kind,
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &wrong_object);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_jump(ctx.emitter, &success);
+
+    ctx.emitter.label(&wrong_object);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_consuming_object_return_type_error(ctx, &prefix_label, prefix_len);
+
+    for (label, suffix) in [
+        (&integer, "int returned"),
+        (&string, "string returned"),
+        (&float, "float returned"),
+        (&boolean, "bool returned"),
+        (&array, "array returned"),
+        (&null, "null returned"),
+        (&resource, "resource returned"),
+        (&callable, "Closure returned"),
+    ] {
+        ctx.emitter.label(label);
+        emit_consuming_return_type_error(ctx, &prefix_label, prefix_len, suffix);
+    }
+
+    ctx.emitter.label(&success);
+    abi::emit_incref_if_refcounted(ctx.emitter, &crate::types::PhpType::Object(target_class));
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    release_consumed_mixed_cell(ctx, 16);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    store_if_result(ctx, inst)
+}
+
+/// Builds and throws one static-suffix return `TypeError`, consuming the boxed input owner.
+fn emit_consuming_return_type_error(
+    ctx: &mut FunctionContext<'_>,
+    prefix_label: &str,
+    prefix_len: usize,
+    suffix: &str,
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, prefix_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, prefix_len as i64);
+    append_static_to_string_result(ctx, suffix);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    release_consumed_mixed_preserving_string(ctx);
+    super::enums::emit_throw_type_error_from_string_result(ctx);
+}
+
+/// Throws an incompatible-object return `TypeError` using its concrete runtime class name.
+fn emit_consuming_object_return_type_error(
+    ctx: &mut FunctionContext<'_>,
+    prefix_label: &str,
+    prefix_len: usize,
+) {
+    let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
+    let class_id = abi::secondary_scratch_reg(ctx.emitter);
+    let table = abi::symbol_scratch_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr {}, [x0]", class_id));        // read the returned object's runtime class id
+            abi::emit_symbol_address(ctx.emitter, table, "_class_name_entries");
+            ctx.emitter.instruction(&format!("lsl {}, {}, #4", class_id, class_id)); // scale the class id to its metadata row
+            ctx.emitter.instruction(&format!("add {}, {}, {}", table, table, class_id)); // address the runtime class-name row
+            ctx.emitter.instruction(&format!("ldr {}, [{}]", name_ptr, table)); // load the concrete class-name pointer
+            ctx.emitter.instruction(&format!("ldr {}, [{}, #8]", name_len, table)); // load the concrete class-name length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [rax]", class_id)); // read the returned object's runtime class id
+            abi::emit_symbol_address(ctx.emitter, table, "_class_name_entries");
+            ctx.emitter.instruction(&format!("shl {}, 4", class_id));           // scale the class id to its metadata row
+            ctx.emitter.instruction(&format!("add {}, {}", table, class_id));   // address the runtime class-name row
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{}]", name_ptr, table)); // load the concrete class-name pointer
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} + 8]", name_len, table)); // load the concrete class-name length
+        }
+    }
+    prepend_static_to_string_result(ctx, prefix_label, prefix_len);
+    append_static_to_string_result(ctx, " returned");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    release_consumed_mixed_preserving_string(ctx);
+    super::enums::emit_throw_type_error_from_string_result(ctx);
+}
+
+/// Prepends a static string to the current string-result pair.
+fn prepend_static_to_string_result(
+    ctx: &mut FunctionContext<'_>,
+    prefix_label: &str,
+    prefix_len: usize,
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let (right_ptr, right_len) = concat_right_regs(ctx);
+    emit_move_reg(ctx, right_ptr, ptr_reg);
+    emit_move_reg(ctx, right_len, len_reg);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, prefix_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, prefix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// Appends a static string to the current string-result pair.
+fn append_static_to_string_result(ctx: &mut FunctionContext<'_>, suffix: &str) {
+    let (right_ptr, right_len) = concat_right_regs(ctx);
+    let (label, len) = ctx.data.add_string(suffix.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, right_ptr, &label);
+    abi::emit_load_int_immediate(ctx.emitter, right_len, len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// Returns the ABI registers carrying `__rt_concat`'s right-hand string.
+fn concat_right_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
+    }
+}
+
+/// Releases the owned boxed input while preserving a built error-message string.
+fn release_consumed_mixed_preserving_string(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    release_consumed_mixed_cell(ctx, 16);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Decrements the consumed Mixed cell stored at `stack_offset` without changing stack depth.
+fn release_consumed_mixed_cell(ctx: &mut FunctionContext<'_>, stack_offset: usize) {
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        stack_offset,
+    );
+    abi::emit_decref_if_refcounted(ctx.emitter, &crate::types::PhpType::Mixed);
+}
+
 /// Moves raw double bits from a general-purpose register into the float-result register.
 fn emit_float_bits_to_float_result(ctx: &mut FunctionContext<'_>, bits_reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("fmov d0, {}", bits_reg)); // reinterpret the boxed payload as a double
+            ctx.emitter.instruction(&format!("fmov d0, {}", bits_reg));         // reinterpret the boxed payload as a double
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movq xmm0, {}", bits_reg)); // reinterpret the boxed payload as a double
+            ctx.emitter.instruction(&format!("movq xmm0, {}", bits_reg));       // reinterpret the boxed payload as a double
         }
     }
 }
@@ -157,11 +373,11 @@ fn emit_float_result_fits_i64_or_jump(ctx: &mut FunctionContext<'_>, fail_label:
             ctx.emitter.instruction(&format!("b.vs {}", fail_label));           // NaN never fits an int boundary
             abi::emit_load_int_immediate(ctx.emitter, "x9", F64_TWO_POW_63_BITS);
             ctx.emitter.instruction("fmov d1, x9");                             // materialize (double)2^63 without a data load
-            ctx.emitter.instruction("fcmp d0, d1");
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare against the exclusive positive int bound
             ctx.emitter.instruction(&format!("b.ge {}", fail_label));           // d >= 2^63 exceeds PHP_INT_MAX
             abi::emit_load_int_immediate(ctx.emitter, "x9", F64_NEG_TWO_POW_63_BITS);
             ctx.emitter.instruction("fmov d1, x9");                             // materialize (double)-2^63
-            ctx.emitter.instruction("fcmp d0, d1");
+            ctx.emitter.instruction("fcmp d0, d1");                             // compare against the inclusive negative int bound
             ctx.emitter.instruction(&format!("b.lt {}", fail_label));           // d < -2^63 is below PHP_INT_MIN
             ctx.emitter.instruction("fcvtzs x0, d0");                           // in-range: exact truncation toward zero
         }
@@ -170,11 +386,11 @@ fn emit_float_result_fits_i64_or_jump(ctx: &mut FunctionContext<'_>, fail_label:
             ctx.emitter.instruction(&format!("jp {}", fail_label));             // NaN never fits an int boundary
             abi::emit_load_int_immediate(ctx.emitter, "r10", F64_TWO_POW_63_BITS);
             ctx.emitter.instruction("movq xmm1, r10");                          // materialize (double)2^63 without a data load
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare against the exclusive positive int bound
             ctx.emitter.instruction(&format!("jae {}", fail_label));            // d >= 2^63 exceeds PHP_INT_MAX
             abi::emit_load_int_immediate(ctx.emitter, "r10", F64_NEG_TWO_POW_63_BITS);
             ctx.emitter.instruction("movq xmm1, r10");                          // materialize (double)-2^63
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare against the inclusive negative int bound
             ctx.emitter.instruction(&format!("jb {}", fail_label));             // d < -2^63 is below PHP_INT_MIN
             ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // in-range: exact truncation toward zero
         }

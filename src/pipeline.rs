@@ -19,7 +19,10 @@ use crate::cli::CliConfig;
 use crate::codegen::platform::Target;
 use crate::codegen::Emit;
 use crate::codegen::LinkRequirement;
+use crate::names::Name;
 use crate::native_deps::NativeRequirement;
+use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
+use crate::php_version::PhpVersion;
 use crate::span::Span;
 use crate::source::SourceMode;
 use crate::timings::CompileTimings;
@@ -145,6 +148,7 @@ pub(crate) fn compile(config: CliConfig) {
     .into_iter()
     .filter_map(|(forced, group)| forced.then_some(group.to_string()))
     .collect();
+    let mut structural_groups = HashSet::new();
 
     // Snapshot the USER-declared function/class names for `opcache.preload`'s
     // `preload_statistics`, taken HERE — after include resolution but BEFORE any compiler prelude
@@ -209,11 +213,17 @@ pub(crate) fn compile(config: CliConfig) {
     // include resolution so usage inside includes is detected.
     crate::progress::phase("tz-prelude");
     let phase_started = Instant::now();
-    let ast = tz_prelude::inject_if_used(
-        ast,
-        with_crates.contains("tz"),
-        &mut prelude_inventory,
-    );
+    let tz_used = with_crates.contains("tz") || tz_prelude::program_uses_tz(&ast);
+    if tz_used {
+        // Synthetic DateTime/DatePeriod methods are checker metadata rather than AST
+        // declarations, so declaration reachability cannot discover their helper calls.
+        // Auto-detection roots only the hidden timelib helpers and externs; `--with-tz` already
+        // roots the complete public `tz` group through the initial force set above.
+        structural_groups.insert(
+            tz_prelude::TIMELIB_RUNTIME_REACHABILITY_GROUP.to_string(),
+        );
+    }
+    let ast = tz_prelude::inject_if_used(ast, tz_used, &mut prelude_inventory);
     timings.record_since("tz-prelude", phase_started);
 
     // Inject the listIdentifiers-filtering prelude (a pure elephc-PHP function over
@@ -351,6 +361,16 @@ pub(crate) fn compile(config: CliConfig) {
         &mut prelude_inventory,
     );
     timings.record_since("version-prelude", phase_started);
+
+    crate::progress::phase("date-timezone-ini");
+    let phase_started = Instant::now();
+    let ast = inject_date_timezone_ini(ast, &ini_overrides);
+    timings.record_since("date-timezone-ini", phase_started);
+
+    crate::progress::phase("error-reporting-ini");
+    let phase_started = Instant::now();
+    let ast = inject_error_reporting_ini(ast, &ini_overrides, php_version);
+    timings.record_since("error-reporting-ini", phase_started);
 
     crate::progress::phase("name-resolve");
     let phase_started = Instant::now();
@@ -536,23 +556,40 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     // Tail-sinking clones the tail of an `if`/`switch`/`try` into every branch, and a clone keeps
     // the original's spans — the same span-keyed hazard, in the other pass that clones.
-    let ast = post_typecheck_optimizer
-        .eliminate_dead_code(ast, check_result.local_binding_decision_spans());
+    let ast = if crate::types::checker::set_state_contract_error(&ast).is_some()
+        || !crate::types::checker::set_state_visibility_warnings(&ast).is_empty()
+    {
+        // PHP validates magic-method contracts even for classes that are never instantiated.
+        // Preserve the declaration until EIR replaces main with the matching fatal diagnostic.
+        ast
+    } else {
+        post_typecheck_optimizer
+            .eliminate_dead_code(ast, check_result.local_binding_decision_spans())
+    };
     timings.record_since("dce", phase_started);
 
     crate::progress::phase("decl-reach");
     let phase_started = Instant::now();
     let exported_function_names: HashSet<String> = exported_functions.keys().cloned().collect();
-    let ast = optimize::prune_unreachable_declarations(
-        ast,
-        &mut check_result,
-        optimize::reachability::PruneOptions {
-            inventory: &prelude_inventory,
-            forced_groups: &forced_groups,
-            exported_functions: &exported_function_names,
-            eval_forced: with_crates.contains("eval"),
-        },
-    );
+    // PHP validates `__set_state()` arity at declaration time, even when the class is never used.
+    // Keep that declaration visible to EIR's synthetic-fatal lowering instead of pruning it first.
+    let ast = if crate::types::checker::set_state_contract_error(&ast).is_some()
+        || !crate::types::checker::set_state_visibility_warnings(&ast).is_empty()
+    {
+        ast
+    } else {
+        optimize::prune_unreachable_declarations(
+            ast,
+            &mut check_result,
+            optimize::reachability::PruneOptions {
+                inventory: &prelude_inventory,
+                forced_groups: &forced_groups,
+                structural_groups: &structural_groups,
+                exported_functions: &exported_function_names,
+                eval_forced: with_crates.contains("eval"),
+            },
+        )
+    };
     timings.record_since("decl-reach", phase_started);
     codegen::prepare_declared_name_order(
         &ast,
@@ -627,6 +664,7 @@ pub(crate) fn compile(config: CliConfig) {
         target,
         emit,
         heap_size,
+        float_precision: float_precision_from_ini(&ini_overrides),
         gc_stats,
         counters,
         instrument,
@@ -640,4 +678,384 @@ pub(crate) fn compile(config: CliConfig) {
         emit_asm,
         timings: &mut timings,
     });
+}
+
+/// Resolves PHP's ordinary float-to-string precision from the last `--ini` override.
+///
+/// PHP's `-1` setting requests the shortest round-tripping representation, for which 17
+/// significant digits is the conservative native formatter equivalent. Explicit precisions up
+/// to PHP's useful double-precision ceiling are baked into the runtime cache identity.
+fn float_precision_from_ini(ini_overrides: &[(String, String)]) -> u8 {
+    let Some(raw_value) = ini_overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "precision")
+        .map(|(_, value)| value.trim())
+    else {
+        return 14;
+    };
+    match raw_value.parse::<i16>() {
+        Ok(-1) => 17,
+        Ok(value @ 0..=53) => value as u8,
+        _ => 14,
+    }
+}
+
+/// Prepends PHP's `date.timezone` startup initialization supplied through `--ini`.
+///
+/// The runtime validator is the same timelib-backed gate as
+/// `date_default_timezone_set()`. Invalid values emit PHP's startup warning and
+/// fall back to UTC before user code runs; the latest repeated directive wins.
+fn inject_date_timezone_ini(
+    program: Program,
+    ini_overrides: &[(String, String)],
+) -> Program {
+    let Some(raw_value) = ini_overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "date.timezone")
+        .map(|(_, value)| value.as_str())
+    else {
+        return program;
+    };
+    let warning = format!(
+        "\nWarning: PHP Startup: Invalid date.timezone value '{raw_value}', using 'UTC' instead in Unknown on line 0\n"
+    );
+    let call = |name: &str, argument: Expr| {
+        Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::from(name),
+                args: vec![argument],
+            },
+            Span::dummy(),
+        )
+    };
+    let mut combined = vec![Stmt::new(
+        StmtKind::If {
+            condition: Expr::new(
+                ExprKind::Not(Box::new(Expr::new(
+                    ExprKind::ErrorSuppress(Box::new(call(
+                        "date_default_timezone_set",
+                        Expr::new(ExprKind::StringLiteral(raw_value.to_string()), Span::dummy()),
+                    ))),
+                    Span::dummy(),
+                ))),
+                Span::dummy(),
+            ),
+            then_body: vec![
+                Stmt::new(
+                    StmtKind::ExprStmt(call(
+                        "__elephc_diag_warning",
+                        Expr::new(ExprKind::StringLiteral(warning), Span::dummy()),
+                    )),
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::ExprStmt(call(
+                        "date_default_timezone_set",
+                        Expr::new(
+                            ExprKind::StringLiteral("UTC".to_string()),
+                            Span::dummy(),
+                        ),
+                    )),
+                    Span::dummy(),
+                ),
+            ],
+            elseif_clauses: Vec::new(),
+            else_body: None,
+        },
+        Span::dummy(),
+    )];
+    combined.extend(program);
+    combined
+}
+
+/// One token from Zend's restricted INI bitmask expression grammar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IniBitmaskToken {
+    Value(i32),
+    Or,
+    And,
+    Xor,
+    BitNot,
+    Not,
+    LeftParen,
+    RightParen,
+}
+
+/// Converts one INI atom to the signed 32-bit value used by `zend_ini_do_op()`.
+fn ini_bitmask_atom_value(atom: &str, php_version: PhpVersion) -> i32 {
+    let atom = atom.trim();
+    if atom.eq_ignore_ascii_case("true")
+        || atom.eq_ignore_ascii_case("on")
+        || atom.eq_ignore_ascii_case("yes")
+    {
+        return 1;
+    }
+    if atom.eq_ignore_ascii_case("false")
+        || atom.eq_ignore_ascii_case("off")
+        || atom.eq_ignore_ascii_case("no")
+        || atom.eq_ignore_ascii_case("none")
+        || atom.eq_ignore_ascii_case("null")
+    {
+        return 0;
+    }
+    if let Some((name, fallback)) = crate::types::error_constants::ERROR_LEVEL_CONSTANTS
+        .iter()
+        .find(|(name, _)| *name == atom)
+    {
+        return crate::types::error_constants::error_level_value_for_version(
+            name,
+            *fallback,
+            php_version,
+        ) as i32;
+    }
+    let numeric_prefix = atom
+        .char_indices()
+        .take_while(|(index, ch)| ch.is_ascii_digit() || (*index == 0 && *ch == '-'))
+        .map(|(_, ch)| ch)
+        .collect::<String>();
+    numeric_prefix.parse::<i32>().unwrap_or(0)
+}
+
+/// Tokenizes the operators, parentheses, constants, and integer atoms accepted by Zend INI.
+fn tokenize_ini_bitmask(value: &str, php_version: PhpVersion) -> Option<Vec<IniBitmaskToken>> {
+    let mut tokens = Vec::new();
+    let mut chars = value.char_indices().peekable();
+    while let Some((start, ch)) = chars.next() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        let operator = match ch {
+            '|' => Some(IniBitmaskToken::Or),
+            '&' => Some(IniBitmaskToken::And),
+            '^' => Some(IniBitmaskToken::Xor),
+            '~' => Some(IniBitmaskToken::BitNot),
+            '!' => Some(IniBitmaskToken::Not),
+            '(' => Some(IniBitmaskToken::LeftParen),
+            ')' => Some(IniBitmaskToken::RightParen),
+            _ => None,
+        };
+        if let Some(operator) = operator {
+            tokens.push(operator);
+            continue;
+        }
+        let mut end = start + ch.len_utf8();
+        while let Some((index, next)) = chars.peek().copied() {
+            if next.is_whitespace() || matches!(next, '|' | '&' | '^' | '~' | '!' | '(' | ')') {
+                break;
+            }
+            chars.next();
+            end = index + next.len_utf8();
+        }
+        let atom = value.get(start..end)?;
+        tokens.push(IniBitmaskToken::Value(ini_bitmask_atom_value(
+            atom,
+            php_version,
+        )));
+    }
+    Some(tokens)
+}
+
+/// Parses one INI primary or unary expression and advances `cursor` past it.
+fn parse_ini_bitmask_unary(tokens: &[IniBitmaskToken], cursor: &mut usize) -> Option<i32> {
+    let token = tokens.get(*cursor).copied()?;
+    *cursor += 1;
+    match token {
+        IniBitmaskToken::Value(value) => Some(value),
+        IniBitmaskToken::BitNot => Some(!parse_ini_bitmask_unary(tokens, cursor)?),
+        IniBitmaskToken::Not => Some(i32::from(parse_ini_bitmask_unary(tokens, cursor)? == 0)),
+        IniBitmaskToken::LeftParen => {
+            let value = parse_ini_bitmask_expression(tokens, cursor)?;
+            if tokens.get(*cursor) != Some(&IniBitmaskToken::RightParen) {
+                return None;
+            }
+            *cursor += 1;
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
+/// Parses Zend's left-associative, equal-precedence `|`, `&`, and `^` expression level.
+fn parse_ini_bitmask_expression(tokens: &[IniBitmaskToken], cursor: &mut usize) -> Option<i32> {
+    let mut value = parse_ini_bitmask_unary(tokens, cursor)?;
+    loop {
+        let operation = match tokens.get(*cursor) {
+            Some(IniBitmaskToken::Or) => IniBitmaskToken::Or,
+            Some(IniBitmaskToken::And) => IniBitmaskToken::And,
+            Some(IniBitmaskToken::Xor) => IniBitmaskToken::Xor,
+            _ => break,
+        };
+        *cursor += 1;
+        let right = parse_ini_bitmask_unary(tokens, cursor)?;
+        value = match operation {
+            IniBitmaskToken::Or => value | right,
+            IniBitmaskToken::And => value & right,
+            IniBitmaskToken::Xor => value ^ right,
+            _ => unreachable!("operator was restricted above"),
+        };
+    }
+    Some(value)
+}
+
+/// Evaluates one `error_reporting` override with Zend INI's 32-bit bitmask semantics.
+fn error_reporting_ini_value(value: &str, php_version: PhpVersion) -> i64 {
+    if value.is_empty() {
+        return 0;
+    }
+    let Some(tokens) = tokenize_ini_bitmask(value, php_version) else {
+        return i64::from(ini_bitmask_atom_value(value, php_version));
+    };
+    let mut cursor = 0;
+    let Some(result) = parse_ini_bitmask_expression(&tokens, &mut cursor) else {
+        return i64::from(ini_bitmask_atom_value(value, php_version));
+    };
+    if cursor != tokens.len() {
+        return i64::from(ini_bitmask_atom_value(value, php_version));
+    }
+    i64::from(result)
+}
+
+/// Prepends the runtime `error_reporting` assignment supplied through `--ini`.
+///
+/// PHP INI accepts expressions such as `E_ALL&~E_DEPRECATED`; parsing the value
+/// as a PHP expression keeps those constants and bitwise rules authoritative.
+/// An empty override is PHP's zero mask. The latest repeated directive wins.
+fn inject_error_reporting_ini(
+    program: Program,
+    ini_overrides: &[(String, String)],
+    php_version: PhpVersion,
+) -> Program {
+    let Some(raw_value) = ini_overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "error_reporting")
+        .map(|(_, value)| value.as_str())
+    else {
+        return program;
+    };
+    let level = error_reporting_ini_value(raw_value, php_version);
+    let mut combined = vec![Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::FunctionCall {
+                name: Name::from("error_reporting"),
+                args: vec![Expr::new(ExprKind::IntLiteral(level), Span::dummy())],
+            },
+            Span::dummy(),
+        )),
+        Span::dummy(),
+    )];
+    combined.extend(program);
+    combined
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{error_reporting_ini_value, float_precision_from_ini};
+    use crate::php_version::PhpVersion;
+
+    /// Verifies compiler-synthesized DateTime support stays direct-AST and never reparses PHP.
+    #[test]
+    fn datetime_production_ast_builders_do_not_parse_embedded_php() {
+        let sources = [
+            (
+                "pipeline.rs",
+                include_str!("pipeline.rs")
+                    .split("#[cfg(test)]")
+                    .next()
+                    .expect("pipeline production prefix"),
+            ),
+            (
+                "containers.rs",
+                include_str!("types/checker/builtin_spl_classes/containers.rs"),
+            ),
+            (
+                "reflection/owner_helpers.rs",
+                include_str!("types/checker/builtin_types/reflection/owner_helpers.rs"),
+            ),
+            (
+                "date_period.rs",
+                include_str!("types/checker/builtin_types/date_period.rs"),
+            ),
+        ];
+        for (name, source) in sources {
+            for forbidden in ["<?php", "lexer::tokenize", "parser::parse"] {
+                assert!(
+                    !source.contains(forbidden),
+                    "{name} embeds or parses PHP production source through `{forbidden}`"
+                );
+            }
+        }
+        let datetime_facade = include_str!("types/checker/builtin_types/datetime.rs");
+        assert!(
+            datetime_facade.contains(
+                "pub(crate) use generated_injection::{inject_builtin_date_period, inject_builtin_datetime};"
+            ),
+            "DatePeriod production injection must use generated direct AST"
+        );
+        let date_period_facade = include_str!("types/checker/builtin_types/date_period.rs");
+        for oracle in ["bodies", "compliance_core"] {
+            let gated_module = format!("#[cfg(test)]\nmod {oracle};");
+            assert!(
+                date_period_facade.contains(&gated_module),
+                "DatePeriod parser oracle `{oracle}` must remain test-only"
+            );
+        }
+        assert!(
+            date_period_facade.contains("#[cfg(test)]\npub(super) mod compliance_state;"),
+            "DatePeriod state oracle must remain test-only and visible to the generator"
+        );
+    }
+
+    /// Verifies the last valid precision override controls ordinary float rendering.
+    #[test]
+    fn float_precision_uses_last_ini_override() {
+        let overrides = vec![
+            ("precision".to_string(), "14".to_string()),
+            ("precision".to_string(), "13".to_string()),
+        ];
+        assert_eq!(float_precision_from_ini(&overrides), 13);
+    }
+
+    /// Verifies defaults, shortest mode, and out-of-range values are deterministic.
+    #[test]
+    fn float_precision_normalizes_special_values() {
+        assert_eq!(float_precision_from_ini(&[]), 14);
+        assert_eq!(
+            float_precision_from_ini(&[("precision".to_string(), "-1".to_string())]),
+            17
+        );
+        assert_eq!(
+            float_precision_from_ini(&[("precision".to_string(), "54".to_string())]),
+            14
+        );
+    }
+
+    /// Verifies Zend INI's equal-precedence bitwise grammar and unary operators.
+    #[test]
+    fn error_reporting_ini_uses_zend_bitmask_grammar() {
+        assert_eq!(
+            error_reporting_ini_value(
+                "E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED",
+                PhpVersion::Php85,
+            ),
+            6143
+        );
+        assert_eq!(
+            error_reporting_ini_value("(E_ERROR | E_WARNING) ^ E_WARNING", PhpVersion::Php85),
+            1
+        );
+        assert_eq!(error_reporting_ini_value("!E_ERROR", PhpVersion::Php85), 0);
+    }
+
+    /// Verifies `E_ALL` follows the selected PHP profile and empty/unknown atoms coerce like INI.
+    #[test]
+    fn error_reporting_ini_tracks_profile_and_atom_coercions() {
+        assert_eq!(error_reporting_ini_value("E_ALL", PhpVersion::Php83), 32767);
+        assert_eq!(error_reporting_ini_value("E_ALL", PhpVersion::Php85), 30719);
+        assert_eq!(error_reporting_ini_value("", PhpVersion::Php85), 0);
+        assert_eq!(error_reporting_ini_value("unknown", PhpVersion::Php85), 0);
+        assert_eq!(error_reporting_ini_value("-1", PhpVersion::Php85), -1);
+    }
 }

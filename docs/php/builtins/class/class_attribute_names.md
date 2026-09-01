@@ -2,7 +2,7 @@
 title: "class_attribute_names()"
 description: "Returns the list of attribute names applied to a class."
 sidebar:
-  order: 75
+  order: 76
 ---
 
 ## class_attribute_names()

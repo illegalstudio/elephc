@@ -14,8 +14,7 @@
 //!   fold correctly with zero runtime `define()` calls.
 //! - These constants are global (available in CLI and `--web` alike), matching
 //!   PHP where the `E_*` levels are always defined.
-//! - `E_ALL` is `32767` on PHP 8.x (`E_STRICT`, value `2048`, is deprecated but
-//!   its bit remains set in `E_ALL`).
+//! - `E_ALL` excludes the removed `E_STRICT` bit from PHP 8.4 onward.
 
 /// Tuple of `(name, value)` pairs for every PHP `E_*` error-level constant.
 ///
@@ -39,6 +38,27 @@ pub(crate) const ERROR_LEVEL_CONSTANTS: &[(&str, i64)] = &[
     ("E_USER_DEPRECATED", 16384),
     ("E_ALL", 32767),
 ];
+
+/// Returns one error-level value for the selected PHP compatibility profile.
+pub(crate) fn error_level_value_for_version(
+    name: &str,
+    fallback: i64,
+    version: crate::php_version::PhpVersion,
+) -> i64 {
+    if name == "E_ALL" {
+        match version {
+            crate::php_version::PhpVersion::Php80
+            | crate::php_version::PhpVersion::Php81
+            | crate::php_version::PhpVersion::Php82
+            | crate::php_version::PhpVersion::Php83 => 32767,
+            crate::php_version::PhpVersion::Php84
+            | crate::php_version::PhpVersion::Php85
+            | crate::php_version::PhpVersion::Php86 => 30719,
+        }
+    } else {
+        fallback
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -72,6 +92,19 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} defined"));
             assert_eq!(entry.1, *value, "{name} value mismatch");
         }
+    }
+
+    /// Verifies PHP 8.4+ removes E_STRICT from the profile-specific E_ALL value.
+    #[test]
+    fn e_all_tracks_the_selected_php_profile() {
+        assert_eq!(
+            error_level_value_for_version("E_ALL", 32767, crate::php_version::PhpVersion::Php83),
+            32767
+        );
+        assert_eq!(
+            error_level_value_for_version("E_ALL", 32767, crate::php_version::PhpVersion::Php85),
+            30719
+        );
     }
 
     /// Asserts no duplicate names exist in `ERROR_LEVEL_CONSTANTS`.

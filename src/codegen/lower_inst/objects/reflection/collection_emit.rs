@@ -26,7 +26,7 @@ pub(super) fn emit_reflection_member_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_member_object(ctx, member_class_name, member)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_append_reflection_member_object(ctx);
+        emit_append_reflection_member_object(ctx, member_class_name);
     }
 
     Ok(())
@@ -65,7 +65,7 @@ pub(super) fn emit_reflection_parameter_array(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_reflection_parameter_object(ctx, parameter)?;
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-        emit_append_reflection_member_object(ctx);
+        emit_append_reflection_member_object(ctx, "ReflectionParameter");
     }
 
     Ok(())
@@ -188,7 +188,7 @@ pub(super) fn emit_reflection_string_assoc_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
     emit_reflection_string_assoc_array(ctx, entries);
@@ -322,4 +322,3 @@ pub(super) fn emit_skip_if_static_property_uninitialized(
     }
     Some(skip_label)
 }
-

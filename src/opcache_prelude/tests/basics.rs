@@ -60,7 +60,7 @@ pub(super) fn renders_parsable_php85_literal() {
         assert!(literal.contains(
             "'opcache.file_cache_read_only' => __elephc_opcache_env_bool('ELEPHC_INI_opcache__file_cache_read_only', 'ELEPHC_INI_opcache.file_cache_read_only', false)"
         ));
-        assert!(literal.contains("'version' => '8.5.0'"));
+        assert!(literal.contains("'version' => '8.5.10-dev'"));
         assert!(literal.contains("'opcache_product_name' => 'Zend OPcache'"));
         // The literal must parse as a standalone expression statement.
         let _ = parse(&format!("<?php $c = {literal};"));

@@ -119,6 +119,9 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
             abi::emit_call_label(ctx.emitter, "__rt_array_ensure_elem_for_write");
             store_if_result(ctx, inst)
         }
+        PhpType::Object(_) => {
+            objects::lower_dynamic_property_fetch_for_write(ctx, inst, receiver, key)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "fetch-for-write runtime_call with receiver PHP type {:?}",
             other

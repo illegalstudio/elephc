@@ -124,17 +124,9 @@ pub(in crate::interpreter) fn eval_time_values_result(
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "gmmktime" => {
-            let [hour, minute, second, month, day, year] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_gmmktime_result(*hour, *minute, *second, *month, *day, *year, context, values)
+            eval_mktime_result_with_defaults("gmmktime", evaluated_args, context, values)
         }
-        "mktime" => {
-            let [hour, minute, second, month, day, year] = evaluated_args else {
-                return Err(EvalStatus::RuntimeFatal);
-            };
-            eval_mktime_result("mktime", *hour, *minute, *second, *month, *day, *year, context, values)
-        }
+        "mktime" => eval_mktime_result_with_defaults("mktime", evaluated_args, context, values),
         "header" => match evaluated_args {
             [line] => eval_header_result(*line, None, None, context, values),
             [line, replace] => eval_header_result(*line, Some(*replace), None, context, values),

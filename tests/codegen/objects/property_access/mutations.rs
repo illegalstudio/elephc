@@ -64,6 +64,21 @@ echo $bucket->last();
     assert_eq!(out, "7");
 }
 
+/// Verifies runtime-name array append on a non-DatePeriod object through stdClass storage.
+#[test]
+fn test_dynamic_property_array_push_on_stdclass() {
+    let out = compile_and_run(
+        r#"<?php
+$box = new stdClass();
+$name = "items";
+$box->$name = [1];
+$box->$name[] = 2;
+echo $box->items[0] . "," . $box->items[1];
+"#,
+    );
+    assert_eq!(out, "1,2");
+}
+
 /// Exercises indexed write `$this->items[0] = $value` on a class property
 /// that holds an array, verifying the replaced element is retrieved correctly.
 #[test]

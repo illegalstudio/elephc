@@ -304,7 +304,10 @@ fn fixed_object_class<'a>(
     if matches!(instruction.op, Op::Acquire | Op::Borrow | Op::Move) {
         return fixed_object_class(function, *instruction.operands.first()?, data);
     }
-    if instruction.op != Op::ObjectNew {
+    if !matches!(
+        instruction.op,
+        Op::ObjectNew | Op::ObjectNewWithoutConstructor
+    ) {
         return None;
     }
     let Immediate::Data(data_id) = instruction.immediate.as_ref()? else {

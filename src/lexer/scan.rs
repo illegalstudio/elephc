@@ -66,6 +66,9 @@ pub fn scan_tokens(
                 span,
                 "PHP opening and closing tags are not valid in .lfc source files",
             ));
+        } else if cursor.remaining().starts_with("?>") {
+            scan_close_tag_and_inline_html(&mut cursor, &mut tokens);
+            continue;
         } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
@@ -99,6 +102,55 @@ pub fn scan_tokens(
     }
 
     Ok(tokens)
+}
+
+/// Lowers one PHP close tag and following inline HTML into ordinary echo tokens.
+///
+/// A close tag terminates the preceding PHP statement like a semicolon. Bytes
+/// outside PHP are emitted verbatim until EOF or the next `<?php`/`<?=` opener;
+/// the latter re-enters PHP in echo-expression mode.
+fn scan_close_tag_and_inline_html(cursor: &mut Cursor, tokens: &mut Vec<SpannedToken>) {
+    let close_span = cursor.span();
+    cursor.advance();
+    cursor.advance();
+    tokens.push(spanned(Token::Semicolon, close_span));
+
+    // Zend's T_CLOSE_TAG token absorbs the immediately following line ending.
+    // Without this, a conventional `?>\n` at EOF gains one visible blank line.
+    if cursor.remaining().starts_with("\r\n") {
+        cursor.advance();
+        cursor.advance();
+    } else if cursor.peek() == Some('\n') {
+        cursor.advance();
+    }
+
+    let inline_span = cursor.span();
+    let mut inline = String::new();
+    while !cursor.is_eof()
+        && !cursor.remaining().starts_with("<?php")
+        && !cursor.remaining().starts_with("<?=")
+    {
+        if let Some(ch) = cursor.advance() {
+            inline.push(ch);
+        }
+    }
+    if !inline.is_empty() {
+        tokens.push(spanned(Token::Echo, inline_span));
+        tokens.push(spanned(Token::StringLiteral(inline), inline_span));
+        tokens.push(spanned(Token::Semicolon, cursor.span()));
+    }
+
+    if cursor.remaining().starts_with("<?php") {
+        for _ in 0..5 {
+            cursor.advance();
+        }
+    } else if cursor.remaining().starts_with("<?=") {
+        let echo_span = cursor.span();
+        for _ in 0..3 {
+            cursor.advance();
+        }
+        tokens.push(spanned(Token::Echo, echo_span));
+    }
 }
 
 /// Skips all whitespace, `//` line comments, `#` line comments (but not `#[` attribute

@@ -24,7 +24,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         return lower_stdclass_prop_set(ctx, object, value, &property);
     }
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
-        return lower_allow_dynamic_prop_set(ctx, object, value, &property, offset);
+        return lower_allow_dynamic_prop_set(ctx, object, value, &property, offset, inst.span);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
@@ -84,7 +84,7 @@ pub(super) fn lower_const_dynamic_prop_set(
         return lower_stdclass_prop_set(ctx, object, value, property);
     }
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
-        return lower_allow_dynamic_prop_set(ctx, object, value, property, offset);
+        return lower_allow_dynamic_prop_set(ctx, object, value, property, offset, inst.span);
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
@@ -245,14 +245,33 @@ pub(super) fn declared_dynamic_property_set_slots(
         class_info
             .properties
             .iter()
-            .map(|(property, _)| property.clone())
+            .enumerate()
+            .filter(|(index, (property, _))| {
+                class_info.visible_property_index(property) == Some(*index)
+            })
+            .filter(|(_, (property, _))| {
+                class_info
+                    .property_visibilities
+                    .get(property)
+                    .unwrap_or(&Visibility::Public)
+                    == &Visibility::Public
+            })
+            .filter(|(_, (property, _))| {
+                let getter = php_symbol_key(&property_hook_get_method(property));
+                let setter = php_symbol_key(&property_hook_set_method(property));
+                !class_info.readonly_properties.contains(property)
+                    && !(class_info.methods.contains_key(&getter)
+                        && !class_info.methods.contains_key(&setter))
+            })
+            .map(|(_, (property, _))| property.clone())
             .collect::<Vec<_>>()
     };
     let mut slots = Vec::new();
     for property in property_names {
         let slot = resolve_property_slot_for_class(ctx, normalized, &property, inst)?;
-        ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
-        slots.push(slot);
+        if ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_ok() {
+            slots.push(slot);
+        }
     }
     Ok(slots)
 }

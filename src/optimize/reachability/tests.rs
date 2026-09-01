@@ -33,6 +33,7 @@ fn prune(source: &str) -> (Program, crate::types::CheckResult) {
         PruneOptions {
             inventory: &inventory,
             forced_groups: &roots,
+            structural_groups: &roots,
             exported_functions: &roots,
             eval_forced: false,
         },
@@ -1059,12 +1060,63 @@ fn prune_ignores_internal_prelude_closure_dispatch_hazard() {
         PruneOptions {
             inventory: &inventory,
             forced_groups: &roots,
+            structural_groups: &roots,
             exported_functions: &roots,
             eval_forced: false,
         },
     );
     assert!(has_method(&program, "T", "dispatch"));
     assert!(!has_method(&program, "T", "sibling"));
+}
+
+/// Verifies structural compiler roots retain dependencies without global dynamic widening.
+#[test]
+fn structural_prelude_group_does_not_promote_callable_hazards() {
+    let program = parse(
+        "<?php function helper(callable $callback): int { return $callback(); } function sibling(): int { return 2; } echo 1;",
+    );
+    let mut check = crate::types::check(&program).expect("fixture must type check");
+    let mut inventory = PreludeInventory::new();
+    inventory
+        .group_mut("structural")
+        .functions
+        .insert("helper".to_string());
+    let empty = HashSet::new();
+    let structural = HashSet::from(["structural".to_string()]);
+    let program = prune_unreachable_declarations(
+        program,
+        &mut check,
+        PruneOptions {
+            inventory: &inventory,
+            forced_groups: &empty,
+            structural_groups: &structural,
+            exported_functions: &empty,
+            eval_forced: false,
+        },
+    );
+
+    assert!(has_function(&program, "helper"));
+    assert!(!has_function(&program, "sibling"));
+}
+
+/// Verifies a declared object property narrows method reachability to its stored class.
+#[test]
+fn typed_property_receiver_does_not_keep_same_named_methods_on_other_live_classes() {
+    let (program, _) = prune(
+        "<?php
+         class Item { public function target(): int { return 1; } }
+         class Other { public function target(): int { return 9; } public function live(): int { return 2; } }
+         class Holder {
+             private Item $item;
+             public function __construct() { $this->item = new Item(); }
+             public function run(): int { return $this->item->target(); }
+         }
+         $holder = new Holder(); $other = new Other(); echo $holder->run(), $other->live();",
+    );
+
+    assert!(has_method(&program, "Item", "target"));
+    assert!(has_method(&program, "Other", "live"));
+    assert!(!has_method(&program, "Other", "target"));
 }
 
 /// Verifies `method_exists` observes static declarations as well as instance methods.

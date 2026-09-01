@@ -11,6 +11,12 @@ use super::*;
 
 /// Returns PHP case-insensitive method names visible to `ReflectionClass::hasMethod()`.
 pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_name: &str) -> Vec<String> {
+    if let Some(method_names) = crate::types::php_src_date_method_names(class_name) {
+        return method_names
+            .iter()
+            .map(|method_name| (*method_name).to_string())
+            .collect();
+    }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut current = Some(class_name.to_string());
@@ -34,6 +40,12 @@ pub(super) fn reflection_class_property_names(
     class_name: &str,
     info: &crate::types::ClassInfo,
 ) -> Vec<String> {
+    if let Some(property_names) = crate::types::php_src_date_property_names(class_name) {
+        return property_names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+    }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     if is_reflection_enum(ctx, class_name) {
@@ -377,21 +389,24 @@ pub(super) fn collect_interface_constant_reflection_members(
     for (constant_name, value_expr) in &interface_info.constants {
         let declaring_interface =
             interface_constant_declaring_interface(interface_info, interface_name, constant_name);
-        let is_final = ctx
-            .module
-            .interface_infos
-            .get(declaring_interface)
-            .is_some_and(|info| info.final_constants.contains(constant_name));
+        let declaring_info = ctx.module.interface_infos.get(declaring_interface);
+        let is_final =
+            declaring_info.is_some_and(|info| info.final_constants.contains(constant_name));
         let value = reflection_constant_value(ctx, declaring_interface, None, value_expr, 0)?;
         push_unique_constant_reflection_member(
             constant_name,
             declaring_interface,
-            Vec::new(),
-            Vec::new(),
+            declaring_info
+                .and_then(|info| info.constant_attribute_names.get(constant_name))
+                .cloned()
+                .unwrap_or_default(),
+            declaring_info
+                .and_then(|info| info.constant_attribute_args.get(constant_name))
+                .cloned()
+                .unwrap_or_default(),
             value,
-            interface_info
-                .constant_types
-                .get(constant_name)
+            declaring_info
+                .and_then(|info| info.constant_types.get(constant_name))
                 .and_then(reflection_declared_type_metadata),
             Visibility::Public,
             is_final,
@@ -490,4 +505,3 @@ pub(super) fn push_unique_listed_constant_member(
         members.push(member);
     }
 }
-

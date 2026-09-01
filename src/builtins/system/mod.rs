@@ -11,12 +11,14 @@
 //! - Pure-data builtins (no check hook): time, sleep, usleep, checkdate, date, gmdate,
 //!   mktime, gmmktime, hrtime, getdate, localtime, date_default_timezone_get/set,
 //!   __elephc_mktime_raw, __elephc_gmmktime_raw, __elephc_strtotime_raw,
+//!   __elephc_diag_warning,
 //!   putenv, http_response_code, header, phpversion, exec, shell_exec, system, passthru,
 //!   json_last_error, json_last_error_msg, serialize, preg_match_all, preg_replace.
 //! - Check-hook builtins: microtime (literal-dependent return type), strtotime
 //!   (returns Union(Int, Bool)), getenv (returns Union(Str, Bool)), php_uname (validates
 //!   arg type), define (side-effect: registers constant type), defined (validates literal),
 //!   extension_loaded (validates literal; const-folds extension membership),
+//!   get_extension_funcs (validates extension names; exposes ordered inventories),
 //!   get_loaded_extensions (validates optional literal flag; const-folds the extension list),
 //!   class_attribute_names/class_attribute_args/class_get_attributes (compile-time reflection),
 //!   json_encode, json_decode, json_validate, unserialize, preg_match (by-ref `$matches`
@@ -25,6 +27,7 @@
 //! - `json_support` holds shared helpers for the JSON/serialize check hooks.
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
+pub mod __elephc_diag_warning;
 pub mod __elephc_class_has_constructor;
 pub mod __elephc_gmmktime_raw;
 pub mod __elephc_initialize_pdo_statement;
@@ -39,14 +42,18 @@ pub mod checkdate;
 pub mod class_attribute_args;
 pub mod class_attribute_names;
 pub mod class_get_attributes;
+pub mod constant;
 pub mod date;
 pub mod date_default_timezone_get;
 pub mod date_default_timezone_set;
-pub mod constant;
 pub mod define;
 pub mod defined;
+pub mod error_reporting;
 pub mod exec;
 pub mod extension_loaded;
+pub mod gc_collect_cycles;
+pub mod gc_enable;
+pub mod get_extension_funcs;
 pub mod get_loaded_extensions;
 pub mod getdate;
 pub mod getenv;
@@ -73,6 +80,7 @@ pub mod preg_replace;
 pub mod preg_split;
 pub mod putenv;
 pub mod serialize;
+pub mod setlocale;
 pub mod shell_exec;
 pub mod sleep;
 pub mod strtotime;

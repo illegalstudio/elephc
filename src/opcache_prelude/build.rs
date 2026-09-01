@@ -28,7 +28,7 @@
 //!   variant a fourth. Sharing it means the empty-path rule (see `INVALIDATE_TEMPLATE`'s
 //!   successor docblock in the parent module) cannot drift between them.
 
-use crate::parser::ast::{BinOp, CastType, Expr, Program, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, TypeExpr};
 use crate::synthetic_class::{
     e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast, e_const, e_float, e_index, e_int,
     e_neg, e_new, e_not, e_null, e_str, e_var, function, s_array_assign, s_assign, s_break,
@@ -738,22 +738,81 @@ pub(crate) fn cli_ini_get_decl() -> Stmt {
     function("ini_get")
         .param("option", TypeExpr::Str)
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
-        .body(vec![s_return(e_call(
-            "__elephc_opcache_ini_string",
-            vec![e_var("option")],
-        ))])
+        .body(vec![
+            s_if(
+                e_binop(e_var("option"), BinOp::StrictEq, e_str("date.timezone")),
+                vec![s_return(e_call("date_default_timezone_get", vec![]))],
+                vec![],
+                None,
+            ),
+            s_return(e_call("__elephc_opcache_ini_string", vec![e_var("option")])),
+        ])
         .build()
 }
 
-/// The CLI `ini_set(string $option, $value): string|false` wrapper: every `opcache.*` directive
-/// is baked into the binary, so it reports failure for every key.
-pub(crate) fn cli_ini_set_decl() -> Stmt {
-    function("ini_set")
+/// Builds the internal line-aware `ini_set` dispatch helper and its public two-argument wrapper.
+pub(crate) fn cli_ini_set_decls() -> Vec<Stmt> {
+    let suppressed_set = Expr::new(
+        ExprKind::ErrorSuppress(Box::new(e_call(
+            "date_default_timezone_set",
+            vec![e_var("value")],
+        ))),
+        crate::span::Span::dummy(),
+    );
+    let invalid_message = e_binop(
+        e_binop(
+            e_binop(
+                e_str("\nWarning: ini_set(): Invalid date.timezone value '"),
+                BinOp::Concat,
+                e_var("value"),
+            ),
+            BinOp::Concat,
+            e_str("', using '"),
+        ),
+        BinOp::Concat,
+        e_binop(e_var("old"), BinOp::Concat, e_str("' instead")),
+    );
+    let dispatch = function(super::CLI_INI_SET_DISPATCH_HELPER)
         .param("option", TypeExpr::Str)
         .param_untyped("value")
+        .param_default("line", TypeExpr::Int, e_int(0))
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             s_assign("value", e_cast(CastType::String, e_var("value"))),
+            s_if(
+                e_binop(e_var("option"), BinOp::StrictEq, e_str("date.timezone")),
+                vec![
+                    s_assign("old", e_call("date_default_timezone_get", vec![])),
+                    s_if(
+                        e_not(suppressed_set),
+                        vec![
+                            s_assign("message", invalid_message),
+                            s_if(
+                                e_binop(e_var("line"), BinOp::Gt, e_int(0)),
+                                vec![s_expr(e_call(
+                                    "__elephc_diag_warning",
+                                    vec![e_var("message"), e_var("line")],
+                                ))],
+                                vec![],
+                                Some(vec![s_expr(e_call(
+                                    "__elephc_diag_warning",
+                                    vec![e_binop(
+                                        e_var("message"),
+                                        BinOp::Concat,
+                                        e_str("\n"),
+                                    )],
+                                ))]),
+                            ),
+                            s_return(e_bool(false)),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_var("old")),
+                ],
+                vec![],
+                None,
+            ),
             s_if(
                 e_binop(
                     e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
@@ -766,7 +825,17 @@ pub(crate) fn cli_ini_set_decl() -> Stmt {
             ),
             s_return(e_bool(false)),
         ])
-        .build()
+        .build();
+    let public = function("ini_set")
+        .param("option", TypeExpr::Str)
+        .param_untyped("value")
+        .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
+        .body(vec![s_return(e_call(
+            super::CLI_INI_SET_DISPATCH_HELPER,
+            vec![e_var("option"), e_var("value"), e_int(0)],
+        ))])
+        .build();
+    vec![dispatch, public]
 }
 
 /// The CLI `ini_get_all(?string $extension = null, bool $details = true)` wrapper — the

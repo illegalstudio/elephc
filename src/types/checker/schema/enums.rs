@@ -463,6 +463,7 @@ pub(crate) fn insert_enum_metadata(
             is_final: true,
             is_readonly_class: true,
             allow_dynamic_properties: false,
+            dynamic_properties_deprecated: false,
             constants,
             constant_deprecations: user_constants
                 .iter()

@@ -42,9 +42,22 @@ pub(super) fn lower_closure_capture(_ctx: &mut FunctionContext<'_>, _inst: &Inst
     Ok(())
 }
 
-/// Lowers an explicit cycle-collection safe point.
-pub(super) fn lower_gc_collect(ctx: &mut FunctionContext<'_>) -> Result<()> {
+/// Lowers an explicit cycle-collection safe point and returns the number of reclaimed blocks.
+pub(super) fn lower_gc_collect(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let before_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_gc_frees", 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
-    Ok(())
+    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_gc_frees", 0);
+    abi::emit_pop_reg(ctx.emitter, before_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx
+            .emitter
+            .instruction(&format!("sub {result_reg}, {result_reg}, {before_reg}")),
+        Arch::X86_64 => ctx
+            .emitter
+            .instruction(&format!("sub {result_reg}, {before_reg}")),
+    }
+    store_if_result(ctx, inst)
 }
-

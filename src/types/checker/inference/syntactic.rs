@@ -303,6 +303,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             target: CastType::Bool,
             ..
         } => PhpType::Bool,
+        ExprKind::Cast {
+            target: CastType::Void,
+            ..
+        } => PhpType::Void,
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
@@ -317,7 +321,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             // strings. Without these arms an array literal such as `[dechex($n)]` would take
             // the `_ => PhpType::Int` fallback below, type the element `int`, and read the
             // string result registers as an integer — `["a"]` came out as `[0]`.
-            | "join" | "dechex" | "decbin" | "decoct" => PhpType::Str,
+            | "join" | "dechex" | "decbin" | "decoct" | "str_word_count" | "serialize" => PhpType::Str,
             "strpos" | "strrpos" | "stripos" | "strripos"
             | "array_search" | "grapheme_strrev" | "fileatime"
             | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
@@ -427,6 +431,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
+        ExprKind::NewDynamic { .. } => PhpType::Mixed,
         ExprKind::NewDynamicObject { fallback_class, .. } => {
             PhpType::Object(fallback_class.as_str().to_string())
         }

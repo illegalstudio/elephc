@@ -211,13 +211,22 @@ fn test_error_static_this() {
     );
 }
 
-/// Tests that a child class method that changes the parameter count when
-/// overriding a parent method produces the expected error.
+/// Tests that a child class method cannot remove an inherited parameter.
 #[test]
 fn test_error_override_cannot_change_parameter_count() {
     expect_error(
         "<?php class Base { public function ping($x) { return $x; } } class Child extends Base { public function ping() { return 1; } }",
-        "Cannot change parameter count when overriding method: Child::ping",
+        "Cannot remove inherited parameters when overriding method: Child::ping",
+    );
+}
+
+/// Tests that appending an optional parameter does not hide a by-reference mismatch in the
+/// inherited callable prefix.
+#[test]
+fn test_error_override_cannot_change_inherited_by_ref_parameter() {
+    expect_error(
+        "<?php class Base { public function ping(&$x) {} } class Child extends Base { public function ping($x, &$extra = null) {} }",
+        "Cannot change pass-by-reference parameters when overriding method: Child::ping",
     );
 }
 

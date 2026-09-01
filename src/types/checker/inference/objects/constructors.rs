@@ -11,6 +11,7 @@
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
+use crate::types::call_args::FixedParameterSlots;
 use crate::types::{fibers, FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -99,6 +100,53 @@ impl Checker {
             self.validate_reflection_owner_constructor(&class_name, args, expr, env)?;
             return Ok(PhpType::Object(class_name));
         }
+        let date_constructor_base = self.ext_date_constructor_base(&class_name);
+        let is_preallocated_date_constructor = date_constructor_base.is_some();
+        if is_preallocated_date_constructor
+            && args
+                .iter()
+                .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+        {
+            for arg in crate::types::call_args::expand_static_assoc_spread_args(args) {
+                self.infer_type(&arg, env)?;
+            }
+            return Ok(PhpType::Object(class_name));
+        }
+        let is_date_period_constructor = date_constructor_base == Some("DatePeriod");
+        let date_period_slots = is_date_period_constructor.then(|| {
+            crate::types::call_args::fixed_parameter_slots(
+                args,
+                &["start", "interval", "end", "options"],
+            )
+        });
+        if matches!(
+            date_period_slots.as_ref(),
+            Some(
+                FixedParameterSlots::Missing(_)
+                    | FixedParameterSlots::Unknown(_)
+                    | FixedParameterSlots::Duplicate(_)
+                    | FixedParameterSlots::DynamicSpread
+            )
+        ) {
+            for arg in crate::types::call_args::expand_static_assoc_spread_args(args) {
+                self.infer_type(&arg, env)?;
+            }
+            return Ok(PhpType::Object(class_name));
+        }
+        let invalid_internal_date_arity = date_constructor_base.is_some_and(|base| {
+            if args
+                .iter()
+                .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. }))
+            {
+                return false;
+            }
+            match crate::names::php_symbol_key(base).as_str() {
+                "datetime" | "datetimeimmutable" => args.len() > 2,
+                "datetimezone" | "dateinterval" => args.len() != 1,
+                "dateperiod" => args.is_empty() || args.len() > 4,
+                _ => false,
+            }
+        });
         if let Some(class_info) = self.classes.get(class_name.as_str()) {
             if class_info.is_abstract {
                 return Err(CompileError::new(
@@ -106,12 +154,37 @@ impl Checker {
                     &format!("Cannot instantiate abstract class: {}", class_name),
                 ));
             }
-            if let Some(sig) = class_info.methods.get("__construct") {
-                if let Some(visibility) = class_info.method_visibilities.get("__construct") {
-                    let declaring_class = class_info
+            if invalid_internal_date_arity {
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                return Ok(PhpType::Object(class_name));
+            }
+            let constructor_class_info = date_constructor_base
+                .and_then(|base| self.classes.get(base))
+                .unwrap_or(class_info);
+            let constructor_method = if matches!(
+                date_period_slots.as_ref(),
+                Some(FixedParameterSlots::Contiguous(1 | 2))
+            ) || (matches!(
+                date_period_slots.as_ref(),
+                Some(FixedParameterSlots::NoNamedArguments)
+            ) && matches!(args.len(), 1 | 2))
+            {
+                "__elephc_initialize_from_iso8601_string"
+            } else {
+                "__construct"
+            };
+            if let Some(sig) = constructor_class_info.methods.get(constructor_method) {
+                if let Some(visibility) = constructor_class_info
+                    .method_visibilities
+                    .get("__construct")
+                {
+                    let declaring_class = constructor_class_info
                         .method_declaring_classes
                         .get("__construct")
                         .map(String::as_str)
+                        .or(date_constructor_base)
                         .unwrap_or(class_name.as_str());
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_construct_internal_iterator_from_builtin_get_iterator(&class_name)
@@ -128,9 +201,37 @@ impl Checker {
                     }
                 }
                 let declared_flags =
-                    Self::declared_method_param_flags(class_info, "__construct", false);
-                let effective_sig = Self::callable_sig_for_declared_params(sig, &declared_flags);
-                let param_to_prop = class_info.constructor_param_to_prop.clone();
+                    Self::declared_method_param_flags(
+                        constructor_class_info,
+                        constructor_method,
+                        false,
+                    );
+                let constructor_is_userland = constructor_class_info
+                    .method_declaring_classes
+                    .get(constructor_method)
+                    .and_then(|declaring_class| self.classes.get(declaring_class))
+                    .is_some_and(|declaring_info| declaring_info.declaration_span.line != 0);
+                let mut effective_sig =
+                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                if date_constructor_base.is_some() {
+                    for (_, parameter_type) in &mut effective_sig.params {
+                        *parameter_type = PhpType::Mixed;
+                    }
+                }
+                if constructor_method == "__elephc_initialize_from_iso8601_string" {
+                    for (_, parameter_type) in effective_sig.params.iter_mut().take(2) {
+                        *parameter_type = PhpType::Mixed;
+                    }
+                } else if is_date_period_constructor {
+                    // ext/date factories return `DateTime|false`. PHP validates the selected
+                    // runtime arm when DatePeriod is invoked, so keep the first overload slot
+                    // dynamic here and let the preallocated-constructor guard raise php-src's
+                    // catchable overload TypeError when the value is actually `false`.
+                    if let Some((_, parameter_type)) = effective_sig.params.first_mut() {
+                        *parameter_type = PhpType::Mixed;
+                    }
+                }
+                let param_to_prop = constructor_class_info.constructor_param_to_prop.clone();
                 let normalized_args = self.normalize_named_call_args(
                     &effective_sig,
                     args,
@@ -150,9 +251,24 @@ impl Checker {
                 } else {
                     effective_sig
                 };
+                let validation_args = if constructor_is_userland
+                    && effective_sig.variadic.is_none()
+                    && !crate::types::call_args::has_named_args(&normalized_args)
+                    && !normalized_args
+                        .iter()
+                        .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
+                    && normalized_args.len() > effective_sig.params.len()
+                {
+                    // PHP userland callables accept extra positional arguments (and expose them
+                    // through func_get_args()). Elephc still evaluates every source argument; the
+                    // fixed constructor ABI receives only its declared prefix.
+                    &normalized_args[..effective_sig.params.len()]
+                } else {
+                    normalized_args.as_slice()
+                };
                 self.check_user_declared_call(
                     &effective_sig,
-                    &normalized_args,
+                    validation_args,
                     expr.span,
                     env,
                     &format!("Constructor '{}::__construct'", class_name),
@@ -172,7 +288,7 @@ impl Checker {
                     }
                 }
                 return Ok(PhpType::Object(class_name));
-            } else if !args.is_empty() {
+            } else if !args.is_empty() && class_info.declaration_span.line == 0 {
                 return Err(CompileError::new(
                     expr.span,
                     &format!(
@@ -195,6 +311,42 @@ impl Checker {
             }
         }
         Ok(PhpType::Object(class_name))
+    }
+
+    /// Returns the ext/date class that declares the effective inherited constructor.
+    ///
+    /// Descendants without their own constructor must keep the internal ext/date
+    /// allocation, overload, and runtime-validation behavior. A descendant that
+    /// overrides `__construct` deliberately falls back to the ordinary userland path.
+    fn ext_date_constructor_base(&self, class_name: &str) -> Option<&'static str> {
+        const BASES: [&str; 5] = [
+            "DateTime",
+            "DateTimeImmutable",
+            "DateTimeZone",
+            "DateInterval",
+            "DatePeriod",
+        ];
+        if let Some(base) = BASES
+            .iter()
+            .copied()
+            .find(|base| class_name.eq_ignore_ascii_case(base))
+        {
+            return Some(base);
+        }
+        let class_info = self.classes.get(class_name)?;
+        if let Some(declaring_class) = class_info
+            .method_declaring_classes
+            .get("__construct")
+        {
+            return BASES
+                .iter()
+                .copied()
+                .find(|base| declaring_class.eq_ignore_ascii_case(base));
+        }
+        BASES
+            .iter()
+            .copied()
+            .find(|base| self.is_subclass_of(class_name, base))
     }
 
     /// Infers constructor arguments for a class that may have been declared by a prior eval call.
@@ -229,7 +381,10 @@ impl Checker {
     fn can_construct_internal_iterator_from_builtin_get_iterator(&self, class_name: &str) -> bool {
         let get_iterator_key = php_symbol_key("getIterator");
         class_name == "InternalIterator"
-            && self.current_class.as_deref() == Some("SplFixedArray")
+            && matches!(
+                self.current_class.as_deref(),
+                Some("SplFixedArray" | "DatePeriod")
+            )
             && self.current_method.as_deref() == Some(get_iterator_key.as_str())
     }
 
@@ -617,7 +772,7 @@ impl Checker {
     ) -> Result<Option<FunctionSig>, CompileError> {
         let lookup_name = function_name.trim_start_matches('\\');
         let builtin_key = php_symbol_key(lookup_name);
-        if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_key) {
+        if let Some(sig) = crate::types::reflection_builtin_function_sig(&builtin_key) {
             return Ok(Some(sig));
         }
         let canonical =

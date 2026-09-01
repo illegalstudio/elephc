@@ -2,7 +2,7 @@
 title: "ob_flush() — internals"
 description: "Compiler internals for ob_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 201
+  order: 202
 ---
 
 ## `ob_flush()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_flush.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_flush.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

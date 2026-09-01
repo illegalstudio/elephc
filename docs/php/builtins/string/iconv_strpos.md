@@ -2,7 +2,7 @@
 title: "iconv_strpos()"
 description: "Finds the first character position of a needle in a string."
 sidebar:
-  order: 423
+  order: 430
 ---
 
 ## iconv_strpos()

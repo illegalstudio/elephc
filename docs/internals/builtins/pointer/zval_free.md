@@ -2,7 +2,7 @@
 title: "zval_free() — internals"
 description: "Compiler internals for zval_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 350
+  order: 357
 ---
 
 ## `zval_free()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_free.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_free.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

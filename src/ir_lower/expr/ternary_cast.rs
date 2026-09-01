@@ -61,6 +61,40 @@ pub(super) fn lower_ternary(
 /// Lowers a cast expression.
 pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
+    // PHP 8.5's `(void)` cast is an explicit discard marker. The enclosing
+    // expression statement still owns cleanup of the evaluated value, so keep
+    // the producer visible and do not emit a representation-changing cast.
+    if matches!(target, CastType::Void) {
+        return value;
+    }
+    // php-src exposes ext/date's virtual object handlers through object-to-array casts.
+    // DatePeriod's handler is modeled by its declared virtual properties; the other date
+    // families expose the same associative shape as their internal serialization handler.
+    if matches!(target, CastType::Array) {
+        let object_type = ctx.builder.value_php_type(value.value);
+        if let Some((class_name, _)) = singular_object_class(&object_type) {
+            if date_object_uses_virtual_property_shape(ctx, class_name) {
+                let release_source = ctx.value_is_owning_temporary(value)
+                    && !ctx.value_is_owned_unboxed_local_load(value.value);
+                let properties = if class_extends_class(ctx, class_name, "DatePeriod") {
+                    lower_get_object_vars_from_value(ctx, value.value, expr.span)
+                        .unwrap_or_else(|error| {
+                            panic!("checked DatePeriod array cast failed: {error}")
+                        })
+                        .value
+                } else {
+                    lower_date_serialize_hash_from_object(ctx, value.value, expr.span).value
+                };
+                if release_source {
+                    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+                }
+                return LoweredValue {
+                    value: properties,
+                    ir_type: ctx.builder.value_type(properties),
+                };
+            }
+        }
+    }
     // Keep the original producer visible for a no-op string cast. Wrapping an
     // owned string temporary in `Cast(Str)` would hide its ownership from the
     // retaining store/call cleanup and leak the detached string allocation.
@@ -133,6 +167,7 @@ pub(super) fn cast_php_type(target: &CastType, source_type: &PhpType) -> PhpType
         CastType::Float => PhpType::Float,
         CastType::String => PhpType::Str,
         CastType::Bool => PhpType::Bool,
+        CastType::Void => PhpType::Void,
         CastType::Array
             if matches!(source_type.codegen_repr(), PhpType::Object(_)) =>
         PhpType::AssocArray {

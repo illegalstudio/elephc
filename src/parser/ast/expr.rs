@@ -263,6 +263,8 @@ pub enum CastType {
     String,
     Bool,
     Array,
+    /// PHP 8.5's explicit discard cast, valid as an expression statement.
+    Void,
 }
 
 #[derive(Debug, Clone, PartialEq)]

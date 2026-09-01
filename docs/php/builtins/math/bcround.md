@@ -2,7 +2,7 @@
 title: "bcround()"
 description: "Rounds an arbitrary-precision decimal number."
 sidebar:
-  order: 277
+  order: 278
 ---
 
 ## bcround()

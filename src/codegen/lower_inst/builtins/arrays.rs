@@ -56,6 +56,7 @@ mod pop_search;
 mod in_array_cases;
 mod in_array_coercions;
 mod in_array_strings;
+mod in_array_mixed;
 
 use map_dispatch::*;
 use map_results::*;
@@ -75,6 +76,7 @@ use pop_search::*;
 use in_array_cases::*;
 use in_array_coercions::*;
 use in_array_strings::*;
+use in_array_mixed::*;
 
 pub(crate) use basic::{
     lower_call_user_func_builtin_escape, lower_array_sum, lower_array_product, lower_array_push,

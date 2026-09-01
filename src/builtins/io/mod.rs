@@ -31,6 +31,10 @@
 //! - `touch` owns the relocated `check_touch` helper (was in io/files.rs).
 //! - Add `pub mod <name>;` here for every new io builtin home.
 
+pub mod __elephc_print_r_object_properties;
+pub mod __elephc_var_dump_indent;
+pub mod __elephc_var_dump_object_properties;
+pub mod __elephc_var_dump_object_property_count;
 pub mod __elephc_phar_bzip2_archive;
 pub mod __elephc_phar_decompress_archive;
 pub mod __elephc_phar_get_file_metadata;

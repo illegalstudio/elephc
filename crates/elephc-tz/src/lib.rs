@@ -1,17 +1,14 @@
 //! Purpose:
-//! Pure-Rust IANA timezone-introspection bridge staticlib for elephc's
-//! `DateTimeZone::getLocation`/`getTransitions`/`listAbbreviations` family. The
-//! three tables are baked from the PHP interpreter (see `data/generate.php`) and
-//! embedded with `include_str!`, so results are byte-for-byte identical to PHP
-//! with no runtime dependency but `std`. The only computed value is a
-//! transition's `time` string, regenerated from its timestamp by a
-//! proleptic-Gregorian formatter that stays exact at extreme timestamps (where
-//! elephc's `gmdate` would not).
+//! IANA timezone and vendored php-src timelib bridge staticlib for Elephc's date/time surface.
+//! The introspection tables are generated from the normative PHP interpreter, while the same
+//! vendored timelib parser implements free-form/format/interval/period parsing and arithmetic.
+//! Transition `time` strings use a proleptic-Gregorian formatter exact at extreme timestamps.
 //!
 //! Called from:
 //! - Compiled PHP programs via the `elephc_tz_*` C ABI (see the `abi` module).
 //! - `cargo test -p elephc-tz` (the rlib) for in-isolation validation against
-//!   reference values captured from PHP 8.5.6 / timelib tz 2026.1.
+//!   reference values captured from php-src `47b563cbb856ec19155aacc3246931dfacbebd21`
+//!   (`PHP 8.5.10-dev`, timelib tz 2026.3).
 //!
 //! Key details:
 //! - Baking is required for parity: tz Rust crates ship slim TZif (no fat
@@ -26,6 +23,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 mod abi;
+mod format;
+mod timelib_ffi;
 
 /// Embedded transition table: one line per zone, `<zone>\t<field>` where field is
 /// `F` (false), `=<canonical>` (alias), or `ts,off,dst,abbr;...`.
@@ -36,7 +35,7 @@ const LOCATIONS: &str = include_str!("../data/location.data");
 const ABBREVIATIONS: &str = include_str!("../data/abbreviations.data");
 /// Embedded timelib/IANA release string the tables above were baked from, captured
 /// by `data/generate.php` as `timezone_version_get()`. Trimmed of the trailing newline
-/// so callers see exactly e.g. `2026.1`.
+/// so callers see exactly e.g. `2026.3`.
 const VERSION: &str = include_str!("../data/version.data");
 
 /// Reports the timelib/IANA release the embedded introspection tables were baked
@@ -148,6 +147,15 @@ fn transitions_index() -> &'static HashMap<&'static str, &'static str> {
     IDX.get_or_init(|| index(TRANSITIONS))
 }
 
+/// Returns whether `name` is one of php-src timelib's accepted timezone identifiers.
+///
+/// The baked transition table includes canonical IANA names, backward-compatible
+/// aliases, and php-src's legacy zones, so membership matches the public
+/// `date_default_timezone_set()` identifier gate without accepting fixed offsets.
+pub fn timezone_identifier_valid(name: &str) -> bool {
+    transitions_index().contains_key(name)
+}
+
 /// Memoized index over the embedded locations table.
 fn locations_index() -> &'static HashMap<&'static str, &'static str> {
     static IDX: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
@@ -240,7 +248,8 @@ pub fn abbreviations() -> &'static [(&'static str, Vec<AbbrevRow>)] {
 mod tests {
     //! Purpose:
     //! Validates the baked tables and the runtime `time` formatter against
-    //! reference values captured from PHP 8.5.6 (timelib tz 2026.1).
+    //! reference values captured from php-src `47b563cbb856ec19155aacc3246931dfacbebd21`
+    //! (`PHP 8.5.10-dev`, timelib tz 2026.3).
     //!
     //! Called from:
     //! - `cargo test -p elephc-tz` through Rust's test harness.
@@ -354,5 +363,29 @@ mod tests {
     fn tables_cover_all_zones() {
         assert_eq!(LOCATIONS.lines().count(), 598);
         assert_eq!(TRANSITIONS.lines().count(), 598);
+    }
+
+    /// Public timezone validation accepts php-src names and aliases while
+    /// rejecting unknown names and numeric/fixed-offset constructor syntax.
+    #[test]
+    fn validates_public_timezone_identifiers() {
+        for name in [
+            "UTC",
+            "GMT",
+            "CET",
+            "Europe/Paris",
+            "Zulu",
+            "GMT0",
+            "EST5EDT",
+            "GMT+0",
+        ] {
+            assert!(timezone_identifier_valid(name), "{name} should be valid");
+        }
+        for name in ["", "+02:00", "UTC-2", "UTC+5:30", "AAA", "ZZZ", "foo"] {
+            assert!(
+                !timezone_identifier_valid(name),
+                "{name} should be rejected"
+            );
+        }
     }
 }

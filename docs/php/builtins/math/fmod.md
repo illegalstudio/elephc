@@ -2,7 +2,7 @@
 title: "fmod()"
 description: "Returns the floating point remainder of the division of the arguments."
 sidebar:
-  order: 293
+  order: 294
 ---
 
 ## fmod()

@@ -399,6 +399,7 @@ standalone server binary.
   available under `--web`: `trigger_error()` renders `"<Prefix>: <message>"` to stderr,
   and `error_log()` supports the stderr channel (`message_type` 0) and file appends
   (`message_type` 3); the mail channel (`message_type` 1) is unsupported and returns
-  `false`. There is no `error_reporting`/`display_errors` layer, so these messages are
-  always written. PHP's "headers already sent" warning genuinely cannot occur because
+  `false`. Runtime diagnostics honor the shared `error_reporting()` mask and `@`
+  suppression; Elephc still has no independent `display_errors` routing layer. PHP's
+  "headers already sent" warning genuinely cannot occur because
   output is buffered until the request completes.

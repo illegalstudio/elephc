@@ -2,7 +2,7 @@
 title: "buffer_free()"
 description: "Frees a buffer<T> and nulls the local variable that held it."
 sidebar:
-  order: 71
+  order: 72
 ---
 
 ## buffer_free()

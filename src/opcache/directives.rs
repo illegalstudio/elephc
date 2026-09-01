@@ -15,7 +15,7 @@
 //! - This module is intentionally dependency-free (no `crate::` references): it is
 //!   compiled into both the `elephc` and `elephc-magician` crates through a shared
 //!   file include, so it must not name types from either crate. The caller passes a
-//!   plain `PHP_VERSION_ID` (80200/80300/80400/80500).
+//!   plain `PHP_VERSION_ID` (80200/80300/80400/80510 for the maintained defaults).
 //! - It owns the `--ini` OVERRIDE PIPELINE, and the ORDER of its two stages is load-bearing:
 //!   [`ini_scanner_value`] first (php-src's INI *scanner* rewrites the boolean barewords
 //!   `on`/`true`/`yes` → `"1"` and `off`/`false`/`no`/`none`/`null` → `""` for EVERY directive,
@@ -46,7 +46,7 @@
 //!   (`opcache.memory_consumption` → 128 MiB = 134217728), `opcache.max_wasted_percentage`
 //!   as the fraction `0.05` (not the raw `5`), and `opcache.optimization_level` as the
 //!   decimal form of `0x7FFEBFFF` (2147401727). The 8.5 set is byte-verified against
-//!   reference PHP 8.5.6 `var_export(opcache_get_configuration()['directives'])`; the
+//!   reference PHP 8.5 php-src oracle; the
 //!   8.2/8.3/8.4 sets apply the documented per-version deltas to the same normalized
 //!   values (their relative ordering is derived, not byte-verified against a live
 //!   older runtime).
@@ -70,16 +70,15 @@ pub enum DirectiveValue {
 pub const OPCACHE_PRODUCT_NAME: &str = "Zend OPcache";
 
 /// Returns the targeted PHP language-version string reported under
-/// `['version']['version']`. Reference PHP reports its own patch release
-/// (`PHP_VERSION`, e.g. `8.5.6`); elephc targets a language version rather than a
-/// specific patch, so it reports the `8.<minor>.0` form of the compile target.
+/// `['version']['version']`. The default profile is pinned to the frozen
+/// `8.5.10-dev` php-src oracle; older profiles retain their `8.<minor>.0` form.
 pub fn opcache_version_string(version_id: u32) -> &'static str {
     match version_id {
         80200 => "8.2.0",
         80300 => "8.3.0",
         80400 => "8.4.0",
         // 80500 and any newer/unknown id fall back to the newest maintained profile.
-        _ => "8.5.0",
+        _ => "8.5.10-dev",
     }
 }
 
@@ -195,8 +194,8 @@ pub fn opcache_directives(version_id: u32) -> Vec<(&'static str, DirectiveValue)
 /// This is NEW data: it is the source of truth for the `ini_get('opcache.*')` surface on
 /// both the native AOT compiler (`crate::opcache_prelude`) and the eval interpreter, exactly
 /// as `opcache_directives` backs `opcache_get_configuration()`.
-// `allow(dead_code)`: this file is `#[path]`-included into `elephc-magician` too, which does
-// not (yet) consult the raw-string projection, so it is dead there while live in `elephc`.
+/// `allow(dead_code)`: this file is `#[path]`-included into `elephc-magician` too, which does
+/// not (yet) consult the raw-string projection, so it is dead there while live in `elephc`.
 #[allow(dead_code)]
 pub fn directive_ini_string(name: &str, value: &DirectiveValue) -> String {
     // Overrides for directives whose raw INI string is not derivable from the normalized
@@ -236,8 +235,8 @@ pub fn directive_ini_string(name: &str, value: &DirectiveValue) -> String {
 /// directive was never overridden. Repeated `--ini` flags for the same key are last-wins
 /// (matching how a later `-d` on a PHP command line overrides an earlier one), so the scan
 /// runs from the back.
-// `allow(dead_code)`: dead in the `elephc-magician` `#[path]` includes that do not consult
-// the override machinery (eval has no `--ini`), live in `elephc`.
+/// `allow(dead_code)`: dead in the `elephc-magician` `#[path]` includes that do not consult
+/// the override machinery (eval has no `--ini`), live in `elephc`.
 #[allow(dead_code)]
 fn latest_override<'a>(overrides: &'a [(String, String)], name: &str) -> Option<&'a str> {
     overrides
@@ -1299,8 +1298,8 @@ pub fn directive_env_type_code(name: &str, value: &DirectiveValue) -> char {
 /// unconfigured run yields `NULL`/`NULL`. `ini_get('opcache.file_cache')` reports `string(0) ""`
 /// in ALL THREE cases — the NULL is visible through `ini_get_all()` alone, which is why this
 /// predicate is consulted only there.
-// `allow(dead_code)`: dead in the `elephc-magician` `#[path]` include (which does not build the
-// `ini_get_all` surface), live in `elephc`.
+/// `allow(dead_code)`: dead in the `elephc-magician` `#[path]` include (which does not build the
+/// `ini_get_all` surface), live in `elephc`.
 #[allow(dead_code)]
 pub fn directive_ini_null_default(name: &str) -> bool {
     name == "opcache.file_cache"
@@ -1322,8 +1321,8 @@ pub fn directive_ini_null_default(name: &str) -> bool {
 /// (`OnUpdateConsistencyChecks`).
 /// The access level of a directive does not vary across the maintained versions (only the
 /// directive *set* does), so a single name-keyed lookup is correct for all of 8.2–8.5.
-// `allow(dead_code)`: dead in the `elephc-magician` `#[path]` include (which does not build
-// the `ini_get_all` access surface), live in `elephc`.
+/// `allow(dead_code)`: dead in the `elephc-magician` `#[path]` include (which does not build
+/// the `ini_get_all` access surface), live in `elephc`.
 #[allow(dead_code)]
 pub fn directive_access(name: &str) -> u8 {
     // PHP_INI_ALL (7) directives; every other opcache directive is PHP_INI_SYSTEM (4).

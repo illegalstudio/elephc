@@ -5,7 +5,7 @@ sidebar:
   order: 18
 ---
 
-elephc provides the object-oriented date/time classes from PHP's standard library: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, and `DateInterval`. They are compiled, not interpreted, and are built on top of the same `date()`, `mktime()`, and `strtotime()` builtins documented in [System & I/O](system-and-io.md).
+elephc provides the object-oriented date/time classes from PHP's standard library: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, and `DatePeriod`. They are compiled, not interpreted, and are built on top of the same `date()`, `mktime()`, and `strtotime()` builtins documented in [System & I/O](system-and-io.md).
 
 ## DateTimeZone
 
@@ -13,12 +13,16 @@ Holds a time-zone identifier.
 
 | Method | Description |
 |---|---|
-| `__construct(string $name)` | Store the zone identifier (e.g. `"UTC"`, `"Europe/Paris"`). |
+| `__construct(string $name)` | Store the zone identifier (e.g. `"UTC"`, `"Europe/Paris"`, `"+0200"`, or a known abbreviation like `"CET"`). Throws `DateInvalidTimeZoneException` (PHP 8.3+) on an unrecognized identifier. |
 | `getName(): string` | Return the stored identifier. |
 | `getOffset(DateTimeInterface $datetime): int` | UTC offset (seconds) of this zone at the given instant — positive east of UTC, negative west — resolved daylight-saving aware from the system timezone database. |
 | `static listIdentifiers(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array` | IANA timezone identifiers as an indexed array. With no arguments returns every zone in `ALL`. `$timezoneGroup` filters by region-group bitmask (e.g. `DateTimeZone::EUROPE`, or several OR'd together); `ALL_WITH_BC` additionally includes the backward-compat zones. With `DateTimeZone::PER_COUNTRY` set, results are filtered to `$countryCode` (an uppercase ISO 3166-1 code, matched case-sensitively); a missing country code then throws `ValueError`, as in PHP. |
 
 `DateTimeZone` defines the region/group constants used as `listIdentifiers()` selectors, with PHP's bitmask values: `AFRICA` (1), `AMERICA` (2), `ANTARCTICA` (4), `ARCTIC` (8), `ASIA` (16), `ATLANTIC` (32), `AUSTRALIA` (64), `EUROPE` (128), `INDIAN` (256), `PACIFIC` (512), `UTC` (1024), `ALL` (2047), `ALL_WITH_BC` (4095), and `PER_COUNTRY` (4096).
+
+The constructor accepts PHP/timelib numeric-zone forms with or without the `GMT` prefix, including
+second precision. It stores the canonical name (`+0200` → `+02:00`,
+`GMT+023045` → `+02:30:45`) while keeping the exact offset for date arithmetic.
 
 ```php
 $europe  = DateTimeZone::listIdentifiers(DateTimeZone::EUROPE);            // 58 zones
@@ -27,8 +31,11 @@ $withBc  = DateTimeZone::listIdentifiers(DateTimeZone::ALL_WITH_BC);       // in
 $france  = DateTimeZone::listIdentifiers(DateTimeZone::PER_COUNTRY, "FR"); // ["Europe/Paris"]
 $all     = timezone_identifiers_list();                                    // alias, same filtering
 ```
+
+| Method | Description |
+|---|---|
 | `getLocation(): array\|false` | The zone's `country_code`, `latitude`, `longitude`, and `comments`, or `false` for zones without a location (e.g. the legacy `CET`/`GMT` abbreviation-zones). |
-| `getTransitions(int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): array\|false` | The zone's daylight-saving transitions (each row has `ts`, `time`, `offset`, `isdst`, `abbr`). With no arguments returns the full list; with a window returns the state active at `$timestampBegin` followed by the transitions inside it. `false` for zones with no transitions. |
+| `getTransitions(int $timestampBegin = PHP_INT_MIN, int $timestampEnd = 2147483647): array\|false` | The zone's daylight-saving transitions (each row has `ts`, `time`, `offset`, `isdst`, `abbr`). With no arguments returns the PHP-default window; with an explicit window it returns the state active at `$timestampBegin` followed by the transitions inside it. `false` for zones with no transitions. |
 | `static listAbbreviations(): array` | The full abbreviation → `[dst, offset, timezone_id]` table, keyed by lowercase abbreviation. |
 
 ```php
@@ -46,9 +53,14 @@ $abbr = DateTimeZone::listAbbreviations();
 echo $abbr["cest"][0]["timezone_id"];               // Europe/Berlin
 ```
 
-The identifier is resolved against the system timezone database, so `getOffset()` is DST-correct and `DateTime::format()` honors the zone (see [`setTimezone()`](#datetime-and-datetimeimmutable) and [Limitations](#limitations)).
+The identifier is resolved with the bundled php-src/timelib data at parsing and arithmetic
+boundaries, while `DateTime::format()` applies the corresponding runtime zone and honors
+daylight-saving transitions (see [`setTimezone()`](#datetime--datetimeimmutable)).
 
-The `getLocation()`, `getTransitions()`, and `listAbbreviations()` tables are baked from PHP's own timelib data (so they are byte-for-byte identical to PHP) and ship in a small bridge that is linked **only** into programs that call one of these three methods (or their `timezone_location_get()` / `timezone_transitions_get()` / `timezone_abbreviations_list()` procedural aliases).
+The `getLocation()`, `getTransitions()`, and `listAbbreviations()` tables are baked from the
+normative php-src timelib data and ship with the same vendored timelib parser/arithmetic bridge.
+The bridge is linked on demand for timezone introspection, parsing, abbreviation resolution,
+interval arithmetic, and normalization of fixed UTC offsets.
 
 ## DateTime and DateTimeImmutable
 
@@ -56,14 +68,14 @@ Both implement `DateTimeInterface`. `DateTime` mutates the object in place and r
 
 | Method | Description |
 |---|---|
-| `__construct(string $datetime = "now", ?DateTimeZone $timezone = null)` | Build from `"now"` or a date/time string such as `"2024-01-15 10:30:45"`. With a `$timezone`, the wall-clock string is interpreted in that zone (unless the string carries its own), and that zone becomes the display zone. |
+| `__construct(string $datetime = "now", ?DateTimeZone $timezone = null)` | Build from `"now"` or a date/time string such as `"2024-01-15 10:30:45"`. With a `$timezone`, the wall-clock string is interpreted in that zone (unless the string carries its own), and that zone becomes the display zone. Throws `DateMalformedStringException` (PHP 8.3+) on an unparseable string. |
 | `getTimestamp(): int` | UNIX timestamp. |
-| `setTimestamp(int $ts): static` | Set the moment from a UNIX timestamp. |
+| `setTimestamp(int $ts): static` | Set the moment from a UNIX timestamp and reset the microsecond component to `0`, as PHP does. |
 | `getMicrosecond(): int` | Sub-second component (0–999999). |
 | `setMicrosecond(int $us): static` | Set the sub-second component; surfaced by the `u`/`v` format specifiers. |
 | `setDate(int $y, int $m, int $d): static` | Replace the calendar date, keeping the time of day. |
 | `setISODate(int $y, int $week, int $dayOfWeek = 1): static` | Set the date from an ISO 8601 week date (day 1 = Monday), keeping the time of day. |
-| `setTime(int $h, int $i, int $s = 0): static` | Replace the time of day, keeping the date. |
+| `setTime(int $h, int $i, int $s = 0, int $microsecond = 0): static` | Replace the time of day, keeping the date. |
 | `getTimezone(): DateTimeZone` | The associated `DateTimeZone`. |
 | `setTimezone(DateTimeZone $tz): static` | Change the display zone (the absolute instant is unchanged). |
 | `getOffset(): int` | UTC offset (seconds) of the object's own zone at its instant, daylight-saving aware. |
@@ -71,11 +83,11 @@ Both implement `DateTimeInterface`. `DateTime` mutates the object in place and r
 | `add(DateInterval $interval): static` | Add a calendar interval. |
 | `sub(DateInterval $interval): static` | Subtract a calendar interval. |
 | `modify(string $modifier): static` | Apply a relative modifier (e.g. `"+1 day"`) parsed by `strtotime()`. |
-| `diff(DateTimeInterface $target): DateInterval` | Difference between two moments. |
-| `static createFromFormat(string $format, string $datetime, ?DateTimeZone $timezone = null): static\|false` | Parse a string per a `date()`-style format, returning a new instance or `false` on mismatch. With a `$timezone`, the wall-clock is interpreted in that zone and it becomes the display zone. |
-| `static createFromTimestamp(int\|float $timestamp): static` | Build a new instance set to a UNIX timestamp (the fractional part is dropped — second resolution). |
+| `diff(DateTimeInterface $target, bool $absolute = false): DateInterval` | Difference between two moments. |
+| `static createFromFormat(string $format, string $datetime, ?DateTimeZone $timezone = null): static\|false` | Parse a string per a `date()`-style format, returning a new instance or `false` on mismatch. The third argument supplies the zone only when the subject does not contain an `O`, `P`, `T`, or `e` zone; an embedded zone overrides it. |
+| `static createFromTimestamp(int\|float $timestamp): static` | Build a new instance set to a UNIX timestamp. The integer part becomes the second-resolution timestamp; the fractional part (for a `float` argument) is preserved as microseconds via `setMicrosecond()`, matching PHP 8.4+. |
 | `static createFromInterface(DateTimeInterface $object): static` | Copy any date object's instant and timezone into this class (mutable ↔ immutable). |
-| `static getLastErrors(): array` | `['warning_count', 'warnings', 'error_count', 'errors']` for the last `createFromFormat()` on this class — `error_count` is 1 after a format mismatch, 0 after success. |
+| `static getLastErrors(): array\|false` | Shared `DateTime`/`DateTimeImmutable` state for the last `createFromFormat()` call. Returns `false` when clean, otherwise `['warning_count', 'warnings', 'error_count', 'errors']`. |
 | `DateTime::createFromImmutable(DateTimeImmutable $object): DateTime` | Mutable copy of an immutable date. |
 | `DateTimeImmutable::createFromMutable(DateTime $object): DateTimeImmutable` | Immutable copy of a mutable date. |
 
@@ -125,7 +137,7 @@ $bad = DateTime::createFromFormat("Y-m-d", "not a date");
 var_dump($bad === false);               // bool(true)
 ```
 
-The supported format characters are `Y y m n d j D l S F M z H G h g i s u v A a U O P Z T e X x`, plus the metas `! | # ? * + \`. In detail:
+The supported format characters are `Y y m n d j D l S F M z H G h g i s u v A a U O P T e X x`, plus the metas `! | # ? * + \`. In detail:
 
 - `D` / `l` parse a weekday name (abbreviated or full, case-insensitive) and shift the result forward 0–6 days to land on that weekday, matching PHP/timelib's relative-weekday behavior.
 - `F` / `M` parse a month name (full, abbreviated, or `sept`, case-insensitive).
@@ -135,7 +147,7 @@ The supported format characters are `Y y m n d j D l S F M z H G h g i s u v A a
 - `#` matches one separator from `;:/.,-`, `?` skips one subject byte, `*` skips bytes until the next digit or separator, `+` tolerates trailing subject data, `\` escapes the next format character, and `!` / `|` reset fields.
 - Any other character must match the subject literally, and (without a trailing `+`) leftover subject data after the format is exhausted is a parse failure, matching PHP.
 
-The timezone specifiers `O` (`±hhmm`), `P` (`±hh:mm`), `Z` (UTC offset in seconds, signed or unsigned, no leading `+` for positive), `T` (greedy alpha abbreviation like `CEST`/`EDT`/`UTC`), and `e` (IANA zone name) consume the corresponding substring from the subject and cross-validate it against the constructed instant's zone (a mismatch returns `false`, matching PHP). The optional third `DateTimeZone` argument is accepted: the parsed wall-clock is interpreted in that zone and it becomes the display zone.
+The timezone specifiers `O` (`±hhmm`), `P` (`±hh:mm`), `T` (greedy alpha abbreviation like `CEST`/`EDT`/`UTC`), and `e` (IANA zone name) select the result timezone and override the optional third `DateTimeZone` argument, matching timelib. `Z` is not a `createFromFormat()` parser specifier; it is matched as a literal `Z`.
 
 ### Format constants
 
@@ -160,7 +172,7 @@ Represents a span of time. The constructor parses an ISO 8601 duration string `P
 | `h`, `i`, `s` | Hours, minutes, seconds. |
 | `f` | Fraction of a second (float). Set by `diff()`, applied by `add()`/`sub()`, and rendered by `format()`'s `%f`/`%F`. |
 | `invert` | `1` when the interval is negative, else `0`. |
-| `days` | Total whole days (set by `diff()`). |
+| `days` | Total whole days (set by `diff()`); `false` for a directly constructed interval. |
 
 ```php
 $iv = new DateInterval("P1Y2M3DT4H5M6S");
@@ -202,7 +214,14 @@ $d = new DateTime("2024-01-31");
 $d->add(DateInterval::createFromDateString("1 month"));     // 2024-03-02 (calendar overflow)
 ```
 
-The procedural alias `date_interval_create_from_date_string($datetime)` is equivalent. Unknown words are ignored rather than raising an error.
+The procedural alias `date_interval_create_from_date_string($datetime)` is equivalent. Unknown
+words raise `DateMalformedIntervalStringException`.
+
+PHP includes `from_string` and `date_string` in `DateInterval` debug/serialization state, but does
+not declare them as readable properties. Elephc mirrors them in `__serialize()` rather than exposing
+them as ordinary public properties. The two PHP serialization shapes are exclusive: an interval
+created from a relative string serializes only `from_string => true` plus `date_string`; an ISO
+interval serializes its components plus `from_string => false` and omits `date_string`.
 
 ## Differences with `diff()`
 
@@ -243,7 +262,7 @@ Identity operators `===`/`!==` are unchanged: they compare object references, so
 
 ## DatePeriod
 
-`DatePeriod` implements `Iterator`, so it can be walked with `foreach` to visit each step of a date range. Construct it from a start date, a `DateInterval` step, and an end date:
+`DatePeriod` is exposed as an `IteratorAggregate`, so it can be walked with `foreach` to visit each step of a date range. Construct it from a start date, a `DateInterval` step, and an end date:
 
 ```php
 $period = new DatePeriod(
@@ -286,12 +305,16 @@ Each iteration yields a fresh `DateTime`, so collecting the values keeps every s
 | Method | Description |
 |---|---|
 | `__construct(DateTimeInterface $start, DateInterval $interval, DateTimeInterface\|int $end, int $options = 0)` | Build a period either over `[start, end)` or for an integer recurrence count. |
-| `getStartDate(): DateTime` | The start date. |
-| `getEndDate(): DateTime` | The end date. |
+| `getStartDate(): DateTimeInterface` | The start date. |
+| `getEndDate(): ?DateTimeInterface` | The end date (or `null` in the recurrence-count form). |
 | `getDateInterval(): DateInterval` | The step interval. |
 | `getRecurrences(): ?int` | The recurrence count for the count form, or `null` for the end-date form. |
-| `getIterator(): Iterator` | An iterator over the period's dates, for `foreach ($p->getIterator() ...)` / `iterator_to_array($p->getIterator())`. (PHP exposes `DatePeriod` as an `IteratorAggregate`; elephc's `DatePeriod` is itself an `Iterator`, so `getIterator()` returns the rewound period — a single live iterator rather than an independent copy.) |
-| `createFromISO8601String(string $isostr): static` | Build a period from an RFC 5545 repeating-interval specification (`R<n>/start[/interval[/end]]`). Forwards to the regular constructor; throws `DateMalformedPeriodStringException` on a malformed specification (PHP 8.3+) — a recurrence-count message for `R0/...` and `Unknown or bad format (...)` for `R/...`, `R-1/...`, or anything not matching `R<digits>/`. The deprecated `new DatePeriod(string)` constructor is not registered; use this static factory instead. |
+| `getIterator(): Iterator` | A fresh, independent iterator over the period's dates, for `foreach ($p->getIterator() ...)` / `iterator_to_array($p->getIterator())`. `DatePeriod` itself is an `IteratorAggregate`, not an `Iterator`, matching php-src. |
+| `createFromISO8601String(string $isostr): static` | Build a period from an RFC 5545 repeating-interval specification (`R<n>/start[/interval[/end]]`). Forwards to the regular constructor; throws `DateMalformedPeriodStringException` on malformed input. The deprecated `new DatePeriod(string[, int $options])` overload is also accepted and routes through this parser. |
+
+`DatePeriod` also exposes PHP 8.2+'s public readonly properties: `$start`, `$current`, `$end`, `$interval`, `$recurrences`, `$include_start_date`, and `$include_end_date`. `$current` reflects the live cursor during iteration; the others are set at construction.
+The public `$recurrences` value is PHP's minimum number of yielded instances; it therefore differs
+from `getRecurrences()` in the count form (for example `4` versus `3` with the default options).
 
 Both the `(start, interval, end)` and `(start, interval, recurrences)` constructor forms are supported, plus `createFromISO8601String()` for the RFC 5545 string form.
 
@@ -329,12 +352,12 @@ The procedural date/time functions are supported as aliases for the OOP API:
 | `date_timestamp_get/set`, `date_timezone_get/set`, `date_offset_get` | the matching `getTimestamp`/`setTimestamp`/`getTimezone`/`setTimezone`/`getOffset` |
 | `timezone_open($id)`, `timezone_name_get($tz)`, `timezone_offset_get($tz, $d)` | `new DateTimeZone($id)`, `$tz->getName()`, `$tz->getOffset($d)` |
 | `timezone_identifiers_list()` | `DateTimeZone::listIdentifiers()` |
-| `timezone_name_from_abbr($abbr)` | the IANA zone for a common abbreviation, or `false` |
+| `timezone_name_from_abbr($abbr [, $utcOffset, $isDST])` | the IANA zone selected by PHP's complete abbreviation and offset/DST lookup, or `false` |
 | `timezone_location_get($tz)`, `timezone_transitions_get($tz [, $begin, $end])`, `timezone_abbreviations_list()` | `$tz->getLocation()`, `$tz->getTransitions(…)`, `DateTimeZone::listAbbreviations()` |
-| `timezone_version_get()` | `"2026.1"` (the IANA release the bundled introspection data was baked from) |
+| `timezone_version_get()` | `"2026.3"` (the IANA release bundled by the normative php-src snapshot) |
 | `date_interval_format($i, $f)` | `$i->format($f)` |
 
-`timezone_name_from_abbr()` recognizes the common abbreviations (`UTC`, `GMT`, `EST`/`EDT`, `CET`/`CEST`, `JST`, `MSK`, `AEST`, …) and returns the same IANA zone PHP does; the optional `$utcOffset`/`$isDST` arguments are accepted but offset-based disambiguation is not performed. Abbreviations outside the common set return `false`.
+`timezone_name_from_abbr()` searches the complete bundled timelib-derived abbreviation table in PHP order. An explicit `$utcOffset` selects the first row with that offset; an unknown abbreviation falls back to php-src's `(offset, isDST)` map.
 
 ### Parsing to components
 
@@ -348,7 +371,10 @@ $d = date_parse("2024-03-15");
 var_dump($d["hour"]);                                 // bool(false) — not specified
 ```
 
-`date_parse_from_format` uses the same format characters as [`createFromFormat()`](#datetime-and-datetimeimmutable). `date_parse` does not implement PHP's full free-form grammar — it recognizes the common formats (`Y-m-d H:i:s`, `Y-m-d`, `H:i`, and similar) by trying them in turn.
+Both functions delegate to the vendored php-src timelib parser. Format tokens, optional fields,
+fractional values, relative components, timezone metadata, byte-positioned warning/error maps,
+duplicate-position counts, and the absence of fields not produced by php-src retain the upstream
+shape.
 
 ### Sunrise, sunset, and twilight
 
@@ -368,23 +394,21 @@ date_sunrise($ts, SUNFUNCS_RET_TIMESTAMP, $lat, $lon);                    // Uni
 date_sunset($ts, SUNFUNCS_RET_DOUBLE, $lat, $lon);                        // hour-of-day float
 ```
 
-`$returnFormat` is one of `SUNFUNCS_RET_TIMESTAMP` (0), `SUNFUNCS_RET_STRING` (1, the default), or `SUNFUNCS_RET_DOUBLE` (2); omitted latitude/longitude/zenith fall back to PHP's defaults. Both functions return `false` when the sun does not reach the requested altitude that day. The implementation is a faithful port of PHP's timelib astronomical algorithm, so `date_sun_info()` and the `RET_TIMESTAMP`/`RET_STRING` formats match PHP exactly; `RET_DOUBLE` may differ only in the last floating-point digit.
+`$returnFormat` is one of `SUNFUNCS_RET_TIMESTAMP` (0), `SUNFUNCS_RET_STRING` (1, the default), or `SUNFUNCS_RET_DOUBLE` (2); omitted latitude/longitude/zenith fall back to PHP's defaults. Both functions return `false` when the sun does not reach the requested altitude that day. The implementation follows PHP's timelib astronomical algorithm for all three return formats.
 
-## Limitations
+## Compatibility details
 
 - `format()` renders the stored instant in the object's **own timezone**: the zone captured from `date_default_timezone_get()` at construction, or one assigned later with `setTimezone()`. Offsets and daylight-saving transitions are resolved from the system timezone database (see [System & I/O](system-and-io.md)). `setTimezone()` changes only the display zone, not the absolute instant. (`gmdate()` remains available for explicit UTC formatting.)
-- The constructor accepts `"now"`, absolute date/time strings, and the `@<timestamp>` epoch form — anything [`strtotime()`](system-and-io.md) parses. For relative expressions like `"+1 day"`, you can also build the object and call `modify()`.
-- `modify()` and the 2-argument `strtotime()` support relative offsets, time-only, and keyword forms, plus the `"first/last day of"` and `"first/last <weekday> of"` phrases (e.g. `"first monday of next month"`, `"last day of this month"`). `DatePeriod` supports the `(start, interval, end)` and `(start, interval, recurrences)` forms, plus the RFC 5545 string form via `DatePeriod::createFromISO8601String()` (the deprecated `new DatePeriod("R4/...")` constructor is not registered).
-- **Microseconds**: `getMicrosecond()`/`setMicrosecond()` store a sub-second component, and `format()`'s `u` (six digits) and `v` (three digits) specifiers render it. `createFromFormat()` parses the `u` specifier (e.g. `"Y-m-d H:i:s.u"`, `"U.u"`). The component is preserved across mutable and immutable operations and participates in arithmetic: `diff()` reports the fractional-second difference in `DateInterval::$f` (with a one-second borrow and a microsecond-aware ordering, so `00.750 → 01.250` is `s=0, f=0.5`), and `add()`/`sub()` apply an interval's `$f` with carry across the second. The constructor captures a trailing fractional second from a date string (`new DateTime("2020-01-01 12:00:00.5")` → microsecond `500000`, padded/truncated to six digits); a `.` that is not a fractional second (e.g. a `DD.MM.YYYY` separator) is left untouched. `modify()` also accepts a `microsecond[s]`/`usec[s]` relative unit (e.g. `modify("+500000 microseconds")`, alone or combined with other clauses), carrying into the whole second. So the sub-second component can be set via the constructor, `createFromFormat()`, or `setMicrosecond()`, and participates in `add()`/`sub()`/`diff()`/`modify()`; everything else stays at libc second resolution.
-- `createFromFormat()` supports the format characters `Y y m n d j D l S F M z H G h g i s u v A a U O P Z T e X x`, `\` escapes, and the `!`/`|` resets. The timezone specifiers `O` (`±hhmm`), `P` (`±hh:mm`), `Z` (UTC offset in seconds, signed or unsigned, no leading `+` for positive), `T` (greedy alpha abbreviation like `CEST`/`EDT`/`UTC`), and `e` (IANA zone name) consume the corresponding substring from the subject and cross-validate it against the constructed instant's zone (a mismatch returns `false`, matching PHP). Its optional third `DateTimeZone` argument is accepted: the parsed wall-clock is interpreted in that zone and it becomes the display zone. The third argument can be passed inline (`new DateTimeZone(...)`) or via a variable.
-- Dates before 1900: `mktime()`, `gmmktime()`, `strtotime()`, and the `DateTime`/`DateTimeImmutable` constructors handle years 101–1899 (libc rejects them, so elephc shifts the year forward by whole 400-year Gregorian cycles into libc's range and corrects the result).
-- Two-digit years: `mktime()` and `gmmktime()` apply PHP's two-digit-year shorthand to their `year` argument — years 0–69 map to 2000–2069 and years 70–100 map to 1970–2000, while years ≥ 101 are taken literally (so `mktime(0, 0, 0, 1, 1, 99)` is 1999 and `mktime(0, 0, 0, 1, 1, 101)` is year 101). The same shorthand is applied to the year field of a `M/D/YY` (or `MM/DD/YY`) date string parsed by `strtotime()`/`DateTime` — so `strtotime("1/1/99")` is 1999 and `strtotime("1/1/50")` is 2050. The shorthand is **not** applied to 2-digit years written in the ISO `YY-MM-DD` form — those are rejected as malformed (PHP accepts them and remaps, so `strtotime("99-01-01")` in PHP is 1999-01-01; the ISO entry in `__rt_strtotime_iso_entry` requires a 4-digit year).
-
-### Not currently supported
-
-A few corners of PHP's date/time API are not implemented:
-
-- **Detailed parse warnings**: `getLastErrors()`/`date_get_last_errors()` report whether the last `createFromFormat()` succeeded or failed (`error_count` 0/1) but do not retain PHP's per-character warning/error positions — only the pass/fail count, which covers the common `if (DateTime::getLastErrors()['error_count'])` guard.
-- **Serialization hooks**: the `__serialize()`/`__unserialize()`/`__wakeup()`/`__set_state()` magic methods are not defined on the date classes, because elephc has no object `serialize()`/`unserialize()`/`var_export()` round-trip for any class.
+- The constructor accepts `"now"`, absolute and relative timelib strings, timezone suffixes, and the `@<timestamp>` epoch form — the same grammar as php-src. `modify()` and the two-argument `strtotime()` use the same parser.
+- `DatePeriod` supports both object overloads, `createFromISO8601String()`, and the deprecated runtime-string constructor overload. It exposes the seven php-src virtual properties and returns an independent iterator.
+- **Microseconds**: `getMicrosecond()`/`setMicrosecond()` store a sub-second component, and `format()`'s `u` (six digits) and `v` (three digits) specifiers render it. `createFromFormat()` parses the `u` specifier (e.g. `"Y-m-d H:i:s.u"`, `"U.u"`). The component is preserved by calendar setters, cross-class factories, and interval arithmetic; `setTimestamp()` deliberately resets it to `0`, matching PHP. `diff()` reports the fractional-second difference in `DateInterval::$f`, and `add()`/`sub()` apply an interval's `$f` with carry across the second. The constructor captures a trailing fractional second from a date string (`new DateTime("2020-01-01 12:00:00.5")` → microsecond `500000`, padded/truncated to six digits). `modify()` also accepts a `microsecond[s]`/`usec[s]` relative unit.
+- `createFromFormat()` supports php-src's timelib format grammar, escapes, reset metas, embedded timezones, diagnostics, and `getLastErrors()` state.
+- Dates before 1900: `mktime()`, `gmmktime()`, `strtotime()`, and the `DateTime`/`DateTimeImmutable` constructors handle years 101–1899 by whole 400-year Gregorian cycles where the host libc needs normalization.
+- Two-digit years: `mktime()`/`gmmktime()` and both `M/D/YY` and ISO `YY-MM-DD` date strings apply PHP's shorthand (0–69 → 2000–2069, 70–100 → 1970–2000).
+- Runtime `E_WARNING`/`E_DEPRECATED` messages use Elephc's suppressible diagnostics channel, so `@` suppresses the same date/time notices without suppressing exceptions. Inside `@`, `error_reporting()` exposes php-src's fatal-only intersection of the active mask; updates still persist after the suppressed expression.
+- The built-in DateTime/DatePeriod/timelib declarations are checked-in direct Rust AST. PHP source equivalents exist only as test-generation oracles under `cfg(test)`; production compilation does not parse embedded synthetic PHP.
+- User-declared `__set_state()` follows Zend declaration order and accepts a by-reference variadic tail after its single non-reference fixed parameter; non-public visibility warnings are emitted before later parameter/return type fatals.
+- Serialization, `var_dump()`, Reflection, exception hierarchy, constants, attributes, function signatures, and method order are pinned to php-src `47b563cbb856ec19155aacc3246931dfacbebd21`.
+- The DateTime example emits assembly on `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, and `linux-x86_64`; the two iOS variants also link as static libraries.
 
 A complete runnable program is in [`examples/datetime/main.php`](https://github.com/illegalstudio/elephc/tree/main/examples/datetime).

@@ -64,6 +64,7 @@ pub(super) fn emit_reflection_member_flag_properties(
                 flags.is_promoted,
             )?;
             emit_reflection_owner_bool_property(ctx, class_name, "__is_virtual", flags.is_virtual)?;
+            emit_reflection_owner_bool_property(ctx, class_name, "__is_dynamic", flags.is_dynamic)?;
         }
         "ReflectionClassConstant" | "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase" => {
             emit_reflection_owner_bool_property(ctx, class_name, "__is_public", flags.is_public)?;

@@ -71,6 +71,31 @@ where
         StmtKind::Echo(expr) => {
             expr_is_eir_function_safe(expr, support, facts, scope_reads).then_some(false)
         }
+        StmtKind::ExprStmt(Expr {
+            kind:
+                ExprKind::Assignment {
+                    target,
+                    value,
+                    result_target,
+                    prelude,
+                    conditional_value_temp,
+                },
+            ..
+        }) => {
+            let ExprKind::Variable(name) = &target.kind else {
+                return None;
+            };
+            if !prelude.is_empty()
+                || result_target.is_some()
+                || conditional_value_temp.is_some()
+                || !scope_reads.is_some_and(|names| names.contains(name))
+                || !expr_is_eir_function_safe(value, support, facts, scope_reads)
+            {
+                return None;
+            }
+            facts.assign(name, value, support, scope_reads);
+            Some(false)
+        }
         StmtKind::Assign { name, value }
             if scope_reads.is_some_and(|names| names.contains(name)) =>
         {

@@ -223,10 +223,14 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decbin",
     "dechex",
     "decoct",
+    "gc_collect_cycles",
+    "gc_enable",
+    "getrandmax",
     "hexdec",
     "join",
     "octdec",
     "serialize",
+    "sizeof",
     "strncasecmp",
     "strncmp",
     "substr_count",
@@ -277,13 +281,13 @@ mod tests {
             }
         }
 
-        assert_eq!(eval_registry, 484);
-        assert_eq!(eval_internal, 39);
-        assert_eq!(eval_pending, 31);
+        assert_eq!(eval_registry, 487);
+        assert_eq!(eval_internal, 45);
+        assert_eq!(eval_pending, 35);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and adds
         // the ten iconv contracts, which both backends implement through the registry.
-        assert_eq!(aot_registry, 541);
+        assert_eq!(aot_registry, 554);
         assert_eq!(aot_external, 10);
         assert_eq!(aot_unsupported, 3);
     }
@@ -331,8 +335,8 @@ mod tests {
 
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 463);
-        assert_eq!(unsupported, 70);
+        assert_eq!(interpreter_adapter, 466);
+        assert_eq!(unsupported, 80);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

@@ -88,6 +88,7 @@ fn lower_instance_method_callable_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.return_ty)?;
+    super::super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 

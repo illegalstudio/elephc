@@ -98,6 +98,21 @@ pub(super) fn dynamic_property_hash_offset(property_count: usize) -> usize {
     8 + property_count * 16
 }
 
+/// Returns property slot offsets whose copied string pair needs owned storage.
+pub(super) fn cloned_string_property_offsets(class_info: &ClassInfo) -> Vec<usize> {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (property, php_type))| {
+            if class_info.property_slot_is_reference(index, property) {
+                return None;
+            }
+            matches!(php_type.codegen_repr(), PhpType::Str).then_some(8 + index * 16)
+        })
+        .collect()
+}
+
 /// Returns property slot offsets whose copied low word must be retained for the cloned owner.
 pub(super) fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usize> {
     class_info
@@ -116,21 +131,24 @@ pub(super) fn cloned_property_retain_offsets(class_info: &ClassInfo) -> Vec<usiz
 /// Returns true when a property slot's low word owns heap storage after a shallow copy.
 pub(super) fn property_clone_needs_retain(php_type: &PhpType) -> bool {
     let php_type = php_type.codegen_repr();
-    matches!(php_type, PhpType::Str) || php_type.is_refcounted()
+    php_type.is_refcounted()
 }
 
-/// Copies declared 16-byte property slots and retains heap-backed child payloads.
+/// Copies declared property slots, duplicating strings and retaining shared heap payloads.
 pub(super) fn emit_clone_declared_property_slots(
     ctx: &mut FunctionContext<'_>,
     source_reg: &str,
     dest_reg: &str,
     property_count: usize,
+    string_offsets: &[usize],
     retained_offsets: &[usize],
 ) {
     for index in 0..property_count {
         let offset = 8 + index * 16;
         emit_copy_property_slot(ctx, source_reg, dest_reg, offset);
-        if retained_offsets.contains(&offset) {
+        if string_offsets.contains(&offset) {
+            emit_duplicate_cloned_string_property(ctx, source_reg, dest_reg, offset);
+        } else if retained_offsets.contains(&offset) {
             emit_retain_cloned_property_pointer(ctx, source_reg, dest_reg, offset);
         }
     }
@@ -151,7 +169,26 @@ pub(super) fn emit_copy_property_slot(
     abi::emit_store_to_address(ctx.emitter, high_reg, dest_reg, offset + 8);
 }
 
-/// Retains the copied low-word pointer for string, array, hash, object, or Mixed slots.
+/// Duplicates a copied string pair so the clone owns storage independent of its source.
+fn emit_duplicate_cloned_string_property(
+    ctx: &mut FunctionContext<'_>,
+    source_reg: &str,
+    dest_reg: &str,
+    offset: usize,
+) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    abi::emit_push_reg(ctx.emitter, dest_reg);
+    abi::emit_load_from_address(ctx.emitter, ptr_reg, dest_reg, offset);
+    abi::emit_load_from_address(ctx.emitter, len_reg, dest_reg, offset + 8);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    abi::emit_pop_reg(ctx.emitter, dest_reg);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    abi::emit_store_to_address(ctx.emitter, ptr_reg, dest_reg, offset);
+    abi::emit_store_to_address(ctx.emitter, len_reg, dest_reg, offset + 8);
+}
+
+/// Retains the copied low-word pointer for array, hash, object, or Mixed slots.
 pub(super) fn emit_retain_cloned_property_pointer(
     ctx: &mut FunctionContext<'_>,
     source_reg: &str,

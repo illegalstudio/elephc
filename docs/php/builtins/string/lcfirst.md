@@ -2,7 +2,7 @@
 title: "lcfirst()"
 description: "Lowercases the first character of a string."
 sidebar:
-  order: 431
+  order: 438
 ---
 
 ## lcfirst()

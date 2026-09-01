@@ -13,7 +13,8 @@
 
 builtin! {
     contract: "gmdate",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Gmdate,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Gmdate),
+        crate::builtins::semantics::BuiltinArgumentLowering::Date,
     ),
 }

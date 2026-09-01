@@ -92,7 +92,7 @@ pub(in crate::interpreter) fn eval_context_localtime(
 
 /// Converts one Unix timestamp to process-local broken-down time through libc.
 pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
-    let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
+    let raw = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
     let mut tm = MaybeUninit::<libc::tm>::uninit();
     let result = unsafe { libc::localtime_r(&raw, tm.as_mut_ptr()) };
     if result.is_null() {
@@ -103,7 +103,7 @@ pub(in crate::interpreter) fn eval_localtime(timestamp: i64) -> Result<libc::tm,
 
 /// Converts one Unix timestamp to UTC broken-down time through libc.
 pub(in crate::interpreter) fn eval_gmtime(timestamp: i64) -> Result<libc::tm, EvalStatus> {
-    let raw: libc::time_t = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
+    let raw = timestamp.try_into().map_err(|_| EvalStatus::RuntimeFatal)?;
     let mut tm = MaybeUninit::<libc::tm>::uninit();
     let result = unsafe { libc::gmtime_r(&raw, tm.as_mut_ptr()) };
     if result.is_null() {

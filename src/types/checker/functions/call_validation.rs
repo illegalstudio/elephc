@@ -274,6 +274,9 @@ impl Checker {
                         Self::types_compatible(expected_member, actual_member)
                     })
                 }),
+            (_, PhpType::Union(actual_members)) => actual_members
+                .iter()
+                .any(|actual_member| Self::types_compatible(expected, actual_member)),
             (PhpType::Union(members), _) => members
                 .iter()
                 .any(|member| Self::types_compatible(member, actual)),

@@ -2,7 +2,7 @@
 title: "pfsockopen()"
 description: "Open persistent Internet or Unix domain socket connection."
 sidebar:
-  order: 384
+  order: 391
 ---
 
 ## pfsockopen()

@@ -100,6 +100,25 @@ fn test_var_dump_float() {
     assert_eq!(out, "float(3.14)\n");
 }
 
+/// Verifies float stringification follows php-src's scientific notation spelling: `.0` is
+/// retained for an integral mantissa and exponent digits are not zero-padded.
+#[test]
+fn test_float_scientific_notation_matches_php_src() {
+    let out = compile_and_run(
+        r#"<?php
+echo -0.000001, "|", 0.00001, "|", 1.5e20, "\n";
+var_dump(-0.000001, 0.00001, 1.5e20);
+"#,
+    );
+    assert_eq!(
+        out,
+        "-1.0E-6|1.0E-5|1.5E+20\n\
+float(-1.0E-6)\n\
+float(1.0E-5)\n\
+float(1.5E+20)\n"
+    );
+}
+
 /// Verifies `var_dump` emits the correct concrete type tag and value for each heterogeneous assoc-array slot: int, string, bool, null, array, and object.
 #[test]
 fn test_var_dump_mixed_prints_concrete_payload() {

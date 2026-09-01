@@ -216,6 +216,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_out_of_range_exception_class_id", "OutOfRangeException"),
         ("_spl_out_of_bounds_exception_class_id", "OutOfBoundsException"),
         ("_spl_invalid_argument_exception_class_id", "InvalidArgumentException"),
+        ("_spl_argument_count_error_class_id", "ArgumentCountError"),
         ("_spl_type_error_class_id", "TypeError"),
         ("_spl_value_error_class_id", "ValueError"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
@@ -223,11 +224,6 @@ pub(crate) fn emit_runtime_data_user(
         // raise reference PHP's catchable DivisionByZeroError from codegen with
         // no EIR class reference to hang the id off.
         ("_spl_division_by_zero_error_class_id", "DivisionByZeroError"),
-        // Emitted for the `new $c(...)` arity refusals. The checker rejects a
-        // static `new C()` that passes too few arguments, but `new $c()` names
-        // its class in a VALUE, so the refusal has to be raised at run time and
-        // has no EIR class reference to hang the id off either.
-        ("_spl_argument_count_error_class_id", "ArgumentCountError"),
     ] {
         let class_id = all_class_id_by_name
             .get(class_name)
@@ -296,6 +292,20 @@ pub(crate) fn emit_runtime_data_user(
                 out.push_str(&format!("    .quad _class_prop_desc_{}\n", class_id));
             } else {
                 out.push_str("    .quad _class_prop_desc_missing\n");
+            }
+        }
+    }
+
+    // Per-class print_r descriptor pointer table. Date/time subclasses contain
+    // only properties declared outside the built-in ext/date base class because
+    // their virtual fields are rendered by the synthetic php-src handler.
+    out.push_str(".globl _class_pr_desc_ptrs\n_class_pr_desc_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_pr_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_pr_desc_missing\n");
             }
         }
     }
@@ -551,13 +561,60 @@ pub(crate) fn emit_runtime_data_user(
         if let Some(max_class_id) = max_class_id {
             let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
-                let entry = class_info_by_id
+                let entry = class_name_by_id
                     .get(&class_id)
-                    .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
+                    .and_then(|class_name| {
+                        inherited_instance_method_impl(classes, class_name, &method_key)
+                    })
                     .map(|impl_class| method_symbol(impl_class, &method_key))
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
             }
+        }
+    }
+
+    // Dense marker table for classes whose effective `__unserialize` implementation is the
+    // native DateInterval handler. The generic parser uses this instead of embedding a direct
+    // method-symbol reference, which would otherwise require DateInterval restoration code in
+    // every program that links the shared unserialize runtime.
+    out.push_str(
+        ".globl _class_dateinterval_unserialize_flags\n_class_dateinterval_unserialize_flags:\n",
+    );
+    if let Some(max_class_id) = max_class_id {
+        let method_key = php_symbol_key("__unserialize");
+        for class_id in 0..=max_class_id {
+            let uses_dateinterval_handler = class_name_by_id
+                .get(&class_id)
+                .and_then(|class_name| {
+                    inherited_instance_method_impl(classes, class_name, &method_key)
+                })
+                .is_some_and(|impl_class| impl_class.eq_ignore_ascii_case("DateInterval"));
+            out.push_str(&format!("    .quad {}\n", u8::from(uses_dateinterval_handler)));
+        }
+    }
+
+    // Dense (owner-name pointer, owner-name length) rows for php-src's five native
+    // ext/date __unserialize handlers. A zero pointer identifies ordinary user hooks.
+    // The runtime publishes these rows only while a native date hook is executing so
+    // the uncaught path can render PHP's `[internal function]` trace frame.
+    out.push_str(
+        ".globl _class_date_unserialize_trace_entries\n_class_date_unserialize_trace_entries:\n",
+    );
+    if let Some(max_class_id) = max_class_id {
+        let method_key = php_symbol_key("__unserialize");
+        for class_id in 0..=max_class_id {
+            let owner = class_name_by_id.get(&class_id).and_then(|class_name| {
+                inherited_instance_method_impl(classes, class_name, &method_key)
+                    .filter(|owner| is_builtin_datetime_class_name(owner))
+            });
+            if let Some(owner) = owner {
+                if let Some(owner_id) = class_id_by_name.get(owner) {
+                    out.push_str(&format!("    .quad _class_name_{}\n", owner_id));
+                    out.push_str(&format!("    .quad {}\n", owner.len()));
+                    continue;
+                }
+            }
+            out.push_str("    .quad 0\n    .quad 0\n");
         }
     }
 
@@ -604,6 +661,33 @@ pub(crate) fn emit_runtime_data_user(
                 out.push_str(&format!("    .quad _class_serprop_declaring_{}\n", class_id));
             } else {
                 out.push_str("    .quad _class_serprop_declaring_missing\n");
+            }
+        }
+    }
+
+    // Date/time internal handlers merge user-declared subclass properties into their magic
+    // serialization array. These tables select the filtered property descriptors only when the
+    // active magic implementation is inherited from one of php-src's five internal date classes.
+    for (table, method) in [
+        ("_class_date_serialize_prop_ptrs", "__serialize"),
+        ("_class_date_unserialize_prop_ptrs", "__unserialize"),
+    ] {
+        out.push_str(&format!(".globl {table}\n{table}:\n"));
+        if let Some(max_class_id) = max_class_id {
+            for class_id in 0..=max_class_id {
+                let entry = class_name_by_id
+                    .get(&class_id)
+                    .filter(|class_name| {
+                        date_magic_uses_builtin_handler(classes, class_name, method)
+                            && !date_magic_custom_property_indices(
+                                classes,
+                                class_name,
+                            )
+                            .is_empty()
+                    })
+                    .map(|_| format!("_class_date_magic_prop_{class_id}"))
+                    .unwrap_or_else(|| "_class_date_magic_prop_missing".to_string());
+                out.push_str(&format!("    .quad {entry}\n"));
             }
         }
     }
@@ -670,6 +754,10 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n"); // property count = 0
     out.push_str(".globl _class_serprop_declaring_missing\n_class_serprop_declaring_missing:\n");
     out.push_str("    .quad -1\n"); // no declaring class for a missing descriptor
+    out.push_str(
+        ".globl _class_date_magic_prop_missing\n_class_date_magic_prop_missing:\n",
+    );
+    out.push_str("    .quad 0\n"); // custom date-subclass property count = 0
     // _class_json_desc_missing: zero flags, zero properties, no jsonSerialize.
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_json_desc_missing\n_class_json_desc_missing:\n");
@@ -685,6 +773,10 @@ pub(crate) fn emit_runtime_data_user(
     // reading past the table.
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_prop_desc_missing\n_class_prop_desc_missing:\n");
+    out.push_str("    .quad 0\n"); // property count = 0
+    // _class_pr_desc_missing: zero properties (a class id with no print_r metadata).
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_pr_desc_missing\n_class_pr_desc_missing:\n");
     out.push_str("    .quad 0\n"); // property count = 0
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_vtable_missing\n_class_vtable_missing:\n");
@@ -713,6 +805,7 @@ pub(crate) fn emit_runtime_data_user(
     emit_static_callable_method_data(&mut out, &sorted_classes);
     out.push_str(".p2align 3\n");
     emit_script_source_file_data(&mut out, source_path);
+    emit_program_source_file_data(&mut out, source_path);
     if emit_eval_reflection_metadata {
         out.push_str(".p2align 3\n");
         emit_eval_reflection_source_file_data(&mut out, source_path);
@@ -1126,6 +1219,52 @@ pub(crate) fn emit_runtime_data_user(
             out.push_str(&format!("    .quad {}\n", declaring_class_id));
         }
 
+        // User properties appended to an inherited internal date/time magic serialization
+        // payload. Internal synthetic storage is deliberately excluded.
+        let date_magic_props = date_magic_custom_property_indices(classes, class_name);
+        for prop_index in &date_magic_props {
+            let (prop_name, _) = &class_info.properties[*prop_index];
+            let mangled = mangled_property_name(class_info, class_name, prop_name);
+            out.push_str(&format!(
+                ".globl _class_date_magic_pname_{}_{}\n_class_date_magic_pname_{}_{}:\n",
+                class_info.class_id,
+                prop_index,
+                class_info.class_id,
+                prop_index,
+            ));
+            out.push_str("    .byte ");
+            for (index, byte) in mangled.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&byte.to_string());
+            }
+            out.push('\n');
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_date_magic_prop_{}\n_class_date_magic_prop_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        out.push_str(&format!("    .quad {}\n", date_magic_props.len()));
+        for prop_index in date_magic_props {
+            let (prop_name, prop_ty) = &class_info.properties[prop_index];
+            let mangled_len = mangled_property_name(class_info, class_name, prop_name).len();
+            let offset = class_info
+                .property_offsets
+                .get(prop_name)
+                .copied()
+                .unwrap_or(8 + prop_index * 16);
+            let tag = prop_value_tag(class_info, prop_name, prop_ty);
+            out.push_str(&format!(
+                "    .quad _class_date_magic_pname_{}_{}\n",
+                class_info.class_id, prop_index
+            ));
+            out.push_str(&format!("    .quad {}\n", mangled_len));
+            out.push_str(&format!("    .quad {}\n", offset));
+            out.push_str(&format!("    .quad {}\n", tag));
+        }
+
         // var_dump property-info table: one row per RENDERED property, carrying the
         // text PHP renders BETWEEN the `[` and `]` of the key line (`"p"`,
         // `"p":protected`, `"p":"C":private`), the property's byte offset within the
@@ -1137,7 +1276,7 @@ pub(crate) fn emit_runtime_data_user(
         // (see `var_dump_debug_info_projection`), because `var_dump` is the only PHP
         // renderer that consults `__debugInfo` AND the only elephc renderer that
         // enumerates object properties at all.
-        let mut vd_rows = var_dump_descriptor_rows(class_info, class_name);
+        let mut vd_rows = var_dump_descriptor_rows(classes, class_info, class_name);
         if enums.contains_key(class_name.as_str()) {
             hoist_enum_name_row(&mut vd_rows);
         }
@@ -1204,14 +1343,45 @@ pub(crate) fn emit_runtime_data_user(
                 "    .quad _class_prop_pkey_{}_{}\n",
                 class_info.class_id, row_index
             ));
-            out.push_str(&format!("    .quad {}\n", row.print_r_key.len())); // print_r key byte length
-            out.push_str(&format!("    .quad {}\n", row.offset)); // byte offset within the object
-            out.push_str(&format!("    .quad {}\n", row.tag)); // runtime value tag
+            out.push_str(&format!("    .quad {}\n", row.print_r_key.len()));
+            out.push_str(&format!("    .quad {}\n", row.offset));
+            out.push_str(&format!("    .quad {}\n", row.tag));
             out.push_str(&format!(
                 "    .quad _class_prop_nkey_{}_{}\n",
                 class_info.class_id, row_index
             ));
-            out.push_str(&format!("    .quad {}\n", row.plain_key.len())); // bare property-name byte length
+            out.push_str(&format!("    .quad {}\n", row.plain_key.len()));
+        }
+
+        // print_r property-info table: keys are unquoted and carry PHP's
+        // `:protected` / `:DeclaringClass:private` suffixes. For ext/date
+        // subclasses the table contains only user-declared properties; the
+        // synthetic renderer appends php-src's virtual fields afterwards.
+        let pr_rows = print_r_descriptor_rows(classes, class_info, class_name);
+        for (row_index, row) in pr_rows.iter().enumerate() {
+            out.push_str(&format!(
+                ".globl _class_pr_pkey_{}_{}\n_class_pr_pkey_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id,
+                row_index,
+                class_info.class_id,
+                row_index,
+                escaped_ascii(&row.key),
+            ));
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_pr_desc_{}\n_class_pr_desc_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        out.push_str(&format!("    .quad {}\n", pr_rows.len()));
+        for (row_index, row) in pr_rows.iter().enumerate() {
+            out.push_str(&format!(
+                "    .quad _class_pr_pkey_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.key.len()));
+            out.push_str(&format!("    .quad {}\n", row.offset));
+            out.push_str(&format!("    .quad {}\n", row.tag));
         }
 
         out.push_str("    .p2align 3\n");
@@ -1256,6 +1426,102 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(&format!("    .quad {}\n", stdclass_id));
 
     out
+}
+
+/// Resolves an instance method's declaring class through inherited class metadata.
+///
+/// Synthetic builtin parents can be injected after a user subclass was flattened, so the
+/// subclass's `method_impl_classes` map may omit an inherited magic serialization hook.
+fn inherited_instance_method_impl<'a>(
+    classes: &'a HashMap<String, ClassInfo>,
+    class_name: &'a str,
+    method_key: &str,
+) -> Option<&'a str> {
+    let allow_inherited_fallback = classes.get(class_name)?.parent.is_some();
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        let class_info = classes.get(name)?;
+        if let Some(impl_class) = class_info.method_impl_classes.get(method_key) {
+            return Some(impl_class.as_str());
+        }
+        if !allow_inherited_fallback {
+            return None;
+        }
+        if let Some(parent) = class_info.parent.as_deref() {
+            current = Some(parent);
+            continue;
+        }
+        return None;
+    }
+    None
+}
+
+/// Returns true when a magic method resolves to one of php-src's internal date/time handlers.
+fn date_magic_uses_builtin_handler(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+    method: &str,
+) -> bool {
+    let method_key = php_symbol_key(method);
+    inherited_instance_method_impl(classes, class_name, &method_key)
+        .is_some_and(is_builtin_datetime_class_name)
+}
+
+/// Returns property indexes declared outside the five internal date/time base classes.
+fn date_magic_custom_property_indices(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+) -> Vec<usize> {
+    if !class_has_builtin_datetime_ancestor(classes, class_name)
+        || is_builtin_datetime_class_name(class_name)
+    {
+        return Vec::new();
+    }
+    let Some(class_info) = classes.get(class_name) else {
+        return Vec::new();
+    };
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (property_name, _))| {
+            let declaring_class = class_info
+                .property_declaring_classes
+                .get(property_name)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            (!is_builtin_datetime_class_name(declaring_class)).then_some(index)
+        })
+        .collect()
+}
+
+/// Returns true when a class descends from one of the five internal date/time object classes.
+fn class_has_builtin_datetime_ancestor(
+    classes: &HashMap<String, ClassInfo>,
+    class_name: &str,
+) -> bool {
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        if is_builtin_datetime_class_name(name) {
+            return true;
+        }
+        current = classes
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
+/// Returns true for the five object classes whose serialization handlers are internal to ext/date.
+fn is_builtin_datetime_class_name(class_name: &str) -> bool {
+    matches!(
+        class_name.trim_start_matches('\\'),
+        "DateTime"
+            | "DateTimeImmutable"
+            | "DateTimeZone"
+            | "DateInterval"
+            | "DatePeriod"
+    )
 }
 
 /// Emits a dense class-id to class-name lookup table for runtime `get_class()`.
@@ -1357,6 +1623,16 @@ fn emit_eval_reflection_source_file_data(out: &mut String, source_path: Option<&
     out.push_str(".p2align 3\n");
     out.push_str(".globl _eval_reflection_source_file_len\n_eval_reflection_source_file_len:\n");
     out.push_str(&format!("    .quad {}\n", source_path.len()));
+}
+
+/// Emits the source path used by native fatal diagnostics.
+fn emit_program_source_file_data(out: &mut String, source_path: Option<&str>) {
+    let source_file = source_path.unwrap_or("");
+    out.push_str(".globl _program_source_file\n_program_source_file:\n");
+    out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(source_file)));
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _program_source_file_len\n_program_source_file_len:\n");
+    out.push_str(&format!("    .quad {}\n", source_file.len()));
 }
 
 /// Emits AOT method flag rows consumed by eval ReflectionMethod metadata probes.
@@ -2748,9 +3024,81 @@ struct VarDumpRow {
     type_name: String,
 }
 
+/// One rendered row of a `_class_pr_desc_*` table.
+struct PrintRRow {
+    /// Text PHP renders between `[` and `]`, without var_dump's quotes.
+    key: String,
+    /// Byte offset of the backing property within the object.
+    offset: usize,
+    /// Runtime value tag of the backing property.
+    tag: u64,
+}
+
+/// Builds the `print_r` rows for a class.
+///
+/// Built-in ext/date storage is deliberately excluded because php-src exposes
+/// virtual fields for those classes. User-declared subclass properties remain
+/// first in layout order and are followed by the synthetic virtual-field output.
+fn print_r_descriptor_rows(
+    classes: &HashMap<String, ClassInfo>,
+    class_info: &ClassInfo,
+    class_name: &str,
+) -> Vec<PrintRRow> {
+    if class_has_builtin_datetime_ancestor(classes, class_name) {
+        return date_magic_custom_property_indices(classes, class_name)
+            .into_iter()
+            .filter_map(|property_index| {
+                let (property_name, property_type) = class_info.properties.get(property_index)?;
+                Some(PrintRRow {
+                    key: print_r_property_key(class_info, class_name, property_name),
+                    offset: class_info
+                        .property_offsets
+                        .get(property_name)
+                        .copied()
+                        .unwrap_or(8 + property_index * 16),
+                    tag: prop_value_tag(class_info, property_name, property_type),
+                })
+            })
+            .collect();
+    }
+
+    var_dump_descriptor_rows(classes, class_info, class_name)
+        .into_iter()
+        .map(|row| PrintRRow {
+            key: row.key.replace('"', ""),
+            offset: row.offset,
+            tag: row.tag,
+        })
+        .collect()
+}
+
 /// Builds the `var_dump` rows for a class: the `__debugInfo()` projection when the
 /// class declares a foldable one, otherwise every declared property in layout order.
-fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<VarDumpRow> {
+fn var_dump_descriptor_rows(
+    classes: &HashMap<String, ClassInfo>,
+    class_info: &ClassInfo,
+    class_name: &str,
+) -> Vec<VarDumpRow> {
+    if class_has_builtin_datetime_ancestor(classes, class_name) {
+        return date_magic_custom_property_indices(classes, class_name)
+            .into_iter()
+            .filter_map(|property_index| {
+                let (property_name, property_type) = class_info.properties.get(property_index)?;
+                Some(VarDumpRow {
+                    key: var_dump_property_key(class_info, class_name, property_name),
+                    print_r_key: print_r_property_key(class_info, class_name, property_name),
+                    plain_key: property_name.clone(),
+                    offset: class_info
+                        .property_offsets
+                        .get(property_name)
+                        .copied()
+                        .unwrap_or(8 + property_index * 16),
+                    tag: prop_value_tag(class_info, property_name, property_type),
+                    type_name: var_dump_property_type_name(property_type),
+                })
+            })
+            .collect();
+    }
     if let Some(projection) = var_dump_debug_info_projection(class_info) {
         return projection
             .into_iter()
@@ -2973,7 +3321,7 @@ fn print_r_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &st
 /// `mixed` — a property can only be uninitialized when it is typed and
 /// default-less, and the walker's `uninitialized(...)` line is the only consumer.
 fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
-    match prop_ty {
+    match prop_ty.codegen_repr() {
         PhpType::Int => "int".to_string(),
         PhpType::Float => "float".to_string(),
         PhpType::Str => "string".to_string(),
@@ -2990,13 +3338,25 @@ fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
 
 /// Maps a declared property's static type to the runtime value tag consumed by
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
-/// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
-/// properties are stored as boxed `Mixed` cells (tag 7).
+/// Mirrors the gc-descriptor tag mapping. Reference properties are boxed
+/// `Mixed` cells (tag 7), while default-less untyped slots use the compiler's
+/// inline tagged-scalar `(payload, runtime_tag)` representation (tag 11).
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) -> u64 {
     if class_info.reference_properties.contains(prop_name) {
         return 7;
     }
-    match prop_ty {
+    let default_less_untyped = class_info
+        .properties
+        .iter()
+        .position(|(name, _)| name == prop_name)
+        .is_some_and(|index| {
+            !class_info.property_slot_is_declared(index, prop_name)
+                && class_info.defaults.get(index).is_some_and(Option::is_none)
+        });
+    if default_less_untyped {
+        return 11;
+    }
+    match prop_ty.codegen_repr() {
         PhpType::Int => 0,
         PhpType::Str => 1,
         PhpType::Float => 2,
@@ -3004,6 +3364,7 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
+        PhpType::TaggedScalar => 11,
         _ => 7,
     }
 }
@@ -3163,7 +3524,7 @@ mod tests {
     use crate::parser::ast::Visibility;
     use crate::types::{ClassInfo, PhpType};
 
-    use super::emit_runtime_data_user;
+    use super::{emit_runtime_data_user, prop_value_tag};
 
     /// Provides the Empty class info helper used by the user module.
     pub(super) fn empty_class_info(class_id: u64, method_name: &str) -> ClassInfo {
@@ -3181,6 +3542,7 @@ mod tests {
             is_final: false,
             is_readonly_class: false,
             allow_dynamic_properties: false,
+            dynamic_properties_deprecated: false,
             constants: HashMap::new(),
     constant_deprecations: HashMap::new(),
     constant_types: HashMap::new(),
@@ -3240,6 +3602,24 @@ mod tests {
             interfaces: Vec::new(),
             constructor_param_to_prop: Vec::new(),
         }
+    }
+
+    /// Verifies only truly untyped default-less slots use the inline tagged-scalar layout.
+    #[test]
+    fn serialization_property_tag_distinguishes_declared_mixed_from_untyped() {
+        let mut class_info = empty_class_info(1, "run");
+        class_info
+            .properties
+            .push(("value".to_string(), PhpType::Mixed));
+        class_info.defaults.push(None);
+        class_info.property_declared_slots.push(false);
+
+        assert_eq!(prop_value_tag(&class_info, "value", &PhpType::Mixed), 11);
+        assert_eq!(prop_value_tag(&class_info, "value", &PhpType::Int), 11);
+
+        class_info.property_declared_slots[0] = true;
+        class_info.declared_properties.insert("value".to_string());
+        assert_eq!(prop_value_tag(&class_info, "value", &PhpType::Mixed), 7);
     }
 
     /// Verifies that emit runtime data user can filter built in classes.

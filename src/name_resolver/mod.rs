@@ -72,6 +72,23 @@ fn rewrite_callback_literal_args(
         .map(|(idx, arg)| {
             if callback_positions.contains(&idx) {
                 if let ExprKind::StringLiteral(raw_name) = &arg.kind {
+                    if function_name.trim_start_matches('\\').eq_ignore_ascii_case("call_user_func_array")
+                        && !raw_name.contains('\\')
+                    {
+                        let internal = if raw_name.eq_ignore_ascii_case("mktime") {
+                            Some("__elephc_mktime_raw")
+                        } else if raw_name.eq_ignore_ascii_case("gmmktime") {
+                            Some("__elephc_gmmktime_raw")
+                        } else {
+                            None
+                        };
+                        if let Some(internal) = internal {
+                            return Expr::new(
+                                ExprKind::StringLiteral(internal.to_string()),
+                                arg.span,
+                            );
+                        }
+                    }
                     let resolved = names::resolve_function_name(
                         &parse_callback_name(raw_name),
                         current_namespace,

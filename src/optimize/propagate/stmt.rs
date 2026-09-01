@@ -600,6 +600,27 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
                 next_env,
             )
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            let object = propagate_expr(*object, &env);
+            let property = propagate_expr(*property, &env);
+            let value = propagate_expr(value, &env);
+            let next_env = env_after_expr_side_effects(env, &[&object, &property, &value]);
+            (
+                Stmt::new(
+                    StmtKind::DynamicPropertyArrayPush {
+                        object: Box::new(object),
+                        property: Box::new(property),
+                        value,
+                    },
+                    span,
+                ),
+                next_env,
+            )
+        }
         StmtKind::PropertyArrayAssign {
             object,
             property,

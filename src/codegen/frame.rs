@@ -465,6 +465,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
+    emit_main_static_property_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
@@ -493,6 +494,27 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
+}
+
+/// Releases initialized refcounted static class properties before process-exit diagnostics.
+fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>) {
+    for (symbol, php_type) in super::web::refcounted_static_properties(ctx.module) {
+        let done = ctx.next_label("static_property_cleanup_done");
+        ctx.emitter
+            .comment(&format!("epilogue cleanup static property {symbol}"));
+        abi::emit_load_symbol_to_reg(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            &symbol,
+            8,
+        );
+        super::web::emit_branch_if_equals_sentinel(ctx.emitter, &done);
+        let ty = php_type.codegen_repr();
+        super::web::emit_release_symbol_value(ctx.emitter, &symbol, &ty);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+        abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
+        ctx.emitter.label(&done);
+    }
 }
 
 /// Releases initialized function static locals before process-exit diagnostics.
@@ -1784,13 +1806,13 @@ fn emit_call_counter_increment(ctx: &mut FunctionContext<'_>, entry_label: &str)
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", &slot);
-            ctx.emitter.instruction("ldr x10, [x9]");
-            ctx.emitter.instruction("add x10, x10, #1");
-            ctx.emitter.instruction("str x10, [x9]");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load this function's current call count
+            ctx.emitter.instruction("add x10, x10, #1");                        // increment the function call count
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the updated function call count
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "r10", &slot);
-            ctx.emitter.instruction("inc qword ptr [r10]");
+            ctx.emitter.instruction("inc qword ptr [r10]");                     // increment this function's call count in place
         }
     }
 }

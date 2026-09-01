@@ -7213,9 +7213,12 @@ echo function_exists("sys_get_temp_dir");');
     );
     // `phpversion()` reports the PHP LANGUAGE version, not elephc's package version. The eval
     // interpreter cannot read `--php-version` itself, so the compiler forwards the profile to
-    // it; this program compiles with the default, hence 8.5.0. `eval_follows_a_non_default_profile`
+    // it; this program compiles with the default, hence 8.5.10-dev. `eval_follows_a_non_default_profile`
     // in `php_version_surface_tests` is where the forwarding itself is measured.
-    assert_eq!(out, "time:8.5.0:/tmp:cwd:call-time:8.5.0:call-cwd:/tmp:1111");
+    assert_eq!(
+        out,
+        "time:8.5.10-dev:/tmp:cwd:call-time:8.5.10-dev:call-cwd:/tmp:1111"
+    );
 }
 
 /// Verifies eval `date()` formats timestamps and `mktime()` creates them.
@@ -7230,12 +7233,15 @@ echo ":" . (date("U", $ts) === strval($ts) ? "U" : "bad");
 echo ":" . call_user_func("date", "Y", $ts);
 $named = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0, "month" => 1, "day" => 1, "year" => 2000]);
 echo ":" . date(format: "Y", timestamp: $named);
+$short = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0]);
+$positional = mktime(0, 0, 0);
+echo ":" . ($short === $positional ? "defaults" : "bad");
 echo ":"; echo function_exists("date"); echo function_exists("mktime");');
 "#,
     );
     assert_eq!(
         out,
-        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:11"
+        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:defaults:11"
     );
 }
 
@@ -9757,6 +9763,47 @@ echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
     );
 }
 
+/// Verifies eval and static code share one `error_reporting()` mask and suppress eval warnings.
+#[test]
+fn test_eval_error_reporting_shares_runtime_mask_with_static_code() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo error_reporting(), "|";
+eval('echo error_reporting(0), "|"; define("EvalMaskedConstant", 1); define("EvalMaskedConstant", 2);');
+echo error_reporting(), "|";
+echo eval('return error_reporting(E_ALL);'), "|";
+echo error_reporting();
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "30719|30719|0|0|30719");
+    assert_eq!(out.stderr, "");
+}
+
+/// Verifies eval E_STRICT reads use the shared E_DEPRECATED runtime channel.
+#[test]
+fn test_eval_e_strict_deprecation_matches_php_src() {
+    let out = compile_and_run_capture(r#"<?php eval('echo E_STRICT, "\n";');"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2048\n");
+    assert_eq!(
+        out.stderr,
+        "\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed"
+    );
+}
+
+/// Verifies eval `setlocale()` exposes target `LC_*` constants and candidate ordering.
+#[test]
+fn test_eval_setlocale_matches_static_process_locale_state() {
+    let out = compile_and_run(
+        r#"<?php
+echo eval('return setlocale(LC_ALL, ["__elephc_invalid_locale__", "C"]);'), "|";
+echo setlocale(LC_ALL, 0);
+"#,
+    );
+    assert_eq!(out, "C|C");
+}
+
 /// Verifies malformed input, builtin failure, and non-callables do not leak Rust panics.
 #[test]
 fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
@@ -11915,14 +11962,17 @@ class EvalMethodArrayArgBox {
     }
 
     public function run() {
-        return eval('return $this->countItems([1, 2, 3]) . ":" . EvalMethodArrayArgBox::countStatic([4, 5]);');
+        return eval('return $this->countItems([1, 2, 3]) . ":" .
+            EvalMethodArrayArgBox::countStatic([4, 5]) . ":" .
+            $this->countItems(["left" => 6, "right" => 7]) . ":" .
+            EvalMethodArrayArgBox::countStatic(["only" => 8]);');
     }
 }
 
 echo (new EvalMethodArrayArgBox())->run();
 "#,
     );
-    assert_eq!(out, "3:2");
+    assert_eq!(out, "3:2:2:1");
 }
 
 /// Verifies eval fragments can pass iterable arguments to AOT methods and constructors.

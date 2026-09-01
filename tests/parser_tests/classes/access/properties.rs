@@ -136,6 +136,31 @@ fn test_parse_property_array_push() {
     }
 }
 
+/// Verifies parsing of an append through a runtime property name.
+#[test]
+fn test_parse_dynamic_property_array_push() {
+    let stmts = parse_source("<?php $obj->$property[] = $item;");
+    match &stmts[0].kind {
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            assert!(matches!(object.kind, ExprKind::Variable(ref name) if name == "obj"));
+            assert!(matches!(property.kind, ExprKind::Variable(ref name) if name == "property"));
+            assert!(matches!(value.kind, ExprKind::Variable(ref name) if name == "item"));
+        }
+        other => panic!("Expected DynamicPropertyArrayPush, got {:?}", other),
+    }
+}
+
+/// Verifies malformed and compound dynamic-property appends remain rejected assignment targets.
+#[test]
+fn test_parse_rejects_malformed_dynamic_property_array_pushes() {
+    assert!(parse_fails("<?php $obj->$property[] += 1;"));
+    assert!(parse_fails("<?php $obj->$property[ = 1;"));
+}
+
 /// Verifies parsing of indexed property array assignment (`$obj->items[0] = 42`).
 /// Fixture: `<?php $obj->items[0] = 42;`
 /// Asserts StmtKind::PropertyArrayAssign with property "items", index IntLiteral 0, and value IntLiteral 42.

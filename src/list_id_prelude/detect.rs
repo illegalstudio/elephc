@@ -417,6 +417,11 @@ fn stmt_refs_listid(stmt: &Stmt) -> bool {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_listid(object) || expr_refs_listid(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_refs_listid(object) || expr_refs_listid(property) || expr_refs_listid(value),
         StmtKind::PropertyArrayAssign {
             object,
             index,

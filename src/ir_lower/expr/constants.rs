@@ -145,7 +145,7 @@ pub(super) fn lower_const_ref(
 }
 
 /// Lowers a prescanned constant value using its checker-visible PHP type.
-fn lower_constant_value(
+pub(super) fn lower_constant_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: ExprKind,
     php_type: PhpType,

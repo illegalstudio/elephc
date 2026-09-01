@@ -2,7 +2,7 @@
 title: "tanh()"
 description: "Returns the hyperbolic tangent of a number."
 sidebar:
-  order: 317
+  order: 319
 ---
 
 ## tanh()

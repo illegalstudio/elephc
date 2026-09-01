@@ -1554,23 +1554,20 @@ fn test_known_by_value_pipe_target_leaves_the_piped_value_markable() {
     expect_no_error("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo strval($a);");
 }
 
-/// The conservative half of the `Pipe` arm, unchanged: a target the scan cannot resolve to a name
-/// with a signature still disqualifies the piped value, and so does a resolvable BY-REFERENCE one.
+/// Unknown by-value pipe targets can consume boxed Mixed storage, while a resolvable
+/// by-reference target remains invalid for the pipe operator itself.
 ///
-/// A `callable` parameter carries no signature here, so an unknown callee could bind the piped
-/// value by reference for the rest of the body — the divergent assignment stays the pre-feature
-/// hard error. The by-reference first-class callable is the arm that proves the new gate is the
-/// signature and not the syntax: same shape, same `strval(...)` spelling, different `ref_params`,
-/// and the checker rejects the pipe itself on top.
+/// A `callable` parameter carries no signature, so its argument remains boxed and safe across
+/// either runtime branch. A known by-reference first-class callable is rejected by the pipe's
+/// own argument contract.
 #[test]
-fn test_unresolved_or_by_ref_pipe_target_still_disqualifies_the_piped_value() {
-    expect_error(
+fn test_unresolved_pipe_target_is_boxed_but_by_ref_target_is_rejected() {
+    expect_no_error(
         "<?php function g(callable $cb, int $n) { if ($n > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> $cb; }",
-        "cannot reassign $a from int to string",
     );
     expect_error(
         "<?php function f(&$x) { $x = 1; return 1; } if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a |> f(...);",
-        "cannot reassign $a from int to string",
+        "Pipe operator does not support by-reference parameters",
     );
 }
 
@@ -1617,27 +1614,13 @@ fn test_unset_inside_try_leaves_the_pre_feature_error() {
     );
 }
 
-/// A retype assignment whose RHS can THROW is no exception to the depth-0 gate.
-///
-/// The straight-line retype requires conditional depth 0 (`merge_local_assignment_type`'s sibling
-/// of `Checker::local_binding_is_killable`), and `try` raises depth for its whole body exactly
-/// like an `if` with no `else`. Probed via `--check`: `$s = "heap" . $argc; try { $s =
-/// mightThrow($argc); } catch (...) {}`, where `mightThrow` returns `int`, stays the ordinary
-/// depth-gated hard error — whether the RHS can throw changes nothing the checker looks at. This
-/// LITERAL shape never reaches lowering, so it is pinned here rather than as a codegen e2e
-/// fixture.
-///
-/// This is not the last word on the underlying ownership risk, though: moving the depth-0 retype
-/// into a CALLEE and the `try` into the CALLER reaches a shape that DOES compile, because the
-/// retype is no longer nested inside the `try` at all — only the CALL that can throw is. See
-/// `codegen::locals_retype::test_retype_whose_throwing_rhs_unwinds_out_of_the_callee_frame` for
-/// the e2e fixture that pins the unwind-across-a-pending-release case this rejection alone would
-/// otherwise leave uncovered.
+/// A retype assignment whose RHS can throw uses boxed Mixed storage inside `try`.
+/// The boxed slot preserves the original string when the RHS throws and stores the integer when
+/// it returns. The end-to-end ownership twin remains in `codegen::locals_retype`.
 #[test]
-fn test_retype_inside_try_with_throwing_rhs_stays_the_depth_gated_error() {
-    expect_error(
+fn test_retype_inside_try_with_throwing_rhs_uses_boxed_storage() {
+    expect_no_error(
         "<?php function mightThrow(int $n): int { if ($n === 1) { throw new Exception(\"boom\"); } return $n; } $s = \"heap\" . $argc; try { $s = mightThrow($argc); } catch (Exception $e) {} echo $s;",
-        "cannot reassign $s from string to int",
     );
 }
 
@@ -1831,12 +1814,10 @@ fn test_unset_then_assign_has_no_warning() {
     expect_no_warning("<?php $a = 0; unset($a); $a = \"ciao\";", "changes type");
 }
 
-/// A conditional incompatible reassignment is not kill/rebind-eligible. The `$a++`
-/// write also blocks Task 6's mixed-storage marking, so this fixture stays an error
-/// through the whole plan (a plain conditional retype becomes legal in Task 6).
+/// A conditional incompatible reassignment followed by increment uses boxed Mixed storage.
 #[test]
-fn test_conditional_retype_still_errors() {
-    expect_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;", "cannot reassign");
+fn test_conditional_retype_with_increment_uses_boxed_storage() {
+    expect_no_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;");
 }
 
 /// Interplay: a conditional unset leaves the binding alive, so a later depth-0
@@ -2317,10 +2298,10 @@ fn test_ref_aliased_never_mixed() {
     expect_error("<?php $a = 0; $r =& $a; if ($argc > 1) { $a = 1; } else { $a = \"x\"; }", "cannot reassign");
 }
 
-/// A non-Assign write (++) blocks marking: the divergent assignment stays an error.
+/// A non-Assign write after a divergent assignment operates on boxed Mixed storage.
 #[test]
-fn test_incdec_write_blocks_marking() {
-    expect_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;", "cannot reassign");
+fn test_incdec_write_uses_boxed_storage() {
+    expect_no_error("<?php $a = 0; if ($argc > 1) { $a = \"x\"; } $a++;");
 }
 
 /// unset anywhere in the body blocks marking: the name stays unmarked, so the
@@ -2790,13 +2771,11 @@ fn test_concatenation_of_inexactly_typed_operands_is_still_exact() {
     );
 }
 
-/// A concatenation still only counts as evidence, never as a licence: a write the scan cannot
-/// model reaching the same name disqualifies it exactly as before.
+/// Concatenation evidence and a following increment share boxed Mixed storage.
 #[test]
-fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
-    expect_error(
+fn test_concatenation_then_increment_uses_boxed_storage() {
+    expect_no_error(
         "<?php $a = 0; if ($argc > 1) { $a = \"s\" . $argc; } $a++;",
-        "cannot reassign",
     );
 }
 
@@ -3114,5 +3093,27 @@ fn test_branch_divergent_marking_survives_an_eval_body() {
         2,
         "both branch assignments must still be recorded in an eval body: {:?}",
         result.mixed_storage_store_sites
+    );
+}
+
+/// Typed locals and typed parameters remain strict through the new boxed-Mixed fallback.
+#[test]
+fn test_boxed_mixed_fallback_preserves_declared_types() {
+    expect_error(
+        "<?php int $value = 1; echo ($value = \"x\");",
+        "cannot reassign $value",
+    );
+    expect_error(
+        "<?php function f(int $value) { if ($value) { $value = new stdClass(); } } f(1);",
+        "cannot reassign $value",
+    );
+}
+
+/// By-reference parameters keep caller-owned storage and cannot be boxed by the fallback.
+#[test]
+fn test_boxed_mixed_fallback_preserves_by_ref_parameters() {
+    expect_error(
+        "<?php function f(&$value) { if ($value) { $value = new stdClass(); } } $value = 1; f($value);",
+        "cannot reassign $value",
     );
 }

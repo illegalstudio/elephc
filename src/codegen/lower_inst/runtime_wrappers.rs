@@ -269,6 +269,48 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             span,
         )
     }
+
+    /// Rejects scope-sensitive object projection from runtime-selected wrappers.
+    fn emit_get_object_vars(
+        &mut self,
+        _object: ValueId,
+        _span: crate::span::Span,
+    ) -> std::result::Result<
+        crate::builtins::semantics::LoweredBuiltinValue,
+        crate::builtins::semantics::BuiltinLoweringError,
+    > {
+        Err(crate::builtins::semantics::BuiltinLoweringError::new(
+            "get_object_vars() is unavailable in runtime-selected callable wrappers",
+        ))
+    }
+
+    /// Rejects array-pointer inspection from runtime-selected wrappers.
+    fn emit_array_end(
+        &mut self,
+        _array: ValueId,
+        _span: crate::span::Span,
+    ) -> std::result::Result<
+        crate::builtins::semantics::LoweredBuiltinValue,
+        crate::builtins::semantics::BuiltinLoweringError,
+    > {
+        Err(crate::builtins::semantics::BuiltinLoweringError::new(
+            "end() is unavailable in runtime-selected callable wrappers",
+        ))
+    }
+
+    /// Rejects closed-world constant-table selection from runtime-selected wrappers.
+    fn emit_constant_fetch(
+        &mut self,
+        _name: ValueId,
+        _span: crate::span::Span,
+    ) -> std::result::Result<
+        crate::builtins::semantics::LoweredBuiltinValue,
+        crate::builtins::semantics::BuiltinLoweringError,
+    > {
+        Err(crate::builtins::semantics::BuiltinLoweringError::new(
+            "constant() is unavailable in runtime-selected callable wrappers",
+        ))
+    }
 }
 
 /// Converts callable signature params into EIR function params with matching ABI/local slots.

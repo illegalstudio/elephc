@@ -115,7 +115,7 @@ pub(crate) fn inject_builtin_reflection(
                 builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
             ],
             attributes: Vec::new(),
-            constants: Vec::new(),
+            constants: vec![builtin_class_const("IS_INSTANCEOF", 2)],
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
         },

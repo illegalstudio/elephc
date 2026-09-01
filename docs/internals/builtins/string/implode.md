@@ -2,7 +2,7 @@
 title: "implode() — internals"
 description: "Compiler internals for implode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 426
+  order: 433
 ---
 
 ## `implode()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/implode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/implode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

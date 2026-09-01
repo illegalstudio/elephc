@@ -103,6 +103,40 @@ pub(super) fn lower_static_call_user_func(
             let [callback_arg, arg_array] = args else {
                 return None;
             };
+            if let ExprKind::StringLiteral(callback_name) = &callback_arg.kind {
+                let callback_key = php_symbol_key(callback_name.trim_start_matches('\\'));
+                if matches!(
+                    callback_key.as_str(),
+                    "mktime" | "gmmktime" | "__elephc_mktime_raw" | "__elephc_gmmktime_raw"
+                ) {
+                    let internal = if callback_key.contains("gmmktime") {
+                        "__elephc_gmmktime_raw"
+                    } else {
+                        "__elephc_mktime_raw"
+                    };
+                    let direct = Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::unqualified(internal),
+                            args: (0..6)
+                                .map(|index| {
+                                    Expr::new(
+                                        ExprKind::ArrayAccess {
+                                            array: Box::new(arg_array.clone()),
+                                            index: Box::new(Expr::new(
+                                                ExprKind::IntLiteral(index),
+                                                arg_array.span,
+                                            )),
+                                        },
+                                        arg_array.span,
+                                    )
+                                })
+                                .collect(),
+                        },
+                        expr.span,
+                    );
+                    return Some(lower_expr(ctx, &direct));
+                }
+            }
             if matches!(arg_array.kind, ExprKind::ArrayLiteralAssoc(_))
                 && static_callable_binding_for_expr(ctx, callback_arg)
                     .is_some_and(|target| matches!(target, StaticCallableBinding::InstanceMethod { .. }))

@@ -10,6 +10,62 @@
 use super::super::*;
 use super::support::*;
 
+/// Verifies eval `error_reporting()` shares PHP's query/update semantics and constants.
+#[test]
+fn execute_program_dispatches_error_reporting_builtin() {
+    let program = parse_fragment(
+        br#"echo error_reporting(); echo ":";
+echo error_reporting(0); echo ":";
+echo error_reporting(); echo ":";
+echo call_user_func("error_reporting", E_ALL & ~E_DEPRECATED); echo ":";
+echo error_reporting();
+return error_reporting(null);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "30719:30719:0:0:22527");
+    assert_eq!(values.get(result), FakeValue::Int(22527));
+}
+
+/// Verifies eval E_STRICT reads emit a mask-aware PHP 8.4+ deprecation.
+#[test]
+fn execute_program_deprecates_e_strict_reads() {
+    let program = parse_fragment(br#"return E_STRICT;"#).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Int(2048));
+    assert_eq!(
+        values.warnings,
+        vec!["\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed"]
+    );
+}
+
+/// Verifies eval `setlocale()` tries array, variadic, and callable candidates in PHP order.
+#[test]
+fn execute_program_dispatches_setlocale_builtin() {
+    let program = parse_fragment(
+        br#"echo setlocale(LC_ALL, ["__elephc_invalid_locale__", "C"]); echo ":";
+echo setlocale(LC_ALL, "__elephc_invalid_locale__", "C"); echo ":";
+echo call_user_func("setlocale", LC_ALL, 0);
+return setlocale(LC_ALL, ["__elephc_invalid_locale__"]);"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "C:C:C");
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+}
+
 /// Verifies eval zero-argument system builtins return native-compatible values.
 #[test]
 fn execute_program_dispatches_zero_arg_system_builtins() {
@@ -70,7 +126,7 @@ return function_exists('opcache_get_configuration');"#,
 
     assert_eq!(
         values.output,
-        "Zend OPcache:8.5.0:disable:134217728:2147401727:61:10:54:0"
+        "Zend OPcache:8.5.10-dev:disable:134217728:2147401727:61:10:54:0"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -253,6 +309,9 @@ echo ":" . (date("U", $ts) === strval($ts) ? "U" : "bad");
 echo ":" . call_user_func("date", "Y", $ts);
 $named = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0, "month" => 1, "day" => 1, "year" => 2000]);
 echo ":" . date(format: "Y", timestamp: $named);
+$short = call_user_func_array("mktime", ["hour" => 0, "minute" => 0, "second" => 0]);
+$positional = mktime(0, 0, 0);
+echo ":" . ($short === $positional ? "defaults" : "bad");
 echo ":"; echo function_exists("date");
 return function_exists("mktime");"#,
         )
@@ -264,7 +323,7 @@ return function_exists("mktime");"#,
 
     assert_eq!(
         values.output,
-        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:1"
+        "2024-01-02 13:02:03:2-1-13-1-PM-pm-2-Tue-Jan-Tuesday-January:U:2024:2000:defaults:1"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
@@ -762,6 +821,25 @@ return function_exists("get_loaded_extensions");"#,
         values.output,
         "11:Core:json:opcache:no-curl:1:Zend OPcache:no-reflection:array"
     );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `get_extension_funcs()` preserves the date inventory and fallback contract.
+#[test]
+fn execute_program_dispatches_get_extension_funcs_builtin() {
+    let program = parse_fragment(
+        br#"$date = get_extension_funcs("DATE");
+echo count($date) . ":" . $date[0] . ":" . $date[47] . ":";
+echo get_extension_funcs("missing") === false ? "false" : "bad";
+return function_exists("get_extension_funcs");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "48:strtotime:date_sun_info:false");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 

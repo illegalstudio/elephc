@@ -1,6 +1,5 @@
 //! Purpose:
-//! Defines the `ext/date` integer constants exposed as PHP predefined constants.
-//! Currently the `SUNFUNCS_RET_*` return-format selectors for `date_sunrise()`/`date_sunset()`.
+//! Defines the `ext/date` integer and string constants exposed as PHP predefined constants.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::init` when registering predefined constant types.
@@ -9,6 +8,24 @@
 //! Key details:
 //! - Values must match PHP's `ext/date` constants exactly so user code comparing or passing
 //!   these selectors behaves identically.
+
+/// Tuple of `(name, value)` pairs for PHP's global date-format string constants.
+pub(crate) const DATE_STR_CONSTANTS: &[(&str, &str)] = &[
+    ("DATE_ATOM", "Y-m-d\\TH:i:sP"),
+    ("DATE_COOKIE", "l, d-M-Y H:i:s T"),
+    ("DATE_ISO8601", "Y-m-d\\TH:i:sO"),
+    ("DATE_ISO8601_EXPANDED", "X-m-d\\TH:i:sP"),
+    ("DATE_RFC822", "D, d M y H:i:s O"),
+    ("DATE_RFC850", "l, d-M-y H:i:s T"),
+    ("DATE_RFC1036", "D, d M y H:i:s O"),
+    ("DATE_RFC1123", "D, d M Y H:i:s O"),
+    ("DATE_RFC7231", "D, d M Y H:i:s \\G\\M\\T"),
+    ("DATE_RFC2822", "D, d M Y H:i:s O"),
+    ("DATE_RFC3339", "Y-m-d\\TH:i:sP"),
+    ("DATE_RFC3339_EXTENDED", "Y-m-d\\TH:i:s.vP"),
+    ("DATE_RSS", "D, d M Y H:i:s O"),
+    ("DATE_W3C", "Y-m-d\\TH:i:sP"),
+];
 
 /// Tuple of `(name, value)` pairs for every `ext/date` integer constant.
 ///
@@ -67,6 +84,21 @@ mod tests {
         assert_eq!(find("SUNFUNCS_RET_DOUBLE"), 2);
     }
 
+    /// Verifies the global date-format aliases match php-src's canonical values.
+    #[test]
+    fn date_format_string_values_match_php() {
+        let find = |name: &str| {
+            DATE_STR_CONSTANTS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, value)| *value)
+                .expect("constant defined")
+        };
+        assert_eq!(find("DATE_ATOM"), "Y-m-d\\TH:i:sP");
+        assert_eq!(find("DATE_RFC7231"), "D, d M Y H:i:s \\G\\M\\T");
+        assert_eq!(find("DATE_RFC3339_EXTENDED"), "Y-m-d\\TH:i:s.vP");
+    }
+
     /// Asserts no duplicate names exist in `DATE_INT_CONSTANTS`.
     #[test]
     fn no_duplicate_constant_names() {
@@ -75,5 +107,15 @@ mod tests {
         let len_before = names.len();
         names.dedup();
         assert_eq!(names.len(), len_before, "duplicate date constant name");
+    }
+
+    /// Asserts the date-format constant registry contains no duplicate names.
+    #[test]
+    fn no_duplicate_date_string_constant_names() {
+        let mut names: Vec<&str> = DATE_STR_CONSTANTS.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        let len_before = names.len();
+        names.dedup();
+        assert_eq!(names.len(), len_before, "duplicate date string constant name");
     }
 }

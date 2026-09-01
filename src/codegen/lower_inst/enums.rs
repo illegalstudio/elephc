@@ -687,7 +687,7 @@ pub(super) fn emit_throw_int_arg_type_error(
 }
 
 /// Allocates a `TypeError` from the current persisted string result and throws it.
-fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
     match ctx.emitter.target.arch {

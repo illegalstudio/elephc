@@ -8,8 +8,105 @@
 //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
 
 use crate::support::*;
+use elephc::php_version::PhpVersion;
 
 // --- Date/time functions ---
+
+/// Verifies `error_reporting()` reads and updates the PHP diagnostic mask, returns
+/// the previous value, and treats an explicit null like the omitted argument.
+#[test]
+fn test_error_reporting_get_set_and_null() {
+    let out = compile_and_run(
+        r#"<?php
+echo error_reporting(), "|";
+echo error_reporting(E_ALL & ~E_DEPRECATED), "|";
+echo error_reporting(), "|";
+echo error_reporting(null), "|";
+echo error_reporting();
+"#,
+    );
+    assert_eq!(out, "30719|30719|22527|22527|22527");
+}
+
+/// Verifies `@` exposes php-src's fatal-only intersection without undoing mask updates.
+#[test]
+fn test_error_reporting_inside_suppression_matches_php_src() {
+    let out = compile_and_run(
+        r#"<?php
+error_reporting(100);
+echo @error_reporting(), "|", error_reporting(), "\n";
+error_reporting(100);
+echo @error_reporting(200), "|", error_reporting(), "\n";
+error_reporting(0);
+echo @error_reporting(), "|", error_reporting(), "\n";
+"#,
+    );
+    assert_eq!(out, "68|100\n68|200\n0|0\n");
+}
+
+/// Verifies PHP 8.4+'s E_STRICT read deprecation and retained integer value.
+#[test]
+fn test_e_strict_deprecation_matches_php_src() {
+    let out = compile_and_run_capture("<?php echo E_STRICT, \"\\n\";");
+    assert!(out.success, "E_STRICT fixture failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2048\n");
+    assert!(
+        out.stderr.starts_with(
+            "\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed in "
+        ) && out.stderr.ends_with(" on line 1\n"),
+        "unexpected E_STRICT deprecation: {}",
+        out.stderr
+    );
+}
+
+/// Verifies E_ALL and the default runtime mask change when E_STRICT is removed in PHP 8.4.
+#[test]
+fn test_e_all_and_error_reporting_follow_php_profile() {
+    let php83 = compile_and_run_with_php_version(
+        "<?php echo E_ALL, \"|\", error_reporting();",
+        PhpVersion::Php83,
+    );
+    let php85 = compile_and_run_with_php_version(
+        "<?php echo E_ALL, \"|\", error_reporting();",
+        PhpVersion::Php85,
+    );
+    assert_eq!(php83, "32767|32767");
+    assert_eq!(php85, "30719|30719");
+}
+
+/// Verifies the internal diagnostic bridge applies the active E_* mask without
+/// suppressing an enabled warning level.
+#[test]
+fn test_error_reporting_masks_diagnostic_levels() {
+    let out = compile_and_run_capture(
+        r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
+__elephc_diag_warning("deprecated\n", 0, E_DEPRECATED);
+__elephc_diag_warning("warning\n", 0, E_WARNING);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "");
+    assert_eq!(out.stderr, "warning\n");
+}
+
+/// Verifies generic runtime warnings honor `error_reporting(E_WARNING)` rather
+/// than only the `@` suppression depth.
+#[test]
+fn test_error_reporting_masks_undefined_array_key_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$values = [];
+error_reporting(0);
+var_dump($values["hidden"]);
+error_reporting(E_WARNING);
+var_dump($values["visible"]);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\nNULL\n");
+    assert_eq!(out.stderr, "Warning: Undefined array key \"visible\"\n");
+}
 
 /// Verifies `date("Y", timestamp)` returns the correct 4-digit year for a known UTC timestamp.
 #[test]
@@ -305,6 +402,37 @@ echo date(\"Y-m-d\", $ts);
     assert_eq!(out, "2000-01-01");
 }
 
+/// Verifies invalid `mktime()` arities throw the php-src `ArgumentCountError` subclass and are
+/// catchable through both `ArgumentCountError` and its `TypeError` parent.
+#[test]
+fn test_mktime_invalid_arity_throws_argument_count_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    mktime();
+} catch (ArgumentCountError $error) {
+    echo $error::class, ": ", $error->getMessage(), "\n";
+}
+try {
+    mktime(1, 2, 3, 4, 5, 6, 7);
+} catch (TypeError $error) {
+    echo $error::class, ": ", $error->getMessage(), "\n";
+}
+try {
+    gmmktime(1, 2, 3, 4, 5, 6, 7);
+} catch (ArgumentCountError $error) {
+    echo $error::class, ": ", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "ArgumentCountError: mktime() expects at least 1 argument, 0 given\n\
+ArgumentCountError: mktime() expects at most 6 arguments, 7 given
+ArgumentCountError: gmmktime() expects at most 6 arguments, 7 given"
+    );
+}
+
 /// Verifies `mktime`/`gmmktime` handle years before 1900 (which libc rejects) via a 400-year
 /// Gregorian-cycle shift, matching PHP's negative timestamps; an in-range year (1900) is unchanged.
 #[test]
@@ -429,11 +557,11 @@ echo date("Y-m-d H:i:s", $lower);
     assert_eq!(out, "2024-06-15 12:00:00,2024-06-15 12:30:00");
 }
 
-/// Verifies `strtotime` returns `false` (PHP's failure value) for malformed ISO-like strings
-/// that have extra junk after the datetime; a strict `=== false` check distinguishes failure
-/// from any valid timestamp.
+/// Verifies timelib's free-form grammar rejects trailing words, bare date suffixes, and incomplete
+/// hours while accepting one-letter zones, slash dates, and `0x` month input exactly like php-src.
+/// A strict `=== false` distinguishes failure from timestamp zero.
 #[test]
-fn test_strtotime_rejects_malformed_iso_datetime() {
+fn test_strtotime_php_src_datetime_grammar_edges() {
     let out = compile_and_run(
         r#"<?php
 echo (strtotime("2024-06-15 12:30:45 extra") === false ? "F" : "x") . ",";
@@ -444,7 +572,7 @@ echo (strtotime("2024/06/15") === false ? "F" : "x") . ",";
 echo (strtotime("2024-0x-15") === false ? "F" : "x");
 "#,
     );
-    assert_eq!(out, "F,F,F,F,F,F");
+    assert_eq!(out, "F,F,x,F,x,x");
 }
 
 /// Verifies the strtotime() failure value is `false`, not `-1`: a failed parse echoes as the
@@ -1019,8 +1147,7 @@ if ($diff >= 3590 && $diff <= 3610) echo "ok";
     assert_eq!(out, "ok");
 }
 
-/// Verifies `strtotime("a day ago")` produces a timestamp roughly 86400 seconds behind now
-/// (allowing ±~1 hour for DST; range 82700–90100).
+/// Verifies php-src parses `a` as military zone A in `a day ago`, yielding one hour ago.
 #[test]
 fn test_strtotime_offset_article_day_ago() {
     let out = compile_and_run(
@@ -1028,24 +1155,17 @@ fn test_strtotime_offset_article_day_ago() {
 $now = time();
 $ts = strtotime("a day ago");
 $diff = $now - $ts;
-if ($diff >= 86400 - 3700 && $diff <= 86400 + 3700) echo "ok";
+if ($diff >= 3590 && $diff <= 3610) echo "ok";
 "#,
     );
     assert_eq!(out, "ok");
 }
 
-/// Verifies `strtotime("an hour")` (article form) is equivalent to "+1 hour".
+/// Verifies php-src rejects the unsupported `an hour` article form.
 #[test]
-fn test_strtotime_offset_article_an_hour() {
-    let out = compile_and_run(
-        r#"<?php
-$now = time();
-$ts = strtotime("an hour");
-$diff = $ts - $now;
-if ($diff >= 3590 && $diff <= 3610) echo "ok";
-"#,
-    );
-    assert_eq!(out, "ok");
+fn test_strtotime_rejects_article_an_hour() {
+    let out = compile_and_run(r#"<?php var_dump(strtotime("an hour"));"#);
+    assert_eq!(out, "bool(false)\n");
 }
 
 /// Verifies `strtotime("+30 seconds")` produces a timestamp roughly 30 seconds ahead of now (±2s tolerance).
@@ -1251,52 +1371,33 @@ echo date("D", $ts);
     assert_eq!(out, "Fri");
 }
 
-/// Regression for #391: the Linux x86_64 weekday-modifier parser must pass
-/// `min(end - weekday_cursor, 16)` to `match_word`, not a fixed 16-byte window.
+/// Verifies the Linux x86_64 timelib wrapper passes its seventh success-pointer argument on the
+/// SysV stack and returns the written flag beside the timestamp.
 #[test]
-fn test_strtotime_x86_64_weekday_modifier_match_window_is_remaining_capped() {
+fn test_strtotime_x86_64_timelib_wrapper_passes_success_pointer_on_stack() {
     let target = Target::parse("linux-x86_64").expect("valid linux x86_64 target");
     let runtime_asm = elephc::codegen::generate_runtime_with_features(
         8_388_608,
         target,
-        elephc::codegen::RuntimeFeatures::none(),
-    );
-    let modifier_block = asm_between_labels(
-        &runtime_asm,
-        "__rt_strtotime_weekdays_entry_linux_x86_64:",
-        "__rt_strtotime_weekdays_direct_linux_x86_64:",
+        elephc::codegen::RuntimeFeatures {
+            timelib: true,
+            ..elephc::codegen::RuntimeFeatures::none()
+        },
     );
 
     assert_asm_contains_ordered(
-        modifier_block,
+        &runtime_asm,
         &[
-            "mov QWORD PTR [rsp + 112], rdi",
-            "lea rdi, [rbp - 64]",
-            "mov rcx, r10",
-            "sub rcx, QWORD PTR [rsp + 112]",
-            "mov r8, 16",
-            "cmp rcx, r8",
-            "cmovae rcx, r8",
-            "call __rt_strtotime_match_word_linux_x86_64",
+            "__rt_strtotime:",
+            "sub rsp, 48",
+            "lea rax, [rbp - 40]",
+            "mov QWORD PTR [rsp], rax",
+            "call elephc_tz_strtotime",
+            "mov rdx, QWORD PTR [rbp - 40]",
+            "leave",
+            "ret",
         ],
     );
-    assert!(
-        !modifier_block.contains("mov rcx, 16"),
-        "weekday modifier path must not pass a fixed 16-byte window:\n{modifier_block}"
-    );
-}
-
-/// Returns the assembly slice between two labels, including the start label and
-/// excluding the end label.
-fn asm_between_labels<'a>(asm: &'a str, start_label: &str, end_label: &str) -> &'a str {
-    let start = asm
-        .find(start_label)
-        .unwrap_or_else(|| panic!("missing start label {start_label}"));
-    let tail = &asm[start..];
-    let end = tail
-        .find(end_label)
-        .unwrap_or_else(|| panic!("missing end label {end_label} after {start_label}"));
-    &tail[..end]
 }
 
 /// Asserts that every assembly needle appears in the provided order.
@@ -3250,4 +3351,145 @@ echo function_exists("mktime") ? "1" : "0", function_exists("gmmktime") ? "1" : 
 "#,
     );
     assert_eq!(out, "2024-06-15 12:30:45|03-15|same-year|h12|11");
+}
+
+/// G19: the procedural `date_create()` alias returns `false` (not a throw) when the string fails to
+/// parse, matching PHP-src's `DateTime|false` contract. The synthetic `__elephc_date_create` wrapper
+/// catches the ctor's `DateMalformedStringException` and returns `false`.
+#[test]
+fn test_date_create_invalid_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$d = date_create("totoro");
+echo ($d === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G19: the procedural `date_create_immutable()` alias returns `false` on an unparseable string,
+/// matching PHP-src's `DateTimeImmutable|false` contract (via the synthetic
+/// `__elephc_date_create` wrapper on `DateTimeImmutable`).
+#[test]
+fn test_date_create_immutable_invalid_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$d = date_create_immutable("totoro");
+echo ($d === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G19b: the procedural `date_modify()` alias returns `false` (not a throw) when the modifier fails
+/// to parse, matching PHP-src's `DateTime|false` contract. The synthetic `__elephc_date_modify`
+/// wrapper catches `modify()`'s `DateMalformedStringException` and returns `false`.
+#[test]
+fn test_date_modify_invalid_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+$d = new DateTime("2024-01-01");
+$r = date_modify($d, "totoro");
+echo ($r === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G15: `idate("")` with an empty format returns `false`. PHP also emits an `E_WARNING`; elephc does
+/// not (no warning system), so only the `false` return is asserted.
+#[test]
+fn test_idate_empty_format_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+echo (idate("") === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies an unrecognized literal `idate()` format returns `false`.
+#[test]
+fn test_idate_unknown_format_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+echo (idate("q") === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies computed formats take the same runtime validation path as literals.
+#[test]
+fn test_idate_dynamic_unknown_format_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+$format = "q";
+echo (idate($format) === false) ? "false" : "other";
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// G15 regression: a recognized `idate` specifier still returns the integer value, not `false`.
+#[test]
+fn test_idate_valid_format_returns_int() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+echo (idate("Y", 1718452800) > 2020) ? "int" : "other";
+"#,
+    );
+    assert_eq!(out, "int");
+}
+
+/// R1: `strtotime` accepts a two-digit ISO year `YY-MM-DD` and applies PHP's shorthand (70-100 →
+/// 1970-2000, 0-69 → 2000-2069), matching PHP-src. `gmdate` is used to avoid local-timezone noise.
+#[test]
+fn test_strtotime_two_digit_iso_year() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+echo gmdate("Y-m-d", strtotime("99-01-01")), "|", gmdate("Y-m-d", strtotime("50-06-15"));
+"#,
+    );
+    assert_eq!(out, "1999-01-01|2050-06-15");
+}
+
+/// Verifies an explicit `-1` timestamp is never mistaken for an omitted `date()`/`gmdate()`
+/// argument, while explicit null keeps php-src's current-time default.
+#[test]
+fn test_date_negative_one_is_distinct_from_omitted_timestamp() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+echo date("U", -1), "|", gmdate("U", -1), "|";
+$timestamp = null;
+echo date("Y", $timestamp) === date("Y") ? "D" : "d";
+echo gmdate("Y", $timestamp) === gmdate("Y") ? "G" : "g";
+"#,
+    );
+    assert_eq!(out, "-1|-1|DG");
+}
+
+/// Reproduces php-src's extreme timestamp formatting without relying on libc `tm` range support.
+#[test]
+fn test_date_extreme_signed_timestamp_formatting_uses_timelib() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+echo date("c|r|U", PHP_INT_MIN), "\n";
+echo date("c|r|Y|U", 67767976233532799), "\n";
+echo date("c|r|Y|U", 67767976233532800), "\n";
+echo gmdate("c|r|U", PHP_INT_MAX), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "-292277022657-01-27T08:29:52+00:00|Sun, 27 Jan -292277022657 08:29:52 +0000|-9223372036854775808\n\
+2147483647-12-31T23:59:59+00:00|Tue, 31 Dec 2147483647 23:59:59 +0000|2147483647|67767976233532799\n\
+2147483648-01-01T00:00:00+00:00|Wed, 01 Jan 2147483648 00:00:00 +0000|2147483648|67767976233532800\n\
+292277026596-12-04T15:30:07+00:00|Sun, 04 Dec 292277026596 15:30:07 +0000|9223372036854775807\n"
+    );
 }

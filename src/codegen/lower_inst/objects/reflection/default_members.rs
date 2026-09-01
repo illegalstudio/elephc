@@ -226,8 +226,10 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
             .and_then(|defaults| defaults.get(index))
             .and_then(Option::as_ref);
         let default_value_constant_name = source_default_expr
-            .or(default_expr)
-            .and_then(reflection_parameter_default_constant_name);
+            .and_then(reflection_parameter_default_constant_name)
+            .or_else(|| {
+                default_expr.and_then(reflection_parameter_default_constant_name)
+            });
         let is_array_type = reflection_parameter_has_named_type(type_metadata.as_ref(), "array");
         let is_callable_type =
             reflection_parameter_has_named_type(type_metadata.as_ref(), "callable");

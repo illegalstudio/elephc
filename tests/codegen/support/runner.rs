@@ -561,7 +561,13 @@ pub(crate) fn link_binary(
     match target().platform {
         Platform::MacOS => {
             let mut ld_cmd = Command::new("ld");
-            ld_cmd.args(["-arch", target().darwin_arch_name(), "-e", "_main", "-o"]);
+            ld_cmd.args([
+                "-arch",
+                target().darwin_arch_name(),
+                "-e",
+                "_main",
+                "-o",
+            ]);
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
@@ -582,6 +588,7 @@ pub(crate) fn link_binary(
                 }
                 ld_cmd.arg("-lodbc");
             }
+            ld_cmd.args(["-U", "_elephc_tz_format"]);
             ld_cmd.args(["-lSystem", "-syslibroot"]);
             ld_cmd.arg(get_sdk_path());
             ld_cmd.args([
@@ -973,6 +980,8 @@ pub(crate) struct ProgramOutput {
     pub(crate) stderr: String,
     // true if the process exited with a successful (zero) exit code.
     pub(crate) success: bool,
+    // Native process exit code, or None when the process ended through a signal.
+    pub(crate) exit_code: Option<i32>,
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1005,6 +1014,7 @@ pub(crate) fn assemble_and_run_capture(
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
+        exit_code: output.status.code(),
     }
 }
 

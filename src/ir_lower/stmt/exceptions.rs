@@ -38,12 +38,37 @@ pub(super) fn lower_try(
     finally_body: Option<&[Stmt]>,
     span: Span,
 ) {
+    let pre_try_types = (!catches.is_empty()).then(|| ctx.local_types.clone());
     if let Some(finally_body) = finally_body {
         lower_try_with_finally(ctx, try_body, catches, finally_body, span);
-        return;
+    } else {
+        lower_try_catch(ctx, try_body, catches, span);
     }
+    if let Some(pre_try_types) = pre_try_types {
+        widen_try_catch_join_types(ctx, &pre_try_types);
+    }
+}
 
-    lower_try_catch(ctx, try_body, catches, span);
+/// Restores conservative logical types where mutually exclusive try/catch writes widened storage.
+fn widen_try_catch_join_types(
+    ctx: &mut LoweringContext<'_, '_>,
+    pre_try_types: &TypeEnv,
+) {
+    let locals = ctx
+        .local_slots
+        .iter()
+        .map(|(name, slot)| (name.clone(), *slot))
+        .collect::<Vec<_>>();
+    for (name, slot) in locals {
+        let current = ctx.local_type(&name);
+        if pre_try_types.get(&name) == Some(&current) {
+            continue;
+        }
+        let storage = ctx.builder.local_php_type(slot).codegen_repr();
+        if storage == PhpType::Mixed {
+            ctx.set_local_logical_type(&name, PhpType::Mixed);
+        }
+    }
 }
 
 /// Lowers a `try`/`catch` statement without a `finally` block.
@@ -67,7 +92,15 @@ pub(super) fn lower_try_catch(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
+    let active_handler_depth = ctx.try_handler_stack.len();
+    ctx.try_handler_stack.push(TryHandlerFrame {
+        handler_token,
+        span,
+        loop_depth: ctx.loop_stack.len(),
+        finally_depth: ctx.finally_stack.len(),
+    });
     lower_block(ctx, try_body);
+    ctx.try_handler_stack.truncate(active_handler_depth);
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         branch_to(ctx, after_block);

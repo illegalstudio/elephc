@@ -137,6 +137,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_var_dump_close_container(emitter);
     io::emit_var_dump_open_object(emitter);
     io::emit_var_dump_object(emitter);
+    io::emit_var_dump_open_debug_object(emitter);
     io::emit_var_dump_emit_object_key(emitter);
     io::emit_var_dump_emit_uninit_line(emitter);
     io::emit_var_dump_emit_recursion_line(emitter);
@@ -161,6 +162,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_print_r_int_key(emitter);
     io::emit_print_r_str_key(emitter);
     io::emit_print_r_value(emitter);
+    io::emit_print_r_object_properties(emitter);
     io::emit_print_r_indexed(emitter);
     io::emit_print_r_hash(emitter);
     io::emit_pr_append(emitter);

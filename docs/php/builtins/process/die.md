@@ -2,7 +2,7 @@
 title: "die()"
 description: "Terminates execution with an optional status."
 sidebar:
-  order: 354
+  order: 361
 ---
 
 ## die()

@@ -83,7 +83,7 @@ fn apply_scalar_param_cast(
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
         // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
-        CastType::Int | CastType::Float | CastType::Array => value,
+        CastType::Int | CastType::Float | CastType::Array | CastType::Void => value,
     }
 }
 
@@ -115,7 +115,9 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: IrType::I64,
             };
-            operands[index] = coerce_to_float_at_span(ctx, lowered, None).value;
+            let coerced = coerce_to_float_at_span(ctx, lowered, None).value;
+            ctx.transfer_call_arg_temp_cleanup(value, coerced);
+            operands[index] = coerced;
         } else if param_ty == PhpType::Str
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
@@ -123,7 +125,9 @@ pub(super) fn coerce_operands_to_params(
                 value,
                 ir_type: ctx.builder.value_type(value),
             };
-            operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+            let coerced = coerce_to_string_at_span(ctx, lowered, None).value;
+            ctx.transfer_call_arg_temp_cleanup(value, coerced);
+            operands[index] = coerced;
         } else if sig.declared_params.get(index).copied().unwrap_or(false) {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
@@ -135,7 +139,9 @@ pub(super) fn coerce_operands_to_params(
                     value,
                     ir_type: ctx.builder.value_type(value),
                 };
-                operands[index] = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+                let coerced = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+                ctx.transfer_call_arg_temp_cleanup(value, coerced);
+                operands[index] = coerced;
             }
         }
     }
@@ -241,18 +247,21 @@ pub(super) fn lower_args_with_signature(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_and_spread_overflow(ctx, sig, args, None)
+}
+
+/// Lowers call arguments with an optional internal-overload error for excess spread entries.
+pub(super) fn lower_args_with_signature_and_spread_overflow(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    spread_overflow_error: Option<&str>,
+) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
     let literal_bound = rewrite_literal_param_bindings(sig, args);
     let args = literal_bound.as_deref().unwrap_or(args);
-    if crate::types::call_args::has_named_args(args) {
-        let operands = lower_named_args_with_signature(ctx, sig, args);
-        return coerce_operands_to_params(ctx, sig, operands);
-    }
-    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
-        return coerce_operands_to_params(ctx, sig, operands);
-    }
     let static_spread_args = if has_static_call_spread_args(args) {
         Some(expand_static_call_spread_args(args))
     } else {
@@ -260,6 +269,15 @@ pub(super) fn lower_args_with_signature(
     };
     let args = static_spread_args.as_deref().unwrap_or(args);
     if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
+        return coerce_operands_to_params(ctx, sig, operands);
+    }
+    if crate::types::call_args::has_named_args(args) {
+        let operands = lower_named_args_with_signature(ctx, sig, args);
+        return coerce_operands_to_params(ctx, sig, operands);
+    }
+    if let Some(operands) =
+        lower_positional_spread_args_with_signature(ctx, sig, args, spread_overflow_error)
+    {
         return coerce_operands_to_params(ctx, sig, operands);
     }
     if args.iter().any(is_spread_arg) {

@@ -2,7 +2,7 @@
 title: "putenv()"
 description: "Sets an environment variable."
 sidebar:
-  order: 149
+  order: 150
 ---
 
 ## putenv()

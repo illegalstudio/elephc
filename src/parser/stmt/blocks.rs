@@ -26,6 +26,17 @@ pub fn parse_block(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>
     let mut stmts = Vec::new();
     let mut errors = Vec::new();
     while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+        if tokens[*pos].0 == Token::Semicolon {
+            *pos += 1;
+            continue;
+        }
+        if tokens[*pos].0 == Token::LBrace {
+            match parse_block(tokens, pos) {
+                Ok(mut block_stmts) => stmts.append(&mut block_stmts),
+                Err(error) => errors.extend(error.flatten()),
+            }
+            continue;
+        }
         match parse_stmt(tokens, pos) {
             Ok(stmt) => stmts.push(stmt),
             Err(error) => {
@@ -52,6 +63,9 @@ pub fn parse_block(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>
 pub fn parse_body(tokens: &[SpannedToken], pos: &mut usize) -> Result<Vec<Stmt>, CompileError> {
     if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
         parse_block(tokens, pos)
+    } else if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+        *pos += 1;
+        Ok(Vec::new())
     } else {
         let stmt = parse_stmt(tokens, pos)?;
         Ok(vec![stmt])

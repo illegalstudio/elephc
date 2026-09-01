@@ -313,6 +313,7 @@ fn validate_instruction_immediate(
         | EnumBackingMixedToInt
         | PackedFieldMixedToInt
         | ReturnBoundaryMixedToInt
+        | ReturnBoundaryMixedToObject
         | PropInitialized
         | StaticPropInitialized
         | ReflectionStaticPropertyInitialized => {
@@ -343,7 +344,11 @@ fn validate_instruction_immediate(
             require_immediate(inst_id, inst, "checked numeric chain", |imm| {
                 matches!(imm, Imm::CheckedNumericChain(chain) if !chain.operations().is_empty()
                     && chain.operations().iter()
-                        .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
+                        .all(|op| !matches!(
+                            op,
+                            crate::ir::MixedNumericOp::Pow
+                                | crate::ir::MixedNumericOp::UnaryPlus
+                        )))
             })
         }
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
@@ -435,6 +440,8 @@ fn validate_opcode_rules(
         ClosureNew => Ok(()),
         FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
+        ObjectNewWithoutConstructor => check_count(inst_id, inst, 0, "0"),
+        ObjectCloneInternal => check_count(inst_id, inst, 1, "1"),
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
@@ -444,7 +451,12 @@ fn validate_opcode_rules(
         }
         ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
-        MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        MixedNumericBinop => match inst.immediate {
+            Some(Immediate::MixedNumericOp(crate::ir::MixedNumericOp::UnaryPlus)) => {
+                check_count(inst_id, inst, 1, "1")
+            }
+            _ => check_count(inst_id, inst, 2, "2"),
+        },
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.
         StrIncDec => check_count(inst_id, inst, 1, "1"),
@@ -522,11 +534,12 @@ fn validate_opcode_rules(
         ArrayHashUnion => check_array_hash_union(function, inst_id, inst),
         HashArrayUnion => check_hash_array_union(function, inst_id, inst),
         HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
-        ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayEnsureUnique
+        ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArrayPush | ArrayEnsureUnique
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
+        ArraySet => check_array_set_receiver(function, inst_id, inst),
         // The fetch-for-write element read is emitted from exactly one site (a by-reference
         // `foreach` source, issue #580) and writes the copy-on-write split back into the
         // receiver's element slot, so its operand shape is pinned tighter than the shared read
@@ -640,6 +653,33 @@ fn check_checked_numeric_chain(
     Ok(())
 }
 
+/// Validates an array write receiver, including boxed Mixed autovivification paths.
+fn check_array_set_receiver(
+    function: &Function,
+    inst_id: InstId,
+    inst: &Instruction,
+) -> Result<(), ValidationError> {
+    check_count(inst_id, inst, 3, "3")?;
+    let receiver = inst.operands[0];
+    let actual = function
+        .value(receiver)
+        .ok_or(ValidationError::UnknownValue(receiver))?
+        .ir_type;
+    if matches!(
+        actual,
+        IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Mixed)
+    ) {
+        Ok(())
+    } else {
+        Err(ValidationError::OperandTypeMismatch {
+            inst: inst_id,
+            operand: receiver,
+            expected: "Heap(Array) or Heap(Mixed)",
+            actual,
+        })
+    }
+}
+
 /// Validates operand and result storage types for typed runtime calls.
 fn validate_typed_runtime_call(
     function: &Function,
@@ -649,6 +689,9 @@ fn validate_typed_runtime_call(
     let Some(Immediate::RuntimeCall(target)) = inst.immediate else {
         return Ok(());
     };
+    if is_runtime_argument_count_error(target, inst.operands.len()) {
+        return Ok(());
+    }
     let signature = target
         .signature()
         .ok_or(ValidationError::UnknownRuntimeCallSignature(inst_id))?;
@@ -692,6 +735,20 @@ fn validate_typed_runtime_call(
         }
     }
     Ok(())
+}
+
+/// Returns whether a typed runtime call intentionally carries an invalid source arity so the
+/// backend can raise PHP's catchable `ArgumentCountError` at the call site.
+fn is_runtime_argument_count_error(
+    target: crate::ir::RuntimeCallTarget,
+    operand_count: usize,
+) -> bool {
+    matches!(
+        target,
+        crate::ir::RuntimeCallTarget::Function(
+            crate::ir::RuntimeFnId::Mktime | crate::ir::RuntimeFnId::Gmmktime
+        )
+    ) && (operand_count == 0 || operand_count > 6)
 }
 
 /// Returns the static diagnostic spelling for one EIR storage type.

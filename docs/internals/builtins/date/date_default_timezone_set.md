@@ -2,7 +2,7 @@
 title: "date_default_timezone_set() — internals"
 description: "Compiler internals for date_default_timezone_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 101
+  order: 102
 ---
 
 ## `date_default_timezone_set()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/date_default_timezone_set.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/date_default_timezone_set.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -27,7 +27,7 @@ sidebar:
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (0 requirements)`
+- **Requirements**: `static (1 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 

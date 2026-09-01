@@ -28,13 +28,18 @@ pub(super) fn reflection_property_metadata(
                 reflection_property_declaring_class_name(info, &property_name);
             let type_metadata = reflection_property_type_metadata(info, &property_name);
             let member_flags = reflection_property_member_flags(info, &property_name)?;
-            let property_hook_members = reflection_property_hook_members(
-                info,
-                &property_name,
-                declaring_class_name.as_deref(),
-                member_flags,
-                type_metadata.as_ref(),
-            );
+            let property_hook_members =
+                if reflected_class.trim_start_matches('\\') == "DatePeriod" {
+                    Vec::new()
+                } else {
+                    reflection_property_hook_members(
+                        info,
+                        &property_name,
+                        declaring_class_name.as_deref(),
+                        member_flags,
+                        type_metadata.as_ref(),
+                    )
+                };
             Some(ReflectionOwnerMetadata {
                 reflected_name: Some(property_name.clone()),
                 attr_names: info
@@ -136,18 +141,18 @@ pub(super) fn reflection_function_parameter_metadata(
     let function_name =
         const_required_string_operand(ctx, function_operand, "ReflectionParameter")?;
     let selector = const_parameter_selector_operand(ctx, parameter_operand)?;
+    if let Some((builtin_name, signature)) =
+        reflection_builtin_function_signature(&function_name)
+    {
+        let metadata = reflection_builtin_function_metadata(ctx, &builtin_name, &signature)?;
+        let Some(parameter) =
+            reflection_parameter_member_for_selector(&metadata.parameter_members, selector)
+        else {
+            return Ok(empty_reflection_metadata());
+        };
+        return Ok(reflection_parameter_owner_metadata(parameter));
+    }
     let Some(function) = ctx.function_by_name(&function_name) else {
-        if let Some((builtin_name, signature)) =
-            reflection_builtin_function_signature(&function_name)
-        {
-            let metadata = reflection_builtin_function_metadata(ctx, &builtin_name, &signature)?;
-            let Some(parameter) =
-                reflection_parameter_member_for_selector(&metadata.parameter_members, selector)
-            else {
-                return Ok(empty_reflection_metadata());
-            };
-            return Ok(reflection_parameter_owner_metadata(parameter));
-        }
         return Ok(empty_reflection_metadata());
     };
     let Some(signature) = function.signature.as_ref() else {
@@ -238,4 +243,3 @@ pub(super) fn reflection_parameter_member_for_selector(
         ReflectionParameterSelector::Position(_) => None,
     }
 }
-

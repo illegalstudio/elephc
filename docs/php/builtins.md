@@ -77,6 +77,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`reset()`](./builtins/array/reset.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`rsort()`](./builtins/array/rsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`shuffle()`](./builtins/array/shuffle.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`sizeof()`](./builtins/array/sizeof.md) | `(mixed $value, int $mode = 0): int` | `int` | ✓ | — |
 | [`sort()`](./builtins/array/sort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`uasort()`](./builtins/array/uasort.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
 | [`uksort()`](./builtins/array/uksort.md) | `(array $array, callable $callback): bool` | `bool` | ✓ | ✓ |
@@ -114,11 +115,11 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`date_default_timezone_set()`](./builtins/date/date_default_timezone_set.md) | `(string $timezoneId): bool` | `bool` | ✓ | ✓ |
 | [`getdate()`](./builtins/date/getdate.md) | `(int $timestamp = null): array` | `array` | ✓ | ✓ |
 | [`gmdate()`](./builtins/date/gmdate.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
-| [`gmmktime()`](./builtins/date/gmmktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
+| [`gmmktime()`](./builtins/date/gmmktime.md) | `(int $hour, int $minute = null, int $second = null, int $month = null, int $day = null, int $year = null): int` | `int` | ✓ | ✓ |
 | [`hrtime()`](./builtins/date/hrtime.md) | `(bool $as_number = false): mixed` | `mixed` | ✓ | ✓ |
 | [`localtime()`](./builtins/date/localtime.md) | `(int $timestamp = -1, bool $associative = false): array` | `array` | ✓ | ✓ |
 | [`microtime()`](./builtins/date/microtime.md) | `(bool $as_float = false): mixed` | `mixed` | ✓ | ✓ |
-| [`mktime()`](./builtins/date/mktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
+| [`mktime()`](./builtins/date/mktime.md) | `(int $hour, int $minute = null, int $second = null, int $month = null, int $day = null, int $year = null): int` | `int` | ✓ | ✓ |
 | [`strtotime()`](./builtins/date/strtotime.md) | `(string $datetime, int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`time()`](./builtins/date/time.md) | `(): int` | `int` | ✓ | ✓ |
 | [`basename()`](./builtins/filesystem/basename.md) | `(string $path, string $suffix = ''): string` | `string` | ✓ | ✓ |
@@ -304,6 +305,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`fdiv()`](./builtins/math/fdiv.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
 | [`floor()`](./builtins/math/floor.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fmod()`](./builtins/math/fmod.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
+| [`getrandmax()`](./builtins/math/getrandmax.md) | `(): int` | `int` | ✓ | — |
 | [`hexdec()`](./builtins/math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | — |
 | [`hypot()`](./builtins/math/hypot.md) | `(float $x, float $y): float` | `float` | ✓ | ✓ |
 | [`intdiv()`](./builtins/math/intdiv.md) | `(int $num1, int $num2): int` | `int` | ✓ | ✓ |
@@ -332,7 +334,11 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`define()`](./builtins/misc/define.md) | `(string $constant_name, mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`defined()`](./builtins/misc/defined.md) | `(string $constant_name): bool` | `bool` | ✓ | ✓ |
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`error_reporting()`](./builtins/misc/error_reporting.md) | `(int $error_level = null): int` | `int` | ✓ | ✓ |
 | [`extension_loaded()`](./builtins/misc/extension_loaded.md) | `(string $extension): bool` | `bool` | ✓ | ✓ |
+| [`gc_collect_cycles()`](./builtins/misc/gc_collect_cycles.md) | `(): int` | `int` | ✓ | — |
+| [`gc_enable()`](./builtins/misc/gc_enable.md) | `(): void` | `void` | ✓ | — |
+| [`get_extension_funcs()`](./builtins/misc/get_extension_funcs.md) | `(string $extension): mixed` | `mixed` | ✓ | ✓ |
 | [`get_loaded_extensions()`](./builtins/misc/get_loaded_extensions.md) | `(bool $zend_extensions = false): array` | `array` | ✓ | ✓ |
 | [`header()`](./builtins/misc/header.md) | `(string $header, bool $replace = true, int $response_code = 0): void` | `void` | ✓ | ✓ |
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
@@ -341,6 +347,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | — |
+| [`setlocale()`](./builtins/misc/setlocale.md) | `(int $category, mixed $locales, ...$rest): mixed` | `mixed` | ✓ | ✓ |
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | — |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` | ✓ | ✓ |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` | ✓ | ✓ |

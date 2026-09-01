@@ -2,7 +2,7 @@
 title: "stat() — internals"
 description: "Compiler internals for stat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 158
+  order: 159
 ---
 
 ## `stat()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stat.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stat.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

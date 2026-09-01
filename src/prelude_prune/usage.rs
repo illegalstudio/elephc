@@ -372,6 +372,15 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             scan_expr(object, usage);
             scan_expr(value, usage);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            scan_expr(object, usage);
+            scan_expr(property, usage);
+            scan_expr(value, usage);
+        }
         StmtKind::PropertyArrayAssign {
             object,
             index,

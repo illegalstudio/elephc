@@ -74,6 +74,12 @@ pub(super) fn lower_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
+    if canonical == "json_encode"
+        && !crate::types::call_args::has_named_args(args)
+        && !args.iter().any(is_spread_arg)
+    {
+        return lower_json_encode_args(ctx, sig, args);
+    }
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
@@ -130,6 +136,43 @@ pub(super) fn lower_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Projects DatePeriod's php-src virtual property shape before JSON object encoding.
+fn lower_json_encode_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<ValueId> {
+    args.iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let value = if let Some(sig) = sig {
+                let value = lower_arg_with_signature(ctx, sig, index, arg);
+                LoweredValue {
+                    value,
+                    ir_type: ctx.builder.value_type(value),
+                }
+            } else {
+                lower_expr(ctx, arg)
+            };
+            if index != 0
+                || singular_object_class(&ctx.builder.value_php_type(value.value)).is_none_or(
+                    |(class_name, _)| !class_extends_class(ctx, class_name, "DatePeriod"),
+                )
+            {
+                return value.value;
+            }
+            let release_source = ctx.value_is_owning_temporary(value)
+                && !ctx.value_is_owned_unboxed_local_load(value.value);
+            let properties = lower_json_date_object_from_value(ctx, value.value, arg.span)
+                .unwrap_or_else(|error| panic!("checked DatePeriod JSON projection failed: {error}"));
+            if release_source {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
+            }
+            properties.value
+        })
+        .collect()
 }
 
 /// Promotes the OpenSSL encrypt tag target to string-capable storage before lowering its load.

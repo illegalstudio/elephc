@@ -134,6 +134,7 @@ impl Checker {
 
                     self.current_class = Some(class.name.clone());
                     self.current_method = Some(method_key.clone());
+                    self.constructor_properties_read.clear();
                     self.current_method_is_static = method.is_static;
                     self.current_by_ref_return = method.by_ref_return;
                     let loop_storage_scope = format!("{}::{}", class.name, method.name);
@@ -207,6 +208,7 @@ impl Checker {
                     }
                     self.current_class = None;
                     self.current_method = None;
+                    self.constructor_properties_read.clear();
                     self.current_method_is_static = false;
                     self.current_by_ref_return = false;
                     self.current_loop_storage_scope = previous_loop_storage_scope;

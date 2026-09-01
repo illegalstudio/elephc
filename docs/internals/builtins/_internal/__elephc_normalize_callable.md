@@ -2,7 +2,7 @@
 title: "__elephc_normalize_callable() — internals"
 description: "Compiler internals for __elephc_normalize_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 527
+  order: 535
 ---
 
 ## `__elephc_normalize_callable()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/elephc_normalize_callable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/elephc_normalize_callable.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

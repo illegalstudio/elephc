@@ -2,7 +2,7 @@
 title: "base_convert() — internals"
 description: "Compiler internals for base_convert(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 266
+  order: 267
 ---
 
 ## `base_convert()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/base_convert.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/base_convert.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

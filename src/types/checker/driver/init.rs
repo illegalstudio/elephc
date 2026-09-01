@@ -12,13 +12,14 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Target;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STR_CONSTANTS};
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::iconv_constants::ICONV_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
+use crate::types::locale_constants::LOCALE_CONSTANT_NAMES;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
@@ -107,6 +108,9 @@ impl Checker {
         for (name, _value) in OPENSSL_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for name in LOCALE_CONSTANT_NAMES {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         for (name, _value) in STREAM_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
@@ -118,6 +122,9 @@ impl Checker {
         }
         for (name, _value) in DATE_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in DATE_STR_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Str);
         }
         for (name, _value) in SESSION_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
@@ -173,6 +180,7 @@ impl Checker {
             declared_trait_constants: HashMap::new(),
             current_class: None,
             current_method: None,
+            constructor_properties_read: HashSet::new(),
             current_function: None,
             current_method_is_static: false,
             current_by_ref_return: false,
@@ -211,6 +219,7 @@ impl Checker {
             ref_aliased_locals: HashSet::new(),
             static_local_names: HashSet::new(),
             typed_local_names: HashSet::new(),
+            unset_mentioned_locals: HashSet::new(),
             local_bind_kill_sites: HashMap::new(),
             local_retype_sites: HashMap::new(),
             statement_position_expr: None,

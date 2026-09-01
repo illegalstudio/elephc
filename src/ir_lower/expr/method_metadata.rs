@@ -17,7 +17,7 @@ pub(super) fn method_signature(
 ) -> Option<FunctionSig> {
     let object_ty = ctx.builder.value_php_type(object);
     let key = php_symbol_key(method);
-    if let Some((class_name, _)) = singular_object_class(&object_ty) {
+    if let Some(class_name) = method_receiver_object_class(&object_ty) {
         let normalized = class_name.trim_start_matches('\\');
         return class_method_signature(ctx, normalized, &key).cloned();
     }
@@ -194,7 +194,9 @@ pub(super) fn method_call_result_type(
         }
         return fallback_expr_type(expr);
     };
-    let return_ty = if let Some((receiver_name, _)) = singular_object_class(&object_ty) {
+    let return_ty = builtin_datetime_magic_serialize_return_type(ctx, &object_ty, method)
+        .unwrap_or(return_ty);
+    let return_ty = if let Some(receiver_name) = method_receiver_object_class(&object_ty) {
         instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))
             .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, receiver_name))
             .unwrap_or(return_ty)
@@ -206,6 +208,45 @@ pub(super) fn method_call_result_type(
     } else {
         return_ty
     }
+}
+
+/// Preserves the known associative representation of inherited ext/date `__serialize()` hooks.
+///
+/// PHP declares these methods as returning generic `array`, but each internal implementation
+/// always returns a string-keyed hash. EIR must keep that concrete storage shape so direct calls
+/// do not reinterpret the hash header as a packed array. User overrides retain their declared
+/// generic return because their runtime key shape is not known here.
+fn builtin_datetime_magic_serialize_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver_type: &PhpType,
+    method: &str,
+) -> Option<PhpType> {
+    let method_key = php_symbol_key(method);
+    if method_key != "__serialize" {
+        return None;
+    }
+    let receiver_name = method_receiver_object_class(receiver_type)?.trim_start_matches('\\');
+    let class_info = ctx.classes.get(receiver_name)?;
+    let impl_class = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .map(String::as_str)
+        .unwrap_or(receiver_name)
+        .trim_start_matches('\\');
+    if !matches!(
+        impl_class,
+        "DateTime"
+            | "DateTimeImmutable"
+            | "DateTimeZone"
+            | "DateInterval"
+            | "DatePeriod"
+    ) {
+        return None;
+    }
+    Some(PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Mixed),
+    })
 }
 
 /// Returns preserved late-static return syntax for EIR instance dispatch.
@@ -247,12 +288,25 @@ pub(super) fn common_dynamic_method_signature(
             continue;
         };
         match common.as_ref() {
-            Some(existing) if existing != &signature => return None,
+            Some(existing) if !method_argument_signatures_match(existing, &signature) => {
+                return None;
+            }
             Some(_) => {}
             None => common = Some(signature),
         }
     }
     common
+}
+
+/// Returns whether two dynamic method candidates accept the same PHP call arguments.
+fn method_argument_signatures_match(left: &FunctionSig, right: &FunctionSig) -> bool {
+    left.params == right.params
+        && left.param_type_exprs == right.param_type_exprs
+        && left.param_attributes == right.param_attributes
+        && left.defaults == right.defaults
+        && left.ref_params == right.ref_params
+        && left.declared_params == right.declared_params
+        && left.variadic == right.variadic
 }
 
 /// Returns true when an instance-method receiver has no single compile-time class.

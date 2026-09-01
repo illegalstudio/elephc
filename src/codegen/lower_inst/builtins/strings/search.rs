@@ -705,9 +705,8 @@ pub(super) fn load_substr_string_and_offset_x86_64(
 
 /// Materializes AArch64 `str_repeat()` runtime arguments.
 pub(super) fn lower_str_repeat_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let source = expect_string_operand(ctx, inst, 0, "str_repeat")?;
     let times = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(source, "x1", "x2")?;
+    load_string_arg_to_regs(ctx, inst, 0, "str_repeat", "x1", "x2")?;
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the source string while materializing the repeat count
     load_as_int(ctx, times, "str_repeat times")?;
     ctx.emitter.instruction("mov x3, x0");                                      // pass the repeat count as the third string-helper argument
@@ -717,9 +716,8 @@ pub(super) fn lower_str_repeat_aarch64(ctx: &mut FunctionContext<'_>, inst: &Ins
 
 /// Materializes x86_64 `str_repeat()` runtime arguments.
 pub(super) fn lower_str_repeat_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let source = expect_string_operand(ctx, inst, 0, "str_repeat")?;
     let times = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(source, "rax", "rdx")?;
+    load_string_arg_to_regs(ctx, inst, 0, "str_repeat", "rax", "rdx")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_as_int(ctx, times, "str_repeat times")?;
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the repeat count as the extra x86_64 runtime argument

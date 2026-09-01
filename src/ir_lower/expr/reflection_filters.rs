@@ -78,11 +78,24 @@ pub(super) fn reflection_property_class_get_properties_index_target(
     if php_symbol_key(method) != "getproperties" {
         return None;
     }
+    if reflection_owner_receiver_is_object(ctx, object) {
+        return None;
+    }
     let filter = reflection_class_get_properties_filter_arg(ctx, args)?;
     let class_name = reflection_class_reflected_class(ctx, object)?;
     let property =
         reflection_class_property_name_at_index(ctx, &class_name, *raw_index as usize, filter)?;
     Some((class_name, property))
+}
+
+/// Returns whether a Reflection owner expression is a `ReflectionObject` rather than a class.
+pub(super) fn reflection_owner_receiver_is_object(
+    ctx: &LoweringContext<'_, '_>,
+    object_expr: &Expr,
+) -> bool {
+    isset_object_expr_class(ctx, object_expr).is_some_and(|(class_name, _)| {
+        php_symbol_key(class_name.trim_start_matches('\\')) == "reflectionobject"
+    })
 }
 
 /// Returns the `ReflectionClass::getProperties()` property name at a known index.
@@ -104,6 +117,15 @@ pub(super) fn reflection_class_property_names_for_filter(
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    if let Some(property_names) = crate::types::php_src_date_property_names(class_name) {
+        return Some(
+            property_names
+                .iter()
+                .filter(|name| reflection_property_matches_filter(class_info, name, filter))
+                .map(|name| (*name).to_string())
+                .collect(),
+        );
+    }
     Some(
         class_info
             .properties
@@ -123,6 +145,15 @@ pub(super) fn reflection_class_method_names_for_filter(
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    if let Some(method_names) = crate::types::php_src_date_method_names(class_name) {
+        return Some(
+            method_names
+                .iter()
+                .filter(|name| reflection_method_matches_filter(class_info, name, filter))
+                .map(|name| (*name).to_string())
+                .collect(),
+        );
+    }
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in class_info
@@ -397,4 +428,3 @@ pub(super) fn reflection_property_filter_modifier_bits(
     }
     modifiers
 }
-

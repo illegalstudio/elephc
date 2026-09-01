@@ -2,7 +2,7 @@
 title: "stat()"
 description: "Gives information about a file."
 sidebar:
-  order: 158
+  order: 159
 ---
 
 ## stat()

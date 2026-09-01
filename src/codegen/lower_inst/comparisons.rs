@@ -308,6 +308,8 @@ pub(super) fn lower_loose_eq(
         emit_float_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else if mixed_numeric_comparable(&lhs_ty, &rhs_ty) {
         emit_mixed_numeric_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
+    } else if mixed_null_comparable(&lhs_ty, &rhs_ty) {
+        emit_mixed_null_loose_eq(ctx, lhs, &lhs_ty, rhs, is_equal)?;
     } else if loose_intish_comparable(&lhs_ty, &rhs_ty) {
         let compare_truthiness = lhs_ty == PhpType::Bool || rhs_ty == PhpType::Bool;
         emit_intish_compare(ctx, lhs, rhs, is_equal, compare_truthiness)?;
@@ -322,6 +324,84 @@ pub(super) fn lower_loose_eq(
         )));
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns true when loose equality compares a runtime Mixed value with PHP null.
+fn mixed_null_comparable(lhs_ty: &PhpType, rhs_ty: &PhpType) -> bool {
+    matches!(
+        (lhs_ty.codegen_repr(), rhs_ty.codegen_repr()),
+        (PhpType::Mixed, PhpType::Void) | (PhpType::Void, PhpType::Mixed)
+    )
+}
+
+/// Compares a boxed Mixed value with null using PHP's string/null and truthiness rules.
+fn emit_mixed_null_loose_eq(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    let mixed = if lhs_ty.codegen_repr() == PhpType::Mixed {
+        lhs
+    } else {
+        rhs
+    };
+    let string_label = ctx.next_label("mixed_null_string");
+    let null_label = ctx.next_label("mixed_null_null");
+    let done_label = ctx.next_label("mixed_null_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(mixed, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime null always equals null
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));
+            ctx.emitter.instruction("cmp x0, #1");                              // strings equal null only when empty
+            ctx.emitter.instruction(&format!("b.eq {}", string_label));
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            ctx.emitter.instruction("eor x0, x0, #1");                          // null equals every other falsy value
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&string_label);
+            ctx.emitter.instruction("cmp x2, #0");                              // compare the unboxed string length with zero
+            ctx.emitter.instruction("cset x0, eq");
+            ctx.emitter.instruction(&format!("b {}", done_label));
+            ctx.emitter.label(&null_label);
+            ctx.emitter.instruction("mov x0, #1");
+            ctx.emitter.label(&done_label);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");
+            }
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(mixed, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime null always equals null
+            ctx.emitter.instruction(&format!("je {}", null_label));
+            ctx.emitter.instruction("cmp rax, 1");                              // strings equal null only when empty
+            ctx.emitter.instruction(&format!("je {}", string_label));
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            ctx.emitter.instruction("xor rax, 1");                              // null equals every other falsy value
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&string_label);
+            ctx.emitter.instruction("cmp rdx, 0");                              // compare the unboxed string length with zero
+            ctx.emitter.instruction("sete al");
+            ctx.emitter.instruction("movzx rax, al");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));
+            ctx.emitter.label(&null_label);
+            ctx.emitter.instruction("mov rax, 1");
+            ctx.emitter.label(&done_label);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Returns true when a PHP type can be boxed into a `Mixed` cell and handed to
@@ -830,7 +910,11 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
-/// Lowers a PHP relational comparison whose operands require runtime tag dispatch.
+/// Lowers a PHP relational comparison through the shared runtime ordering table.
+///
+/// EIR representation fixpoints may refine an operand from `Mixed` to a concrete scalar after
+/// this opcode was selected. Concrete operands are therefore boxed here as well instead of being
+/// rejected; the PHP comparison table remains semantically correct for both shapes.
 pub(super) fn lower_php_rel_cmp(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -839,12 +923,6 @@ pub(super) fn lower_php_rel_cmp(
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    if !needs_runtime_ordering_compare(&lhs_ty) && !needs_runtime_ordering_compare(&rhs_ty) {
-        return Err(CodegenIrError::invalid_module(format!(
-            "php_rel_cmp requires a runtime-tagged operand, got {:?} and {:?}",
-            lhs_ty, rhs_ty
-        )));
-    }
     emit_runtime_ordering_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
     emit_runtime_relational_result(ctx, super::expect_cmp_predicate(inst)?)?;
     store_if_result(ctx, inst)

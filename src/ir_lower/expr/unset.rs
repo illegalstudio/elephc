@@ -33,8 +33,13 @@ pub(super) fn lower_unset_locals(
             }
             _ => {}
         }
+        if ctx.builder.insertion_block_is_terminated() {
+            break;
+        }
     }
-    crate::ir_lower::ownership::collect_cycles(ctx, Some(expr.span));
+    if !ctx.builder.insertion_block_is_terminated() {
+        crate::ir_lower::ownership::collect_cycles(ctx, Some(expr.span));
+    }
     Some(null)
 }
 
@@ -199,16 +204,16 @@ pub(super) fn unset_property_access_has_direct_lowering(
     matches!(
         property_unset_action(ctx, object, property),
         Some(
-            UnsetPropertyAction::Magic
+            UnsetPropertyAction::Declared
+                | UnsetPropertyAction::DatePeriodVirtual
+                | UnsetPropertyAction::Magic
                 | UnsetPropertyAction::Noop
-                | UnsetPropertyAction::ClearTyped
                 | UnsetPropertyAction::RemoveDynamic
         )
     )
 }
 
 /// Lowers `unset($object->property)` for magic and no-op property targets.
-/// Lowers `unset($object->property)` for magic, no-op, fixed-slot and dynamic property targets.
 pub(super) fn lower_unset_property_access(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
@@ -216,26 +221,45 @@ pub(super) fn lower_unset_property_access(
     expr: &Expr,
 ) {
     match property_unset_action(ctx, object, property) {
+        Some(UnsetPropertyAction::Declared) => {
+            let object = lower_expr(ctx, object);
+            let property_data = ctx.intern_string(property);
+            ctx.emit_void(
+                Op::PropUnset,
+                vec![object.value],
+                Some(Immediate::Data(property_data)),
+                Op::PropUnset.default_effects(),
+                Some(expr.span),
+            );
+            release_owning_receiver_temporary(ctx, object, expr.span);
+        }
+        Some(UnsetPropertyAction::RemoveDynamic) => {
+            let object = lower_expr(ctx, object);
+            let property_data = ctx.intern_string(property);
+            ctx.emit_void(
+                Op::PropUnset,
+                vec![object.value],
+                Some(Immediate::Data(property_data)),
+                Op::PropUnset.default_effects(),
+                Some(expr.span),
+            );
+            release_owning_receiver_temporary(ctx, object, expr.span);
+        }
+        Some(UnsetPropertyAction::DatePeriodVirtual) => {
+            let class_name = isset_object_expr_class(ctx, object)
+                .map(|(class_name, _)| class_name)
+                .unwrap_or_else(|| "DatePeriod".to_string());
+            let object = lower_expr(ctx, object);
+            release_owning_receiver_temporary(ctx, object, expr.span);
+            let message = format!("Cannot unset {}::${}", class_name, property);
+            crate::ir_lower::stmt::lower_throw_access_error(ctx, &message, expr.span);
+        }
         Some(UnsetPropertyAction::Magic) => {
             let object = lower_expr(ctx, object);
             lower_magic_property_unset(ctx, object, property, expr);
         }
         Some(UnsetPropertyAction::Noop) => {
             lower_expr(ctx, object);
-        }
-        // Both storage shapes share `Op::PropUnset`: the backend already resolves the
-        // receiver's property storage, so it picks the fixed-slot marker or the
-        // dynamic-hash removal from the same instruction.
-        Some(UnsetPropertyAction::ClearTyped | UnsetPropertyAction::RemoveDynamic) => {
-            let object = lower_expr(ctx, object);
-            let data = ctx.intern_string(property);
-            ctx.emit_void(
-                Op::PropUnset,
-                vec![object.value],
-                Some(Immediate::Data(data)),
-                Op::PropUnset.default_effects(),
-                Some(expr.span),
-            );
         }
         Some(UnsetPropertyAction::Fallback) | None => {}
     }
@@ -244,14 +268,10 @@ pub(super) fn lower_unset_property_access(
 /// Describes how `unset($object->property)` should be lowered for a known receiver class.
 pub(super) enum UnsetPropertyAction {
     Fallback,
+    Declared,
+    DatePeriodVirtual,
     Magic,
     Noop,
-    /// The property has a DECLARED type, so PHP's `unset()` leaves it uninitialized —
-    /// a state elephc's fixed property slots represent exactly.
-    ClearTyped,
-    /// The property lives in the receiver's dynamic-property hash (`stdClass`, or an
-    /// undeclared name on an `#[AllowDynamicProperties]` class), where PHP's `unset()`
-    /// really is a key removal.
     RemoveDynamic,
 }
 
@@ -262,27 +282,33 @@ pub(super) fn property_unset_action(
     property: &str,
 ) -> Option<UnsetPropertyAction> {
     let (class_name, _) = isset_object_expr_class(ctx, object)?;
-    // Every `stdClass` property is a hash entry, so `unset()` is a plain key removal and
-    // `stdClass` declares no magic methods that could intercept it.
+    if class_extends_class(ctx, &class_name, "DatePeriod")
+        && matches!(
+            property,
+            "start"
+                | "current"
+                | "end"
+                | "interval"
+                | "recurrences"
+                | "include_start_date"
+                | "include_end_date"
+        )
+    {
+        return Some(UnsetPropertyAction::DatePeriodVirtual);
+    }
     if is_builtin_stdclass_name(&class_name) {
         return Some(UnsetPropertyAction::RemoveDynamic);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
+    if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
+        return Some(if class_info.visible_property_is_declared(property) {
+            UnsetPropertyAction::Declared
+        } else {
+            UnsetPropertyAction::Fallback
+        });
+    }
     if class_info.allow_dynamic_properties && class_info.visible_property(property).is_none() {
         return Some(dynamic_property_unset_action(ctx, &class_name));
-    }
-    if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
-        // PHP does NOT consult `__unset` for a property it can see: it removes the
-        // property itself. A DECLARED (typed) property becomes uninitialized, which
-        // elephc's fixed slots can represent exactly.
-        if class_info.visible_property_is_declared(property) {
-            return Some(UnsetPropertyAction::ClearTyped);
-        }
-        // An UNTYPED fixed slot has no "removed" state and no null-capable storage:
-        // PHP's later read must warn and answer `null`, which a slot the checker typed
-        // `Int`/`Str`/... cannot represent. Keep the explicit unsupported diagnostic
-        // rather than leaving a stale value or a garbage payload behind.
-        return Some(UnsetPropertyAction::Fallback);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__unset")).is_some() {
         Some(UnsetPropertyAction::Magic)
@@ -354,4 +380,3 @@ pub(super) fn lower_nullable_magic_property_unset(
 
     ctx.builder.position_at_end(merge);
 }
-

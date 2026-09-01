@@ -46,6 +46,7 @@ use super::*;
         );
         let variants = [
             RuntimeFeatures { regex: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { timelib: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { mb_strlen: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { phar_archive: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { descriptor_invoker: true, ..RuntimeFeatures::none() },
@@ -57,6 +58,8 @@ use super::*;
             RuntimeFeatures { generator: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { popen_resource: true, ..RuntimeFeatures::none() },
             RuntimeFeatures { directory_resource: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { float_precision: 13, ..RuntimeFeatures::none() },
+            RuntimeFeatures { php_profile: 4, ..RuntimeFeatures::none() },
         ];
 
         let mut keys = std::collections::HashSet::from([baseline]);

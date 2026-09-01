@@ -306,7 +306,7 @@ fn test_program_private_instance_method_effects_recognize_private_methods() {
     );
 }
 
-/// Verifies public `$this` calls use a precise exact summary in a final class.
+/// Verifies public `$this` calls keep the exact body plus declared-return boundary.
 #[test]
 fn test_program_instance_method_effects_resolve_public_this_dispatch() {
     let program = parse_program(
@@ -322,7 +322,7 @@ final class Util {
 
     assert_eq!(
         instance_method_effects.get("Util::relay"),
-        Some(&Effect::PURE)
+        Some(&Effect::PURE.with_may_throw())
     );
 }
 
@@ -347,7 +347,7 @@ final class Child extends Base {
         .expect("missing Base::relay summary");
 
     assert!(relay.has_side_effects);
-    assert!(!relay.may_throw);
+    assert!(relay.may_throw);
 }
 
 /// Verifies `eval()` prevents closed-world subclass assumptions for virtual dispatch.
@@ -438,7 +438,7 @@ final class TraitBox {
     assert!(
         instance_method_effects
             .get("HookBox::read")
-            .is_some_and(|effect| effect.has_side_effects && !effect.may_throw)
+            .is_some_and(|effect| effect.has_side_effects && effect.may_throw)
     );
     assert!(
         instance_method_effects

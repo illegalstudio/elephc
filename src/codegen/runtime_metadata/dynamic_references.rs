@@ -24,7 +24,7 @@ pub(in crate::codegen) fn referenced_class_data_names(module: &Module) -> HashSe
     {
         for inst in &function.instructions {
             match inst.op {
-                Op::ObjectNew => {}
+                Op::ObjectNew | Op::ObjectNewWithoutConstructor => {}
                 Op::InstanceOf if instance_of_value_needs_runtime_metadata(function, inst) => {}
                 Op::InstanceOf => continue,
                 _ => continue,

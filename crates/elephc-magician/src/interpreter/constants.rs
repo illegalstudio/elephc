@@ -226,16 +226,6 @@ pub(super) const EVAL_WEEKDAY_SHORT_NAMES: &[&str; 7] =
 /// [`crate::eval_php_profile`]: 8.2 through 8.5 all report `8`.
 pub(super) const EVAL_PHP_MAJOR_VERSION: i64 = 8;
 
-/// `PHP_RELEASE_VERSION` — always `0`, and therefore invariant across profiles: elephc
-/// targets a language profile, not an upstream patch release, so there is no engine build
-/// whose patch component could differ. Reference PHP 8.5.6 reports `6`.
-pub(super) const EVAL_PHP_RELEASE_VERSION: i64 = 0;
-
-/// `PHP_EXTRA_VERSION` — the empty string, exactly as reference PHP reports for a release
-/// build (verified on 8.5.6), and invariant across profiles for the same reason
-/// [`EVAL_PHP_RELEASE_VERSION`] is.
-pub(super) const EVAL_PHP_EXTRA_VERSION: &str = "";
-
 /// `PHP_SAPI` reported from inside `eval()`.
 ///
 /// KEEP IN SYNC with `crate::web_prelude::sapi_name()` in the compiler. Unlike the version

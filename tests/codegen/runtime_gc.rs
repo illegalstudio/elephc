@@ -35,3 +35,5 @@ mod heap;
 mod heap_codegen;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]
 mod resource_scope_cleanup;
+#[path = "runtime_gc/reflection.rs"]
+mod reflection;

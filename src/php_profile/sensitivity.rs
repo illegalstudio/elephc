@@ -36,7 +36,7 @@ use crate::span::Span;
 ///
 /// Every reported sensitivity is a VALUE difference: the program computes something
 /// different under different profiles. `PHP_VERSION_ID` is `80200` under one profile and
-/// `80500` under another; `opcache_get_configuration()` returns arrays of different shape.
+/// `80510` under another; `opcache_get_configuration()` returns arrays of different shape.
 /// That is what makes the profile a decision the user should get to make deliberately.
 ///
 /// # The one surface that is deliberately NOT a sensitivity
@@ -90,13 +90,11 @@ struct Watched {
 ///
 /// # What is deliberately ABSENT, and why
 ///
-/// `PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and `PHP_EXTRA_VERSION` are NOT here. Across
-/// the maintained profile set they are invariant — `8`, `0` and `""` respectively — because
-/// every profile is an `8.x` at patch `.0` (see `web_prelude::PhpVersion::version_string`
-/// for the patch-is-zero rule). Listing them would report a dependence that does not exist.
-/// `constants_absent_from_the_table_are_invariant` pins that reasoning to the actual values,
-/// so the day a `9.0` profile lands, that test fails and forces this table to grow rather
-/// than letting it quietly become wrong.
+/// `PHP_MAJOR_VERSION` is NOT here. It remains `8` across the maintained profile set, so
+/// listing it would report a dependence that does not exist. `PHP_RELEASE_VERSION` and
+/// `PHP_EXTRA_VERSION` are watched because the frozen PHP 8.5 profile reports `10` and `-dev`
+/// while the other maintained profiles report `0` and `""`. The invariance test pins the only
+/// remaining omission, so a future `9.0` profile forces this table to grow.
 ///
 /// `PHP_SAPI`, `php_sapi_name()` and `ini_restore()` are also absent: the first two move
 /// with `--web`, not with the version, and the third is a no-op under every profile.
@@ -114,6 +112,10 @@ struct Watched {
 const EVAL_PROFILE_DEPENDENT_NAMES: &[&str] = &[
     "PHP_VERSION",
     "PHP_MINOR_VERSION",
+    "PHP_RELEASE_VERSION",
+    "PHP_EXTRA_VERSION",
+    "E_ALL",
+    "error_reporting",
     "phpversion",
     "opcache_get_configuration",
     "opcache_get_status",
@@ -125,14 +127,14 @@ const WATCHED: &[Watched] = &[
         symbol_kind: SymbolKind::Constant,
         args: ArgFilter::Any,
         web_only: false,
-        detail: "reports \"8.2.0\" through \"8.5.0\" depending on the profile",
+        detail: "reports \"8.2.0\" through \"8.5.10-dev\" depending on the profile",
     },
     Watched {
         symbol: "PHP_VERSION_ID",
         symbol_kind: SymbolKind::Constant,
         args: ArgFilter::Any,
         web_only: false,
-        detail: "reports 80200 through 80500 depending on the profile",
+        detail: "reports 80200 through 80510 depending on the profile",
     },
     Watched {
         symbol: "PHP_MINOR_VERSION",
@@ -140,6 +142,34 @@ const WATCHED: &[Watched] = &[
         args: ArgFilter::Any,
         web_only: false,
         detail: "reports 2 through 5 depending on the profile",
+    },
+    Watched {
+        symbol: "PHP_RELEASE_VERSION",
+        symbol_kind: SymbolKind::Constant,
+        args: ArgFilter::Any,
+        web_only: false,
+        detail: "reports 10 for the frozen PHP 8.5 profile and 0 for the others",
+    },
+    Watched {
+        symbol: "PHP_EXTRA_VERSION",
+        symbol_kind: SymbolKind::Constant,
+        args: ArgFilter::Any,
+        web_only: false,
+        detail: "reports \"-dev\" for the frozen PHP 8.5 profile and \"\" for the others",
+    },
+    Watched {
+        symbol: "E_ALL",
+        symbol_kind: SymbolKind::Constant,
+        args: ArgFilter::Any,
+        web_only: false,
+        detail: "reports 32767 through PHP 8.3 and 30719 from PHP 8.4 onward",
+    },
+    Watched {
+        symbol: "error_reporting",
+        symbol_kind: SymbolKind::Function,
+        args: ArgFilter::Any,
+        web_only: false,
+        detail: "defaults to the profile-specific E_ALL mask",
     },
     Watched {
         symbol: "phpversion",
@@ -357,12 +387,10 @@ mod tests {
         assert!(scan(&program, false).is_empty());
     }
 
-    /// The three `PHP_*` constants deliberately left out of [`WATCHED`] really are invariant
-    /// across every maintained profile.
+    /// `PHP_MAJOR_VERSION`, deliberately left out of [`WATCHED`], remains invariant.
     ///
-    /// This is the guard that keeps the omission honest: when a profile lands whose major,
-    /// release or extra component differs — a `9.0`, or a non-`.0` patch — this fails and
-    /// names the constant that must join the table.
+    /// This is the guard that keeps the omission honest: a future `9.0` profile must make the
+    /// constant join the table instead of silently invalidating the independence claim.
     #[test]
     fn constants_absent_from_the_table_are_invariant() {
         let profiles = PhpVersion::MAINTAINED;
@@ -373,20 +401,10 @@ mod tests {
                 first.major(),
                 "PHP_MAJOR_VERSION now varies across profiles and must be added to WATCHED"
             );
-            assert_eq!(
-                profile.release(),
-                first.release(),
-                "PHP_RELEASE_VERSION now varies across profiles and must be added to WATCHED"
-            );
-            assert_eq!(
-                profile.extra_version(),
-                first.extra_version(),
-                "PHP_EXTRA_VERSION now varies across profiles and must be added to WATCHED"
-            );
         }
     }
 
-    /// Conversely, the three version constants that ARE in the table really do vary, so the
+    /// Conversely, the five version constants that ARE in the table really do vary, so the
     /// table is not padded with entries that would produce noise.
     #[test]
     fn constants_present_in_the_table_really_vary() {
@@ -402,9 +420,17 @@ mod tests {
                 .collect();
         let distinct_minors: std::collections::HashSet<_> =
             PhpVersion::MAINTAINED.iter().map(|p| p.minor()).collect();
+        let distinct_releases: std::collections::HashSet<_> =
+            PhpVersion::MAINTAINED.iter().map(|p| p.release()).collect();
+        let distinct_extras: std::collections::HashSet<_> = PhpVersion::MAINTAINED
+            .iter()
+            .map(|p| p.extra_version())
+            .collect();
         assert_eq!(distinct_strings.len(), PhpVersion::MAINTAINED.len());
         assert_eq!(distinct_ids.len(), PhpVersion::MAINTAINED.len());
         assert_eq!(distinct_minors.len(), PhpVersion::MAINTAINED.len());
+        assert!(distinct_releases.len() > 1);
+        assert!(distinct_extras.len() > 1);
     }
 
     /// Every name `eval` is matched on is itself a table entry.

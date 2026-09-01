@@ -27,7 +27,10 @@ use crate::codegen::{
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names;
-use crate::names::{label_fragment, method_symbol, php_symbol_key};
+use crate::names::{
+    label_fragment, method_symbol, php_symbol_key, property_hook_get_method,
+    property_hook_set_method,
+};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
@@ -39,7 +42,9 @@ use super::{
     emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
-    materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
+    emit_dynamic_instance_method_call, materialize_method_call_args_with_receiver_reg_and_refs,
+    emit_date_special_trace_begin,
+    resolve_method_call_target, MethodCallTarget,
     emit_runtime_callable_invoker_inline, property_values, store_if_result,
     store_method_call_result,
 };
@@ -116,6 +121,7 @@ struct ConstructorCallTarget {
 
 mod fixed_new;
 mod clone_and_spl;
+mod mixed_clone;
 mod iterator_iterator;
 pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
@@ -125,10 +131,12 @@ mod dynamic_pdo;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
+mod property_read_compat;
 mod dynamic_property_read_entry;
 mod dynamic_property_read_resolution;
 mod runtime_property_writes;
 mod named_property_writes;
+mod dynamic_property_write_compat;
 mod instanceof_entry;
 mod allocation_clone;
 mod interface_layout;
@@ -145,6 +153,8 @@ mod instanceof_helpers;
 use fixed_new::*;
 #[allow(unused_imports)]
 use clone_and_spl::*;
+#[allow(unused_imports)]
+use mixed_clone::*;
 #[allow(unused_imports)]
 use iterator_iterator::*;
 #[allow(unused_imports)]
@@ -164,6 +174,8 @@ use known_property_reads::*;
 #[allow(unused_imports)]
 use mixed_property_reads::*;
 #[allow(unused_imports)]
+use property_read_compat::*;
+#[allow(unused_imports)]
 use dynamic_property_read_entry::*;
 #[allow(unused_imports)]
 use dynamic_property_read_resolution::*;
@@ -171,6 +183,8 @@ use dynamic_property_read_resolution::*;
 use runtime_property_writes::*;
 #[allow(unused_imports)]
 use named_property_writes::*;
+#[allow(unused_imports)]
+use dynamic_property_write_compat::*;
 #[allow(unused_imports)]
 use instanceof_entry::*;
 #[allow(unused_imports)]
@@ -197,7 +211,7 @@ pub(super) use fiber_dynamic_entry::{
     lower_dynamic_object_new, lower_dynamic_object_new_mixed,
     lower_dynamic_object_new_without_constructor_mixed,
 };
-pub(super) use fixed_new::lower_object_new;
+pub(super) use fixed_new::{lower_object_new, lower_object_new_without_constructor};
 pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
@@ -211,6 +225,7 @@ pub(super) use property_resolution::{
 pub(super) use runtime_property_writes::{
     lower_dynamic_prop_set, lower_prop_set, lower_prop_unset,
 };
+pub(super) use dynamic_property_write_compat::lower_dynamic_property_fetch_for_write;
 pub(super) use clone_and_spl::lower_object_clone_shallow;
 
 /// Resolves the declared property slot targeted by a direct container mutation.

@@ -10,7 +10,7 @@
 //!
 //! Key details:
 //! - Mirrors the builtin SPL method lowering: scans already-lowered EIR for
-//!   `ObjectNew` / `MethodCall` / `StaticMethodCall` referencing a date/time class
+//!   `ObjectNew` / method/property calls / `StaticMethodCall` referencing a date/time class
 //!   and lowers the referenced method bodies, iterating to a fixpoint for
 //!   transitive references (for example `DateTime::diff` returning a
 //!   `DateInterval`, or the calendar functions that desugar to
@@ -21,8 +21,9 @@
 
 use std::collections::HashSet;
 
-use crate::ir::{Function, Immediate, Module, Op};
+use crate::ir::{Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::ir_lower::function;
+use crate::names::property_hook_get_method;
 use crate::parser::ast::ExprKind;
 use crate::types::{CheckResult, PhpType};
 
@@ -40,22 +41,54 @@ fn is_builtin_datetime_class(name: &str) -> bool {
     BUILTIN_DATETIME_CLASSES.contains(&name.trim_start_matches('\\'))
 }
 
-/// Returns the normalized builtin date/time class named by `ty`, if any.
+/// Returns every normalized builtin date/time class or descendant named by `ty`.
 ///
 /// Accepts a concrete `Object(Class)` receiver as well as nullable/union receivers such as
 /// `?DateTimeZone` (`Union([Object("DateTimeZone"), Void])`), whose codegen representation
 /// collapses to `Mixed`. This lets the reference scan discover date/time methods invoked on a
 /// nullable date/time receiver — e.g. the constructor's internal `$timezone->getName()` — so they
-/// are lowered instead of dispatching to an unemitted symbol at runtime.
-fn builtin_datetime_class_in_type(ty: &PhpType) -> Option<String> {
-    match ty {
+/// are lowered instead of dispatching to an unemitted symbol at runtime. Descendants retain their
+/// concrete name so inherited method ownership is resolved through `method_impl_class()`.
+fn builtin_datetime_classes_in_type(module: &Module, ty: &PhpType) -> Vec<String> {
+    let mut classes = match ty {
         PhpType::Object(name) => {
             let normalized = name.trim_start_matches('\\');
-            is_builtin_datetime_class(normalized).then(|| normalized.to_string())
+            if normalized.eq_ignore_ascii_case("DateTimeInterface") {
+                ["DateTime", "DateTimeImmutable"]
+                    .into_iter()
+                    .filter(|class| module.class_infos.contains_key(*class))
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                class_is_or_extends_builtin_datetime(module, normalized)
+                    .then(|| vec![normalized.to_string()])
+                    .unwrap_or_default()
+            }
         }
-        PhpType::Union(members) => members.iter().find_map(builtin_datetime_class_in_type),
-        _ => None,
+        PhpType::Union(members) => members
+            .iter()
+            .flat_map(|member| builtin_datetime_classes_in_type(module, member))
+            .collect(),
+        _ => Vec::new(),
+    };
+    classes.sort();
+    classes.dedup();
+    classes
+}
+
+/// Returns true when a class is one of the synthetic date classes or descends from one.
+fn class_is_or_extends_builtin_datetime(module: &Module, class_name: &str) -> bool {
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(name) = current {
+        if is_builtin_datetime_class(name) {
+            return true;
+        }
+        current = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
     }
+    false
 }
 
 /// Lowers every referenced synthetic date/time method into the EIR module.
@@ -72,6 +105,14 @@ pub(crate) fn lower_referenced_builtin_datetime_methods(
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     lower_eval_date_alias_methods_if_needed(module, check_result, constants, fiber_return_sigs);
+    lower_builtin_datetime_method(
+        "DateTime",
+        &php_method_key("__elephc_timezone_type"),
+        module,
+        check_result,
+        constants,
+        fiber_return_sigs,
+    );
     loop {
         let mut methods = referenced_builtin_datetime_methods(module);
         methods.sort();
@@ -128,11 +169,13 @@ fn lower_eval_date_alias_methods_if_needed(
     }
 }
 
-/// Returns the builtin DateTime-family methods reachable from eval alias dispatch.
+/// Returns the builtin DateTime-family methods reachable from eval alias dispatch and
+/// runtime-generated `var_export()` restoration expressions.
 fn eval_date_alias_builtin_datetime_methods(module: &Module) -> Vec<(String, String)> {
     let mut methods = Vec::new();
-    for class_name in ["DateTime", "DateTimeImmutable", "DateTimeZone", "DateInterval"] {
+    for class_name in BUILTIN_DATETIME_CLASSES {
         push_constructor_and_interface_methods(&mut methods, module, class_name);
+        methods.push(((*class_name).to_string(), php_method_key("__set_state")));
     }
     for method_name in EVAL_DATE_ALIAS_METHOD_NAMES {
         methods.push(("DateTime".to_string(), php_method_key(method_name)));
@@ -260,6 +303,13 @@ fn eval_fragments_may_reach_dates(module: &Module) -> bool {
             if !instruction_uses_eval(module, inst) {
                 continue;
             }
+            // Non-literal eval operations resolve their source entirely at runtime. Their
+            // immediates are function-name metadata, not an eval fragment string, so feeding
+            // them to the literal planner can accidentally classify an unrelated string-pool
+            // entry as bridge-free and omit the dynamic DateTime method surface.
+            if inst.op != Op::EvalLiteralCall {
+                return true;
+            }
             // Every eval op other than a literal call resolves its source at runtime, and
             // `eval_literal_call_requires_bridge` answers `true` for them on the same reasoning.
             if crate::ir_lower::program::eval_literal_call_requires_bridge(
@@ -331,9 +381,9 @@ fn builtin_call_is_eval(module: &Module, inst: &crate::ir::Instruction) -> bool 
 
 /// Finds builtin date/time methods whose symbols are required by already-lowered EIR.
 ///
-/// Returns `(class_name, method_key)` pairs for every `ObjectNew`,
-/// `MethodCall`/`NullsafeMethodCall`, and `StaticMethodCall` that targets a
-/// date/time class. `ObjectNew` additionally pulls in the constructor and the
+/// Returns `(class_name, method_key)` pairs for every date object allocation,
+/// method/property call, and `StaticMethodCall` that targets a
+/// date/time class. Fixed allocation additionally pulls in the constructor and the
 /// full interface vtable required to allocate the object.
 fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)> {
     let mut methods = Vec::new();
@@ -348,8 +398,13 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
         .chain(module.runtime_callable_invokers.iter())
     {
         for inst in &function.instructions {
+            if instruction_calls_unserialize(inst) {
+                for class_name in BUILTIN_DATETIME_CLASSES {
+                    push_unserialize_magic_methods(&mut methods, module, class_name);
+                }
+            }
             match inst.op {
-                Op::ObjectNew => {
+                Op::ObjectNew | Op::ObjectNewWithoutConstructor => {
                     if let Some(class_name) = datetime_class_data_name(module, inst) {
                         push_constructor_and_interface_methods(&mut methods, module, class_name);
                     }
@@ -362,25 +417,85 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
                     // receiver such as a `?DateTimeZone` parameter collapses to `Mixed` under
                     // codegen_repr(), which would hide methods (e.g. the constructor's internal
                     // `$timezone->getName()`) and leave their symbols unemitted.
-                    let Some(normalized) = function
-                        .value(receiver)
-                        .and_then(|value| builtin_datetime_class_in_type(&value.php_type))
-                    else {
-                        continue;
-                    };
+                    let receiver_ty = function.value(receiver).map(|v| &v.php_type);
                     let Some(method_name) = string_data_name(module, inst) else {
                         continue;
                     };
                     let method_key = php_method_key(method_name);
-                    let impl_class = method_impl_class(module, &normalized, &method_key);
-                    methods.push((impl_class, method_key));
+                    let concrete_classes = receiver_ty
+                        .map(|ty| builtin_datetime_classes_in_type(module, ty))
+                        .unwrap_or_default();
+                    if !concrete_classes.is_empty() {
+                        for class_name in concrete_classes {
+                            let impl_class = method_impl_class(module, &class_name, &method_key);
+                            methods.push((impl_class, method_key.clone()));
+                        }
+                        continue;
+                    }
+                    // When the receiver is `Mixed` (e.g. the result of `date_create()` which
+                    // returns `DateTime|false`), codegen dispatches over every matching class.
+                    if receiver_ty.is_some_and(|ty| {
+                        matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                    }) {
+                        for class_name in BUILTIN_DATETIME_CLASSES {
+                            let Some(class_info) = module.class_infos.get(*class_name) else {
+                                continue;
+                            };
+                            if class_info.methods.contains_key(&method_key) {
+                                let impl_class = method_impl_class(module, class_name, &method_key);
+                                methods.push((impl_class, method_key.clone()));
+                            }
+                        }
+                    }
+                }
+                Op::PropGet | Op::NullsafePropGet | Op::DynamicPropGet => {
+                    let Some(receiver) = inst.operands.first().copied() else {
+                        continue;
+                    };
+                    let receiver_ty = function.value(receiver).map(|value| &value.php_type);
+                    let property = matches!(inst.op, Op::PropGet | Op::NullsafePropGet)
+                        .then(|| string_data_name(module, inst))
+                        .flatten();
+                    let concrete_classes = receiver_ty
+                        .map(|ty| builtin_datetime_classes_in_type(module, ty))
+                        .unwrap_or_default();
+                    if !concrete_classes.is_empty() {
+                        for class_name in concrete_classes {
+                            push_property_read_methods(
+                                &mut methods,
+                                module,
+                                &class_name,
+                                property,
+                            );
+                        }
+                    } else if receiver_ty.is_some_and(|ty| {
+                        matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                    }) {
+                        for class_name in BUILTIN_DATETIME_CLASSES {
+                            push_property_read_methods(
+                                &mut methods,
+                                module,
+                                class_name,
+                                property,
+                            );
+                        }
+                    }
                 }
                 Op::StaticMethodCall => {
                     if let Some(name) = string_data_name(module, inst) {
                         if let Some((class_name, method_name)) = name.split_once("::") {
-                            let normalized = class_name.trim_start_matches('\\');
-                            if is_builtin_datetime_class(normalized) {
-                                methods.push((normalized.to_string(), php_method_key(method_name)));
+                            if let Some(resolved_class) =
+                                resolve_static_datetime_class(module, function, class_name)
+                            {
+                                let method_key = php_method_key(method_name);
+                                let impl_class = static_method_impl_class(
+                                    module,
+                                    &resolved_class,
+                                    &method_key,
+                                );
+                                if is_builtin_datetime_class(&impl_class) {
+                                    methods.push((impl_class, method_key));
+                                }
                             }
                         }
                     }
@@ -389,23 +504,146 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
             }
         }
     }
+    // DatePeriod's synthetic iterator canonicalizes its Mixed cursor through these two static
+    // factories. The SPL fixed point can add that helper immediately before this discovery pass,
+    // so pin both symbols whenever the helper itself is present instead of relying on its erased
+    // Mixed return type to rediscover the concrete targets.
+    if module.class_methods.iter().any(|function| {
+        function.name == "DatePeriod::__elephc_clone_iterator_value"
+    }) {
+        methods.push((
+            "DateTime".to_string(),
+            php_method_key("createFromInterface"),
+        ));
+        methods.push((
+            "DateTimeImmutable".to_string(),
+            php_method_key("createFromInterface"),
+        ));
+    }
     methods
 }
 
-/// Enqueues a date/time class constructor plus every method its interfaces expose.
+/// Returns true when an EIR instruction invokes PHP's generic `unserialize()` runtime.
+fn instruction_calls_unserialize(inst: &crate::ir::Instruction) -> bool {
+    matches!(
+        inst.immediate,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+            RuntimeFnId::Unserialize
+        )))
+    )
+}
+
+/// Enqueues date-object restoration hooks reachable only through generic `unserialize()`.
+///
+/// Runtime deserialization allocates a class by the serialized name, so no `ObjectNew` opcode
+/// exists for the normal demand scan to discover. Both hook tables must nevertheless point at
+/// emitted method bodies, including for literal payloads in programs that never call `serialize()`.
+fn push_unserialize_magic_methods(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    class_name: &str,
+) {
+    for method_name in ["__unserialize", "__wakeup"] {
+        let method_key = php_method_key(method_name);
+        let impl_class = method_impl_class(module, class_name, &method_key);
+        if is_builtin_datetime_class(&impl_class) {
+            methods.push((impl_class, method_key));
+        }
+    }
+}
+
+/// Resolves a static-call class operand when it names a date/time class or descendant.
+///
+/// `parent`, `self`, and `static` are interpreted relative to the currently lowered class
+/// method. This is required for user constructors that call an internal date/time
+/// `parent::__construct()` body whose EIR symbol must be materialized on demand.
+fn resolve_static_datetime_class(
+    module: &Module,
+    function: &Function,
+    class_name: &str,
+) -> Option<String> {
+    let normalized = class_name.trim_start_matches('\\');
+    let current_class = function
+        .name
+        .split_once("::")
+        .map(|(owner, _)| owner.trim_start_matches('\\'));
+    let resolved = match php_method_key(normalized).as_str() {
+        "parent" => current_class
+            .and_then(|owner| module.class_infos.get(owner))
+            .and_then(|class_info| class_info.parent.as_deref())?,
+        "self" | "static" => current_class?,
+        _ => normalized,
+    };
+    class_is_or_extends_builtin_datetime(module, resolved).then(|| resolved.to_string())
+}
+
+/// Enqueues magic and synthetic hook getters that one property-read opcode may dispatch to.
+fn push_property_read_methods(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    class_name: &str,
+    property: Option<&str>,
+) {
+    let Some(class_info) = module.class_infos.get(class_name) else {
+        return;
+    };
+    let magic_get_key = php_method_key("__get");
+    if class_info.methods.contains_key(&magic_get_key) {
+        let impl_class = method_impl_class(module, class_name, &magic_get_key);
+        methods.push((impl_class, magic_get_key));
+    }
+    if let Some(property) = property {
+        let hook_key = php_method_key(&property_hook_get_method(property));
+        if class_info.methods.contains_key(&hook_key) {
+            let impl_class = method_impl_class(module, class_name, &hook_key);
+            methods.push((impl_class, hook_key));
+        }
+        return;
+    }
+    for method_key in class_info
+        .methods
+        .keys()
+        .filter(|method_key| method_key.starts_with("__propget_"))
+    {
+        let impl_class = method_impl_class(module, class_name, method_key);
+        methods.push((impl_class, method_key.clone()));
+    }
+}
+
+/// Enqueues a date/time constructor, runtime hooks, and interface methods.
 ///
 /// Object allocation requires the full interface vtable symbol set, so this walks
 /// the class's interfaces (and their parents) and enqueues each declared method on
-/// the date/time class that implements it.
+/// the date/time class that implements it. Runtime serialization tables also point
+/// directly at inherited magic/debug methods, whose initialization guard must
+/// also be emitted even without a source call.
 fn push_constructor_and_interface_methods(
     methods: &mut Vec<(String, String)>,
     module: &Module,
     class_name: &str,
 ) {
-    methods.push((class_name.to_string(), php_method_key("__construct")));
+    let constructor_key = php_method_key("__construct");
+    let constructor_impl = method_impl_class(module, class_name, &constructor_key);
+    if is_builtin_datetime_class(&constructor_impl) {
+        methods.push((constructor_impl, constructor_key));
+    }
     let Some(class_info) = module.class_infos.get(class_name) else {
         return;
     };
+    for method_name in [
+        "__serialize",
+        "__unserialize",
+        "__wakeup",
+        "__elephc_debug_dump",
+        "__elephc_print_r_dump",
+        "__elephc_assert_initialized",
+    ] {
+        let method_key = php_method_key(method_name);
+        let impl_class = method_impl_class(module, class_name, &method_key);
+        if is_builtin_datetime_class(&impl_class) {
+            methods.push((impl_class, method_key));
+        }
+    }
     let mut seen = HashSet::new();
     let mut stack = class_info
         .interfaces
@@ -433,11 +671,47 @@ fn push_constructor_and_interface_methods(
 ///
 /// Falls back to `class_name` when no implementing-class metadata is recorded.
 fn method_impl_class(module: &Module, class_name: &str, method_key: &str) -> String {
-    module
-        .class_infos
-        .get(class_name)
-        .and_then(|class_info| class_info.method_impl_classes.get(method_key).cloned())
-        .unwrap_or_else(|| class_name.to_string())
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        let Some(class_info) = module.class_infos.get(name) else {
+            break;
+        };
+        if let Some(impl_class) = class_info.method_impl_classes.get(method_key) {
+            return impl_class.clone();
+        }
+        if let Some(parent) = class_info.parent.as_deref() {
+            current = Some(parent);
+            continue;
+        }
+        if class_info.methods.contains_key(method_key) {
+            return name.to_string();
+        }
+        break;
+    }
+    class_name.to_string()
+}
+
+/// Resolves which class actually implements a static `method_key` for `class_name`, following
+/// inherited static-method metadata before falling back to the requested receiver.
+fn static_method_impl_class(module: &Module, class_name: &str, method_key: &str) -> String {
+    let mut current = Some(class_name);
+    while let Some(name) = current {
+        let Some(class_info) = module.class_infos.get(name) else {
+            break;
+        };
+        if let Some(impl_class) = class_info.static_method_impl_classes.get(method_key) {
+            return impl_class.clone();
+        }
+        if let Some(parent) = class_info.parent.as_deref() {
+            current = Some(parent);
+            continue;
+        }
+        if class_info.methods.contains_key(method_key) {
+            return name.to_string();
+        }
+        break;
+    }
+    class_name.to_string()
 }
 
 /// Lowers one synthetic date/time method body into `module.class_methods`.
@@ -497,8 +771,8 @@ fn class_method_already_lowered(
     })
 }
 
-/// Returns the class-name immediate attached to an `ObjectNew` instruction when it
-/// names a builtin date/time class.
+/// Returns the class-name immediate attached to a fixed object allocation when it names
+/// a builtin date/time class.
 fn datetime_class_data_name<'a>(
     module: &'a Module,
     inst: &crate::ir::Instruction,
@@ -507,7 +781,7 @@ fn datetime_class_data_name<'a>(
         return None;
     };
     let name = module.data.class_names.get(data.as_raw() as usize)?;
-    is_builtin_datetime_class(name).then_some(name.as_str())
+    class_is_or_extends_builtin_datetime(module, name).then_some(name.as_str())
 }
 
 /// Returns the string immediate attached to an instruction.

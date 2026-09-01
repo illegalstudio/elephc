@@ -80,7 +80,7 @@ pub(super) fn load_property_store_value_to_result(
         }
         return Ok(());
     }
-    if can_coerce_tagged_scalar_to_int_property(&value_ty, slot_ty) {
+    if can_coerce_scalar_to_int_property(&value_ty, slot_ty) {
         ctx.load_value_to_result(value)?;
         crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
         return Ok(());

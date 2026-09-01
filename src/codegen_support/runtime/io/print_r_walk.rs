@@ -1,6 +1,7 @@
 //! Purpose:
 //! Emits the `__rt_print_r_*` runtime walkers that render PHP `print_r`
-//! output for indexed arrays and associative arrays (hashes), matching
+//! output for indexed arrays, associative arrays (hashes), and user-declared
+//! object properties, matching
 //! PHP's recursive `Array\n(\n    [key] => value\n)\n` layout with
 //! 4-space-per-level indentation and unquoted keys.
 //!
@@ -29,11 +30,17 @@
 //!   `codegen_support::runtime::objects::print_r_object`, which owns the whole
 //!   `ClassName Object\n(\n ... )\n` frame (and the enum header) the same way the
 //!   tag-4/5 branches own the array frame.
+//! - Date/time objects reached through `Mixed` dispatch through a program-owned
+//!   renderer, while `_class_pr_desc_ptrs` supplies user-declared subclass
+//!   properties to the synthetic ext/date object blocks.
 //! - The AArch64 path is shared by macOS and Linux ARM64 (`emitter.syscall(4)`
 //!   maps to the platform write number); the `_linux_x86_64` paths are SysV.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+
+/// Byte width of one `_class_pr_desc_*` property row.
+const PR_DESC_ROW_BYTES: u64 = 32;
 
 /// `__rt_print_r_spaces`: write `n` ASCII spaces to stdout in <=64-byte chunks.
 /// Input: AArch64 x0 / x86_64 rdi = space count.
@@ -289,6 +296,12 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
 
+    emitter.instruction("cmp x0, #11");                                         // inline TaggedScalar property descriptor?
+    emitter.instruction("b.ne __rt_pr_value_input_ready");                     // ordinary tags already use canonical value words
+    emitter.instruction("mov x0, x2");                                         // dispatch using the slot's int/null runtime tag
+    emitter.instruction("mov x2, xzr");                                        // tagged scalar payloads have no third word
+    emitter.label("__rt_pr_value_input_ready");
+
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the value frame pointer
@@ -361,6 +374,9 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.label("__rt_pr_val_obj");
     emitter.instruction("ldr x0, [sp, #0]");                                    // nested object pointer
     emitter.instruction("cbz x0, __rt_pr_val_done");                            // defensive: a null instance renders nothing
+    emitter.instruction("bl __elephc_print_r_datetime_object");                 // render php-src ext/date virtual properties when applicable
+    emitter.instruction("cbnz x0, __rt_pr_val_done");                           // the ext/date dispatcher consumed the object
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the plain object pointer after special dispatch
     emitter.instruction("ldr x1, [sp, #16]");                                   // base = the nested paren indent
     emitter.instruction("bl __rt_print_r_object");                              // recurse into the object walker
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
@@ -382,6 +398,12 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
+
+    emitter.instruction("cmp rdi, 11");                                        // inline TaggedScalar property descriptor?
+    emitter.instruction("jne __rt_pr_value_input_ready_x86");                  // ordinary tags already use canonical value words
+    emitter.instruction("mov rdi, rdx");                                       // dispatch using the slot's int/null runtime tag
+    emitter.instruction("xor edx, edx");                                       // tagged scalar payloads have no third word
+    emitter.label("__rt_pr_value_input_ready_x86");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the value frame pointer
@@ -460,6 +482,10 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested object pointer
     emitter.instruction("test rdi, rdi");                                       // defensive null-instance check
     emitter.instruction("jz __rt_pr_val_done_x86");                             // a null instance renders nothing
+    emitter.instruction("call __elephc_print_r_datetime_object");               // render php-src ext/date virtual properties when applicable
+    emitter.instruction("test rax, rax");                                       // did the special dispatcher consume the object?
+    emitter.instruction("jnz __rt_pr_val_done_x86");                            // the ext/date block is already complete
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the plain object pointer after special dispatch
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // base = the nested paren indent
     emitter.instruction("call __rt_print_r_object");                            // recurse into the object walker
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
@@ -476,6 +502,168 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the value frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+}
+
+/// `__rt_print_r_object_properties`: renders the initialized user-declared
+/// properties of an ext/date object inside an already-open object block.
+///
+/// The per-class `_class_pr_desc_ptrs` table supplies unquoted keys, property
+/// offsets, and runtime value tags. Built-in ext/date storage is absent from that
+/// table, so the synthetic method can append php-src's virtual fields afterwards.
+/// Input: AArch64 x0 / x86_64 rdi = object pointer.
+pub fn emit_print_r_object_properties(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_print_r_object_properties_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: print_r_object_properties ---");
+    emitter.label_global("__rt_print_r_object_properties");
+
+    // Frame: object, descriptor, index, count, row, slot, then saved FP/LR.
+    emitter.instruction("sub sp, sp, #80");                                     // allocate the property-walk frame
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish the property-walk frame
+    emitter.instruction("str x0, [sp, #0]");                                    // save the object pointer
+
+    emitter.instruction("ldr x9, [x0]");                                        // load the runtime class id
+    abi::emit_symbol_address(emitter, "x10", "_class_gc_desc_count");            // resolve the class-id table extent
+    emitter.instruction("ldr x10, [x10]");                                      // load the number of registered class ids
+    emitter.instruction("cmp x9, x10");                                         // is the class id in range?
+    emitter.instruction("b.hs __rt_pr_obj_props_missing");                       // out-of-range ids use an empty descriptor
+    abi::emit_symbol_address(emitter, "x10", "_class_pr_desc_ptrs");             // resolve the print_r descriptor table
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // load this class's descriptor pointer
+    emitter.instruction("b __rt_pr_obj_props_desc_ready");                      // continue with the resolved descriptor
+    emitter.label("__rt_pr_obj_props_missing");
+    abi::emit_symbol_address(emitter, "x10", "_class_pr_desc_missing");          // use the zero-property descriptor
+    emitter.label("__rt_pr_obj_props_desc_ready");
+    emitter.instruction("str x10, [sp, #8]");                                   // save the descriptor pointer
+    emitter.instruction("ldr x9, [x10]");                                       // load the declared property count
+    emitter.instruction("str x9, [sp, #24]");                                   // save the loop bound
+    emitter.instruction("str xzr, [sp, #16]");                                  // property index = 0
+
+    emitter.label("__rt_pr_obj_props_loop");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the property index
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the property count
+    emitter.instruction("cmp x9, x10");                                         // rendered every declared property?
+    emitter.instruction("b.ge __rt_pr_obj_props_done");                         // walk complete
+    emitter.instruction("ldr x11, [sp, #8]");                                   // reload the descriptor pointer
+    emitter.instruction(&format!("mov x12, #{}", PR_DESC_ROW_BYTES));            // each descriptor row occupies 32 bytes
+    emitter.instruction("mul x12, x9, x12");                                    // byte offset of this descriptor row
+    emitter.instruction("add x11, x11, x12");                                   // advance into the descriptor
+    emitter.instruction("add x11, x11, #8");                                    // skip the leading property-count word
+    emitter.instruction("str x11, [sp, #32]");                                  // save the row pointer across calls
+    emitter.instruction("ldr x13, [x11, #16]");                                 // load the property's byte offset
+    emitter.instruction("ldr x14, [sp, #0]");                                   // reload the object pointer
+    emitter.instruction("add x13, x14, x13");                                   // resolve the property slot
+    emitter.instruction("str x13, [sp, #40]");                                  // save the slot pointer across calls
+
+    emitter.instruction("ldr x14, [x13, #8]");                                  // load the slot high word
+    emitter.instruction("movz x15, #0xfffd");                                   // low halfword of the uninitialized sentinel
+    emitter.instruction("movk x15, #0xffff, lsl #16");                          // second halfword of the uninitialized sentinel
+    emitter.instruction("movk x15, #0xffff, lsl #32");                          // third halfword of the uninitialized sentinel
+    emitter.instruction("movk x15, #0x7fff, lsl #48");                          // top halfword of the uninitialized sentinel
+    emitter.instruction("cmp x14, x15");                                        // is this typed property uninitialized?
+    emitter.instruction("b.eq __rt_pr_obj_props_next");                         // print_r omits uninitialized properties
+
+    emitter.instruction("ldr x0, [x11]");                                       // load the unquoted property-key pointer
+    emitter.instruction("ldr x1, [x11, #8]");                                   // load the property-key length
+    emitter.instruction("mov x2, #4");                                          // object properties are indented four spaces
+    emitter.instruction("bl __rt_print_r_str_key");                             // emit `    [key] => `
+    emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row
+    emitter.instruction("ldr x13, [sp, #40]");                                  // reload the property slot
+    emitter.instruction("ldr x0, [x11, #24]");                                  // property runtime tag
+    emitter.instruction("ldr x1, [x13]");                                       // property low payload word
+    emitter.instruction("ldr x2, [x13, #8]");                                   // property high payload word
+    emitter.instruction("mov x3, #4");                                          // nested containers align below the key
+    emitter.instruction("bl __rt_print_r_value");                               // render the property value recursively
+    abi::emit_symbol_address(emitter, "x1", "_pr_nl");                           // load the trailing newline
+    emitter.instruction("mov x2, #1");                                          // len(newline) = 1
+    emitter.instruction("bl __rt_pr_write");                                    // finish the property line
+
+    emitter.label("__rt_pr_obj_props_next");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the property index
+    emitter.instruction("add x9, x9, #1");                                      // advance to the next property
+    emitter.instruction("str x9, [sp, #16]");                                   // save the updated index
+    emitter.instruction("b __rt_pr_obj_props_loop");                            // continue the walk
+
+    emitter.label("__rt_pr_obj_props_done");
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the property-walk frame
+    emitter.instruction("ret");                                                 // return to the synthetic date renderer
+}
+
+/// Emits the Linux x86_64 ext/date user-property walker for `print_r`.
+fn emit_print_r_object_properties_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: print_r_object_properties ---");
+    emitter.label_global("__rt_print_r_object_properties");
+
+    emitter.instruction("push rbp");                                            // save caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the property-walk frame
+    emitter.instruction("sub rsp, 64");                                         // allocate the property-walk frame
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the object pointer
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // load the runtime class id
+    abi::emit_symbol_address(emitter, "r10", "_class_gc_desc_count");            // resolve the class-id table extent
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the number of registered class ids
+    emitter.instruction("cmp r9, r10");                                         // is the class id in range?
+    emitter.instruction("jae __rt_pr_obj_props_missing_x86");                   // out-of-range ids use an empty descriptor
+    abi::emit_symbol_address(emitter, "r10", "_class_pr_desc_ptrs");             // resolve the print_r descriptor table
+    emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // load this class's descriptor pointer
+    emitter.instruction("jmp __rt_pr_obj_props_desc_ready_x86");                // continue with the resolved descriptor
+    emitter.label("__rt_pr_obj_props_missing_x86");
+    abi::emit_symbol_address(emitter, "r10", "_class_pr_desc_missing");          // use the zero-property descriptor
+    emitter.label("__rt_pr_obj_props_desc_ready_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the descriptor pointer
+    emitter.instruction("mov r9, QWORD PTR [r10]");                             // load the declared property count
+    emitter.instruction("mov QWORD PTR [rbp - 32], r9");                        // save the loop bound
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // property index = 0
+
+    emitter.label("__rt_pr_obj_props_loop_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property index
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the property count
+    emitter.instruction("cmp r9, r10");                                         // rendered every declared property?
+    emitter.instruction("jge __rt_pr_obj_props_done_x86");                      // walk complete
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the descriptor pointer
+    emitter.instruction(&format!("imul r9, r9, {}", PR_DESC_ROW_BYTES));         // byte offset of this descriptor row
+    emitter.instruction("add r11, r9");                                         // advance into the descriptor
+    emitter.instruction("add r11, 8");                                          // skip the leading property-count word
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the row pointer across calls
+    emitter.instruction("mov r10, QWORD PTR [r11 + 16]");                       // load the property's byte offset
+    emitter.instruction("add r10, QWORD PTR [rbp - 8]");                        // resolve the property slot
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the slot pointer across calls
+    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load the slot high word
+    emitter.instruction("movabs r11, 0x7ffffffffffffffd");                      // materialize the uninitialized sentinel
+    emitter.instruction("cmp r10, r11");                                        // is this typed property uninitialized?
+    emitter.instruction("je __rt_pr_obj_props_next_x86");                       // print_r omits uninitialized properties
+
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row
+    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the unquoted property-key pointer
+    emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // load the property-key length
+    emitter.instruction("mov edx, 4");                                          // object properties are indented four spaces
+    emitter.instruction("call __rt_print_r_str_key");                           // emit `    [key] => `
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot
+    emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property runtime tag
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // property low payload word
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // property high payload word
+    emitter.instruction("mov ecx, 4");                                          // nested containers align below the key
+    emitter.instruction("call __rt_print_r_value");                             // render the property value recursively
+    abi::emit_symbol_address(emitter, "rsi", "_pr_nl");                          // load the trailing newline
+    emitter.instruction("mov edx, 1");                                          // len(newline) = 1
+    emitter.instruction("call __rt_pr_write");                                  // finish the property line
+
+    emitter.label("__rt_pr_obj_props_next_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload the property index
+    emitter.instruction("add r9, 1");                                           // advance to the next property
+    emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // save the updated index
+    emitter.instruction("jmp __rt_pr_obj_props_loop_x86");                      // continue the walk
+
+    emitter.label("__rt_pr_obj_props_done_x86");
+    emitter.instruction("add rsp, 64");                                         // release the property-walk frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return to the synthetic date renderer
 }
 
 /// `__rt_print_r_indexed`: render an indexed array body `<base>(\n ... <base>)\n`,

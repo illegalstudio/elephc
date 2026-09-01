@@ -181,6 +181,9 @@ fn render_macos_command(
         paths.bin.as_os_str().to_owned(),
         paths.object.as_os_str().to_owned(),
         paths.runtime.as_os_str().to_owned(),
+        // The cached runtime can reference the optional timelib bridge from a dead subsection.
+        OsString::from("-U"),
+        OsString::from("_elephc_tz_format"),
         OsString::from("-syslibroot"),
         OsString::from(sdk.path),
         OsString::from("-platform_version"),

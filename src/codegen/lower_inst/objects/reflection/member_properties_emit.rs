@@ -27,7 +27,7 @@ pub(super) fn emit_reflection_member_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_member_array(ctx, member_class_name, members)?;
@@ -62,7 +62,7 @@ pub(super) fn emit_reflection_property_hook_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_property_hook_array(ctx, members)?;
@@ -103,7 +103,7 @@ pub(super) fn emit_reflection_constructor_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -134,7 +134,7 @@ pub(super) fn emit_reflection_method_prototype_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -167,7 +167,7 @@ pub(super) fn emit_reflection_parent_class_property(
     if let Some(parent_class_name) = parent_class_name {
         let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -208,7 +208,7 @@ pub(super) fn emit_reflection_declaring_class_property(
         let declaring_metadata =
             reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -244,7 +244,7 @@ pub(super) fn emit_reflection_enum_property(
     if let Some(enum_name) = enum_name {
         let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
         emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionEnum".to_string()),
         );
@@ -276,7 +276,7 @@ pub(super) fn emit_reflection_parameter_array_property_by_name(
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
+    abi::emit_reg_move(ctx.emitter, object_reg, result_reg);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_call_label(ctx.emitter, "__rt_decref_array");
     emit_reflection_parameter_array(ctx, parameters)?;
@@ -293,4 +293,3 @@ pub(super) fn emit_reflection_parameter_array_property_by_name(
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
 }
-

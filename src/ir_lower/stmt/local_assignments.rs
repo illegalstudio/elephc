@@ -22,6 +22,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
         ctx.store_local(name, null_lowered, PhpType::Void, Some(span));
         ctx.mark_local_initialized(name);
     }
+    initialize_undefined_direct_assignment_source(ctx, value);
 
     // A by-reference `Closure::bind(fn &() => $this->prop, $obj, $obj)` assigned to a variable is
     // tracked as a static callable, like a closure literal, so a later `$b()` lowers to a direct
@@ -150,6 +151,44 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     if let Some(sig) = fiber_start_sig {
         ctx.bind_fiber_start_sig(name, sig);
     }
+}
+
+/// Materializes PHP null and a path-sensitive warning when a direct assignment reads an
+/// otherwise undefined local, so unreachable loop bodies remain harmless and reachable reads
+/// match php-src instead of loading an uninitialized frame slot.
+fn initialize_undefined_direct_assignment_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+) {
+    let ExprKind::Variable(source) = &value.kind else {
+        return;
+    };
+    if ctx.has_local_slot(source) || ctx.variable_has_runtime_initializer(source) {
+        return;
+    }
+    let warning = Expr::new(
+        ExprKind::FunctionCall {
+            name: crate::names::Name::unqualified("__elephc_diag_warning"),
+            args: vec![
+                Expr::new(
+                    ExprKind::StringLiteral(format!("\nWarning: Undefined variable ${}", source)),
+                    value.span,
+                ),
+                Expr::new(ExprKind::IntLiteral(value.span.line as i64), value.span),
+                Expr::new(ExprKind::IntLiteral(2), value.span),
+            ],
+        },
+        value.span,
+    );
+    let warning_value = lower_expr(ctx, &warning);
+    release_expr_statement_result(ctx, warning_value, value.span);
+    let null_value = ctx.builder.emit_const_null();
+    let null_lowered = LoweredValue {
+        value: null_value,
+        ir_type: IrType::I64,
+    };
+    ctx.store_local(source, null_lowered, PhpType::Void, Some(value.span));
+    ctx.mark_local_initialized(source);
 }
 
 /// Returns whether a closure literal captures the local being assigned.
@@ -312,4 +351,3 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         }
     }
 }
-

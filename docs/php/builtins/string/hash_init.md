@@ -2,7 +2,7 @@
 title: "hash_init()"
 description: "Opens an incremental hashing context, returning a HashContext object. Provided by the compiler-injected hash prelude in compiled code; the eval interpreter still returns a resource."
 sidebar:
-  order: 410
+  order: 417
 ---
 
 ## hash_init()

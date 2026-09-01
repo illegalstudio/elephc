@@ -334,13 +334,22 @@ fn emit_spec_parser(emitter: &mut Emitter) {
     emitter.instruction("cbz x20, __rt_sprintf_endspec");                       // format ended before the conversion
     emitter.instruction("ldrb w12, [x19]");                                     // peek at the current specifier byte
     emitter.instruction("cmp w12, #46");                                        // '.' precision introducer?
-    emitter.instruction("b.ne __rt_sprintf_stype");                             // no → the conversion character follows
+    emitter.instruction("b.ne __rt_sprintf_slength");                           // no → try PHP's optional `l` length modifier
     emitter.instruction("add x19, x19, #1");                                    // consume the '.'
     emitter.instruction("sub x20, x20, #1");                                    // account for the consumed byte
     emitter.instruction("mov x11, #0");                                         // precision accumulator ('.' alone means 0)
     emitter.instruction("mov x14, #0");                                         // precision digit count
     emit_scan_decimal(emitter, "__rt_sprintf_p", "x19", "x20", "x11", "x14");
     emitter.instruction("str x11, [sp, #104]");                                 // store the parsed precision
+
+    // -- optional single `l` modifier --
+    emitter.label("__rt_sprintf_slength");
+    emitter.instruction("cbz x20, __rt_sprintf_endspec");                       // format ended before the conversion
+    emitter.instruction("ldrb w12, [x19]");                                     // peek at the possible length modifier
+    emitter.instruction("cmp w12, #108");                                       // ASCII `l`
+    emitter.instruction("b.ne __rt_sprintf_stype");                             // current byte is already the conversion
+    emitter.instruction("add x19, x19, #1");                                    // consume the modifier
+    emitter.instruction("sub x20, x20, #1");                                    // account for the consumed byte
 
     // -- conversion character --
     emitter.label("__rt_sprintf_stype");

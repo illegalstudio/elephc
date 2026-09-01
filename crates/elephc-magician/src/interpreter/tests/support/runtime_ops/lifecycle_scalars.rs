@@ -42,7 +42,27 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     }
     /// Records fake PHP warnings without writing to stderr.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
-        self.runtime_warning(message)
+        if self.error_reporting.unwrap_or(30719) & 2 == 0 {
+            Ok(())
+        } else {
+            self.runtime_warning(message)
+        }
+    }
+    /// Records fake PHP deprecations under the active E_DEPRECATED mask.
+    fn deprecated(&mut self, message: &str) -> Result<(), EvalStatus> {
+        if self.error_reporting.unwrap_or(30719) & 8192 == 0 {
+            Ok(())
+        } else {
+            self.runtime_warning(message)
+        }
+    }
+    /// Reads the fake runtime error mask and optionally replaces it.
+    fn error_reporting(&mut self, level: Option<i64>) -> Result<i64, EvalStatus> {
+        let previous = self.error_reporting.unwrap_or(30719);
+        if let Some(level) = level {
+            self.error_reporting = Some(level);
+        }
+        Ok(previous)
     }
     /// Creates a fake null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {

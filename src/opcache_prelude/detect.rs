@@ -719,6 +719,13 @@ fn stmt_refs(stmt: &Stmt, target: Symbol<'_>) -> Option<Span> {
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs(object, target).or_else(|| expr_refs(value, target))
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_refs(object, target)
+            .or_else(|| expr_refs(property, target))
+            .or_else(|| expr_refs(value, target)),
         StmtKind::PropertyArrayAssign {
             object,
             index,

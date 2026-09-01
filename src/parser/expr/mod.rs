@@ -19,6 +19,22 @@ use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 
+/// Returns whether a statement begins with PHP 8.5's statement-only `(void)` discard marker.
+pub(crate) fn starts_void_statement_cast(tokens: &[SpannedToken], pos: usize) -> bool {
+    matches!(
+        (
+            tokens.get(pos).map(|(token, _)| token),
+            tokens.get(pos + 1).map(|(token, _)| token),
+            tokens.get(pos + 2).map(|(token, _)| token),
+        ),
+        (
+            Some(Token::LParen),
+            Some(Token::Identifier(name)),
+            Some(Token::RParen),
+        ) if name.eq_ignore_ascii_case("void")
+    )
+}
+
 /// Parses a PHP expression using a Pratt parser, starting at binding power 0.
 /// Returns the parsed expression or a compile error if syntax is invalid.
 pub fn parse_expr(tokens: &[SpannedToken], pos: &mut usize) -> Result<Expr, CompileError> {

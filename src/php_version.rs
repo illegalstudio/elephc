@@ -91,7 +91,7 @@ impl PhpVersion {
             Self::Php82 => 80200,
             Self::Php83 => 80300,
             Self::Php84 => 80400,
-            Self::Php85 => 80500,
+            Self::Php85 => 80510,
             Self::Php86 => 80600,
         }
     }
@@ -104,7 +104,7 @@ impl PhpVersion {
             Self::Php82 => "8.2.0",
             Self::Php83 => "8.3.0",
             Self::Php84 => "8.4.0",
-            Self::Php85 => "8.5.0",
+            Self::Php85 => "8.5.10-dev",
             Self::Php86 => "8.6.0",
         }
     }
@@ -124,9 +124,12 @@ impl PhpVersion {
         self.version_id() % 100
     }
 
-    /// Returns the empty prerelease suffix used by stable language profiles.
+    /// Returns the prerelease suffix reported by the selected frozen profile.
     pub const fn extra_version(self) -> &'static str {
-        ""
+        match self {
+            Self::Php85 => "-dev",
+            _ => "",
+        }
     }
 
     /// Returns the matching Zend Engine language-profile version.
@@ -137,7 +140,7 @@ impl PhpVersion {
             Self::Php82 => "4.2.0",
             Self::Php83 => "4.3.0",
             Self::Php84 => "4.4.0",
-            Self::Php85 => "4.5.0",
+            Self::Php85 => "4.5.10-dev",
             Self::Php86 => "4.6.0",
         }
     }

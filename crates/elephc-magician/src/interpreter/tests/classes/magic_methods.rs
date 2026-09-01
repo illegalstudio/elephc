@@ -378,6 +378,18 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             "bad __set_state parameter type",
         ),
         (
+            br#"class EvalBadSetStateVariadicOnly { public static function __set_state(...$data) {} }"#.as_slice(),
+            "variadic-only __set_state",
+        ),
+        (
+            br#"class EvalBadSetStateByRef { public static function __set_state(&$data) {} }"#.as_slice(),
+            "by-reference __set_state",
+        ),
+        (
+            br#"class EvalBadSetStateReturn { public static function __set_state(array $data): int { return 1; } }"#.as_slice(),
+            "bad __set_state return type",
+        ),
+        (
             br#"class EvalBadClone { public static function __clone() {} }"#.as_slice(),
             "static __clone",
         ),
@@ -401,6 +413,14 @@ fn execute_program_rejects_invalid_eval_magic_method_contracts() {
             br#"trait EvalBadMagicTrait { public static function __isset($name) { return true; } }"#.as_slice(),
             "trait static __isset",
         ),
+        (
+            br#"trait EvalBadSetStateTrait { public static function __set_state($data, $extra) {} }"#.as_slice(),
+            "trait bad __set_state arity",
+        ),
+        (
+            br#"interface EvalBadSetStateInterface { public static function __set_state($data, $extra); }"#.as_slice(),
+            "interface bad __set_state arity",
+        ),
     ];
 
     for (source, label) in cases {
@@ -420,9 +440,18 @@ fn execute_program_accepts_debug_and_set_state_magic_contracts() {
     public function __debugInfo(): ?array { return null; }
 }
 class EvalGoodSetStateMagic {
-    public static function __set_state($data) {}
+    public static function __set_state(iterable $data, &...$rest): static { return new static(); }
 }
-return class_exists("EvalGoodDebugInfoMagic") && class_exists("EvalGoodSetStateMagic");"#,
+trait EvalGoodSetStateTrait {
+    public static function __set_state(array $data, &...$rest): static { return new static(); }
+}
+interface EvalGoodSetStateInterface {
+    public static function __set_state(array $data, &...$rest): static;
+}
+return class_exists("EvalGoodDebugInfoMagic")
+    && class_exists("EvalGoodSetStateMagic")
+    && trait_exists("EvalGoodSetStateTrait")
+    && interface_exists("EvalGoodSetStateInterface");"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -431,4 +460,53 @@ return class_exists("EvalGoodDebugInfoMagic") && class_exists("EvalGoodSetStateM
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
     assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval records php-src's non-fatal visibility warning for `__set_state()`.
+#[test]
+fn execute_program_warns_for_non_public_set_state_magic_contract() {
+    let program = parse_fragment(
+        br#"class EvalHiddenSetState {
+    private static function __set_state(array $data) {}
+}
+return class_exists("EvalHiddenSetState");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(
+        values.warnings,
+        vec![
+            "The magic method EvalHiddenSetState::__set_state() must have public visibility"
+                .to_string()
+        ]
+    );
+}
+
+/// Verifies eval records visibility before rejecting a later `__set_state()` type mismatch.
+#[test]
+fn execute_program_warns_before_set_state_type_fatal() {
+    let program = parse_fragment(
+        br#"class EvalHiddenInvalidSetState {
+    private static function __set_state(string $data): static { return new static(); }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values)
+        .expect_err("invalid set-state type must fail after warning");
+
+    assert_eq!(
+        values.warnings,
+        vec![
+            "The magic method EvalHiddenInvalidSetState::__set_state() must have public visibility"
+                .to_string()
+        ]
+    );
 }

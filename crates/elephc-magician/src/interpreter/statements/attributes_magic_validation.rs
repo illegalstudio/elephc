@@ -343,11 +343,84 @@ pub(super) fn eval_method_implements_interface(
         }))
 }
 
-/// Validates PHP magic-method contracts for one eval class-like method list.
-pub(super) fn validate_eval_magic_methods(methods: &[EvalClassMethod]) -> Result<(), EvalStatus> {
+/// Validates PHP magic-method contracts and emits ordered `__set_state()` warnings.
+pub(super) fn validate_eval_magic_methods(
+    owner: &str,
+    methods: &[EvalClassMethod],
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     for method in methods {
-        validate_eval_magic_method(method)?;
+        validate_eval_magic_method_with_visibility(owner, method, values)?;
     }
+    Ok(())
+}
+
+/// Validates php-src's `__set_state()` contract on eval interface declarations.
+pub(super) fn validate_eval_interface_set_state_methods(
+    methods: &[EvalInterfaceMethod],
+) -> Result<(), EvalStatus> {
+    for method in methods {
+        if !method.name().eq_ignore_ascii_case("__set_state") {
+            continue;
+        }
+        let fixed_parameters = method
+            .parameter_is_variadic()
+            .iter()
+            .filter(|is_variadic| !**is_variadic)
+            .count();
+        let fixed_position = method
+            .parameter_is_variadic()
+            .iter()
+            .position(|is_variadic| !*is_variadic);
+        if fixed_parameters != 1 {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let fixed_position = fixed_position.ok_or(EvalStatus::RuntimeFatal)?;
+        if method
+            .parameter_is_by_ref()
+            .get(fixed_position)
+            .copied()
+            .unwrap_or(false)
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if !method.is_static() {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        if let Some(Some(parameter_type)) = method.parameter_types().get(fixed_position) {
+            if !set_state_parameter_type_accepts_array(parameter_type) {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+        }
+        if method
+            .return_type()
+            .is_some_and(|return_type| !set_state_return_type_is_object(return_type))
+        {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+    }
+    Ok(())
+}
+
+/// Validates one method while preserving php-src's warning-before-type-fatal order.
+pub(super) fn validate_eval_magic_method_with_visibility(
+    owner: &str,
+    method: &EvalClassMethod,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !method.name().eq_ignore_ascii_case("__set_state") {
+        return validate_eval_magic_method(method);
+    }
+    validate_set_state_arity(method)?;
+    validate_set_state_no_fixed_by_ref_params(method)?;
+    validate_magic_static(method)?;
+    if method.visibility() != EvalVisibility::Public {
+        values.warning(&format!(
+            "The magic method {owner}::__set_state() must have public visibility"
+        ))?;
+    }
+    validate_set_state_declared_param_type(method)?;
+    validate_set_state_declared_return_type(method)?;
     Ok(())
 }
 
@@ -412,9 +485,11 @@ pub(super) fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(),
             validate_magic_declared_return_type(method, MagicReturnType::NullableArray)?;
         }
         "__set_state" => {
+            validate_set_state_arity(method)?;
+            validate_set_state_no_fixed_by_ref_params(method)?;
             validate_magic_static(method)?;
-            validate_magic_arity(method, 1)?;
-            validate_magic_declared_param_type(method, 0, MagicParamType::Array)?;
+            validate_set_state_declared_param_type(method)?;
+            validate_set_state_declared_return_type(method)?;
         }
         "__invoke" => {
             validate_magic_non_static(method)?;
@@ -441,7 +516,8 @@ pub(super) fn validate_eval_magic_method(method: &EvalClassMethod) -> Result<(),
 
 /// Returns whether PHP rejects by-reference parameters for this magic method.
 pub(super) fn validated_eval_magic_method_rejects_by_ref_params(name: &str) -> bool {
-    is_validated_eval_magic_method(name) && !matches!(name, "__construct" | "__invoke")
+    is_validated_eval_magic_method(name)
+        && !matches!(name, "__construct" | "__invoke" | "__set_state")
 }
 
 /// Returns whether eval knows PHP declaration-time rules for this magic method.
@@ -523,6 +599,92 @@ pub(super) fn validate_magic_arity(method: &EvalClassMethod, expected: usize) ->
     } else {
         Err(EvalStatus::RuntimeFatal)
     }
+}
+
+/// Enforces php-src's one fixed parameter rule while allowing one trailing variadic.
+fn validate_set_state_arity(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    let fixed_parameters = method
+        .parameter_is_variadic()
+        .iter()
+        .filter(|is_variadic| !**is_variadic)
+        .count();
+    if fixed_parameters == 1 {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Rejects by-reference fixed parameters while allowing php-src's by-reference variadic tail.
+fn validate_set_state_no_fixed_by_ref_params(
+    method: &EvalClassMethod,
+) -> Result<(), EvalStatus> {
+    if method
+        .parameter_is_by_ref()
+        .iter()
+        .zip(method.parameter_is_variadic())
+        .any(|(is_by_ref, is_variadic)| *is_by_ref && !*is_variadic)
+    {
+        Err(EvalStatus::RuntimeFatal)
+    } else {
+        Ok(())
+    }
+}
+
+/// Accepts an omitted type or any declared parameter supertype of PHP `array`.
+fn validate_set_state_declared_param_type(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    let fixed_position = method
+        .parameter_is_variadic()
+        .iter()
+        .position(|is_variadic| !*is_variadic)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let Some(Some(parameter_type)) = method.parameter_types().get(fixed_position) else {
+        return Ok(());
+    };
+    if set_state_parameter_type_accepts_array(parameter_type) {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Returns whether one eval parameter type accepts every PHP array value.
+fn set_state_parameter_type_accepts_array(parameter_type: &EvalParameterType) -> bool {
+    !parameter_type.is_intersection()
+        && parameter_type.variants().iter().any(|variant| {
+            matches!(
+                variant,
+                EvalParameterTypeVariant::Array
+                    | EvalParameterTypeVariant::Iterable
+                    | EvalParameterTypeVariant::Mixed
+            )
+        })
+}
+
+/// Accepts an omitted return, `never`, or a non-null object/class-only declaration.
+fn validate_set_state_declared_return_type(method: &EvalClassMethod) -> Result<(), EvalStatus> {
+    let Some(return_type) = method.return_type() else {
+        return Ok(());
+    };
+    if set_state_return_type_is_object(return_type) {
+        Ok(())
+    } else {
+        Err(EvalStatus::RuntimeFatal)
+    }
+}
+
+/// Returns whether one eval return type is covariant with PHP's object contract.
+fn set_state_return_type_is_object(return_type: &EvalParameterType) -> bool {
+    !return_type.allows_null()
+        && !return_type.variants().is_empty()
+        && return_type.variants().iter().all(|variant| {
+            matches!(
+                variant,
+                EvalParameterTypeVariant::Class(_)
+                    | EvalParameterTypeVariant::Never
+                    | EvalParameterTypeVariant::Object
+            )
+        })
 }
 
 /// Rejects by-reference parameters on PHP magic methods.

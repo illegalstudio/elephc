@@ -11,10 +11,164 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{TypeExpr, Visibility};
+use crate::parser::ast::{ClassMethod, Stmt, StmtKind, TypeExpr, Visibility};
 use crate::types::PhpType;
 
 use super::super::Checker;
+
+/// One fatal PHP contract violation on a user-declared `__set_state()` method.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SetStateContractViolation {
+    Arity,
+    NonStatic,
+    ByReference,
+    ParameterType { name: String },
+    ReturnType,
+}
+
+/// Returns the first declaration-time `__set_state()` violation in php-src order.
+pub(crate) fn set_state_contract_violation(
+    method: &ClassMethod,
+) -> Option<SetStateContractViolation> {
+    if method.params.len() != 1 {
+        return Some(SetStateContractViolation::Arity);
+    }
+    if method.params.iter().any(|(_, _, _, by_ref)| *by_ref) {
+        return Some(SetStateContractViolation::ByReference);
+    }
+    if !method.is_static {
+        return Some(SetStateContractViolation::NonStatic);
+    }
+    let (name, parameter_type, _, _) = &method.params[0];
+    if parameter_type
+        .as_ref()
+        .is_some_and(|parameter_type| !set_state_parameter_accepts_array(parameter_type))
+    {
+        return Some(SetStateContractViolation::ParameterType { name: name.clone() });
+    }
+    if method
+        .return_type
+        .as_ref()
+        .is_some_and(|return_type| !set_state_return_is_object(return_type))
+    {
+        return Some(SetStateContractViolation::ReturnType);
+    }
+    None
+}
+
+/// Finds the first class-like declaration whose `__set_state()` contract PHP rejects fatally.
+pub(crate) fn set_state_contract_error(
+    statements: &[Stmt],
+) -> Option<(String, u32, SetStateContractViolation)> {
+    for statement in statements {
+        match &statement.kind {
+            StmtKind::ClassDecl { name, methods, .. }
+            | StmtKind::InterfaceDecl { name, methods, .. }
+            | StmtKind::TraitDecl { name, methods, .. } => {
+                for method in methods {
+                    if php_symbol_key(&method.name) == "__set_state" {
+                        if let Some(violation) = set_state_contract_violation(method) {
+                            return Some((name.clone(), method.span.line, violation));
+                        }
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => {
+                if let Some(invalid) = set_state_contract_error(body) {
+                    return Some(invalid);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Collects valid non-public `__set_state()` declarations that php-src warns about.
+pub(crate) fn set_state_visibility_warnings(statements: &[Stmt]) -> Vec<(String, u32)> {
+    let mut warnings = Vec::new();
+    collect_set_state_visibility_warnings(statements, &mut warnings);
+    warnings
+}
+
+/// Recursively appends php-src-visible `__set_state()` visibility warnings in source order.
+fn collect_set_state_visibility_warnings(
+    statements: &[Stmt],
+    warnings: &mut Vec<(String, u32)>,
+) {
+    for statement in statements {
+        match &statement.kind {
+            StmtKind::ClassDecl { name, methods, .. }
+            | StmtKind::InterfaceDecl { name, methods, .. }
+            | StmtKind::TraitDecl { name, methods, .. } => {
+                for method in methods {
+                    if php_symbol_key(&method.name) == "__set_state"
+                        && set_state_reaches_visibility_check(method)
+                        && method.visibility != Visibility::Public
+                    {
+                        warnings.push((name.clone(), method.span.line));
+                    }
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. }
+            | StmtKind::Synthetic(body) => {
+                collect_set_state_visibility_warnings(body, warnings);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Returns whether php-src reaches `__set_state()`'s non-fatal visibility check.
+fn set_state_reaches_visibility_check(method: &ClassMethod) -> bool {
+    method.params.len() == 1
+        && !method.params.iter().any(|(_, _, _, by_ref)| *by_ref)
+        && method.is_static
+}
+
+/// Returns whether a declared parameter type accepts every PHP array value.
+fn set_state_parameter_accepts_array(parameter_type: &TypeExpr) -> bool {
+    match parameter_type {
+        TypeExpr::Array(_) | TypeExpr::Iterable => true,
+        TypeExpr::Nullable(inner) => set_state_parameter_accepts_array(inner),
+        TypeExpr::Union(members) => members.iter().any(set_state_parameter_accepts_array),
+        TypeExpr::Named(name) => matches!(
+            name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str(),
+            "array" | "iterable" | "mixed"
+        ),
+        _ => false,
+    }
+}
+
+/// Returns whether a declared return type is covariant with php-src's `object` contract.
+fn set_state_return_is_object(return_type: &TypeExpr) -> bool {
+    match return_type {
+        TypeExpr::Never => true,
+        TypeExpr::Named(name) => !matches!(
+            name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str(),
+            "array"
+                | "bool"
+                | "callable"
+                | "false"
+                | "float"
+                | "int"
+                | "iterable"
+                | "mixed"
+                | "null"
+                | "resource"
+                | "string"
+                | "true"
+                | "void"
+        ),
+        TypeExpr::Union(members) | TypeExpr::Intersection(members) => {
+            !members.is_empty() && members.iter().all(set_state_return_is_object)
+        }
+        _ => false,
+    }
+}
 
 /// Patches the type signatures for the property/method interception magic
 /// methods on user-declared classes to enforce PHP-correct parameter types.

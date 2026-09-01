@@ -33,6 +33,9 @@ pub(super) fn reflection_class_method_member(
     method_name: &str,
 ) -> Result<Option<ReflectionListedMember>> {
     let method_key = php_symbol_key(method_name);
+    if crate::types::php_src_date_method_visible(class_name, &method_key) == Some(false) {
+        return Ok(None);
+    }
     let sig = info
         .methods
         .get(&method_key)
@@ -55,13 +58,26 @@ pub(super) fn reflection_class_method_member(
     let Some(flags) = reflection_method_member_flags(info, &method_key) else {
         return Ok(None);
     };
-    let required_parameter_count = reflection_required_parameter_count(sig);
+    let is_php_dateperiod_constructor = class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("DatePeriod")
+        && method_key == "__construct";
+    let required_parameter_count = if is_php_dateperiod_constructor {
+        1
+    } else {
+        reflection_required_parameter_count(sig)
+    };
     let late_static_return = if flags.is_static {
         info.late_static_static_method_returns.get(&method_key)
     } else {
         info.late_static_method_returns.get(&method_key)
     };
-    let type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
+    let mut type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
+    if let Some(return_type) =
+        crate::types::php_src_date_method_return_type(class_name, &method_key)
+    {
+        type_metadata = reflection_declared_type_metadata(&return_type);
+    }
     let is_generator = reflection_method_is_generator(
         ctx,
         declaring_class_name.as_deref().unwrap_or(class_name),
@@ -90,7 +106,7 @@ pub(super) fn reflection_class_method_member(
                 flags.is_static,
             )
         });
-    let parameters = reflection_parameter_members_with_declaring_class(
+    let mut parameters = reflection_parameter_members_with_declaring_class(
         ctx,
         sig,
         class_name,
@@ -100,8 +116,38 @@ pub(super) fn reflection_class_method_member(
         &reflection_promoted_constructor_parameter_names(info, &method_key),
         source_defaults.as_deref(),
     )?;
+    if is_php_dateperiod_constructor {
+        for (index, parameter) in parameters.iter_mut().enumerate() {
+            parameter.is_optional = index > 0;
+            parameter.has_type = false;
+            parameter.allows_null = true;
+            parameter.type_metadata = None;
+            parameter.default_value = None;
+            parameter.default_value_constant_name = None;
+        }
+    }
+    for (index, parameter) in parameters.iter_mut().enumerate() {
+        let Some(type_expr) = crate::types::php_src_date_method_parameter_type(
+            class_name,
+            &method_key,
+            index,
+        ) else {
+            continue;
+        };
+        parameter.has_type = true;
+        parameter.allows_null = false;
+        parameter.is_array_type = false;
+        parameter.is_callable_type = false;
+        parameter.type_metadata = reflection_declared_type_metadata(&type_expr);
+    }
+    let reflected_method_name = crate::types::php_src_date_method_canonical_name(
+        class_name,
+        &method_key,
+    )
+    .unwrap_or(method_name)
+    .to_string();
     Ok(Some(ReflectionListedMember {
-        name: method_key.clone(),
+        name: reflected_method_name,
         declaring_class_name,
         attr_names,
         attr_args,
@@ -197,7 +243,12 @@ pub(super) fn reflection_interface_method_member(
         source_defaults.as_deref(),
     )?;
     Ok(Some(ReflectionListedMember {
-        name: method_key,
+        name: crate::types::php_src_date_method_canonical_name(
+            interface_name,
+            &method_key,
+        )
+        .unwrap_or(method_name)
+        .to_string(),
         declaring_class_name: Some(declaring_class_name),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
@@ -314,4 +365,3 @@ pub(super) fn reflection_method_is_generator(
             && function.flags.is_generator
     })
 }
-

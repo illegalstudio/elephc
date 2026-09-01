@@ -78,6 +78,53 @@ pub(crate) const OB_DEFAULT_HANDLER_NAME: &str = "default output handler";
 /// PHP's closure / first-class-callable handler display name.
 pub(crate) const OB_CLOSURE_INVOKE_NAME: &str = "Closure::__invoke";
 
+/// Prefix of php-src's uncaught exception diagnostic.
+pub(crate) const UNCAUGHT_TRACE_PREFIX: &str = "\nFatal error: Uncaught ";
+/// Prefix for the replacement Throwable printed after a previously uncaught exception.
+pub(crate) const UNCAUGHT_TRACE_NEXT_PREFIX: &str = "\nNext ";
+/// Main-only stack suffix used by an exception thrown from `finally` during native date unwind.
+pub(crate) const UNCAUGHT_TRACE_NEXT_STACK_PREFIX: &str =
+    "\nStack trace:\n#0 {main}\n  thrown in ";
+/// Separator between the throwable class name and its message.
+pub(crate) const UNCAUGHT_TRACE_CLASS_SEPARATOR: &str = ": ";
+/// Separator before the source location attached to an uncaught throwable.
+pub(crate) const UNCAUGHT_TRACE_LOCATION_SEPARATOR: &str = " in ";
+/// Delimiter before the source line attached to the fatal header.
+pub(crate) const UNCAUGHT_TRACE_LINE_PREFIX: &str = ":";
+/// Trace header and internal-hook frame prefix after the fatal source line.
+pub(crate) const UNCAUGHT_UNSERIALIZE_STACK_PREFIX: &str =
+    "\nStack trace:\n#0 [internal function]: ";
+/// Suffix of the internal `__unserialize()` frame and prefix of its caller frame.
+pub(crate) const UNCAUGHT_UNSERIALIZE_OWNER_SUFFIX: &str =
+    "->__unserialize(Array)\n#1 ";
+/// Caller-frame delimiter before its source line.
+pub(crate) const UNCAUGHT_UNSERIALIZE_CALL_PREFIX: &str = "(";
+/// Caller-frame text after its source line and before the serialized preview.
+pub(crate) const UNCAUGHT_UNSERIALIZE_CALL_AFTER_LINE: &str = "): unserialize('";
+/// Caller-frame suffix plus the `{main}` frame and thrown-location prefix.
+pub(crate) const UNCAUGHT_UNSERIALIZE_CALL_SUFFIX: &str =
+    "...')\n#2 {main}\n  thrown in ";
+/// Text before the source line repeated by the final `thrown in` diagnostic.
+pub(crate) const UNCAUGHT_UNSERIALIZE_THROWN_SUFFIX: &str = " on line ";
+/// Main-only stack rendered for DatePeriod's iterator object-handler guard.
+pub(crate) const UNCAUGHT_DATEPERIOD_STACK_PREFIX: &str =
+    "\nStack trace:\n#0 {main}\n  thrown in ";
+/// First frame prefix for an uncaught procedural `timezone_offset_get()` TypeError.
+pub(crate) const UNCAUGHT_TIMEZONE_OFFSET_STACK_PREFIX: &str = "\nStack trace:\n#0 ";
+/// Procedural date frame body followed by the main frame and thrown-location prefix.
+pub(crate) const UNCAUGHT_TIMEZONE_OFFSET_STACK_SUFFIX: &str =
+    "): timezone_offset_get(Object(DateTime), Object(DateTimeZone))\n#1 {main}\n  thrown in ";
+/// First frame prefix for the uninitialized-DateTime `format()` regression trace.
+pub(crate) const UNCAUGHT_DATETIME_FORMAT_STACK_PREFIX: &str = "\nStack trace:\n#0 ";
+/// Body after the primary source line and before the constructor caller location.
+pub(crate) const UNCAUGHT_DATETIME_FORMAT_PARENT_PREFIX: &str =
+    "): DateTime->format('Y')\n#1 ";
+/// Constructor frame body followed by the main frame and thrown-location prefix.
+pub(crate) const UNCAUGHT_DATETIME_FORMAT_STACK_SUFFIX: &str =
+    "): mydt->__construct('Funktionsansvar...', Object(DateTimeZone))\n#2 {main}\n  thrown in ";
+/// Newline terminating the uncaught throwable diagnostic.
+pub(crate) const UNCAUGHT_TRACE_NEWLINE: &str = "\n";
+
 pub(crate) const DIRNAME_LEVELS_MSG: &str =
     "Fatal error: dirname(): Argument #2 ($levels) must be greater than or equal to 1\n";
 /// Fatal error message written by `__rt_stack_overflow` when a function prologue finds the

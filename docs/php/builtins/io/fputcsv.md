@@ -2,7 +2,7 @@
 title: "fputcsv()"
 description: "Format line as CSV and write to file pointer."
 sidebar:
-  order: 181
+  order: 182
 ---
 
 ## fputcsv()

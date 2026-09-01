@@ -43,6 +43,7 @@ pub(in crate::interpreter) fn execute_interface_decl_stmt(
     validate_eval_declared_constants(interface.constants())?;
     validate_eval_interface_constants(interface.constants())?;
     validate_interface_constant_parent_redeclarations(interface, context, values)?;
+    validate_eval_interface_set_state_methods(interface.methods())?;
     if context.define_interface(interface.clone()) {
         initialize_eval_declared_constants(
             interface.name(),
@@ -78,7 +79,7 @@ pub(in crate::interpreter) fn execute_trait_decl_stmt(
     let trait_decl = expand_eval_trait_traits(trait_decl, context)?;
     validate_eval_trait_attribute_targets(&trait_decl)?;
     validate_eval_declared_constants(trait_decl.constants())?;
-    validate_eval_magic_methods(trait_decl.methods())?;
+    validate_eval_magic_methods(trait_decl.name(), trait_decl.methods(), values)?;
     if context.define_trait(trait_decl.clone()) {
         initialize_eval_declared_constants(
             trait_decl.name(),
@@ -765,7 +766,7 @@ pub(super) fn validate_eval_class_modifiers(
     }
     for method in class.methods() {
         validate_eval_method_attribute_targets(method.attributes())?;
-        validate_eval_magic_method(method)?;
+        validate_eval_magic_method_with_visibility(class.name(), method, values)?;
         if method.is_abstract() && method.is_final() {
             return Err(EvalStatus::RuntimeFatal);
         }

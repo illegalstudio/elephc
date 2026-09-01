@@ -393,6 +393,7 @@ fn emit_mixed_tostring_candidate_call(
     }
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     Ok(candidate.target.return_ty.clone())
 }
 

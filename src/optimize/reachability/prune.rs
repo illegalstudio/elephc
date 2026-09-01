@@ -134,6 +134,7 @@ fn prune_statement_children(statement: &mut Stmt, reachability: &Reachability) {
         | StmtKind::StaticVar { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::PropertyAssign { .. }
+        | StmtKind::DynamicPropertyArrayPush { .. }
         | StmtKind::StaticPropertyAssign { .. }
         | StmtKind::StaticPropertyArrayPush { .. }
         | StmtKind::StaticPropertyArrayAssign { .. }

@@ -279,6 +279,15 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_writes_local(object, name) || expr_writes_local(value, name)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_writes_local(object, name)
+                || expr_writes_local(property, name)
+                || expr_writes_local(value, name)
+        }
         StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
             expr_writes_local(condition, name)
                 || body_writes_local(then_body, name)
@@ -552,6 +561,15 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_contains_eval_call(object) || expr_contains_eval_call(value)
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_contains_eval_call(object)
+                || expr_contains_eval_call(property)
+                || expr_contains_eval_call(value)
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -773,4 +791,3 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
 }
-

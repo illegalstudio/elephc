@@ -2,7 +2,7 @@
 title: "hash_update() — internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 411
+  order: 418
 ---
 
 ## `hash_update()` — internals

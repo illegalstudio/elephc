@@ -60,6 +60,13 @@ fn eval_predefined_constant(
     name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if name.trim_start_matches('\\').eq_ignore_ascii_case("E_STRICT")
+        && crate::eval_php_profile::eval_php_version_id() >= 80400
+    {
+        values.deprecated(
+            "\nDeprecated: Constant E_STRICT is deprecated since 8.4, the error level was removed",
+        )?;
+    }
     let Some(value) = eval_predefined_constant_value(name) else {
         return Ok(None);
     };
@@ -176,6 +183,35 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
             EVAL_JSON_INVALID_UTF8_SUBSTITUTE,
         )),
         "JSON_THROW_ON_ERROR" => Some(EvalPredefinedConstant::Int(EVAL_JSON_THROW_ON_ERROR)),
+        "E_ERROR" => Some(EvalPredefinedConstant::Int(1)),
+        "E_WARNING" => Some(EvalPredefinedConstant::Int(2)),
+        "E_PARSE" => Some(EvalPredefinedConstant::Int(4)),
+        "E_NOTICE" => Some(EvalPredefinedConstant::Int(8)),
+        "E_CORE_ERROR" => Some(EvalPredefinedConstant::Int(16)),
+        "E_CORE_WARNING" => Some(EvalPredefinedConstant::Int(32)),
+        "E_COMPILE_ERROR" => Some(EvalPredefinedConstant::Int(64)),
+        "E_COMPILE_WARNING" => Some(EvalPredefinedConstant::Int(128)),
+        "E_USER_ERROR" => Some(EvalPredefinedConstant::Int(256)),
+        "E_USER_WARNING" => Some(EvalPredefinedConstant::Int(512)),
+        "E_USER_NOTICE" => Some(EvalPredefinedConstant::Int(1024)),
+        "E_STRICT" => Some(EvalPredefinedConstant::Int(2048)),
+        "E_RECOVERABLE_ERROR" => Some(EvalPredefinedConstant::Int(4096)),
+        "E_DEPRECATED" => Some(EvalPredefinedConstant::Int(8192)),
+        "E_USER_DEPRECATED" => Some(EvalPredefinedConstant::Int(16384)),
+        "E_ALL" => Some(EvalPredefinedConstant::Int(
+            if crate::eval_php_profile::eval_php_version_id() >= 80400 {
+                30719
+            } else {
+                32767
+            },
+        )),
+        "LC_CTYPE" => Some(EvalPredefinedConstant::Int(libc::LC_CTYPE as i64)),
+        "LC_NUMERIC" => Some(EvalPredefinedConstant::Int(libc::LC_NUMERIC as i64)),
+        "LC_TIME" => Some(EvalPredefinedConstant::Int(libc::LC_TIME as i64)),
+        "LC_COLLATE" => Some(EvalPredefinedConstant::Int(libc::LC_COLLATE as i64)),
+        "LC_MONETARY" => Some(EvalPredefinedConstant::Int(libc::LC_MONETARY as i64)),
+        "LC_ALL" => Some(EvalPredefinedConstant::Int(libc::LC_ALL as i64)),
+        "LC_MESSAGES" => Some(EvalPredefinedConstant::Int(libc::LC_MESSAGES as i64)),
         "INF" => Some(EvalPredefinedConstant::Float(f64::INFINITY)),
         "NAN" => Some(EvalPredefinedConstant::Float(f64::NAN)),
         "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
@@ -195,8 +231,12 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "PHP_MINOR_VERSION" => Some(EvalPredefinedConstant::Int(
             crate::eval_php_profile::eval_php_minor_version(),
         )),
-        "PHP_RELEASE_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION)),
-        "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION)),
+        "PHP_RELEASE_VERSION" => Some(EvalPredefinedConstant::Int(
+            crate::eval_php_profile::eval_php_release_version(),
+        )),
+        "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(
+            crate::eval_php_profile::eval_php_extra_version(),
+        )),
         "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),
         "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
         _ => None,

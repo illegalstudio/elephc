@@ -8,6 +8,7 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::ir::IrHeapKind;
 
 /// Coerces a value to the current function return storage type when needed.
 pub(super) fn coerce_to_return_type(
@@ -16,6 +17,9 @@ pub(super) fn coerce_to_return_type(
     span: Option<Span>,
 ) -> LoweredValue {
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
+        return value;
+    }
+    if let Some(value) = declared_object_return_boundary(ctx, value, span) {
         return value;
     }
     if value.ir_type == ctx.return_type {
@@ -46,6 +50,56 @@ pub(super) fn coerce_to_return_type(
         ),
         IrType::Void => value,
     }
+}
+
+/// Verifies a dynamically-typed value at a DECLARED class/interface return boundary.
+fn declared_object_return_boundary(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> Option<LoweredValue> {
+    let PhpType::Object(target_class) = &ctx.return_php_type else {
+        return None;
+    };
+    let target_class = target_class.trim_start_matches('\\').to_string();
+    let display_type = if target_class.is_empty() {
+        "object"
+    } else {
+        target_class.as_str()
+    };
+    if !ctx.return_type_is_declared {
+        return None;
+    }
+    let source_type = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source_type == ctx.return_php_type.codegen_repr()
+        || (target_class.is_empty() && matches!(source_type, PhpType::Object(_)))
+    {
+        return None;
+    }
+    let consumed = if value.ir_type == IrType::Heap(IrHeapKind::Mixed) {
+        if ctx.value_is_owning_temporary(value) {
+            value
+        } else {
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span)
+        }
+    } else {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, span)
+    };
+    let prefix = format!(
+        "{}(): Return value must be of type {}, ",
+        ctx.owner_name(),
+        display_type
+    );
+    let spec = format!("{}\0{}", target_class, prefix);
+    let data = ctx.intern_string(&spec);
+    Some(ctx.emit_value(
+        Op::ReturnBoundaryMixedToObject,
+        vec![consumed.value],
+        Some(Immediate::Data(data)),
+        ctx.return_php_type.clone(),
+        Op::ReturnBoundaryMixedToObject.default_effects(),
+        span,
+    ))
 }
 
 /// Verifies a dynamically-typed value against a DECLARED `int` return boundary.
@@ -283,4 +337,3 @@ pub(super) fn coerce_to_string(
         ),
     }
 }
-

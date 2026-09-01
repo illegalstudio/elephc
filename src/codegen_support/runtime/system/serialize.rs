@@ -81,6 +81,11 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // canonical null has no low payload word
     emitter.instruction("mov x2, #0");                                          // canonical null has no high payload word
     emitter.label("__rt_serialize_value_input_ready");
+    emitter.instruction("cmp x0, #11");                                         // inline TaggedScalar descriptor?
+    emitter.instruction("b.ne __rt_serialize_value_normalized");                // ordinary tags already have canonical payload words
+    emitter.instruction("mov x0, x2");                                          // use the slot's per-value int/null runtime tag
+    emitter.instruction("mov x2, xzr");                                         // tagged scalar payloads have no third word
+    emitter.label("__rt_serialize_value_normalized");
 
     // -- set up stack frame --
     // [sp+0]=output start, [sp+8]=write pos, [sp+16]=tag, [sp+24]=lo, [sp+32]=hi
@@ -595,6 +600,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the saved post-prefix offset
     emitter.instruction("str x10, [x9]");                                       // rewind, discarding any concat scratch the method left
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the returned array pointer
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the concrete object receiver
+    emitter.instruction("bl __rt_date_magic_append_props");                     // merge user-declared date-subclass properties
+    emitter.instruction("str x0, [sp, #32]");                                   // save the possibly grown returned hash
     emitter.instruction("ldur x9, [x0, #-8]");                                  // load its heap kind word
     emitter.instruction("and x9, x9, #0xff");                                   // isolate the heap kind (2=indexed, 3=hash)
     emitter.instruction("cmp x9, #3");                                          // is the returned array a hash?
@@ -676,6 +684,18 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with the object appended
 
     emitter.label("__rt_serialize_object_default");
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the concrete class id
+    emit_symbol_address(emitter, "x10", "_stdclass_class_id");
+    emitter.instruction("ldr x10, [x10]");                                     // load stdClass's generated class id
+    emitter.instruction("cmp x9, x10");                                        // does this object store every property in its dynamic hash?
+    emitter.instruction("b.ne __rt_serialize_object_default_declared");         // ordinary classes use the fixed property-info table
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the stdClass object pointer
+    emitter.instruction("ldr x0, [x0, #8]");                                   // stdClass layout stores its property hash after the class id
+    emitter.instruction("bl __rt_serialize_hash_body");                        // append the dynamic property count and key/value body
+    emitter.instruction("ldp x29, x30, [sp, #80]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                    // deallocate the object frame
+    emitter.instruction("ret");                                                // return with the stdClass body appended
+    emitter.label("__rt_serialize_object_default_declared");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the class id
     emit_symbol_address(emitter, "x9", "_class_serprop_ptrs");
     emitter.instruction("ldr x13, [x9, x1, lsl #3]");                           // property-info table pointer
@@ -805,6 +825,67 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // deallocate the named-property frame
     emitter.instruction("ret");                                                 // return with the named property appended
+
+    // -- __rt_date_magic_append_props(x0=hash, x1=obj): merge user properties
+    //    declared by a DateTime-family subclass into the internal magic array. --
+    emitter.blank();
+    emitter.comment("--- runtime: date_magic_append_props ---");
+    emitter.label_global("__rt_date_magic_append_props");
+    emitter.instruction("sub sp, sp, #96");                                     // allocate the date-property merge frame
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish the merge frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the magic serialization hash
+    emitter.instruction("str x1, [sp, #8]");                                    // save the concrete object pointer
+    emitter.instruction("ldr x9, [x1]");                                        // load the concrete runtime class id
+    emit_symbol_address(emitter, "x10", "_class_date_serialize_prop_ptrs");
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // filtered user-property descriptor
+    emitter.instruction("str x10, [sp, #16]");                                  // save the descriptor pointer
+    emitter.instruction("ldr x11, [x10]");                                      // load the custom property count
+    emitter.instruction("str x11, [sp, #24]");                                  // save the custom property count
+    emitter.instruction("str xzr, [sp, #32]");                                  // property cursor = 0
+    emitter.label("__rt_date_magic_append_props_loop");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the property cursor
+    emitter.instruction("ldr x10, [sp, #24]");                                  // reload the property count
+    emitter.instruction("cmp x9, x10");                                         // merged every custom property?
+    emitter.instruction("b.ge __rt_date_magic_append_props_done");              // return the final hash when complete
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the descriptor base
+    emitter.instruction("add x11, x10, #8");                                    // skip the descriptor count
+    emitter.instruction("add x11, x11, x9, lsl #5");                            // address the current 32-byte row
+    emitter.instruction("str x11, [sp, #40]");                                  // save the current row pointer
+    emitter.instruction("ldr x12, [x11, #16]");                                 // load the property byte offset
+    emitter.instruction("ldr x13, [x11, #24]");                                 // load the property runtime tag
+    emitter.instruction("ldr x14, [sp, #8]");                                   // reload the concrete object pointer
+    emitter.instruction("add x14, x14, x12");                                   // address the concrete property slot
+    emitter.instruction("ldr x1, [x14]");                                       // load the property low payload word
+    emitter.instruction("ldr x2, [x14, #8]");                                   // load the property high payload word
+    emitter.instruction("cmp x13, #7");                                         // is the slot already a boxed Mixed value?
+    emitter.instruction("b.eq __rt_date_magic_append_props_mixed");             // retain the existing cell instead of nesting it
+    emitter.instruction("mov x0, x13");                                         // pass the concrete runtime tag
+    emitter.instruction("bl __rt_mixed_from_value");                            // box and retain the property value for the hash
+    emitter.instruction("b __rt_date_magic_append_props_boxed");                // continue with the owned Mixed cell
+    emitter.label("__rt_date_magic_append_props_mixed");
+    emitter.instruction("mov x0, x1");                                          // move the existing Mixed cell into the retain ABI
+    emitter.instruction("bl __rt_incref");                                      // retain the cell for the serialization hash
+    emitter.label("__rt_date_magic_append_props_boxed");
+    emitter.instruction("str x0, [sp, #48]");                                   // save the owned Mixed cell
+    emitter.instruction("ldr x11, [sp, #40]");                                  // reload the current descriptor row
+    emitter.instruction("ldr x1, [x11]");                                       // key pointer = PHP-mangled property name
+    emitter.instruction("ldr x2, [x11, #8]");                                   // key length
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the possibly grown hash
+    emitter.instruction("ldr x3, [sp, #48]");                                   // value low word = owned Mixed cell
+    emitter.instruction("mov x4, #0");                                          // value high word is unused
+    emitter.instruction("mov x5, #7");                                          // hash value tag = boxed Mixed
+    emitter.instruction("bl __rt_hash_set");                                    // insert or replace the custom property
+    emitter.instruction("str x0, [sp, #0]");                                    // save the possibly grown hash
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the property cursor
+    emitter.instruction("add x9, x9, #1");                                      // advance to the next custom property
+    emitter.instruction("str x9, [sp, #32]");                                   // persist the advanced cursor
+    emitter.instruction("b __rt_date_magic_append_props_loop");                 // continue merging properties
+    emitter.label("__rt_date_magic_append_props_done");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // return the final serialization hash
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate the merge frame
+    emitter.instruction("ret");                                                 // return to the object serializer
 
     // -- __rt_serialize_begin: reset the reference state for a new top-level
     //    serialize() call (value counter and the seen-objects map) --
@@ -967,6 +1048,11 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor esi, esi");                                        // canonical null has no low payload word
     emitter.instruction("xor edx, edx");                                        // canonical null has no high payload word
     emitter.label("__rt_serialize_value_input_ready");
+    emitter.instruction("cmp rdi, 11");                                         // inline TaggedScalar descriptor?
+    emitter.instruction("jne __rt_serialize_value_normalized");                 // ordinary tags already have canonical payload words
+    emitter.instruction("mov rdi, rdx");                                        // use the slot's per-value int/null runtime tag
+    emitter.instruction("xor edx, edx");                                        // tagged scalar payloads have no third word
+    emitter.label("__rt_serialize_value_normalized");
 
     // -- set up stack frame --
     // [rbp-8]=output start, [rbp-16]=write pos, [rbp-24]=tag, [rbp-32]=lo, [rbp-40]=hi
@@ -1464,7 +1550,10 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emit_symbol_address(emitter, "r10", "_concat_off");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the saved post-prefix offset
     emitter.instruction("mov QWORD PTR [r10], rax");                            // rewind, discarding any concat scratch the method left
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // reload the returned array pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the returned array pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the concrete object receiver
+    emitter.instruction("call __rt_date_magic_append_props");                   // merge user-declared date-subclass properties
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the possibly grown returned hash
     emitter.instruction("mov rcx, QWORD PTR [rax - 8]");                        // load its heap kind word
     emitter.instruction("and rcx, 0xff");                                       // isolate the heap kind (2=indexed, 3=hash)
     emitter.instruction("cmp rcx, 3");                                          // is the returned array a hash?
@@ -1547,6 +1636,18 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return with the object appended
 
     emitter.label("__rt_serialize_object_default");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                      // reload the concrete class id
+    emit_symbol_address(emitter, "r10", "_stdclass_class_id");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                           // load stdClass's generated class id
+    emitter.instruction("cmp rax, r10");                                       // does this object store every property in its dynamic hash?
+    emitter.instruction("jne __rt_serialize_object_default_declared");         // ordinary classes use the fixed property-info table
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                       // reload the stdClass object pointer
+    emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                       // stdClass layout stores its property hash after the class id
+    emitter.instruction("call __rt_serialize_hash_body");                      // append the dynamic property count and key/value body
+    emitter.instruction("add rsp, 64");                                        // deallocate the object frame
+    emitter.instruction("pop rbp");                                            // restore the caller frame pointer
+    emitter.instruction("ret");                                                // return with the stdClass body appended
+    emitter.label("__rt_serialize_object_default_declared");
     emit_symbol_address(emitter, "r10", "_class_serprop_ptrs");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // class id
     emitter.instruction("shl rcx, 3");                                          // class_id * 8 (pointer stride)
@@ -1683,6 +1784,67 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 64");                                         // deallocate the named-property frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return with the named property appended
+
+    // -- __rt_date_magic_append_props(rdi=hash, rsi=obj): merge user properties
+    //    declared by a DateTime-family subclass into the internal magic array. --
+    emitter.blank();
+    emitter.comment("--- runtime: date_magic_append_props ---");
+    emitter.label_global("__rt_date_magic_append_props");
+    emitter.instruction("push rbp");                                            // save the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the merge frame
+    emitter.instruction("sub rsp, 80");                                         // reserve merge state slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the magic serialization hash
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the concrete object pointer
+    emitter.instruction("mov rax, QWORD PTR [rsi]");                            // load the concrete runtime class id
+    emit_symbol_address(emitter, "r10", "_class_date_serialize_prop_ptrs");
+    emitter.instruction("mov r10, QWORD PTR [r10 + rax*8]");                    // filtered user-property descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the descriptor pointer
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the custom property count
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");                       // save the custom property count
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // property cursor = 0
+    emitter.label("__rt_date_magic_append_props_loop");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the property cursor
+    emitter.instruction("cmp rax, QWORD PTR [rbp - 32]");                       // merged every custom property?
+    emitter.instruction("jge __rt_date_magic_append_props_done");               // return the final hash when complete
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the descriptor base
+    emitter.instruction("shl rax, 5");                                          // convert the cursor to a 32-byte row offset
+    emitter.instruction("add r10, rax");                                        // advance to the current descriptor row
+    emitter.instruction("add r10, 8");                                          // skip the descriptor count word
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the current row pointer
+    emitter.instruction("mov r8, QWORD PTR [r10 + 16]");                        // load the property byte offset
+    emitter.instruction("mov r9, QWORD PTR [r10 + 24]");                        // load the property runtime tag
+    emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // reload the concrete object pointer
+    emitter.instruction("add r11, r8");                                         // address the concrete property slot
+    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the property low payload word
+    emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // load the property high payload word
+    emitter.instruction("cmp r9, 7");                                           // is the slot already a boxed Mixed value?
+    emitter.instruction("je __rt_date_magic_append_props_mixed");               // retain the existing cell instead of nesting it
+    emitter.instruction("mov rax, r9");                                         // pass the concrete runtime tag
+    emitter.instruction("call __rt_mixed_from_value");                          // box and retain the property value for the hash
+    emitter.instruction("jmp __rt_date_magic_append_props_boxed");              // continue with the owned Mixed cell
+    emitter.label("__rt_date_magic_append_props_mixed");
+    emitter.instruction("mov rax, rdi");                                        // move the existing Mixed cell into the retain ABI
+    emitter.instruction("call __rt_incref");                                    // retain the cell for the serialization hash
+    emitter.label("__rt_date_magic_append_props_boxed");
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the owned Mixed cell
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the current descriptor row
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // key pointer = PHP-mangled property name
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // key length
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the possibly grown hash
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // value low word = owned Mixed cell
+    emitter.instruction("xor r8, r8");                                          // value high word is unused
+    emitter.instruction("mov r9, 7");                                           // hash value tag = boxed Mixed
+    emitter.instruction("call __rt_hash_set");                                  // insert or replace the custom property
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the possibly grown hash
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the property cursor
+    emitter.instruction("add rax, 1");                                          // advance to the next custom property
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // persist the advanced cursor
+    emitter.instruction("jmp __rt_date_magic_append_props_loop");               // continue merging properties
+    emitter.label("__rt_date_magic_append_props_done");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the final serialization hash
+    emitter.instruction("add rsp, 80");                                         // deallocate the merge frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the object serializer
 
     // -- __rt_serialize_begin: reset the reference state for a new top-level
     //    serialize() call (value counter and the seen-objects map) --

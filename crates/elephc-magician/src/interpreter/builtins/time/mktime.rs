@@ -35,16 +35,62 @@ pub(in crate::interpreter) fn eval_builtin_mktime_like(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [hour, minute, second, month, day, year] = args else {
+    if !(1..=6).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
+    }
+    let evaluated = args
+        .iter()
+        .map(|arg| eval_expr(arg, context, scope, values))
+        .collect::<Result<Vec<_>, _>>()?;
+    eval_mktime_result_with_defaults(name, &evaluated, context, values)
+}
+
+/// Fills omitted or null optionals with the current local/UTC date part.
+pub(in crate::interpreter) fn eval_mktime_result_with_defaults(
+    name: &str,
+    args: &[RuntimeCellHandle],
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if !(1..=6).contains(&args.len()) {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let date_name = if name == "gmmktime" { "gmdate" } else { "date" };
+    let mut full = Vec::with_capacity(6);
+    let mut temps = Vec::new();
+    for (index, spec) in ["G", "i", "s", "n", "j", "Y"].into_iter().enumerate() {
+        if let Some(arg) = args.get(index) {
+            if !values.is_null(*arg)? {
+                full.push(*arg);
+                continue;
+            }
+        }
+        match eval_current_date_part_int(date_name, spec, context, values) {
+            Ok(default) => {
+                temps.push(default);
+                full.push(default);
+            }
+            Err(status) => {
+                for temp in temps {
+                    values.release(temp)?;
+                }
+                return Err(status);
+            }
+        }
+    }
+    let result = if name == "gmmktime" {
+        eval_gmmktime_result(
+            full[0], full[1], full[2], full[3], full[4], full[5], context, values,
+        )
+    } else {
+        eval_mktime_result(
+            name, full[0], full[1], full[2], full[3], full[4], full[5], context, values,
+        )
     };
-    let hour = eval_expr(hour, context, scope, values)?;
-    let minute = eval_expr(minute, context, scope, values)?;
-    let second = eval_expr(second, context, scope, values)?;
-    let month = eval_expr(month, context, scope, values)?;
-    let day = eval_expr(day, context, scope, values)?;
-    let year = eval_expr(year, context, scope, values)?;
-    eval_mktime_result(name, hour, minute, second, month, day, year, context, values)
+    for temp in temps {
+        values.release(temp)?;
+    }
+    result
 }
 
 /// Converts PHP date components to a local Unix timestamp through libc `mktime`.

@@ -508,6 +508,28 @@ impl<'a> FunctionContext<'a> {
         Ok(ty)
     }
 
+    /// Copies a register-allocated scalar into its reserved frame slot before hidden calls.
+    ///
+    /// Some compound EIR operations expand to several runtime calls in one backend lowering.
+    /// Register allocation cannot see those hidden clobber points, so their later operands must
+    /// be snapshotted without first moving through a caller-saved result register.
+    pub(super) fn spill_allocated_value_to_frame(&mut self, value: ValueId) -> Result<()> {
+        let Some(reg) = self.allocation.register_of(value) else {
+            return Ok(());
+        };
+        let offset = self.value_offset(value)?;
+        abi::store_at_offset(self.emitter, reg, offset);
+        Ok(())
+    }
+
+    /// Loads an SSA value from its reserved frame slot, ignoring a register allocation.
+    pub(super) fn load_value_from_frame(&mut self, value: ValueId) -> Result<PhpType> {
+        let ty = self.value_php_type(value)?;
+        let offset = self.value_offset(value)?;
+        abi::emit_load(self.emitter, &ty.codegen_repr(), offset);
+        Ok(ty)
+    }
+
     /// Loads a single-register SSA value into a caller-selected register.
     ///
     /// When the value lives in an allocated register, it is moved register to

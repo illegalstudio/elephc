@@ -9,57 +9,12 @@
 
 use super::*;
 
-/// PHP source backing the `DateTime`/`DateTimeImmutable` constructor. With no timezone, parses the
-/// string in the active default zone and records that as the display zone. With a `$timezone`, the
-/// wall-clock string is interpreted in that zone (the default is temporarily switched so
-/// `strtotime()` resolves the local time there — an explicit zone inside the string still wins),
-/// and the zone becomes the display zone. `"now"` is the current instant regardless of zone.
-#[cfg(test)]
-pub(super) const CONSTRUCT_SRC: &str = r#"<?php
-// Capture a trailing fractional second (HH:MM:SS.ffffff) into the microsecond
-// component and strip it before strtotime() (which does not accept it). The
-// parsing lives in static helpers so the constructor body stays small (adding
-// locals + a loop here corrupts the frame when a caller also formats the result).
-$this->microsecond = DateTime::__elephc_extract_micros($datetime);
-$datetime = DateTime::__elephc_strip_micros($datetime);
-if ($timezone === null) {
-    if ($datetime === "now") {
-        $this->timestamp = time();
-    } else {
-        $__ts = strtotime($datetime);
-        if ($__ts === false) {
-            throw new DateMalformedStringException("Failed to parse time string (" . $datetime . ")");
-        }
-        $this->timestamp = $__ts;
-    }
-    $this->timezone_name = date_default_timezone_get();
-} else {
-    $tzname = $timezone->getName();
-    if ($datetime === "now") {
-        $this->timestamp = time();
-    } else {
-        $saved = date_default_timezone_get();
-        date_default_timezone_set($tzname);
-        $__ts = strtotime($datetime);
-        if ($__ts === false) {
-            date_default_timezone_set($saved);
-            throw new DateMalformedStringException("Failed to parse time string (" . $datetime . ")");
-        }
-        $this->timestamp = $__ts;
-        date_default_timezone_set($saved);
-    }
-    $this->timezone_name = $tzname;
-}
-"#;
-
 /// `DateTime`/`DateTimeImmutable::__construct(string $datetime = "now", ?DateTimeZone $timezone = null)`
 /// — stores a UNIX timestamp and the object's display zone.
 ///
-/// The body is the parsed `CONSTRUCT_SRC`. `$timezone` is typed `?DateTimeZone` (defaulting to
-/// `null`); the `=== null` discriminator selects the form and `$timezone->getName()` reads the
-/// zone on the non-null arm. A later `setTimezone()` still overrides the zone. (A `mixed` default
-/// of `null` here miscompiled when the constructor was called more than once per frame, so the
-/// nullable-object typing is used instead — it also matches PHP's signature.)
+/// The direct body mirrors the canonical test oracle in
+/// `super::compliance_core::CONSTRUCT_SRC`. `$timezone` is typed `?DateTimeZone` (defaulting to
+/// `null`), matching PHP's signature.
 pub(super) fn datetime_immutable_constructor() -> ClassMethod {
     let body = super::bodies::construct();
     method(

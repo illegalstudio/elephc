@@ -67,16 +67,21 @@ pub(super) fn lower_runtime_dynamic_declared_prop_get(
         ctx.emitter.label(label);
         let base_reg = abi::symbol_scratch_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
-        if slot.is_declared {
-            emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+        if let Some(target) = property_hook_get_target(ctx, &slot.class_name, &slot.property)? {
+            emit_property_hook_get_result(ctx, inst, object, base_reg, slot, &target)?;
+        } else {
+            if slot.is_declared {
+                emit_uninitialized_typed_property_guard(ctx, slot, base_reg);
+            }
+            emit_property_load(ctx, slot, base_reg)?;
+            materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
         }
-        emit_property_load(ctx, slot, base_reg)?;
-        materialize_loaded_property_result(ctx, inst, &slot.php_type)?;
         abi::emit_release_temporary_stack(ctx.emitter, 32);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
     ctx.emitter.label(&miss_label);
+    emit_dynamic_undefined_property_warning(ctx, inst, &class_name, property_value)?;
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     emit_dynamic_property_miss_result(ctx, inst);
     ctx.emitter.label(&done_label);

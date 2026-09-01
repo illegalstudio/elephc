@@ -1255,6 +1255,29 @@ echo is_subclass_of($d, "Animal") ? "y" : "n";
     assert_eq!(out, "yynny");
 }
 
+/// Verifies class-string relation checks honor `allow_string`, parents, interfaces, and self.
+#[test]
+fn test_is_a_class_string_relations() {
+    let out = compile_and_run(
+        r#"<?php
+interface Pettable {}
+class Animal {}
+class Dog extends Animal implements Pettable {}
+echo is_a("Dog", "Animal", true) ? "y" : "n";
+echo is_a("Dog", "Animal", false) ? "y" : "n";
+echo is_a("Dog", "Dog", true) ? "y" : "n";
+echo is_subclass_of("Dog", "Animal") ? "y" : "n";
+echo is_subclass_of("Dog", "Dog") ? "y" : "n";
+echo is_a("Dog", "Pettable", true) ? "p" : "n";
+$allow = $argc > 0;
+$deny = $argc < 0;
+echo is_a("Dog", "Animal", $allow) ? "y" : "n";
+echo is_a("Dog", "Animal", $deny) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "ynyynpyn");
+}
+
 /// Verifies is a target string is case insensitive.
 #[test]
 fn test_is_a_target_string_is_case_insensitive() {

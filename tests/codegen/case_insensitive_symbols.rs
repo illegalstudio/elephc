@@ -68,6 +68,26 @@ ECHO $g instanceof named ? ":iface" : ":no-iface";
     assert_eq!(out, "P:ok:class:iface");
 }
 
+/// Tests that synthetic ext/date classes and their exception hierarchy are canonicalized
+/// case-insensitively before builtin declarations are injected by the type checker.
+#[test]
+fn test_case_insensitive_builtin_datetime_class_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+$zone = new DateTimezone("UTC");
+$date = new DATETIMEIMMUTABLE("2024-01-02", $zone);
+$restored = dateinterval::__set_state(["date_string" => "2 days"]);
+echo $date->format("Y-m-d"), "|", $zone->getName(), "|", $restored->format("%d"), "|";
+try {
+    throw new datemalformedstringexception("bad");
+} catch (DATEEXCEPTION $exception) {
+    echo $exception->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "2024-01-02|UTC|2|bad");
+}
+
 /// Tests that variables, object properties, array string keys, and user-defined constants
 /// are all case-sensitive. `$Name` and `$name` must be distinct variables, `$box->Code`
 /// and `$box->code` must refer to different properties, `["Key"]` and `["key"]` must be

@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// Verifies PHP close/reopen tags echo inline HTML and terminate the preceding statement.
+#[test]
+fn test_close_tag_inline_html_and_short_echo_reopen() {
+    let out = compile_and_run(r#"<?php echo "a" ?>===DONE===<?php echo "b" ?>:<?= "c" ?>"#);
+    assert_eq!(out, "a===DONE===b:c");
+}
+
 /// Verifies that if (true) executes the branch.
 #[test]
 fn test_if_true() {
@@ -247,6 +254,15 @@ if ($x) {
 fn test_while_null_no_loop() {
     let out = compile_and_run("<?php $x = null; while ($x) { echo \"bad\"; } echo \"ok\";");
     assert_eq!(out, "ok");
+}
+
+/// Verifies PHP empty statements work at top level, in blocks, and as a braceless loop body.
+#[test]
+fn test_empty_statements_and_empty_loop_body() {
+    let out = compile_and_run(
+        "<?php ;; $i = 0; while ($i++ < 2); { ; echo $i; ;; }",
+    );
+    assert_eq!(out, "3");
 }
 
 // --- Ternary operator ---

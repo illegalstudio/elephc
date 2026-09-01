@@ -48,13 +48,19 @@ mod storage;
 /// cannot, whether or not it goes on to reference the builtin — gating the check behind the
 /// reference scan let that program compile silently, shadowing a builtin, which is exactly the
 /// quiet failure this gate is supposed to be free of. `error_tests::spl_builtins` caught it.
+/// `register_internal_iterator` closes the narrower hidden dependency introduced by DatePeriod
+/// without paying to register and flatten the rest of the SPL class family.
 pub(crate) fn inject_builtin_spl_classes(
     interface_map: &mut HashMap<String, InterfaceDeclInfo>,
     class_map: &mut HashMap<String, FlattenedClass>,
     register: bool,
+    register_internal_iterator: bool,
 ) -> Result<(), CompileError> {
     registry::ensure_no_redeclarations(interface_map, class_map)?;
     if !register {
+        if register_internal_iterator {
+            containers::insert_internal_iterator(class_map);
+        }
         return Ok(());
     }
 
@@ -75,6 +81,23 @@ pub(crate) fn inject_builtin_spl_classes(
     phar::insert_classes(class_map);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DateTime pay-for-use registers only DatePeriod's hidden iterator, not all SPL classes.
+    #[test]
+    fn date_dependency_injects_only_internal_iterator() {
+        let mut interfaces = HashMap::new();
+        let mut classes = HashMap::new();
+        inject_builtin_spl_classes(&mut interfaces, &mut classes, false, true)
+            .expect("selective InternalIterator injection must succeed");
+        assert_eq!(classes.len(), 1);
+        assert!(classes.contains_key("InternalIterator"));
+        assert!(!classes.contains_key("SplFixedArray"));
+    }
 }
 
 /// Patches builtin SPL storage signatures in the compiler metadata registry.

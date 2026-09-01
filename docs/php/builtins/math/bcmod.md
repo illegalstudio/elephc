@@ -2,7 +2,7 @@
 title: "bcmod()"
 description: "Returns the remainder of arbitrary-precision decimal division."
 sidebar:
-  order: 273
+  order: 274
 ---
 
 ## bcmod()

@@ -197,6 +197,29 @@ pub(super) fn resolve_stmt_exprs(
             property,
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => StmtKind::DynamicPropertyArrayPush {
+            object: Box::new(resolve_expr(
+                *object,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?),
+            property: Box::new(resolve_expr(
+                *property,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?),
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
         StmtKind::PropertyArrayAssign {
             object,
             property,

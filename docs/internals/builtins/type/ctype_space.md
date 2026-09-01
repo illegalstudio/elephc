@@ -2,7 +2,7 @@
 title: "ctype_space() — internals"
 description: "Compiler internals for ctype_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 492
+  order: 499
 ---
 
 ## `ctype_space()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ctype_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_space.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

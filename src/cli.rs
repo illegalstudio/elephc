@@ -1118,7 +1118,7 @@ mod tests {
         assert_eq!(parse_php_version("8.2").version_id(), 80200);
         assert_eq!(parse_php_version("8.3").version_id(), 80300);
         assert_eq!(parse_php_version("8.4").version_id(), 80400);
-        assert_eq!(parse_php_version("8.5").version_id(), 80500);
+        assert_eq!(parse_php_version("8.5").version_id(), 80510);
         assert_eq!(parse_php_version("8.6").version_id(), 80600);
     }
 

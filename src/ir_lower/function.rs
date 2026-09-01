@@ -20,8 +20,8 @@ use crate::ir_lower::context::{
 use crate::ir_lower::effects_lookup;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    AttributeGroup, BinOp, CastType, ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind,
-    TypeExpr,
+    AttributeGroup, BinOp, CastType, ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt,
+    StmtKind, TypeExpr,
 };
 use crate::names::Name;
 use crate::span::Span;
@@ -1876,6 +1876,46 @@ fn direct_closure_return_expr_type(
                     }
                 }
             }
+        }
+    }
+    if let ExprKind::MethodCall { object, method, .. } = &expr.kind {
+        let receiver_name = match &object.kind {
+            ExprKind::Variable(name) => Some(name.as_str()),
+            ExprKind::This => Some("this"),
+            _ => None,
+        };
+        if let Some(receiver_name) = receiver_name {
+            let receiver_ty = captures
+                .iter()
+                .find(|(capture_name, _, _)| capture_name == receiver_name)
+                .map(|(_, ty, _)| ty)
+                .or_else(|| {
+                    params
+                        .iter()
+                        .find(|(param_name, _)| param_name == receiver_name)
+                        .map(|(_, ty)| ty)
+                });
+            if let Some(PhpType::Object(class)) = receiver_ty {
+                if let Some(signature) = classes
+                    .get(class.trim_start_matches('\\'))
+                    .and_then(|info| method_signature(info, method, false))
+                {
+                    return signature.return_type.clone();
+                }
+            }
+        }
+    }
+    if let ExprKind::StaticMethodCall {
+        receiver: StaticReceiver::Named(class),
+        method,
+        ..
+    } = &expr.kind
+    {
+        if let Some(signature) = classes
+            .get(class.as_str().trim_start_matches('\\'))
+            .and_then(|info| method_signature(info, method, true))
+        {
+            return signature.return_type.clone();
         }
     }
     crate::types::checker::infer_expr_type_syntactic(expr)

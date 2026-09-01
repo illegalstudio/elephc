@@ -20,6 +20,8 @@ use super::context::FunctionContext;
 use super::frame;
 use super::{CodegenIrError, Result};
 
+const PHP_FATAL_EXIT_STATUS: u32 = 255;
+
 /// Lowers one EIR terminator.
 pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator) -> Result<()> {
     match term {
@@ -88,8 +90,18 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             let else_label = ctx.block_label_for_id(*else_target)?;
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
-            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
-            abi::emit_jump(ctx.emitter, &else_edge);
+            if ctx.emitter.target.arch == Arch::AArch64 {
+                // AArch64 conditional branches only reach +/-1 MiB. Keep the conditional jump
+                // local, then use the wider unconditional branch for either EIR successor.
+                let then_veneer = ctx.next_label("cond_then_veneer");
+                abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_veneer);
+                abi::emit_jump(ctx.emitter, &else_edge);
+                ctx.emitter.label(&then_veneer);
+                abi::emit_jump(ctx.emitter, &then_edge);
+            } else {
+                abi::emit_branch_if_int_result_nonzero(ctx.emitter, &then_edge);
+                abi::emit_jump(ctx.emitter, &else_edge);
+            }
             emit_edge_args(ctx, &then_edge, *then_target, then_args, "cond_br then")?;
             emit_edge_args(ctx, &else_edge, *else_target, else_args, "cond_br else")?;
             Ok(())
@@ -117,9 +129,72 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
             ty
         )));
     }
+    emit_chain_pending_exception(ctx);
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);
     abi::emit_call_label(ctx.emitter, "__rt_throw_current");
     Ok(())
+}
+
+/// Transfers an already-pending Throwable into the new exception's `previous` chain.
+fn emit_chain_pending_exception(ctx: &mut FunctionContext<'_>) {
+    let scan = ctx.next_label("throw_previous_scan");
+    let append = ctx.next_label("throw_previous_append");
+    let duplicate = ctx.next_label("throw_previous_duplicate");
+    let done = ctx.next_label("throw_previous_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_exc_value", 0);
+            ctx.emitter.instruction(&format!("cbz x9, {done}"));                // no pending exception means there is no implicit previous value
+            ctx.emitter.instruction("cmp x9, x0");                             // rethrowing the same object must not point it at itself
+            ctx.emitter.instruction(&format!("b.eq {done}"));                  // keep the existing in-flight ownership on a direct rethrow
+            ctx.emitter.instruction("mov x10, x0");                            // scan from the new Throwable through explicit previous values
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("ldr x11, [x10, #40]");                    // compact Throwable previous pointer
+            ctx.emitter.instruction(&format!("cbz x11, {append}"));            // append at the first empty previous slot
+            ctx.emitter.instruction("cmp x11, x9");                            // was the pending Throwable already supplied explicitly?
+            ctx.emitter.instruction(&format!("b.eq {duplicate}"));             // release only the duplicate in-flight ownership
+            ctx.emitter.instruction("mov x10, x11");                           // continue along the explicit previous chain
+            ctx.emitter.instruction(&format!("b {scan}"));
+            ctx.emitter.label(&append);
+            ctx.emitter.instruction("str x9, [x10, #40]");                    // transfer the runtime exception-slot reference into the chain
+            ctx.emitter.instruction(&format!("b {done}"));
+            ctx.emitter.label(&duplicate);
+            ctx.emitter.instruction("sub sp, sp, #16");                        // preserve the new Throwable while dropping the duplicate slot reference
+            ctx.emitter.instruction("str x0, [sp]");
+            ctx.emitter.instruction("mov x0, x9");
+            abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+            ctx.emitter.instruction("ldr x0, [sp]");
+            ctx.emitter.instruction("add sp, sp, #16");
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_exc_value", 0);
+            ctx.emitter.instruction("test r9, r9");                             // no pending exception means there is no implicit previous value
+            ctx.emitter.instruction(&format!("jz {done}"));
+            ctx.emitter.instruction("cmp r9, rax");                            // rethrowing the same object must not point it at itself
+            ctx.emitter.instruction(&format!("je {done}"));                    // keep the existing in-flight ownership on a direct rethrow
+            ctx.emitter.instruction("mov r10, rax");                           // scan from the new Throwable through explicit previous values
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10 + 40]");          // compact Throwable previous pointer
+            ctx.emitter.instruction("test r11, r11");
+            ctx.emitter.instruction(&format!("jz {append}"));                  // append at the first empty previous slot
+            ctx.emitter.instruction("cmp r11, r9");                            // was the pending Throwable already supplied explicitly?
+            ctx.emitter.instruction(&format!("je {duplicate}"));               // release only the duplicate in-flight ownership
+            ctx.emitter.instruction("mov r10, r11");                           // continue along the explicit previous chain
+            ctx.emitter.instruction(&format!("jmp {scan}"));
+            ctx.emitter.label(&append);
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 40], r9");           // transfer the runtime exception-slot reference into the chain
+            ctx.emitter.instruction(&format!("jmp {done}"));
+            ctx.emitter.label(&duplicate);
+            ctx.emitter.instruction("sub rsp, 16");                            // preserve the new Throwable while dropping the duplicate slot reference
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");
+            ctx.emitter.instruction("mov rax, r9");
+            abi::emit_call_label(ctx.emitter, "__rt_decref_object");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");
+            ctx.emitter.instruction("add rsp, 16");
+            ctx.emitter.label(&done);
+        }
+    }
 }
 
 /// Lowers an unconditional branch and copies any target block parameters.
@@ -147,7 +222,7 @@ fn lower_unreachable(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Lowers an unrecoverable fatal diagnostic and process exit.
+/// Lowers an unrecoverable fatal diagnostic and php-src-compatible process exit.
 fn lower_fatal(ctx: &mut FunctionContext<'_>, message: DataId) -> Result<()> {
     let (message_label, message_len) = ctx.intern_string_data(message)?;
     ctx.emitter.blank();
@@ -168,7 +243,7 @@ fn lower_fatal(ctx: &mut FunctionContext<'_>, message: DataId) -> Result<()> {
             ctx.emitter.instruction("syscall");                                 // emit the EIR fatal diagnostic before exiting
         }
     }
-    abi::emit_exit(ctx.emitter, 1);
+    abi::emit_exit(ctx.emitter, PHP_FATAL_EXIT_STATUS);
     Ok(())
 }
 
@@ -194,10 +269,11 @@ fn lower_switch(
         abi::emit_load_int_immediate(ctx.emitter, case_reg, case.value);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(
-                    &format!("cmp {}, {}", result_reg, case_reg)
-                );                                                              // compare switch scrutinee with the case value
-                ctx.emitter.instruction(&format!("b.eq {}", branch_label));     // branch to the matching switch case
+                let next_case = ctx.next_label("switch_case_next");
+                ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, case_reg)); // compare switch scrutinee with the case value
+                ctx.emitter.instruction(&format!("b.ne {}", next_case));       // keep the conditional branch within its short architectural range
+                abi::emit_jump(ctx.emitter, &branch_label);
+                ctx.emitter.label(&next_case);
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction(
@@ -417,6 +493,24 @@ mod tests {
     /// and the default fallthrough branching to the labels that were actually emitted.
     ///
     /// Structural for the same reason as `cond_br_arguments_emit_edge_copy_stubs()`.
+
+    /// Verifies AArch64 conditional branches target a nearby veneer before long EIR edges.
+    #[test]
+    fn aarch64_cond_br_uses_local_long_range_veneer() {
+        let asm = generate_cond_branch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));
+
+        let veneer = find_numbered_label(&asm, "_eir_main_cond_then_veneer");
+        let then_edge = find_numbered_label(&asm, "_eir_main_cond_then_args");
+        assert!(
+            asm.contains(&format!("cbz x0, 1f\n    b {veneer}\n1:")),
+            "{asm}"
+        );
+        assert!(
+            asm.contains(&format!("{veneer}:\n    b {then_edge}")),
+            "{asm}"
+        );
+    }
+
     #[test]
     fn switch_arguments_emit_edge_copy_stubs() {
         let asm = generate_switch_arg_main_asm(Target::new(Platform::Linux, Arch::AArch64));

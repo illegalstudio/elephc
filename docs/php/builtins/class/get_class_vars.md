@@ -2,7 +2,7 @@
 title: "get_class_vars()"
 description: "Returns visible default properties for a class."
 sidebar:
-  order: 86
+  order: 87
 ---
 
 ## get_class_vars()

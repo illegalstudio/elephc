@@ -2,7 +2,7 @@
 title: "realpath_cache_get()"
 description: "Returns realpath cache entries."
 sidebar:
-  order: 153
+  order: 154
 ---
 
 ## realpath_cache_get()

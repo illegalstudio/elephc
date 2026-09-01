@@ -2,7 +2,7 @@
 title: "buffer_free() — internals"
 description: "Compiler internals for buffer_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 71
+  order: 72
 ---
 
 ## `buffer_free()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/buffer_free.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/buffer_free.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

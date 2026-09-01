@@ -108,31 +108,40 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
         },
     );
 
-    class_map.insert(
-        "InternalIterator".to_string(),
-        FlattenedClass {
-            name: "InternalIterator".to_string(),
-            span: crate::span::Span::dummy(),
-            extends: None,
-            implements: vec!["Iterator".to_string()],
-            is_abstract: false,
-            is_final: true,
-            is_readonly_class: false,
-            properties: internal_iterator_properties(),
-            methods: spl_internal_iterator_methods(),
-            attributes: Vec::new(),
-            constants: Vec::new(),
-            used_traits: Vec::new(),
-            trait_aliases: Vec::new(),
-        },
-    );
+    insert_internal_iterator(class_map);
+}
+
+/// Inserts only the compiler-owned iterator used by DatePeriod and aggregate SPL classes.
+pub(super) fn insert_internal_iterator(class_map: &mut HashMap<String, FlattenedClass>) {
+    class_map.entry("InternalIterator".to_string()).or_insert_with(|| FlattenedClass {
+        name: "InternalIterator".to_string(),
+        span: crate::span::Span::dummy(),
+        extends: None,
+        implements: vec!["Iterator".to_string()],
+        is_abstract: false,
+        is_final: true,
+        is_readonly_class: false,
+        properties: internal_iterator_properties(),
+        methods: spl_internal_iterator_methods(),
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    });
 }
 
 /// Builds the method list for SPL internal iterator.
 fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
     let mut construct = method_with_body(
         "__construct",
-        vec![param("owner", named_type("SplFixedArray"))],
+        vec![
+            param("owner", mixed_type()),
+            param_default(
+                "onCurrent",
+                TypeExpr::Nullable(Box::new(named_type("Closure"))),
+                null_expr(),
+            ),
+        ],
         Some(TypeExpr::Void),
         internal_iterator_construct_body(),
     );
@@ -151,8 +160,13 @@ fn spl_internal_iterator_methods() -> Vec<ClassMethod> {
 /// Builds the property list for internal iterator.
 fn internal_iterator_properties() -> Vec<ClassProperty> {
     vec![
-        storage_property("owner", named_type("SplFixedArray")),
+        storage_property("owner", mixed_type()),
         storage_property("position", TypeExpr::Int),
+        storage_property_default(
+            "onCurrent",
+            TypeExpr::Nullable(Box::new(named_type("Closure"))),
+            null_expr(),
+        ),
     ]
 }
 
@@ -323,30 +337,99 @@ fn internal_iterator_construct_body() -> Vec<Stmt> {
     vec![
         property_assign_stmt(this_expr(), "owner", var_expr("owner")),
         property_assign_stmt(this_expr(), "position", int_expr(0)),
+        property_assign_stmt(this_expr(), "onCurrent", var_expr("onCurrent")),
     ]
 }
 
 /// Builds the synthetic method body for internal iterator current.
 fn internal_iterator_current_body() -> Vec<Stmt> {
-    return_body(method_call(
-        internal_iterator_owner_expr(),
-        "offsetGet",
-        vec![internal_iterator_position_expr()],
-    ))
+    vec![
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "onCurrent"),
+                BinOp::StrictNotEq,
+                null_expr(),
+            ),
+            vec![
+                assign_stmt(
+                    "value",
+                    array_access(
+                        internal_iterator_owner_expr(),
+                        internal_iterator_position_expr(),
+                    ),
+                ),
+                return_stmt(expr(ExprKind::ExprCall {
+                    callee: Box::new(property_access(this_expr(), "onCurrent")),
+                    args: vec![var_expr("value")],
+                })),
+            ],
+            None,
+        ),
+        return_stmt(method_call(
+            internal_iterator_owner_expr(),
+            "offsetGet",
+            vec![internal_iterator_position_expr()],
+        )),
+    ]
 }
 
 /// Builds the synthetic method body for internal iterator next.
 fn internal_iterator_next_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(
-        this_expr(),
-        "position",
-        binary_expr(internal_iterator_position_expr(), BinOp::Add, int_expr(1)),
-    )]
+    vec![
+        property_assign_stmt(
+            this_expr(),
+            "position",
+            binary_expr(
+                internal_iterator_position_expr(),
+                BinOp::Add,
+                int_expr(1),
+            ),
+        ),
+        if_stmt(
+            binary_expr(
+                property_access(this_expr(), "onCurrent"),
+                BinOp::StrictNotEq,
+                null_expr(),
+            ),
+            vec![if_stmt(
+                binary_expr(
+                    internal_iterator_position_expr(),
+                    BinOp::Lt,
+                    count_expr(internal_iterator_owner_expr()),
+                ),
+                vec![expr_stmt(method_call(this_expr(), "current", Vec::new()))],
+                Some(vec![expr_stmt(expr(ExprKind::ExprCall {
+                    callee: Box::new(property_access(this_expr(), "onCurrent")),
+                    args: vec![null_expr()],
+                }))]),
+            )],
+            None,
+        ),
+    ]
 }
 
 /// Builds the synthetic method body for internal iterator rewind.
 fn internal_iterator_rewind_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(this_expr(), "position", int_expr(0))]
+    vec![
+        property_assign_stmt(this_expr(), "position", int_expr(0)),
+        if_stmt(
+            binary_expr(
+                binary_expr(
+                    property_access(this_expr(), "onCurrent"),
+                    BinOp::StrictNotEq,
+                    null_expr(),
+                ),
+                BinOp::And,
+                binary_expr(
+                    count_expr(internal_iterator_owner_expr()),
+                    BinOp::Gt,
+                    int_expr(0),
+                ),
+            ),
+            vec![expr_stmt(method_call(this_expr(), "current", Vec::new()))],
+            None,
+        ),
+    ]
 }
 
 /// Builds the synthetic method body for internal iterator valid.
@@ -354,13 +437,16 @@ fn internal_iterator_valid_body() -> Vec<Stmt> {
     return_body(binary_expr(
         internal_iterator_position_expr(),
         BinOp::Lt,
-        method_call(internal_iterator_owner_expr(), "count", Vec::new()),
+        function_call("count", vec![internal_iterator_owner_expr()]),
     ))
 }
 
 /// Builds the synthetic method body for fixed array get iterator.
 fn fixed_array_get_iterator_body() -> Vec<Stmt> {
-    return_body(new_object_expr("InternalIterator", vec![this_expr()]))
+    return_body(new_object_expr(
+        "InternalIterator",
+        vec![this_expr()],
+    ))
 }
 
 /// Provides the Dll items snapshot prelude helper used by the containers module.

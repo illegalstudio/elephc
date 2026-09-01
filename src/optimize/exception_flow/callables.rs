@@ -12,7 +12,7 @@
 use crate::names::php_symbol_key;
 use crate::optimize::effect_analysis::method_effect_key;
 use crate::parser::ast::{Stmt, StmtKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Lexical class context needed to resolve self/parent/static throw and call forms.
 #[derive(Clone, Debug)]
@@ -35,11 +35,22 @@ pub(super) fn collect_exception_bodies<'a>(
     static_methods: &mut HashMap<String, (&'a [Stmt], String)>,
     instance_methods: &mut HashMap<String, (&'a [Stmt], String)>,
     class_contexts: &mut HashMap<String, ExceptionClassContext>,
+    function_declared_returns: &mut HashSet<String>,
+    static_method_declared_returns: &mut HashSet<String>,
+    instance_method_declared_returns: &mut HashSet<String>,
 ) {
     for stmt in stmts {
         match &stmt.kind {
-            StmtKind::FunctionDecl { name, body, .. } => {
+            StmtKind::FunctionDecl {
+                name,
+                body,
+                return_type,
+                ..
+            } => {
                 functions.insert(name.clone(), body);
+                if return_type.is_some() {
+                    function_declared_returns.insert(php_symbol_key(name));
+                }
             }
             StmtKind::ClassDecl {
                 name,
@@ -55,11 +66,19 @@ pub(super) fn collect_exception_bodies<'a>(
                     },
                 );
                 for method in methods.iter().filter(|method| method.has_body) {
-                    let entry = (&method.body[..], php_symbol_key(name));
+                    let class_key = php_symbol_key(name);
+                    let method_key = method_effect_key(name, &method.name);
+                    let entry = (&method.body[..], class_key);
                     if method.is_static {
-                        static_methods.insert(method_effect_key(name, &method.name), entry);
+                        static_methods.insert(method_key.clone(), entry);
+                        if method.return_type.is_some() {
+                            static_method_declared_returns.insert(method_key);
+                        }
                     } else {
-                        instance_methods.insert(method_effect_key(name, &method.name), entry);
+                        instance_methods.insert(method_key.clone(), entry);
+                        if method.return_type.is_some() {
+                            instance_method_declared_returns.insert(method_key);
+                        }
                     }
                 }
             }
@@ -69,6 +88,9 @@ pub(super) fn collect_exception_bodies<'a>(
                 static_methods,
                 instance_methods,
                 class_contexts,
+                function_declared_returns,
+                static_method_declared_returns,
+                instance_method_declared_returns,
             ),
             _ => {}
         }

@@ -2,7 +2,7 @@
 title: "urldecode()"
 description: "Decodes a URL-encoded string, including '+' as a space."
 sidebar:
-  order: 483
+  order: 490
 ---
 
 ## urldecode()

@@ -2,7 +2,7 @@
 title: "get_class_methods()"
 description: "Returns method names visible on an object or class."
 sidebar:
-  order: 85
+  order: 86
 ---
 
 ## get_class_methods()

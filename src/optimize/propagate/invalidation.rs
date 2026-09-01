@@ -682,6 +682,13 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_invalidation(object).union(expr_invalidation(value))
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => expr_invalidation(object)
+            .union(expr_invalidation(property))
+            .union(expr_invalidation(value)),
         StmtKind::PropertyArrayAssign {
             object,
             index,

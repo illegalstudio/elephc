@@ -44,6 +44,12 @@ pub enum LinkRequirement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
     pub regex: bool,
+    /// Significant digits used by PHP's ordinary float-to-string conversion.
+    pub float_precision: u8,
+    /// Selected PHP minor profile, used by version-sensitive runtime data.
+    pub php_profile: u8,
+    /// True when emitted code can call the timelib-backed date parser.
+    pub timelib: bool,
     /// True when lowered code can call the optional iconv-backed `mb_strlen()` helper.
     pub mb_strlen: bool,
     pub phar_archive: bool,
@@ -129,12 +135,18 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
+            | ((self.float_precision as u64) << 12)
+            | ((self.php_profile as u64) << 20)
+            | ((self.timelib as u64) << 28)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
     pub const fn none() -> Self {
         Self {
             regex: false,
+            float_precision: 14,
+            php_profile: 5,
+            timelib: false,
             mb_strlen: false,
             phar_archive: false,
             descriptor_invoker: false,
@@ -154,6 +166,9 @@ impl RuntimeFeatures {
     pub const fn all() -> Self {
         Self {
             regex: true,
+            float_precision: 14,
+            php_profile: 5,
+            timelib: true,
             mb_strlen: true,
             phar_archive: true,
             descriptor_invoker: true,
@@ -193,6 +208,9 @@ pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<
         requirements.push(LinkRequirement::Bridge("elephc_phar"));
         requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
         requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
+    }
+    if features.timelib {
+        requirements.push(LinkRequirement::Bridge("elephc_tz"));
     }
     if features.descriptor_invoker && !features.eval_bridge {
         // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that reference
@@ -333,6 +351,15 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
         | StmtKind::Include { path: expr, .. } => expr_has_regex_call(expr),
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_has_regex_call(object)
+                || expr_has_regex_call(property)
+                || expr_has_regex_call(value)
+        }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
@@ -656,6 +683,15 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
         | StmtKind::Include { path: expr, .. } => expr_needs_descriptor_invoker(expr),
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            expr_needs_descriptor_invoker(object)
+                || expr_needs_descriptor_invoker(property)
+                || expr_needs_descriptor_invoker(value)
+        }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
@@ -1267,6 +1303,9 @@ mod tests {
     fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures {
             regex: false,
+            float_precision: 14,
+            php_profile: 5,
+            timelib: false,
             mb_strlen: false,
             phar_archive: false,
             descriptor_invoker: true,

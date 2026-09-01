@@ -25,7 +25,7 @@
 //!   "have we crossed an eval yet" flag cannot see an eval BELOW the `unset` it has to veto),
 //!   and because it runs in BOTH modes — the collect above is not gated on `--strict-locals`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::errors::CompileWarning;
 use crate::names::Name;
@@ -108,6 +108,8 @@ struct Facts {
     /// the one shape that lets it reach an enclosing local — a `use (&$x)` capture — already
     /// makes `$x` reference-aliased and therefore neither killable nor re-bindable out here.
     contains_eval: bool,
+    /// Plain local roots mentioned by `unset()` anywhere in this body.
+    unset_names: HashSet<String>,
     /// Every guard region opened while walking this body, indexed by the id stored in
     /// [`AssignSite::guard_region`]. Kept after the region closes: transparency is decided later,
     /// once all of the region's assignments are known.
@@ -162,6 +164,7 @@ impl Checker {
         // retype both consult and which `--strict-locals` does not switch off (the kill is
         // mode-independent). Installed before the early return below for exactly that reason.
         self.body_contains_eval = facts.contains_eval;
+        self.unset_mentioned_locals = facts.unset_names.clone();
 
         // This visit RE-DECIDES every assignment site in this body, so a decision a SUPERSEDED
         // walk recorded for one of them is dropped first. The checker walks a body more than
@@ -898,6 +901,15 @@ fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
             collect_expr(checker, object, depth, facts);
             collect_expr(checker, value, depth, facts);
         }
+        StmtKind::DynamicPropertyArrayPush {
+            object,
+            property,
+            value,
+        } => {
+            collect_expr(checker, object, depth, facts);
+            collect_expr(checker, property, depth, facts);
+            collect_expr(checker, value, depth, facts);
+        }
         StmtKind::PropertyArrayAssign { object, property: _, index, value } => {
             collect_expr(checker, object, depth, facts);
             collect_expr(checker, index, depth, facts);
@@ -1049,6 +1061,9 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 // A name mentioned in ANY `unset` is left to the kill path (or to today's error).
                 for arg in args {
                     disqualify_root(facts, arg);
+                    if let Some(name) = root_local_name(arg) {
+                        facts.unset_names.insert(name.to_string());
+                    }
                 }
             } else if callee_may_bind_arguments_by_ref(checker, name) {
                 disqualify_call_arguments(facts, args);
@@ -1222,6 +1237,25 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
+    }
+}
+
+/// Returns the plain local at the root of an lvalue/reference chain, if any.
+fn root_local_name(expr: &Expr) -> Option<&str> {
+    let mut current = expr;
+    loop {
+        match &current.kind {
+            ExprKind::Variable(name) => return Some(name),
+            ExprKind::ArrayAccess { array: base, .. }
+            | ExprKind::PropertyAccess { object: base, .. }
+            | ExprKind::NullsafePropertyAccess { object: base, .. }
+            | ExprKind::DynamicPropertyAccess { object: base, .. }
+            | ExprKind::NullsafeDynamicPropertyAccess { object: base, .. }
+            | ExprKind::Spread(base)
+            | ExprKind::ErrorSuppress(base)
+            | ExprKind::NamedArg { value: base, .. } => current = base,
+            _ => return None,
+        }
     }
 }
 

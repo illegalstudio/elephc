@@ -27,6 +27,7 @@ use super::constants::resolve_lexical_class_constant_value;
 #[derive(Default)]
 pub(super) struct ClassBuildState {
     pub(super) allow_dynamic_properties: bool,
+    pub(super) dynamic_properties_deprecated: bool,
     pub(super) prop_types: Vec<(String, PhpType)>,
     pub(super) property_offsets: HashMap<String, usize>,
     pub(super) property_declaring_classes: HashMap<String, String>,
@@ -88,6 +89,7 @@ impl ClassBuildState {
             state.inherit_static_methods(parent);
             state.interfaces = parent.interfaces.clone();
             state.allow_dynamic_properties = parent.allow_dynamic_properties;
+            state.dynamic_properties_deprecated = parent.dynamic_properties_deprecated;
         }
         state
     }
@@ -125,6 +127,8 @@ impl ClassBuildState {
                 )
             })
             .collect();
+        let explicitly_allows_dynamic_properties = class_has_allow_dynamic_properties(class);
+        let internal_date_dynamic_properties = class_has_internal_date_dynamic_properties(class);
         Ok(ClassInfo {
             class_id,
             declaration_span: class.span,
@@ -133,7 +137,10 @@ impl ClassBuildState {
             is_final: class.is_final,
             is_readonly_class: class.is_readonly_class,
             allow_dynamic_properties: self.allow_dynamic_properties
-                || class_has_allow_dynamic_properties(class),
+                || explicitly_allows_dynamic_properties
+                || internal_date_dynamic_properties,
+            dynamic_properties_deprecated: !explicitly_allows_dynamic_properties
+                && (self.dynamic_properties_deprecated || internal_date_dynamic_properties),
             constants: class
                 .constants
                 .iter()
@@ -386,8 +393,7 @@ fn scoped_receiver_type_name(
     }
 }
 
-/// Returns `true` if the class declaration carries the PHP 8.2
-/// `#[\AllowDynamicProperties]` marker attribute.
+/// Returns `true` if the declaration carries PHP's `AllowDynamicProperties` attribute.
 pub(super) fn class_has_allow_dynamic_properties(class: &FlattenedClass) -> bool {
     class.attributes.iter().any(|group| {
         group.attributes.iter().any(|attr| {
@@ -397,6 +403,14 @@ pub(super) fn class_has_allow_dynamic_properties(class: &FlattenedClass) -> bool
             )
         })
     })
+}
+
+/// Returns `true` for internal ext/date bases that accept deprecated dynamic properties.
+fn class_has_internal_date_dynamic_properties(class: &FlattenedClass) -> bool {
+    matches!(
+        class.name.trim_start_matches('\\'),
+        "DateTime" | "DateTimeImmutable" | "DateTimeZone" | "DateInterval" | "DatePeriod"
+    )
 }
 
 impl ClassBuildState {

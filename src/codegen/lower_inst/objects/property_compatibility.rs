@@ -60,7 +60,7 @@ pub(super) fn ensure_property_value_supported(
     if can_store_value_as_tagged_scalar_property(value_ty, &slot.php_type) {
         return Ok(());
     }
-    if can_coerce_tagged_scalar_to_int_property(value_ty, &slot.php_type) {
+    if can_coerce_scalar_to_int_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     if can_store_class_default_in_refined_null_property(ctx, value_ty, &slot.php_type) {
@@ -233,9 +233,12 @@ pub(super) fn can_store_value_as_tagged_scalar_property(value_ty: &PhpType, slot
     )
 }
 
-/// Returns true when a nullable inline scalar can be narrowed into int property storage.
-pub(super) fn can_coerce_tagged_scalar_to_int_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
-    value_ty.codegen_repr() == PhpType::TaggedScalar && slot_ty.codegen_repr() == PhpType::Int
+/// Returns true when an inline boolean or nullable tagged scalar can use int property storage.
+pub(super) fn can_coerce_scalar_to_int_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
+    matches!(
+        value_ty.codegen_repr(),
+        PhpType::Bool | PhpType::False | PhpType::TaggedScalar
+    ) && slot_ty.codegen_repr() == PhpType::Int
 }
 
 /// Returns true when a class default initializer writes into an untyped property later refined to null.

@@ -35,6 +35,10 @@ pub(crate) fn lower_ref_assign_property(
         return;
     };
     let object = lower_expr(ctx, object);
+    if let Some(message) = reference_property_assignment_error(ctx, object.value, property) {
+        crate::ir_lower::stmt::lower_throw_access_error(ctx, &message, span);
+        return;
+    }
     let value_type = property_get_result_type(ctx, object.value, property, Op::PropGet, source);
     let data = ctx.intern_string(property);
     let cell_ptr = ctx.emit_value(
@@ -46,6 +50,46 @@ pub(crate) fn lower_ref_assign_property(
         Some(span),
     );
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
+/// Returns the PHP runtime error for a reference assignment to a non-referenceable property.
+fn reference_property_assignment_error(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Option<String> {
+    let object_ty = ctx.builder.value_php_type(object);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    let normalized = class_name.trim_start_matches('\\');
+    let class_info = ctx.classes.get(normalized)?;
+    let declaring_class = class_info
+        .property_declaring_classes
+        .get(property)
+        .map(String::as_str)
+        .unwrap_or(normalized);
+
+    if class_info.readonly_properties.contains(property) {
+        return Some(format!(
+            "Cannot indirectly modify readonly property {}::${}",
+            declaring_class, property
+        ));
+    }
+
+    let getter = php_symbol_key(&property_hook_get_method(property));
+    let getter_is_by_value = class_info
+        .methods
+        .get(&getter)
+        .is_some_and(|signature| !signature.by_ref_return);
+    if php_symbol_key(declaring_class.trim_start_matches('\\')) == "dateperiod"
+        && getter_is_by_value
+    {
+        return Some(format!(
+            "Cannot modify readonly property DatePeriod::${}",
+            property
+        ));
+    }
+
+    None
 }
 
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
@@ -109,6 +153,25 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    if matches!(op, Op::PropGet | Op::NullsafePropGet)
+        && date_interval_property_is_undefined(ctx, object.value, property)
+    {
+        let message_text = format!("\nWarning: Undefined property: DateInterval::${property}");
+        let message_expr = Expr::new(ExprKind::StringLiteral(message_text.clone()), expr.span);
+        let message = lower_string_literal(ctx, &message_text, &message_expr);
+        let line = emit_i64_at_span(ctx, expr.span.line as i64, expr.span);
+        let level = emit_i64_at_span(ctx, 2, expr.span);
+        let _ = emit_builtin_call_value(
+            ctx,
+            "__elephc_diag_warning",
+            vec![message.value, line.value, level.value],
+            PhpType::Void,
+            expr.span,
+            None,
+        );
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return lower_boxed_null(ctx, expr);
+    }
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.
@@ -135,6 +198,23 @@ pub(super) fn lower_property_get_from_value(
         Some(expr.span),
     );
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Returns whether an ext/date interval receiver has no declared property with this name.
+fn date_interval_property_is_undefined(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    property: &str,
+) -> bool {
+    let object_type = ctx.builder.value_php_type(object);
+    let Some((class_name, _)) = singular_object_class(&object_type) else {
+        return false;
+    };
+    class_extends_class(ctx, class_name, "DateInterval")
+        && ctx
+            .classes
+            .get(class_name.trim_start_matches('\\'))
+            .is_some_and(|class_info| class_info.visible_property(property).is_none())
 }
 
 /// Returns true when value metadata proves the runtime value is PHP null.
@@ -561,6 +641,34 @@ pub(super) fn singular_object_class(php_type: &PhpType) -> Option<(&str, bool)> 
     }
 }
 
+/// Returns the sole object class carried by a method receiver type.
+///
+/// Unlike `singular_object_class`, this accepts unions such as `DateTime|false`: the non-object
+/// arm still reaches the backend's Mixed-receiver fatal path, while the object arm supplies the
+/// declared method signature and therefore preserves the successful call's precise return type.
+pub(super) fn method_receiver_object_class(php_type: &PhpType) -> Option<&str> {
+    match php_type {
+        PhpType::Object(name) => Some(name.as_str()),
+        PhpType::Union(members) => {
+            let mut found = None;
+            for member in members {
+                let PhpType::Object(name) = member else {
+                    if matches!(member, PhpType::Mixed) {
+                        return None;
+                    }
+                    continue;
+                };
+                if found.is_some_and(|existing| existing != name.as_str()) {
+                    return None;
+                }
+                found = Some(name.as_str());
+            }
+            found
+        }
+        _ => None,
+    }
+}
+
 /// Returns precise runtime storage types for inherited SPL callback-filter internals.
 pub(super) fn runtime_property_type_override(
     ctx: &LoweringContext<'_, '_>,
@@ -611,14 +719,22 @@ pub(super) fn lower_dynamic_property_get_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
-    let property = lower_expr(ctx, property);
+    let property_value = lower_expr(ctx, property);
+    let property_value = coerce_to_string(ctx, property_value, property);
     let result = ctx.emit_value(
         Op::DynamicPropGet,
-        vec![object.value, property.value],
+        vec![object.value, property_value.value],
         None,
         result_type,
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
+    );
+    release_owned_call_arg_temporaries(
+        ctx,
+        &[property_value.value],
+        Some(result.value),
+        &ReturnArgAlias::None,
+        expr.span,
     );
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
@@ -739,4 +855,3 @@ pub(super) fn static_property_result_type(
     };
     normalize_value_php_type(property_ty.codegen_repr())
 }
-

@@ -429,7 +429,10 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
 
     target_source = read(REPO / "src" / "ir" / "runtime_fn.rs")
     builtin_target_variants = dict(
-        re.findall(r'RuntimeFnId::([A-Za-z0-9_]+)\s*=>\s*"([^"]+)"', target_source)
+        re.findall(
+            r'RuntimeFnId::([A-Za-z0-9_]+)\s*=>\s*(?:\{\s*)?"([^"]+)"',
+            target_source,
+        )
     )
     builtin_variant_by_name = {name: variant for variant, name in builtin_target_variants.items()}
     builtin_backend_source = "\n".join(

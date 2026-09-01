@@ -1411,6 +1411,9 @@ fn runtime_array_instance_method_targets_for_descriptor(
         let mut methods = class_info.methods.iter().collect::<Vec<_>>();
         methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if !class_info
                 .method_visibilities
                 .get(method_name)
@@ -1458,6 +1461,9 @@ fn runtime_static_method_descriptor_cases(
         let mut static_methods = class_info.static_methods.iter().collect::<Vec<_>>();
         static_methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in static_methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if !class_info
                 .static_method_visibilities
                 .get(method_name)
@@ -1556,6 +1562,9 @@ fn runtime_array_instance_method_targets(
         let mut methods = class_info.methods.iter().collect::<Vec<_>>();
         methods.sort_by(|left, right| left.0.cmp(right.0));
         for (method_name, sig) in methods {
+            if !callable_dispatch::runtime_method_callable_visible(method_name) {
+                continue;
+            }
             if sig.params.len() != arg_count || sig.variadic.is_some() {
                 continue;
             }
@@ -2102,6 +2111,7 @@ fn emit_runtime_array_instance_method_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     store_call_result(ctx, inst, &target.sig.return_type)?;
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 

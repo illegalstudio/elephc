@@ -292,6 +292,69 @@ pub(super) fn reflection_class_metadata_for_name(
     Ok(empty_reflection_metadata())
 }
 
+/// Builds php-src's state-dependent dynamic property surface for `DateInterval` objects.
+pub(super) fn reflection_date_interval_object_metadata(
+    ctx: &FunctionContext<'_>,
+    from_string: bool,
+) -> Result<ReflectionOwnerMetadata> {
+    let mut metadata = reflection_class_metadata_for_name(ctx, "DateInterval")?;
+    let property_names = if from_string {
+        vec!["from_string", "date_string"]
+    } else {
+        vec![
+            "y",
+            "m",
+            "d",
+            "h",
+            "i",
+            "s",
+            "f",
+            "invert",
+            "days",
+            "from_string",
+        ]
+    };
+    metadata.property_names = property_names
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    metadata.property_members = metadata
+        .property_names
+        .iter()
+        .map(|name| reflection_date_interval_dynamic_property_member(name))
+        .collect();
+    metadata.default_property_members.clear();
+    Ok(metadata)
+}
+
+/// Builds one untyped public dynamic `ReflectionProperty` owned by `DateInterval`.
+fn reflection_date_interval_dynamic_property_member(
+    property_name: &str,
+) -> ReflectionListedMember {
+    let mut flags =
+        reflection_member_flags(false, &Visibility::Public, false, false, false, false);
+    flags.is_dynamic = true;
+    ReflectionListedMember {
+        name: property_name.to_string(),
+        declaring_class_name: Some("DateInterval".to_string()),
+        attr_names: Vec::new(),
+        attr_args: Vec::new(),
+        constant_value: None,
+        backing_value: None,
+        is_enum_case: false,
+        flags,
+        modifiers: reflection_property_modifiers_from_flags(flags),
+        type_metadata: None,
+        default_value: None,
+        property_hook_members: Vec::new(),
+        required_parameter_count: 0,
+        is_deprecated: false,
+        is_generator: false,
+        prototype_member: None,
+        parameters: Vec::new(),
+    }
+}
+
 /// Resolves class metadata for nested declaring-class slots without recursive member objects.
 pub(super) fn reflection_shallow_class_metadata_for_name(
     ctx: &FunctionContext<'_>,
@@ -340,4 +403,3 @@ pub(super) fn reflection_enum_metadata_for_name(
     metadata.parent_class_name = None;
     Ok(metadata)
 }
-

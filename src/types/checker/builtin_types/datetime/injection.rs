@@ -239,7 +239,6 @@ pub(super) fn inject_builtin_date_exceptions(class_map: &mut HashMap<String, Fla
         ("DateMalformedStringException", "DateException"),
         ("DateMalformedIntervalStringException", "DateException"),
         ("DateMalformedPeriodStringException", "DateException"),
-        ("DateUnknownException", "DateException"),
     ] {
         if !class_map.contains_key(name) {
             class_map.insert(name.to_string(), date_exception_subclass(name, parent));

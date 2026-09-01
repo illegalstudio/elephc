@@ -2,7 +2,7 @@
 title: "gmdate()"
 description: "Formats a GMT/UTC date and time."
 sidebar:
-  order: 103
+  order: 104
 ---
 
 ## gmdate()

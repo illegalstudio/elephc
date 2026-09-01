@@ -16,11 +16,12 @@ use crate::parser::alt_syntax::{
     close_alternative_block, parse_alternative_stmts, parse_control_body,
     reject_mixed_branch_body, starts_alternative_body, IF_SEGMENT_STOPS,
 };
-use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
-use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
+use crate::parser::ast::{CatchClause, Expr, ExprKind, Stmt, StmtKind};
+use crate::parser::expr::{parse_expr, starts_void_statement_cast};
 use crate::parser::stmt::{
     expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
-    parse_destructuring_pattern_unpack, parse_name, starts_destructuring_pattern,
+    parse_destructuring_pattern_unpack, parse_name, parse_void_expr_inline,
+    starts_destructuring_pattern,
 };
 use crate::span::Span;
 
@@ -360,7 +361,7 @@ pub fn parse_for(
 
     let init = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
         let init_span = tokens[*pos].1.span;
-        let s = parse_assign_inline(tokens, pos, init_span)?;
+        let s = parse_for_clause_stmt(tokens, pos, init_span)?;
         Some(Box::new(s))
     } else {
         None
@@ -376,7 +377,7 @@ pub fn parse_for(
 
     let update = if *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
         let update_span = tokens[*pos].1.span;
-        let s = parse_assign_inline(tokens, pos, update_span)?;
+        let s = parse_for_clause_stmt(tokens, pos, update_span)?;
         Some(Box::new(s))
     } else {
         None
@@ -483,108 +484,50 @@ pub fn parse_try(
     ))
 }
 
-/// Parse a simple statement without trailing semicolon (for use inside for-loops).
+/// Parses any PHP expression used in a `for` initializer or update clause without consuming
+/// the clause delimiter. A plain local assignment is canonicalized to `StmtKind::Assign` so
+/// statement-level analyses retain their existing assignment semantics; other expressions stay
+/// expression statements.
 pub fn parse_assign_inline(
     tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
 ) -> Result<Stmt, CompileError> {
-    if *pos < tokens.len() {
-        match &tokens[*pos].0 {
-            Token::PlusPlus => {
-                *pos += 1;
-                let name = match tokens.get(*pos).map(|(t, _)| t) {
-                    Some(Token::Variable(n)) => n.clone(),
-                    _ => return Err(CompileError::new(span, "Expected variable after '++'")),
-                };
-                *pos += 1;
-                let expr = Expr::new(ExprKind::PreIncrement(name), span);
-                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
+    let expr = parse_expr(tokens, pos)?;
+    if let ExprKind::Assignment {
+        target,
+        value,
+        result_target,
+        prelude,
+        conditional_value_temp,
+    } = &expr.kind
+    {
+        if prelude.is_empty() && result_target.is_none() && conditional_value_temp.is_none() {
+            if let ExprKind::Variable(name) = &target.kind {
+                return Ok(Stmt::new(
+                    StmtKind::Assign {
+                        name: name.clone(),
+                        value: value.as_ref().clone(),
+                    },
+                    span,
+                ));
             }
-            Token::MinusMinus => {
-                *pos += 1;
-                let name = match tokens.get(*pos).map(|(t, _)| t) {
-                    Some(Token::Variable(n)) => n.clone(),
-                    _ => return Err(CompileError::new(span, "Expected variable after '--'")),
-                };
-                *pos += 1;
-                let expr = Expr::new(ExprKind::PreDecrement(name), span);
-                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
-            }
-            _ => {}
         }
     }
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+}
 
-    let name = match &tokens[*pos].0 {
-        Token::Variable(n) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected variable in for clause")),
-    };
-    *pos += 1;
-
-    if *pos < tokens.len() {
-        match &tokens[*pos].0 {
-            Token::PlusPlus => {
-                *pos += 1;
-                let expr = Expr::new(ExprKind::PostIncrement(name), span);
-                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
-            }
-            Token::MinusMinus => {
-                *pos += 1;
-                let expr = Expr::new(ExprKind::PostDecrement(name), span);
-                return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
-            }
-            _ => {}
-        }
-    }
-
-    if *pos >= tokens.len() {
-        return Err(CompileError::new(span, "Expected '=' after variable name"));
-    }
-
-    let compound_op = match &tokens[*pos].0 {
-        Token::PlusAssign => Some(BinOp::Add),
-        Token::MinusAssign => Some(BinOp::Sub),
-        Token::StarAssign => Some(BinOp::Mul),
-        Token::StarStarAssign => Some(BinOp::Pow),
-        Token::SlashAssign => Some(BinOp::Div),
-        Token::PercentAssign => Some(BinOp::Mod),
-        Token::DotAssign => Some(BinOp::Concat),
-        Token::AmpAssign => Some(BinOp::BitAnd),
-        Token::PipeAssign => Some(BinOp::BitOr),
-        Token::CaretAssign => Some(BinOp::BitXor),
-        Token::LessLessAssign => Some(BinOp::ShiftLeft),
-        Token::GreaterGreaterAssign => Some(BinOp::ShiftRight),
-        Token::Assign => None,
-        Token::QuestionQuestionAssign => {
-            *pos += 1;
-            let rhs = parse_assignment_value_expr(tokens, pos)?;
-            let value = Expr::new(
-                ExprKind::NullCoalesce {
-                    value: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
-                    default: Box::new(rhs),
-                },
-                span,
-            );
-            return Ok(Stmt::new(StmtKind::Assign { name, value }, span));
-        }
-        _ => return Err(CompileError::new(span, "Expected '=' after variable name")),
-    };
-    *pos += 1;
-
-    let rhs = parse_assignment_value_expr(tokens, pos)?;
-    let value = if let Some(op) = compound_op {
-        Expr::new(
-            ExprKind::BinaryOp {
-                left: Box::new(Expr::new(ExprKind::Variable(name.clone()), span)),
-                op,
-                right: Box::new(rhs),
-            },
-            span,
-        )
+/// Parses one side-effecting `for` initializer or update clause without its delimiter.
+fn parse_for_clause_stmt(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    if starts_void_statement_cast(tokens, *pos) {
+        parse_void_expr_inline(tokens, pos, span)
     } else {
-        rhs
-    };
-    Ok(Stmt::new(StmtKind::Assign { name, value }, span))
+        parse_assign_inline(tokens, pos, span)
+    }
 }
 
 /// Parse: switch (expr) { case expr: stmts... case expr: stmts... default: stmts... }

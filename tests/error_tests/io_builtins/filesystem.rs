@@ -23,16 +23,15 @@ fn test_error_file_get_contents_wrong_args() {
     );
 }
 
-/// Verifies `file_get_contents()` returning `false` is incompatible with declared `string` return type.
+/// Verifies a `string|false` builtin result is accepted at PHP's runtime return boundary.
 #[test]
-fn test_error_file_get_contents_false_return_rejects_string_return_type() {
-    expect_error(
+fn test_file_get_contents_false_return_is_runtime_coercible() {
+    expect_no_error(
         r#"<?php
 function read_file(): string {
     return file_get_contents("missing.txt");
 }
 "#,
-        "Function 'read_file' return type expects Str, got Union([Str, False])",
     );
 }
 
@@ -51,16 +50,15 @@ fn test_error_readfile_wrong_args() {
     expect_error("<?php readfile();", "readfile() takes exactly 1 argument");
 }
 
-/// Verifies `readfile()` returning `false` is incompatible with declared `int` return type.
+/// Verifies an `int|false` builtin result is accepted at PHP's runtime return boundary.
 #[test]
-fn test_error_readfile_false_return_rejects_int_return_type() {
-    expect_error(
+fn test_readfile_false_return_is_runtime_coercible() {
+    expect_no_error(
         r#"<?php
 function dump_file(): int {
     return readfile("missing.txt");
 }
 "#,
-        "Function 'dump_file' return type expects Int, got Union([Int, False])",
     );
 }
 

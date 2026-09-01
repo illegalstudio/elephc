@@ -595,6 +595,9 @@ pub(crate) fn lower_is_a_relation(
     let object = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
     let exclude_self = name == "is_subclass_of";
+    if ctx.value_php_type(object)?.codegen_repr() == PhpType::Str {
+        return lower_class_string_relation(ctx, inst, object, target, exclude_self);
+    }
     if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_))
         && super::has_eval_context(ctx)
     {
@@ -605,6 +608,151 @@ pub(crate) fn lower_is_a_relation(
     let result = static_relation_holds(ctx, object, target, exclude_self)?;
     emit_bool_result(ctx, result);
     store_if_result(ctx, inst)
+}
+
+/// Lowers class-string `is_a()`/`is_subclass_of()` through runtime class metadata.
+fn lower_class_string_relation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    source: ValueId,
+    target: ValueId,
+    exclude_self: bool,
+) -> Result<()> {
+    let early_false = ctx.next_label("class_string_relation_false");
+    let stacked_false = ctx.next_label("class_string_relation_stacked_false");
+    let source_match = ctx.next_label("class_string_relation_source_match");
+    let done = ctx.next_label("class_string_relation_done");
+    let allow_string = inst.operands.get(2).copied();
+    let dynamic_allow_string = match allow_string {
+        Some(flag) => match const_bool_operand(ctx, flag)? {
+            Some(false) => {
+                emit_bool_result(ctx, false);
+                return store_if_result(ctx, inst);
+            }
+            Some(true) => None,
+            None => Some(flag),
+        },
+        None if !exclude_self => {
+            emit_bool_result(ctx, false);
+            return store_if_result(ctx, inst);
+        }
+        None => None,
+    };
+    if let (Some(source_class), Some(target_class)) = (
+        optional_const_string_operand(ctx, source)?,
+        optional_const_string_operand(ctx, target)?,
+    ) {
+        let result =
+            static_class_string_relation_holds(ctx, &source_class, &target_class, exclude_self);
+        if !result {
+            emit_bool_result(ctx, false);
+        } else if let Some(flag) = dynamic_allow_string {
+            ctx.load_value_to_result(flag)?;
+        } else {
+            emit_bool_result(ctx, true);
+        }
+        return store_if_result(ctx, inst);
+    }
+    if let Some(flag) = dynamic_allow_string {
+        ctx.load_value_to_result(flag)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x0, #0");                          // test the runtime allow-string flag
+                ctx.emitter.instruction(&format!("b.eq {}", early_false));      // reject class strings when allow_string is false
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // test the runtime allow-string flag
+                ctx.emitter.instruction(&format!("jz {}", early_false));        // reject class strings when allow_string is false
+            }
+        }
+    }
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(target, "x1", "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
+            ctx.emitter.instruction("cmp x0, #0");                              // did the target class or interface resolve?
+            ctx.emitter.instruction(&format!("b.eq {}", early_false));          // unresolved targets cannot match a class string
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_string_value_to_regs(source, "x1", "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
+            ctx.emitter.instruction("cmp x0, #0");                              // did the source class string resolve?
+            ctx.emitter.instruction(&format!("b.eq {}", stacked_false));        // unresolved source strings cannot satisfy the relation
+            ctx.emitter.instruction("cmp x2, #0");                              // did the source resolve to a concrete class?
+            ctx.emitter.instruction(&format!("b.ne {}", stacked_false));        // interface source strings need interface-parent metadata
+            if exclude_self {
+                ctx.emitter.instruction("ldr x9, [sp]");                        // reload the target class or interface id
+                ctx.emitter.instruction("ldr x10, [sp, #8]");                   // reload the target kind
+                ctx.emitter.instruction(&format!("cbnz x10, {}", source_match)); // interface targets cannot be exact concrete-class matches
+                ctx.emitter.instruction("cmp x1, x9");                          // compare source and target concrete class ids
+                ctx.emitter.instruction(&format!("b.eq {}", stacked_false));    // is_subclass_of excludes exact class-string matches
+            }
+            ctx.emitter.label(&source_match);
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "xzr");
+            ctx.emitter.instruction("mov x0, sp");                              // pass a fake object header containing the source class id
+            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // pass the target metadata id
+            ctx.emitter.instruction("ldr x2, [sp, #24]");                       // pass the target metadata kind
+            abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            ctx.emitter.instruction(&format!("b {}", done));                    // keep the matcher result after balanced cleanup
+            ctx.emitter.label(&stacked_false);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            emit_bool_result(ctx, false);
+            ctx.emitter.instruction(&format!("b {}", done));                    // join the unresolved-source false path
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(target, "rax", "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
+            ctx.emitter.instruction("test rax, rax");                           // did the target class or interface resolve?
+            ctx.emitter.instruction(&format!("jz {}", early_false));            // unresolved targets cannot match a class string
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rdx");
+            ctx.load_string_value_to_regs(source, "rax", "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_instanceof_lookup");
+            ctx.emitter.instruction("test rax, rax");                           // did the source class string resolve?
+            ctx.emitter.instruction(&format!("jz {}", stacked_false));          // unresolved source strings cannot satisfy the relation
+            ctx.emitter.instruction("test rdx, rdx");                           // did the source resolve to a concrete class?
+            ctx.emitter.instruction(&format!("jnz {}", stacked_false));         // interface source strings need interface-parent metadata
+            if exclude_self {
+                ctx.emitter.instruction("cmp QWORD PTR [rsp + 8], 0");          // is the target a concrete class rather than an interface?
+                ctx.emitter.instruction(&format!("jne {}", source_match));      // interface targets cannot be exact concrete-class matches
+                ctx.emitter.instruction("cmp rdi, QWORD PTR [rsp]");            // compare source and target concrete class ids
+                ctx.emitter.instruction(&format!("je {}", stacked_false));      // is_subclass_of excludes exact class-string matches
+            }
+            ctx.emitter.label(&source_match);
+            ctx.emitter.instruction("xor r8d, r8d");                            // clear padding beside the fake object class id
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "r8");
+            ctx.emitter.instruction("mov rdi, rsp");                            // pass a fake object header containing the source class id
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // pass the target metadata id
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");           // pass the target metadata kind
+            abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // keep the matcher result after balanced cleanup
+            ctx.emitter.label(&stacked_false);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            emit_bool_result(ctx, false);
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // join the unresolved-source false path
+        }
+    }
+    ctx.emitter.label(&early_false);
+    emit_bool_result(ctx, false);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Evaluates a relation between two literal class strings from checked class metadata.
+fn static_class_string_relation_holds(
+    ctx: &FunctionContext<'_>,
+    source_class: &str,
+    target_class: &str,
+    exclude_self: bool,
+) -> bool {
+    let source_class = source_class.trim_start_matches('\\');
+    let target_key = php_symbol_key(target_class.trim_start_matches('\\'));
+    if !exclude_self && php_symbol_key(source_class) == target_key {
+        return true;
+    }
+    parent_chain_contains(ctx, source_class, &target_key)
+        || class_interfaces_contain(ctx, source_class, &target_key)
 }
 
 /// Lowers `get_declared_classes/interfaces/traits()` using the shared declaration registry.
@@ -1062,7 +1210,7 @@ fn emit_string_result(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
 }
 
 /// Emits `value` as the current boolean result.
-fn emit_bool_result(ctx: &mut FunctionContext<'_>, value: bool) {
+pub(super) fn emit_bool_result(ctx: &mut FunctionContext<'_>, value: bool) {
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -1168,7 +1316,7 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
 }
 
 /// Allocates an indexed string array and appends every declaration name.
-fn emit_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
+pub(super) fn emit_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
     let capacity = names.len().max(1);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1260,7 +1408,7 @@ fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Str
 }
 
 /// Returns a `ConstStr` operand value, or `None` when the operand is not a literal string.
-fn optional_const_string_operand(
+pub(super) fn optional_const_string_operand(
     ctx: &FunctionContext<'_>,
     value: ValueId,
 ) -> Result<Option<String>> {

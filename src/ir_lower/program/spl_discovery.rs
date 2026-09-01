@@ -75,6 +75,11 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
                         push_builtin_spl_metadata_methods(&mut methods, module, class_name);
                     }
                 }
+                Op::ObjectNewWithoutConstructor => {
+                    if let Some(class_name) = class_data_name(module, inst) {
+                        push_builtin_spl_metadata_methods(&mut methods, module, class_name);
+                    }
+                }
                 Op::DynamicObjectNew => {
                     if let Some((fallback_class, required_parent)) =
                         dynamic_object_new_metadata_names(module, inst)
@@ -159,11 +164,163 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
                         _ => {}
                     }
                 }
+                Op::VarDump => push_datetime_var_dump_methods(
+                    &mut methods,
+                    module,
+                    function,
+                    &inst.operands,
+                ),
+                Op::PrintR => push_datetime_print_r_methods(
+                    &mut methods,
+                    module,
+                    function,
+                    &inst.operands,
+                ),
+                Op::RuntimeCall
+                    if typed_builtin_target(inst) == Some(crate::ir::RuntimeFnId::VarDump) =>
+                {
+                    push_datetime_var_dump_methods(
+                        &mut methods,
+                        module,
+                        function,
+                        &inst.operands,
+                    );
+                }
+                Op::RuntimeCall
+                    if typed_builtin_target(inst) == Some(crate::ir::RuntimeFnId::PrintR) =>
+                {
+                    push_datetime_print_r_methods(
+                        &mut methods,
+                        module,
+                        function,
+                        &inst.operands,
+                    );
+                }
                 _ => {}
             }
         }
     }
     methods
+}
+
+/// Adds the php-src-specific date/time debug renderer methods referenced by `var_dump()`.
+fn push_datetime_var_dump_methods(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    function: &Function,
+    operands: &[crate::ir::ValueId],
+) {
+    let debug_key = php_method_key("__elephc_debug_dump");
+    for operand in operands {
+        let Some(operand_type) = function
+            .value(*operand)
+            .map(|value| value.php_type.codegen_repr())
+        else {
+            continue;
+        };
+        push_datetime_var_dump_type_methods(methods, module, &operand_type, &debug_key);
+    }
+}
+
+/// Adds the php-src-specific date/time renderer methods referenced by `print_r()`.
+fn push_datetime_print_r_methods(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    function: &Function,
+    operands: &[crate::ir::ValueId],
+) {
+    let print_key = php_method_key("__elephc_print_r_dump");
+    for operand in operands {
+        let Some(operand_type) = function
+            .value(*operand)
+            .map(|value| value.php_type.codegen_repr())
+        else {
+            continue;
+        };
+        push_datetime_var_dump_type_methods(methods, module, &operand_type, &print_key);
+    }
+}
+
+/// Registers ext/date debug renderers and their initialization guards reachable
+/// through one debug-output operand type.
+fn push_datetime_var_dump_type_methods(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    operand_type: &PhpType,
+    debug_key: &str,
+) {
+    let initialized_key = php_method_key("__elephc_assert_initialized");
+    match operand_type {
+        PhpType::Object(class_name) => {
+            let normalized = class_name.trim_start_matches('\\');
+            if is_datetime_debug_class(normalized) {
+                push_supported_builtin_spl_method_for_receiver(
+                    methods,
+                    module,
+                    normalized,
+                    debug_key,
+                );
+                push_supported_builtin_spl_method_for_receiver(
+                    methods,
+                    module,
+                    normalized,
+                    &initialized_key,
+                );
+            } else if normalized.eq_ignore_ascii_case("DateTimeInterface") {
+                for class_name in ["DateTime", "DateTimeImmutable"] {
+                    push_supported_builtin_spl_method_for_receiver(
+                        methods,
+                        module,
+                        class_name,
+                        debug_key,
+                    );
+                    push_supported_builtin_spl_method_for_receiver(
+                        methods,
+                        module,
+                        class_name,
+                        &initialized_key,
+                    );
+                }
+            }
+        }
+        PhpType::Array(element) => {
+            push_datetime_var_dump_type_methods(methods, module, element, debug_key);
+        }
+        PhpType::AssocArray { value, .. } => {
+            push_datetime_var_dump_type_methods(methods, module, value, debug_key);
+        }
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
+            for class_name in [
+                "DateTime",
+                "DateTimeImmutable",
+                "DateTimeZone",
+                "DateInterval",
+                "DatePeriod",
+            ] {
+                push_supported_builtin_spl_method_for_receiver(
+                    methods,
+                    module,
+                    class_name,
+                    debug_key,
+                );
+                push_supported_builtin_spl_method_for_receiver(
+                    methods,
+                    module,
+                    class_name,
+                    &initialized_key,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns whether a builtin class owns a php-src-specific `var_dump()` renderer.
+fn is_datetime_debug_class(class_name: &str) -> bool {
+    matches!(
+        php_symbol_key(class_name).as_str(),
+        "datetime" | "datetimeimmutable" | "datetimezone" | "dateinterval" | "dateperiod"
+    )
 }
 
 /// Returns true when generic `new $class` can emit static metadata for this class.

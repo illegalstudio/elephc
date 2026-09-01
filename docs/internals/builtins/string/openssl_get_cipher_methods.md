@@ -2,7 +2,7 @@
 title: "openssl_get_cipher_methods() — internals"
 description: "Compiler internals for openssl_get_cipher_methods(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 441
+  order: 448
 ---
 
 ## `openssl_get_cipher_methods()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/openssl_get_cipher_methods.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/openssl_get_cipher_methods.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -217,6 +217,15 @@ fn test_list_unpack_two_vars() {
     assert_eq!(out, "141");
 }
 
+/// Verifies foreach list destructuring assigns positional values before each body execution.
+#[test]
+fn test_foreach_value_destructuring() {
+    let out = compile_and_run(
+        "<?php foreach ([[1, 'a'], [2, 'b']] as [$number, $letter]) { echo $number, $letter; }",
+    );
+    assert_eq!(out, "1a2b");
+}
+
 // Tests skipped entries in list unpacking: `[$first, , $third,] = [10, 20, 30];`
 // outputs "10 30". Commas without a variable name discard that element.
 /// Verifies that list unpack skipped entries.
@@ -2199,6 +2208,13 @@ fn test_php_eol() {
     assert_eq!(out, "a\nb");
 }
 
+/// Verifies PHP's global namespace prefix is accepted for the built-in `PHP_EOL` constant.
+#[test]
+fn test_fully_qualified_php_eol() {
+    let out = compile_and_run("<?php echo \"a\" . \\PHP_EOL . \"b\";");
+    assert_eq!(out, "a\nb");
+}
+
 // Tests `echo PHP_OS;` outputs the platform-specific OS name (e.g. "Darwin" on macOS).
 // The expected value is retrieved from `target().platform.php_os_name()`.
 /// Verifies that PHP os.
@@ -2425,20 +2441,18 @@ echo getenv("ELEPHC_TEST_VAR");
 // -- v0.8 phpversion / php_uname --
 
 // Tests `phpversion()` returns the PHP LANGUAGE version of the compile target, not elephc's
-// own package version. The default `--php-version` is 8.5, and elephc reports the profile's
-// `8.<minor>.0` form (reference PHP 8.5.6 reports `8.5.6`) — the same deliberate `.0`
-// divergence `opcache_get_configuration()['version']['version']` makes. See
-// `web_prelude::PhpVersion::version_string`.
+// own package version. The default `--php-version` is pinned to the frozen php-src oracle,
+// matching `opcache_get_configuration()['version']['version']`.
 /// Verifies that phpversion.
 #[test]
 fn test_phpversion() {
     let out = compile_and_run("<?php echo phpversion();");
-    assert_eq!(out, "8.5.0");
+    assert_eq!(out, "8.5.10-dev");
 }
 
 // Tests `phpversion($extension)` reports the same version for a loaded extension and `false`
-// for an unknown one. Reference PHP 8.5.6 verified: `phpversion('json')` is `'8.5.6'` (every
-// bundled extension reports the interpreter's version) and `phpversion('nope_xyz')` is
+// for an unknown one. Reference PHP verifies that every bundled extension reports the
+// interpreter's version and `phpversion('nope_xyz')` is
 // `false`. Matching is case-insensitive there too, so `Core`/`core` must agree.
 /// Verifies that phpversion with an extension name.
 #[test]
@@ -2454,7 +2468,7 @@ var_dump(phpversion("json") === phpversion());
     );
     assert_eq!(
         out,
-        "string(5) \"8.5.0\"\nstring(5) \"8.5.0\"\nstring(5) \"8.5.0\"\nbool(false)\nbool(true)\n"
+        "string(10) \"8.5.10-dev\"\nstring(10) \"8.5.10-dev\"\nstring(10) \"8.5.10-dev\"\nbool(false)\nbool(true)\n"
     );
 }
 

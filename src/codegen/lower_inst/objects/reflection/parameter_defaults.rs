@@ -16,6 +16,9 @@ pub(super) fn reflection_parameter_default_value(
     current_info: Option<&crate::types::ClassInfo>,
     default: &Expr,
 ) -> Result<Option<ReflectionParameterDefaultValue>> {
+    if let Some(value) = reflection_global_default_value(default) {
+        return Ok(Some(value));
+    }
     if let Some(value) =
         reflection_object_parameter_default_value(ctx, current_class, current_info, default)?
     {
@@ -256,11 +259,30 @@ pub(super) fn reflection_parameter_default_from_constant_value(
 /// Returns PHP's constant-name metadata for parameter defaults that name a class constant.
 pub(super) fn reflection_parameter_default_constant_name(default: &Expr) -> Option<String> {
     match &default.kind {
-        ExprKind::ScopedConstantAccess { receiver, name } => Some(format!(
-            "{}::{}",
-            reflection_static_receiver_label(receiver),
-            name
-        )),
+        ExprKind::ScopedConstantAccess { receiver, name }
+            if reflection_static_receiver_label(receiver)
+                == "__ElephcReflectionGlobalConstant" =>
+        {
+            Some(name.clone())
+        }
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            Some(format!("{}::{}", reflection_static_receiver_label(receiver), name))
+        }
+        _ => None,
+    }
+}
+
+/// Materializes one global-constant marker used only by reflected builtin defaults.
+fn reflection_global_default_value(default: &Expr) -> Option<ReflectionParameterDefaultValue> {
+    let ExprKind::ScopedConstantAccess { receiver, name } = &default.kind else {
+        return None;
+    };
+    if reflection_static_receiver_label(receiver) != "__ElephcReflectionGlobalConstant" {
+        return None;
+    }
+    match name.as_str() {
+        "PHP_INT_MIN" => Some(ReflectionParameterDefaultValue::Int(i64::MIN)),
+        "SUNFUNCS_RET_STRING" => Some(ReflectionParameterDefaultValue::Int(1)),
         _ => None,
     }
 }
@@ -372,6 +394,7 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
         PhpType::Float => Some(reflection_builtin_named_type("float", false)),
         PhpType::Str => Some(reflection_builtin_named_type("string", false)),
         PhpType::Bool => Some(reflection_builtin_named_type("bool", false)),
+        PhpType::False => Some(reflection_builtin_named_type("false", false)),
         PhpType::Iterable => Some(reflection_builtin_named_type("iterable", false)),
         PhpType::Mixed => Some(reflection_builtin_named_type("mixed", true)),
         PhpType::Array(_) | PhpType::AssocArray { .. } => {

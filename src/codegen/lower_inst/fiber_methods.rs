@@ -485,10 +485,13 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     {
         emit_box_current_value_as_mixed(ctx.emitter, &target.return_ty.codegen_repr());
     }
+    store_if_result(ctx, inst)?;
+    super::emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
+    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)?;
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
     objects::emit_boxed_null(ctx);
-    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)?;
-    emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+    ctx.emitter.label(&done_label);
+    Ok(())
 }

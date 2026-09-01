@@ -155,66 +155,59 @@ if ($raw === "") {
     return false;
 }
 $lines = explode("\n", $raw);
-$all = [];
-foreach ($lines as $line) {
-    $g = explode("\t", $line);
-    $all[] = [
-        "ts" => (int) $g[0],
-        "offset" => (int) $g[1],
-        "isdst" => $g[2] === "1",
-        "abbr" => $g[3],
-        "time" => $g[4],
-    ];
-}
-$n = count($all);
+$lineCount = count($lines);
 $result = [];
-$active = -1;
-for ($i = 0; $i < $n; $i++) {
-    if ($all[$i]["ts"] <= $timestampBegin) {
-        $active = $i;
+$resultIndex = 0;
+$activeFound = false;
+$activeTs = 0;
+$activeOffset = 0;
+$activeDst = false;
+$activeAbbr = "";
+$activeTime = "";
+$i = 0;
+while ($i < $lineCount) {
+    $g = explode("\t", $lines[$i]);
+    $ts = (int) $g[0];
+    if ($ts <= $timestampBegin) {
+        $activeFound = true;
+        $activeTs = $ts;
+        $activeOffset = (int) $g[1];
+        $activeDst = $g[2] === "1";
+        $activeAbbr = $g[3];
+        $activeTime = $g[4];
     }
+    $i = intval($i + 1);
 }
-if ($active >= 0) {
-    $a = $all[$active];
-    // (int) unboxes the boxed array element to a plain int so the comparison with
-    // the int param is reliable (a boxed element compared directly mis-evaluates).
-    // $ats <= $timestampBegin by construction; when they are equal (the
-    // PHP_INT_MIN default lands on row 0, or begin hits a transition exactly),
-    // reuse the bridge's ts/time rather than formatting an extreme begin with
-    // gmdate — gmdate(PHP_INT_MIN) exhausts the heap.
-    $ats = (int) $a["ts"];
-    if ($timestampBegin <= $ats) {
-        // begin coincides with this transition (the PHP_INT_MIN default lands on
-        // row 0): the synthetic row IS this row, so reuse it verbatim. This also
-        // avoids rebuilding an array literal carrying a PHP_INT_MIN value, which the
-        // array machinery mishandles.
-        $result[] = $a;
-    } else {
-        $result[] = [
-            "ts" => $timestampBegin,
-            "time" => gmdate("Y-m-d\TH:i:sP", $timestampBegin),
-            "offset" => $a["offset"],
-            "isdst" => $a["isdst"],
-            "abbr" => $a["abbr"],
+if ($activeFound) {
+    $result[$resultIndex] = [
+        "ts" => $timestampBegin <= $activeTs ? $activeTs : $timestampBegin,
+        "time" => $timestampBegin <= $activeTs ? $activeTime : gmdate("Y-m-d\TH:i:sP", $timestampBegin),
+        "offset" => $activeOffset,
+        "isdst" => $activeDst,
+        "abbr" => $activeAbbr,
+    ];
+    $resultIndex = intval($resultIndex + 1);
+}
+$i = 0;
+while ($i < $lineCount) {
+    $g = explode("\t", $lines[$i]);
+    $ts = (int) $g[0];
+    if ($ts > $timestampBegin && $ts <= $timestampEnd) {
+        $result[$resultIndex] = [
+            "ts" => $ts,
+            "time" => $g[4],
+            "offset" => (int) $g[1],
+            "isdst" => $g[2] === "1",
+            "abbr" => $g[3],
         ];
+        $resultIndex = intval($resultIndex + 1);
     }
+    $i = intval($i + 1);
 }
-for ($i = 0; $i < $n; $i++) {
-    if ($all[$i]["ts"] > $timestampBegin && $all[$i]["ts"] <= $timestampEnd) {
-        $r = $all[$i];
-        $result[] = [
-            "ts" => $r["ts"],
-            "time" => $r["time"],
-            "offset" => $r["offset"],
-            "isdst" => $r["isdst"],
-            "abbr" => $r["abbr"],
-        ];
-    }
-}
-return $result;
+return array_slice($result, 0, $resultIndex);
 "#;
 
-/// Test-only: the compilation path builds this body; the oracle checks the two agree.
+/// Test-only PHP oracle for the direct AST abbreviation-list body.
 #[cfg(test)]
 pub(super) const LIST_ABBREVIATIONS_SRC: &str = r#"<?php
 $raw = elephc_tz_abbreviations();
@@ -265,6 +258,7 @@ pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
     // with no args), and `i64::MIN` is exactly the bridge's row-0 timestamp, so the
     // no-arg call reproduces the full transition list.
     let int_literal = |v: i64| Expr::new(ExprKind::IntLiteral(v), dummy());
+    let body = super::bodies::tz_get_transitions();
     method(
         "getTransitions",
         vec![
@@ -282,7 +276,7 @@ pub(super) fn datetime_zone_get_transitions() -> ClassMethod {
             ),
         ],
         Some(TypeExpr::Named(Name::unqualified("mixed"))),
-        super::bodies::tz_get_transitions(),
+        body,
     )
 }
 

@@ -21,6 +21,12 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the key length
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the value box
     emitter.instruction("mov rax, QWORD PTR [rdi]");                            // class id from the object header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_stdclass_class_id");
+    emitter.instruction("cmp rax, QWORD PTR [r10]");                           // does the receiver use dynamic property storage?
+    emitter.instruction("jne __rt_obj_store_prop_declared");                   // fixed-layout objects use the generated property table
+    emitter.instruction("call __rt_stdclass_set");                             // original args still carry object, key pair, and boxed value
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                        // dynamic property stored
+    emitter.label("__rt_obj_store_prop_declared");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_class_serprop_ptrs");
     emitter.instruction("shl rax, 3");                                          // class_id * 8 (pointer stride)
     emitter.instruction("add r10, rax");                                        // slot = base + class_id*8
@@ -66,8 +72,16 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("je __rt_obj_store_prop_str");                          // store pointer and length
     emitter.instruction("cmp r9, 4");                                           // is this an indexed-array slot?
     emitter.instruction("je __rt_obj_store_prop_arr");                          // convert the parsed hash to an indexed array
+    emitter.instruction("cmp r9, 11");                                          // is this an inline TaggedScalar slot?
+    emitter.instruction("je __rt_obj_store_prop_tagged_scalar");                // restore payload plus the parsed runtime tag
     emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // typed scalar/object/hash: unbox the low word
     emitter.instruction("mov QWORD PTR [r10], rax");                            // store it inline in the slot
+    emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
+    emitter.label("__rt_obj_store_prop_tagged_scalar");
+    emitter.instruction("mov rax, QWORD PTR [rcx + 8]");                        // load the scalar payload from the parsed Mixed cell
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // restore the inline payload word
+    emitter.instruction("mov rax, QWORD PTR [rcx]");                            // load the parsed int/null runtime tag
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // restore the inline runtime-tag word
     emitter.instruction("jmp __rt_obj_store_prop_ret");                         // property stored
     emitter.label("__rt_obj_store_prop_arr");
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save the property byte offset across the call

@@ -2,7 +2,7 @@
 title: "strtr() — internals"
 description: "Compiler internals for strtr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 476
+  order: 483
 ---
 
 ## `strtr()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strtr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strtr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

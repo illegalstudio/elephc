@@ -112,6 +112,21 @@ impl Checker {
         if catalog::strict_php_hidden_builtin(&builtin_key) {
             return Ok(None);
         }
+        if matches!(builtin_key.as_str(), "mktime" | "gmmktime")
+            && (args.is_empty() || args.len() > 6)
+            && !args.iter().any(|arg| {
+                matches!(
+                    arg.kind,
+                    crate::parser::ast::ExprKind::NamedArg { .. }
+                        | crate::parser::ast::ExprKind::Spread(_)
+                )
+            })
+        {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(Some(PhpType::Int));
+        }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         let normalized_args;
         let args = if let Some(sig) =

@@ -28,10 +28,14 @@ pub(super) enum InArrayCase {
     IntNeedleStringArray,
     StringNeedleBoolArray,
     BoolNeedleStringArray,
+    MixedNeedleStringExact,
+    MixedNeedleStringLoose,
     MixedIntExact,
     MixedIntLoose,
     MixedStringExact,
     MixedStringLoose,
+    MixedMixedExact,
+    MixedMixedLoose,
 }
 
 /// Verifies that an indexed-array `in_array()` call has a lowered Phase 04 payload shape.
@@ -59,6 +63,10 @@ pub(super) fn supported_in_array_case(
             PhpType::Mixed if needle_ty == PhpType::Int => match mode {
                 InArrayMode::Loose => Ok(InArrayCase::MixedIntLoose),
                 InArrayMode::Strict => Ok(InArrayCase::MixedIntExact),
+            },
+            PhpType::Mixed if needle_ty == PhpType::Mixed => match mode {
+                InArrayMode::Loose => Ok(InArrayCase::MixedMixedLoose),
+                InArrayMode::Strict => Ok(InArrayCase::MixedMixedExact),
             },
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "in_array needle PHP type {:?} for indexed-array element PHP type {:?}",
@@ -114,6 +122,7 @@ pub(super) fn supported_in_array_string_case(needle_ty: &PhpType, mode: InArrayM
         InArrayMode::Strict => match needle_ty {
             PhpType::Str => Ok(InArrayCase::StringExact),
             PhpType::Int | PhpType::Bool => Ok(InArrayCase::AlwaysFalse),
+            PhpType::Mixed => Ok(InArrayCase::MixedNeedleStringExact),
             _ => Err(CodegenIrError::unsupported(format!(
                 "strict in_array needle PHP type {:?} for string indexed-array",
                 needle_ty
@@ -123,6 +132,7 @@ pub(super) fn supported_in_array_string_case(needle_ty: &PhpType, mode: InArrayM
             PhpType::Str => Ok(InArrayCase::StringLoose),
             PhpType::Int => Ok(InArrayCase::IntNeedleStringArray),
             PhpType::Bool => Ok(InArrayCase::BoolNeedleStringArray),
+            PhpType::Mixed => Ok(InArrayCase::MixedNeedleStringLoose),
             _ => Err(CodegenIrError::unsupported(format!(
                 "loose in_array needle PHP type {:?} for string indexed-array",
                 needle_ty
@@ -327,4 +337,3 @@ pub(super) fn lower_in_array_string_needle_int_array_x86_64(
     ctx.emitter.label(&done_label);
     Ok(())
 }
-

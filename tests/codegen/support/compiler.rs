@@ -243,6 +243,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     TestLinkRequirements,
 ) {
     elephc::codegen::set_null_repr(null_repr);
+    elephc::codegen::set_compile_profile(php_version, false);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
@@ -280,7 +281,9 @@ fn try_compile_source_to_asm_with_defines_repr(
         linked_php_surfaces.push("mysqli".to_string());
     }
     elephc::codegen::set_linked_extensions(linked_php_surfaces);
-    let resolved = elephc::tz_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let tz_used = elephc::tz_prelude::program_uses_tz(&resolved);
+    let resolved =
+        elephc::tz_prelude::inject_if_used(resolved, tz_used, &mut prelude_inventory);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
@@ -311,12 +314,20 @@ fn try_compile_source_to_asm_with_defines_repr(
         check_result.local_binding_decision_spans(),
     );
     let empty_roots = HashSet::new();
+    let structural_groups = if tz_used {
+        HashSet::from([
+            elephc::tz_prelude::TIMELIB_RUNTIME_REACHABILITY_GROUP.to_string(),
+        ])
+    } else {
+        HashSet::new()
+    };
     let optimized = elephc::optimize::prune_unreachable_declarations(
         optimized,
         &mut check_result,
         elephc::optimize::reachability::PruneOptions {
             inventory: &prelude_inventory,
             forced_groups: &empty_roots,
+            structural_groups: &structural_groups,
             exported_functions: &empty_roots,
             eval_forced: false,
         },
@@ -348,7 +359,8 @@ fn try_compile_source_to_asm_with_defines_repr(
         false,
         elephc::codegen::WebIsolation::Worker,
     );
-    let runtime_features = ir_module.required_runtime_features;
+    let mut runtime_features = ir_module.required_runtime_features;
+    runtime_features.php_profile = php_version.minor() as u8;
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
     let link_requirements = TestLinkRequirements::new(
@@ -854,7 +866,7 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
     elephc_out
 }
 
-/// Returns `user_asm` with the compiled script's embedded path removed, for needle assertions.
+/// Returns `user_asm` with the compiled script's embedded paths removed, for needle assertions.
 ///
 /// `_script_source_file` carries the CANONICAL PATH of the compiled script, read by
 /// `Throwable::getFile()` and by the ` in <file>:<line>` suffix of the uncaught-exception report.
@@ -863,9 +875,11 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
 /// compiled from. `!user_asm.contains("pow")` in a fixture compiled under
 /// `elephc_constant_folding_pow` matched the DIRECTORY NAME, not a surviving `pow` call.
 ///
-/// Only the path bytes are dropped. Every instruction and every other data literal survives, so an
-/// assertion keeps exactly the meaning it had — in particular, string literals an optimizer was
-/// supposed to eliminate are still visible, which is what several of these tests actually check.
+/// `_program_source_file` carries the same canonical path for native fatal diagnostics, so its
+/// duplicate bytes must be removed as well. Only those path bytes are dropped. Every instruction
+/// and every other data literal survives, so an assertion keeps exactly the meaning it had — in
+/// particular, string literals an optimizer was supposed to eliminate are still visible, which is
+/// what several of these tests actually check.
 ///
 /// This cannot be folded into `compile_source_to_asm_with_options`: callers pass its result on to
 /// `assemble_and_run`, and a `_script_source_file` with no bytes would make the assembled program
@@ -878,7 +892,10 @@ pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
             drop_next_ascii = false;
             continue;
         }
-        drop_next_ascii = line.trim() == "_script_source_file:";
+        drop_next_ascii = matches!(
+            line.trim(),
+            "_script_source_file:" | "_program_source_file:"
+        );
         out.push(line);
     }
     out.join("\n")
@@ -887,6 +904,25 @@ pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
 #[cfg(test)]
 mod exit_harness_tests {
     use super::*;
+
+    /// Verifies optimizer assembly checks ignore both runtime copies of the fixture path only.
+    #[test]
+    fn embedded_script_path_filter_removes_both_canonical_path_copies() {
+        let asm = r#"_script_source_file:
+    .ascii "/tmp/dead-pow.php"
+_script_source_file_len:
+    .quad 17
+_program_source_file:
+    .ascii "/tmp/dead-pow.php"
+_program_source_file_len:
+    .quad 17
+_live_literal:
+    .ascii "dead-pow""#;
+
+        let filtered = asm_without_embedded_script_path(asm);
+        assert!(!filtered.contains("/tmp/dead-pow.php"));
+        assert!(filtered.contains(".ascii \"dead-pow\""));
+    }
 
     /// Verifies each supported target uses the process-wide exit epilogue emitted by codegen.
     #[test]

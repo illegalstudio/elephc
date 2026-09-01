@@ -44,14 +44,10 @@ fn test_error_undefined_class() {
     expect_error("<?php $x = new Missing();", "Undefined class: Missing");
 }
 
-/// Verifies the error diagnostic for undefined property.
+/// Verifies undefined-property reads reach PHP's runtime warning/null path.
 #[test]
-fn test_error_undefined_property() {
-    // accessing an absent property on an object reports undefined property with the class name.
-    expect_error(
-        "<?php class Box {} $b = new Box(); echo $b->missing;",
-        "Undefined property: Box::missing",
-    );
+fn test_undefined_property_is_runtime_checked() {
+    expect_no_error("<?php class Box {} $b = new Box(); echo $b->missing;");
 }
 
 /// Verifies the error diagnostic for undefined method.
@@ -184,6 +180,15 @@ fn test_error_nullsafe_assignment_target_is_rejected() {
     // nullsafe cannot appear on the left-hand side of an assignment.
     expect_error(
         "<?php class Profile {} class User { public ?Profile $profile; } $user = new User(); $user?->profile = new Profile();",
+        "Invalid assignment target",
+    );
+}
+
+/// Verifies compound assignment cannot use an empty dynamic-property append target.
+#[test]
+fn test_error_dynamic_property_array_push_compound_assignment_is_rejected() {
+    expect_error(
+        "<?php $box = new stdClass(); $name = 'items'; $box->$name[] += 1;",
         "Invalid assignment target",
     );
 }
@@ -542,7 +547,7 @@ fn test_error_wrong_signature_vs_interface() {
     // implementing an interface method with a different parameter count is an error.
     expect_error(
         "<?php interface Named { public function name($x); } class User implements Named { public function name() { return \"x\"; } }",
-        "Cannot change parameter count when implementing interface method: User::name",
+        "Cannot remove inherited parameters when implementing interface method: User::name",
     );
 }
 

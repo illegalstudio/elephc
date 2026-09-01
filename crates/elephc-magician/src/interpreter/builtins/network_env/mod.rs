@@ -14,6 +14,7 @@ use super::super::*;
 
 mod exec;
 mod extension_loaded;
+mod get_extension_funcs;
 mod get_loaded_extensions;
 mod getenv;
 mod gethostbyaddr;
@@ -35,11 +36,13 @@ mod passthru;
 mod php_uname;
 mod phpversion;
 mod putenv;
+mod setlocale;
 mod shell_exec;
 mod system;
 
 pub(in crate::interpreter) use exec::*;
 pub(in crate::interpreter) use extension_loaded::*;
+pub(in crate::interpreter) use get_extension_funcs::*;
 pub(in crate::interpreter) use get_loaded_extensions::*;
 pub(in crate::interpreter) use getenv::*;
 pub(in crate::interpreter) use gethostbyaddr::*;
@@ -61,6 +64,7 @@ pub(in crate::interpreter) use passthru::*;
 pub(in crate::interpreter) use php_uname::*;
 pub(in crate::interpreter) use phpversion::*;
 pub(in crate::interpreter) use putenv::*;
+pub(in crate::interpreter) use setlocale::*;
 pub(in crate::interpreter) use shell_exec::*;
 pub(in crate::interpreter) use system::*;
 
@@ -78,6 +82,9 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "system" => eval_builtin_system(args, context, scope, values),
         "passthru" => eval_builtin_passthru(args, context, scope, values),
         "extension_loaded" => eval_builtin_extension_loaded(args, context, scope, values),
+        "get_extension_funcs" => {
+            eval_builtin_get_extension_funcs(args, context, scope, values)
+        }
         "get_loaded_extensions" => {
             eval_builtin_get_loaded_extensions(args, context, scope, values)
         }
@@ -96,6 +103,7 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
+        "setlocale" => eval_builtin_setlocale(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -159,6 +167,12 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
                 return Err(EvalStatus::RuntimeFatal);
             };
             eval_extension_loaded_result(*extension, values)
+        }
+        "get_extension_funcs" => {
+            let [extension] = evaluated_args else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_get_extension_funcs_result(*extension, values)
         }
         "get_loaded_extensions" => {
             let zend_extensions = match evaluated_args {
@@ -227,6 +241,7 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
             };
             eval_putenv_result(*assignment, values)
         }
+        "setlocale" => eval_setlocale_result(evaluated_args, values),
         "long2ip" => {
             let [value] = evaluated_args else {
                 return Err(EvalStatus::RuntimeFatal);

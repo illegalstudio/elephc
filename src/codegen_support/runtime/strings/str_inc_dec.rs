@@ -67,7 +67,12 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_cstr");                                        // copy the bounded PHP string into the C-string scratch buffer
     emitter.instruction("bl __rt_php_num_scan");                                // clip the scratch to PHP's leading numeric run
     emitter.instruction("str x0, [sp, #24]");                                   // save the clipped numeric run for the integer parser and strtod
-    emitter.instruction("cbz x1, __rt_sid_alpha");                              // a string PHP does not consider numeric carries alphanumerically
+    emitter.instruction("cbnz x1, __rt_sid_numeric");                           // fully numeric strings always use numeric increment/decrement
+    emitter.instruction("ldr x3, [sp, #16]");                                   // inspect the caller's delta for unary-plus conversion mode
+    emitter.instruction("cbnz x3, __rt_sid_alpha");                             // ordinary ++/-- keeps the alphanumeric path for nonnumeric strings
+    emitter.instruction("ldrb w10, [x0]");                                      // unary plus accepts a leading numeric run with a warning
+    emitter.instruction("cbz w10, __rt_sid_alpha");                             // no numeric prefix remains a TypeError at the unary-plus caller
+    emitter.label("__rt_sid_numeric");
 
     // -- a '.' or an exponent marker in the run forces PHP's float result --
     emitter.instruction("mov x9, x0");                                          // x9 = cursor over the clipped numeric run
@@ -305,7 +310,12 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_php_num_scan");                              // clip the scratch to PHP's leading numeric run
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the clipped numeric run for the integer parser and strtod
     emitter.instruction("test rdx, rdx");                                       // did the scanner report the whole string as numeric?
-    emitter.instruction("jz __rt_sid_alpha_x86");                               // a string PHP does not consider numeric carries alphanumerically
+    emitter.instruction("jnz __rt_sid_numeric_x86");                            // fully numeric strings always use numeric increment/decrement
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // inspect the caller's delta for unary-plus conversion mode
+    emitter.instruction("jne __rt_sid_alpha_x86");                              // ordinary ++/-- keeps the alphanumeric path for nonnumeric strings
+    emitter.instruction("cmp BYTE PTR [rax], 0");                               // unary plus accepts a leading numeric run with a warning
+    emitter.instruction("je __rt_sid_alpha_x86");                               // no numeric prefix remains a TypeError at the unary-plus caller
+    emitter.label("__rt_sid_numeric_x86");
 
     // -- a '.' or an exponent marker in the run forces PHP's float result --
     emitter.instruction("mov r8, rax");                                         // r8 = cursor over the clipped numeric run

@@ -18,6 +18,40 @@ pub(super) fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    if object_uses_dynamic_property_storage(ctx, object.value, property) {
+        let current = lower_dynamic_property_cell_for_write(ctx, object.value, property, span);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![current.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        return;
+    }
+    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+        .filter(is_runtime_typed_property)
+    {
+        let data = ctx.intern_string(property);
+        let current = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty,
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![current.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        return;
+    }
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -78,6 +112,42 @@ pub(super) fn lower_property_array_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    if object_uses_dynamic_property_storage(ctx, object.value, property) {
+        let current = lower_dynamic_property_cell_for_write(ctx, object.value, property, span);
+        let index = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::ArraySet,
+            vec![current.value, index.value, value.value],
+            None,
+            Op::ArraySet.default_effects(),
+            Some(span),
+        );
+        return;
+    }
+    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+        .filter(is_runtime_typed_property)
+    {
+        let data = ctx.intern_string(property);
+        let current = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty,
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let index = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::ArraySet,
+            vec![current.value, index.value, value.value],
+            None,
+            Op::ArraySet.default_effects(),
+            Some(span),
+        );
+        return;
+    }
     if let Some(property_ty) =
         object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
@@ -210,6 +280,45 @@ pub(super) fn lower_property_array_assign(
     );
 }
 
+/// Returns whether an undeclared property uses the receiver's dynamic-property hash tail.
+fn object_uses_dynamic_property_storage(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> bool {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object) else {
+        return false;
+    };
+    let Some(class_info) = ctx.classes.get(class_name.trim_start_matches('\\')) else {
+        return false;
+    };
+    class_info.allow_dynamic_properties && class_info.visible_property(property).is_none()
+}
+
+/// Fetches or creates an undeclared dynamic-property cell for an indirect array write.
+fn lower_dynamic_property_cell_for_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    span: Span,
+) -> LoweredValue {
+    let property_expr = Expr::new(ExprKind::StringLiteral(property.to_string()), span);
+    let key = lower_expr(ctx, &property_expr);
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![object, key.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        PhpType::Mixed,
+        effects_lookup::runtime_effects(),
+        Some(span),
+    )
+}
+
+/// Returns true when an object property's fixed slot is a boxed runtime value.
+fn is_runtime_typed_property(php_type: &PhpType) -> bool {
+    matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+}
+
 /// Releases a temporary assigned into an object property after `PropSet` retains or boxes it.
 pub(super) fn release_property_assignment_source_after_retaining_store(
     ctx: &mut LoweringContext<'_, '_>,
@@ -283,4 +392,3 @@ pub(super) fn indexed_property_array_element_type(property_ty: &PhpType) -> Opti
         _ => None,
     }
 }
-

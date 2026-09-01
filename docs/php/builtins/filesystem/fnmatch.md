@@ -2,7 +2,7 @@
 title: "fnmatch()"
 description: "Matches a filename against a pattern."
 sidebar:
-  order: 131
+  order: 132
 ---
 
 ## fnmatch()

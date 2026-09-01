@@ -1694,6 +1694,28 @@ echo "done";
     );
 }
 
+/// Regression: initialized refcounted static properties release their final value before
+/// heap-debug reporting, including a `mixed` slot whose runtime payload changes shape.
+#[test]
+fn test_static_property_final_value_is_released_at_process_exit() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class StaticOwner {
+    public static mixed $value = "initial";
+}
+StaticOwner::$value = ["final"];
+echo StaticOwner::$value[0];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "final");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the final static-property value to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for issue #408 (in-place promotion): a string-key write that
 /// promotes a freshly built indexed array literal to hash storage must also free
 /// the source array. Repeated promotion in a loop keeps GC allocs and frees
@@ -4426,6 +4448,75 @@ echo $sum, "\n";
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected alternating alias/non-alias paths to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a static method whose fallback concatenates a string parameter releases an owning
+/// property-read argument temporary after every non-aliasing call.
+///
+/// Concatenation always creates independent storage. Treating that return as unknown provenance
+/// suppressed the argument release, leaking one 48-byte copy per call in helpers shaped like
+/// `DateTime::__elephc_runtime_timezone_name()`.
+#[test]
+fn test_static_concat_return_releases_owned_string_argument() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ZoneName {
+    public string $value = "UTC";
+
+    public static function normalize(string $value): string {
+        $upper = strtoupper($value);
+        if ($upper === "UTC") {
+            return "UTC";
+        }
+        return "" . $value;
+    }
+}
+
+$zone = new ZoneName();
+for ($i = 0; $i < 40; $i++) {
+    $name = ZoneName::normalize($zone->value);
+}
+echo $name;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "UTC");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected static concat-return arguments to be released, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies `clone` releases an owning boxed element read from mixed array storage.
+///
+/// The shallow clone borrows the source object while copying it. Before the source-temp cleanup,
+/// every `clone $objects[0]` left the freshly boxed `ArrayGet` cell live after the clone itself
+/// had been assigned and reclaimed.
+#[test]
+fn test_clone_releases_mixed_array_read_source() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Item {
+    public int $value = 7;
+}
+
+for ($i = 0; $i < 4; $i++) {
+    $items[$i] = new Item();
+}
+for ($i = 0; $i < 40; $i++) {
+    $copy = clone $items[0];
+}
+echo $copy->value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "7");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clone source temporaries to be released, got: {}",
         out.stderr
     );
 }

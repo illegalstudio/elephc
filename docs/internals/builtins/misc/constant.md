@@ -2,7 +2,7 @@
 title: "constant() — internals"
 description: "Compiler internals for constant(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 318
+  order: 320
 ---
 
 ## `constant()` — internals
@@ -10,22 +10,22 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/constant.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/constant.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
 - Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-- **Target strategy**: `eir_primitive`
+- **Target strategy**: `eir_graph`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `non_heap`
-- **Effects**: `static (1 declared effects)`
+- **Result ownership**: `fresh`
+- **Effects**: `static (3 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

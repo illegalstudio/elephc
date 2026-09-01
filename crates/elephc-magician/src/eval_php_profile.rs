@@ -29,7 +29,7 @@ use std::cell::Cell;
 ///
 /// KEEP IN SYNC with the default of `--php-version` in the compiler
 /// (`crate::web_prelude::PhpVersion::default()`).
-const DEFAULT_EVAL_PHP_VERSION_ID: u32 = 80500;
+const DEFAULT_EVAL_PHP_VERSION_ID: u32 = 80510;
 
 /// The supported profiles, paired with the `PHP_VERSION` string each one reports.
 ///
@@ -43,7 +43,7 @@ const EVAL_PHP_PROFILES: &[(u32, &str)] = &[
     (80200, "8.2.0"),
     (80300, "8.3.0"),
     (80400, "8.4.0"),
-    (80500, "8.5.0"),
+    (80510, "8.5.10-dev"),
     (80600, "8.6.0"),
 ];
 
@@ -72,7 +72,7 @@ pub(crate) fn eval_php_version_string() -> &'static str {
     EVAL_PHP_PROFILES
         .iter()
         .find(|(known, _)| *known == id)
-        .map_or("8.5.0", |(_, spelling)| *spelling)
+        .map_or("8.5.10-dev", |(_, spelling)| *spelling)
 }
 
 /// Returns `PHP_MINOR_VERSION` for the profile active on the current thread.
@@ -82,6 +82,16 @@ pub(crate) fn eval_php_version_string() -> &'static str {
 /// `8`, `0` and `""` from 8.2 through 8.5.
 pub(crate) fn eval_php_minor_version() -> i64 {
     i64::from((eval_php_version_id() / 100) % 100)
+}
+
+/// Returns `PHP_RELEASE_VERSION` for the active profile.
+pub(crate) fn eval_php_release_version() -> i64 {
+    i64::from(eval_php_version_id() % 100)
+}
+
+/// Returns `PHP_EXTRA_VERSION` for the active frozen profile.
+pub(crate) fn eval_php_extra_version() -> &'static str {
+    if eval_php_version_id() == 80510 { "-dev" } else { "" }
 }
 
 /// RAII guard restoring the previous profile on drop.
@@ -118,8 +128,8 @@ mod tests {
     /// elephc's codegen observes the behaviour that shipped before the setter.
     #[test]
     fn default_profile_is_the_newest_one() {
-        assert_eq!(eval_php_version_id(), 80500);
-        assert_eq!(eval_php_version_string(), "8.5.0");
+        assert_eq!(eval_php_version_id(), 80510);
+        assert_eq!(eval_php_version_string(), "8.5.10-dev");
         assert_eq!(eval_php_minor_version(), 5);
     }
 
@@ -149,8 +159,7 @@ mod tests {
     #[test]
     fn spellings_agree_with_their_ids() {
         for (id, spelling) in EVAL_PHP_PROFILES {
-            let expected = format!("{}.{}.0", id / 10000, (id / 100) % 100);
-            assert_eq!(*spelling, expected);
+            assert!(spelling.starts_with(&format!("{}.{}.", id / 10000, (id / 100) % 100)));
         }
     }
 }

@@ -122,6 +122,8 @@ pub(super) fn emit_module(
     for method in &module.class_methods {
         emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
     }
+    lower_inst::builtins::debug::emit_datetime_var_dump_dispatcher(emitter, module);
+    lower_inst::builtins::debug::emit_datetime_print_r_dispatcher(emitter, module);
     for closure in &module.closures {
         emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
     }

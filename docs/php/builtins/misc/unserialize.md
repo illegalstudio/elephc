@@ -2,7 +2,7 @@
 title: "unserialize()"
 description: "Creates a PHP value from a stored representation."
 sidebar:
-  order: 331
+  order: 338
 ---
 
 ## unserialize()

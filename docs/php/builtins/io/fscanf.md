@@ -2,7 +2,7 @@
 title: "fscanf()"
 description: "Parses input from a file according to a format."
 sidebar:
-  order: 183
+  order: 184
 ---
 
 ## fscanf()

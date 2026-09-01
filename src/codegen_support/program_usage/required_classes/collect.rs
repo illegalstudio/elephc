@@ -205,6 +205,15 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
             | StmtKind::PropertyArrayPush { value, .. } => {
                 collect_required_class_names_in_expr(value, names);
             }
+            StmtKind::DynamicPropertyArrayPush {
+                object,
+                property,
+                value,
+            } => {
+                collect_required_class_names_in_expr(object, names);
+                collect_required_class_names_in_expr(property, names);
+                collect_required_class_names_in_expr(value, names);
+            }
             StmtKind::StaticPropertyAssign {
                 receiver, value, ..
             }

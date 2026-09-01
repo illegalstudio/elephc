@@ -2,7 +2,7 @@
 title: "class_uses()"
 description: "Returns the traits used by the given class."
 sidebar:
-  order: 80
+  order: 81
 ---
 
 ## class_uses()

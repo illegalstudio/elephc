@@ -2,7 +2,7 @@
 title: "str_starts_with() — internals"
 description: "Compiler internals for str_starts_with(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 460
+  order: 467
 ---
 
 ## `str_starts_with()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/str_starts_with.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/str_starts_with.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:576](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L576) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

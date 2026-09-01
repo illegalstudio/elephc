@@ -215,7 +215,7 @@ pub fn inject_if_used(
                     declarations.push(build::cli_ini_get_decl());
                 }
                 if ini_set_used {
-                    declarations.push(build::cli_ini_set_decl());
+                    declarations.extend(build::cli_ini_set_decls());
                 }
                 if ini_get_all_used {
                     // The known-module predicate is only reachable from ini_get_all's extension

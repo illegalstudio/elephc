@@ -225,28 +225,7 @@ fn eval_mktime_alias(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() > 6 {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let mut full = Vec::with_capacity(6);
-    let mut temps = Vec::new();
-    let date_name = if name == "gmmktime" { "gmdate" } else { "date" };
-    for (index, spec) in ["G", "i", "s", "n", "j", "Y"].into_iter().enumerate() {
-        if let Some(arg) = args.get(index) {
-            full.push(*arg);
-        } else {
-            let default = eval_current_date_part_int(date_name, spec, context, values)?;
-            temps.push(default);
-            full.push(default);
-        }
-    }
-    let result = eval_mktime_result(
-        name, full[0], full[1], full[2], full[3], full[4], full[5], context, values,
-    );
-    for temp in temps {
-        values.release(temp)?;
-    }
-    result
+    eval_mktime_result_with_defaults(name, &args, context, values)
 }
 
 /// Constructs one native DateTime-family object and runs its constructor.
@@ -471,11 +450,14 @@ fn eval_date_sunfunc_alias(
         return Err(EvalStatus::RuntimeFatal);
     }
     let which = values.int(if sunset { 1 } else { 0 })?;
-    let mut call_args = Vec::with_capacity(args.len() + 1);
+    let line = values.int(0)?;
+    let mut call_args = Vec::with_capacity(args.len() + 2);
     call_args.push(which);
+    call_args.push(line);
     call_args.extend(args);
     let result = eval_static_alias("DateTime", "__elephc_date_sunfunc", call_args, context, values);
     values.release(which)?;
+    values.release(line)?;
     result
 }
 
@@ -521,7 +503,7 @@ fn eval_timezone_version_alias(
 }
 
 /// Evaluates one current date part as an integer runtime cell.
-fn eval_current_date_part_int(
+pub(in crate::interpreter) fn eval_current_date_part_int(
     date_name: &str,
     spec: &str,
     context: &ElephcEvalContext,

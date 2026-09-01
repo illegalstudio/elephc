@@ -13,6 +13,9 @@
 //!   indexed arrays of scalars, and the result is the two-input hash result type. A
 //!   check hook is required because the return type depends on the inferred arguments.
 
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
@@ -20,9 +23,25 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_replace",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayReplace,
-    ),
+    semantics: array_replace_semantics(),
+}
+
+/// Builds semantics that derive the concrete result hash from both operand types.
+const fn array_replace_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayReplace);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the widened associative result shape used by the two-hash runtime helper.
+fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
+    let Some(first) = input.arg_types.first() else {
+        return PhpType::Mixed;
+    };
+    let Some(second) = input.arg_types.get(1) else {
+        return first.clone();
+    };
+    PhpType::two_input_hash_result(first, second)
 }
 
 /// Validates both arguments are hash-compatible arrays and returns the merged hash type.

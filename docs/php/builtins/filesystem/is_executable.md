@@ -2,7 +2,7 @@
 title: "is_executable()"
 description: "Tells whether the filename is executable."
 sidebar:
-  order: 136
+  order: 137
 ---
 
 ## is_executable()
