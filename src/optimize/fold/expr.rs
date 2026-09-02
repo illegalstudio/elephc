@@ -183,8 +183,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
-            let mut args = args.into_iter().map(fold_expr).collect::<Vec<_>>();
-            fold_pcntl_signal_array_literal(&name, &mut args);
+            let args = args.into_iter().map(fold_expr).collect::<Vec<_>>();
             if name
                 .as_canonical()
                 .trim_start_matches('\\')
@@ -447,50 +446,6 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         }
     };
     Expr { kind, span }
-}
-
-/// Applies PHP's integer coercion and key-insensitive semantics to literal PCNTL signal sets.
-fn fold_pcntl_signal_array_literal(name: &Name, args: &mut [Expr]) {
-    let canonical = name.as_canonical().to_ascii_lowercase();
-    let signal_position = match canonical.trim_start_matches('\\') {
-        "pcntl_sigprocmask" => 1,
-        "pcntl_sigwaitinfo" | "pcntl_sigtimedwait" => 0,
-        _ => return,
-    };
-    let Some(argument) = args.get_mut(signal_position) else {
-        return;
-    };
-    let value = match &mut argument.kind {
-        ExprKind::NamedArg { name, value } if php_symbol_key(name) == "signals" => value.as_mut(),
-        ExprKind::NamedArg { .. } => return,
-        _ => argument,
-    };
-    let items = match std::mem::replace(&mut value.kind, ExprKind::Null) {
-        ExprKind::ArrayLiteral(items) => items,
-        ExprKind::ArrayLiteralAssoc(items) => items.into_iter().map(|(_, value)| value).collect(),
-        other => {
-            value.kind = other;
-            return;
-        }
-    };
-    value.kind = ExprKind::ArrayLiteral(
-        items
-            .into_iter()
-            .map(|item| {
-                let span = item.span;
-                match item.kind {
-                    ExprKind::StringLiteral(text) => text
-                        .trim()
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|number| number.is_finite())
-                        .map(|number| Expr::new(ExprKind::IntLiteral(number as i64), span))
-                        .unwrap_or_else(|| Expr::new(ExprKind::StringLiteral(text), span)),
-                    _ => item,
-                }
-            })
-            .collect(),
-    );
 }
 
 /// Folds the target of an instanceof expression, recursing into the expression form.

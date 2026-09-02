@@ -198,9 +198,7 @@ pub(super) fn emit_value_error_unless(
             ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval degenerate?
             ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // a single-point interval accepts any step magnitude
             ctx.emitter.instruction(&format!("csel x9, {}, {}, le", low, high));// x9 = the smaller of the two endpoints
-            ctx.emitter.instruction(
-                &format!("csel x10, {}, {}, le", high, low)
-            );                                                                  // x10 = the larger of the two endpoints
+            ctx.emitter.instruction(&format!("csel x10, {}, {}, le", high, low)); // x10 = the larger of the two endpoints
             ctx.emitter.instruction("sub x9, x10, x9");                         // x9 = high - low, the spanned interval as an unsigned width
             ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // is the guarded argument negative?
             ctx.emitter.instruction(&format!("cneg x10, {}, lt", reg));         // x10 = |argument|, its unsigned magnitude
@@ -304,6 +302,14 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
     Ok(())
 }
 
+/// Throws a catchable PHP `Error` whose message already sits in the string-result registers.
+pub(super) fn emit_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "Error");
+    emit_dynamic_throwable_object(ctx, "_spl_error_class_id");
+}
+
 /// Throws a catchable PHP `ValueError` whose message already sits in the string-result registers.
 ///
 /// The static `emit_value_error()` covers the builtin guards whose wording is fixed. A few of
@@ -401,9 +407,7 @@ fn emit_static_exception_at(
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 throwable heap kind
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
@@ -572,9 +576,7 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(
-                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
-            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 throwable heap kind
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);

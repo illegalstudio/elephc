@@ -5,7 +5,8 @@
 //! - `cargo test --test codegen_tests runtime_gc::pcntl` through Rust's test harness.
 //!
 //! Key details:
-//! - Output rebinding and process-wide handler teardown must release every retained heap owner.
+//! - Output rebinding, temporary signal normalization, and process-wide handler teardown
+//!   must release every retained heap owner.
 
 use crate::support::compile_and_run_with_heap_debug;
 
@@ -71,6 +72,27 @@ fn test_pcntl_signal_closure_registration_is_heap_clean() {
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "registered", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr,
+    );
+}
+
+/// Releases every temporary integer array created for variable numeric-string signal sets.
+#[test]
+fn test_pcntl_signal_string_array_normalization_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        "<?php
+        $signals = ['user' => '9', 'term' => '15'];
+        for ($i = 0; $i < 3; $i++) {
+            pcntl_sigprocmask(SIG_BLOCK, $signals);
+            pcntl_sigprocmask(SIG_UNBLOCK, $signals);
+        }
+        echo 'clean';",
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "clean", "stderr: {}", out.stderr);
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap, got: {}",

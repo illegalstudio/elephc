@@ -105,6 +105,12 @@ impl Checker {
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
         let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        if self.has_function_decl_folded(name)
+            && crate::builtins::registry::lookup(name).is_some()
+            && !catalog::builtin_is_available_for_target(name, self.target)
+        {
+            return Ok(None);
+        }
         // `--strict-php` hides extension builtins entirely: the call must fall
         // through to user-function resolution and the standard undefined-function
         // diagnostics, mirroring PHP where these names do not exist. This must

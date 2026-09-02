@@ -53,6 +53,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 | PhpType::Void
                 | PhpType::Never
                 | PhpType::TaggedScalar
+                | PhpType::Object(_)
                 | PhpType::Mixed
                 | PhpType::Union(_)
         ) {

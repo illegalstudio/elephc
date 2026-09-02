@@ -20,6 +20,9 @@ use crate::types::PhpType;
 use super::pcntl::{
     pcntl_optional_output_local_slot, pcntl_siginfo_output_local_slot, store_pcntl_siginfo_array,
 };
+use super::pcntl_signal_values::{
+    load_signal_int_array, release_normalized_signal_array, store_normalized_signal_array,
+};
 use super::strings::load_as_int;
 use super::{ensure_arg_count_between, expect_operand, store_if_result};
 
@@ -29,14 +32,16 @@ const MASK_MODE_OFFSET: usize = SIGNAL_BUFFER_BYTES;
 const MASK_RESULT_OFFSET: usize = SIGNAL_BUFFER_BYTES + 8;
 const MASK_SIGNALS_OFFSET: usize = SIGNAL_BUFFER_BYTES + 16;
 const MASK_COUNT_OFFSET: usize = SIGNAL_BUFFER_BYTES + 24;
-const MASK_FRAME_BYTES: usize = SIGNAL_BUFFER_BYTES + 32;
+const MASK_NORMALIZED_OFFSET: usize = SIGNAL_BUFFER_BYTES + 32;
+const MASK_FRAME_BYTES: usize = SIGNAL_BUFFER_BYTES + 48;
 const SIGINFO_BYTES: usize = 96;
 const WAIT_SIGNALS_OFFSET: usize = SIGINFO_BYTES;
 const WAIT_COUNT_OFFSET: usize = SIGINFO_BYTES + 8;
 const WAIT_SECONDS_OFFSET: usize = SIGINFO_BYTES + 16;
 const WAIT_NANOSECONDS_OFFSET: usize = SIGINFO_BYTES + 24;
 const WAIT_RESULT_OFFSET: usize = SIGINFO_BYTES + 32;
-const WAIT_FRAME_BYTES: usize = SIGINFO_BYTES + 48;
+const WAIT_NORMALIZED_OFFSET: usize = SIGINFO_BYTES + 40;
+const WAIT_FRAME_BYTES: usize = SIGINFO_BYTES + 64;
 
 /// Lowers `pcntl_sigprocmask()` and conditionally writes the prior mask array.
 pub(super) fn lower_sigprocmask(
@@ -63,7 +68,8 @@ pub(super) fn lower_sigprocmask(
         MASK_MODE_OFFSET,
     );
     let signals = expect_operand(inst, 1)?;
-    load_indexed_int_array(ctx, signals, "pcntl_sigprocmask signals")?;
+    let normalized = load_signal_int_array(ctx, signals, "pcntl_sigprocmask", 2)?;
+    store_normalized_signal_array(ctx, normalized, MASK_NORMALIZED_OFFSET);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x9, [x0]");                            // stage the selected signal count
@@ -80,7 +86,7 @@ pub(super) fn lower_sigprocmask(
             ctx.emitter.instruction("cset x2, eq");                             // validation arg2 = whether emptiness is allowed
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", MASK_SIGNALS_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", MASK_COUNT_OFFSET);
-            emit_validate_signal_set(ctx, "pcntl_sigprocmask", 2);
+            emit_validate_signal_set(ctx, "pcntl_sigprocmask", 2, normalized.then_some(MASK_NORMALIZED_OFFSET));
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", MASK_SIGNALS_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", MASK_COUNT_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", MASK_MODE_OFFSET);
@@ -107,7 +113,7 @@ pub(super) fn lower_sigprocmask(
             ctx.emitter.instruction("movzx edx, dl");                           // validation arg2 = normalized boolean
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", MASK_SIGNALS_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", MASK_COUNT_OFFSET);
-            emit_validate_signal_set(ctx, "pcntl_sigprocmask", 2);
+            emit_validate_signal_set(ctx, "pcntl_sigprocmask", 2, normalized.then_some(MASK_NORMALIZED_OFFSET));
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", MASK_SIGNALS_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", MASK_COUNT_OFFSET);
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", MASK_MODE_OFFSET);
@@ -124,6 +130,7 @@ pub(super) fn lower_sigprocmask(
             ctx.emitter.instruction(&format!("js {failure}"));                  // return false while preserving caller output
         }
     }
+    release_normalized_signal_array(ctx, normalized, MASK_NORMALIZED_OFFSET);
     if let Some(slot) = old_slot {
         ctx.release_local_before_refcounted_writeback(slot)?;
         emit_indexed_int_array_from_stack(ctx, 0, MASK_RESULT_OFFSET);
@@ -135,6 +142,7 @@ pub(super) fn lower_sigprocmask(
         Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),        // bypass the false failure result
     }
     ctx.emitter.label(&failure);
+    release_normalized_signal_array(ctx, normalized, MASK_NORMALIZED_OFFSET);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, MASK_FRAME_BYTES);
@@ -160,7 +168,8 @@ pub(super) fn lower_signal_wait(
     let failure = ctx.next_label("pcntl_signal_wait_failure");
     let done = ctx.next_label("pcntl_signal_wait_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, WAIT_FRAME_BYTES);
-    load_indexed_int_array(ctx, expect_operand(inst, 0)?, name)?;
+    let normalized = load_signal_int_array(ctx, expect_operand(inst, 0)?, name, 1)?;
+    store_normalized_signal_array(ctx, normalized, WAIT_NORMALIZED_OFFSET);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("add x9, x0, #24");                         // preserve indexed signal payload
@@ -187,7 +196,7 @@ pub(super) fn lower_signal_wait(
             ctx.emitter.instruction("xor edx, edx");                            // synchronous waits reject an empty signal set
         }
     }
-    emit_validate_signal_set(ctx, name, 1);
+    emit_validate_signal_set(ctx, name, 1, normalized.then_some(WAIT_NORMALIZED_OFFSET));
     if timed {
         load_optional_int(ctx, inst.operands.get(2).copied(), 0, name)?;
         abi::emit_store_to_sp(
@@ -201,7 +210,10 @@ pub(super) fn lower_signal_wait(
             abi::int_result_reg(ctx.emitter),
             WAIT_NANOSECONDS_OFFSET,
         );
-        emit_validate_sigtimedwait_timeout(ctx);
+        emit_validate_sigtimedwait_timeout(
+            ctx,
+            normalized.then_some(WAIT_NORMALIZED_OFFSET),
+        );
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -239,6 +251,7 @@ pub(super) fn lower_signal_wait(
             ctx.emitter.instruction(&format!("je {failure}"));                  // return false without siginfo writeback
         }
     }
+    release_normalized_signal_array(ctx, normalized, WAIT_NORMALIZED_OFFSET);
     if let Some(slot) = info_slot {
         ctx.release_local_before_refcounted_writeback(slot)?;
         match ctx.emitter.target.arch {
@@ -260,6 +273,7 @@ pub(super) fn lower_signal_wait(
         Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done}")),        // bypass the boxed false failure result
     }
     ctx.emitter.label(&failure);
+    release_normalized_signal_array(ctx, normalized, WAIT_NORMALIZED_OFFSET);
     abi::emit_release_temporary_stack(ctx.emitter, WAIT_FRAME_BYTES);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
@@ -298,7 +312,12 @@ fn emit_validate_sigprocmask_mode(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Calls the bridge's signal-set validator and raises PHP's array `ValueError`s.
-fn emit_validate_signal_set(ctx: &mut FunctionContext<'_>, name: &str, argument: usize) {
+fn emit_validate_signal_set(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    argument: usize,
+    normalized_offset: Option<usize>,
+) {
     let empty = ctx.next_label("pcntl_signal_set_empty");
     let range = ctx.next_label("pcntl_signal_set_range");
     let valid = ctx.next_label("pcntl_signal_set_valid");
@@ -321,11 +340,17 @@ fn emit_validate_signal_set(ctx: &mut FunctionContext<'_>, name: &str, argument:
         }
     }
     ctx.emitter.label(&empty);
+    if let Some(offset) = normalized_offset {
+        release_normalized_signal_array(ctx, true, offset);
+    }
     super::super::exceptions::emit_value_error(
         ctx,
         &format!("{name}(): Argument #{argument} ($signals) must not be empty"),
     );
     ctx.emitter.label(&range);
+    if let Some(offset) = normalized_offset {
+        release_normalized_signal_array(ctx, true, offset);
+    }
     let maximum = match ctx.emitter.target.platform {
         Platform::MacOS => 31,
         Platform::Linux => 64,
@@ -341,7 +366,10 @@ fn emit_validate_signal_set(ctx: &mut FunctionContext<'_>, name: &str, argument:
 }
 
 /// Raises PHP's runtime `ValueError`s for invalid dynamic timed-wait bounds.
-fn emit_validate_sigtimedwait_timeout(ctx: &mut FunctionContext<'_>) {
+fn emit_validate_sigtimedwait_timeout(
+    ctx: &mut FunctionContext<'_>,
+    normalized_offset: Option<usize>,
+) {
     let invalid_seconds = ctx.next_label("pcntl_sigtimedwait_invalid_seconds");
     let invalid_nanoseconds = ctx.next_label("pcntl_sigtimedwait_invalid_nanoseconds");
     let zero_timeout = ctx.next_label("pcntl_sigtimedwait_zero_timeout");
@@ -376,16 +404,25 @@ fn emit_validate_sigtimedwait_timeout(ctx: &mut FunctionContext<'_>) {
         }
     }
     ctx.emitter.label(&invalid_seconds);
+    if let Some(offset) = normalized_offset {
+        release_normalized_signal_array(ctx, true, offset);
+    }
     super::super::exceptions::emit_value_error(
         ctx,
         "pcntl_sigtimedwait(): Argument #3 ($seconds) must be greater than or equal to 0",
     );
     ctx.emitter.label(&invalid_nanoseconds);
+    if let Some(offset) = normalized_offset {
+        release_normalized_signal_array(ctx, true, offset);
+    }
     super::super::exceptions::emit_value_error(
         ctx,
         "pcntl_sigtimedwait(): Argument #4 ($nanoseconds) must be between 0 and 1e9",
     );
     ctx.emitter.label(&zero_timeout);
+    if let Some(offset) = normalized_offset {
+        release_normalized_signal_array(ctx, true, offset);
+    }
     super::super::exceptions::emit_value_error(
         ctx,
         "pcntl_sigtimedwait(): At least one of argument #3 ($seconds) or argument #4 ($nanoseconds) must be greater than 0",
@@ -393,22 +430,7 @@ fn emit_validate_sigtimedwait_timeout(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&valid);
 }
 
-/// Validates and loads one indexed integer array through its native result pointer.
-fn load_indexed_int_array(
-    ctx: &mut FunctionContext<'_>,
-    value: crate::ir::ValueId,
-    context: &str,
-) -> Result<()> {
-    let ty = ctx.load_value_to_result(value)?.codegen_repr();
-    if matches!(ty, PhpType::Array(ref element) if matches!(&**element, PhpType::Int | PhpType::Never))
-    {
-        return Ok(());
-    }
-    Err(CodegenIrError::unsupported(format!(
-        "{context} storage {ty:?}",
-    )))
-}
-
+/// Loads an integer array directly or normalizes PHP-coercible indexed/associative values.
 /// Resolves an old-signal output to indexed integer or boxed local storage.
 fn pcntl_signal_array_output_local_slot(
     ctx: &FunctionContext<'_>,

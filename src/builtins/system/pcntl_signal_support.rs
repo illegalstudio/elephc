@@ -5,7 +5,8 @@
 //! - The `pcntl_sigprocmask`, `pcntl_sigwaitinfo`, and `pcntl_sigtimedwait` builtin homes.
 //!
 //! Key details:
-//! - Signal sets use indexed integer arrays in the AOT bridge ABI.
+//! - Signal-set values accept PHP's weak integer-coercible scalar array forms; codegen
+//!   normalizes indexed and associative storage into the AOT bridge ABI.
 //! - By-reference outputs are write-only and may introduce previously undefined variables.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -133,13 +134,13 @@ fn check_signal_arguments(
         if name.as_deref() == Some("signals") || (name.is_none() && index == signals_index) {
             let ty = cx.checker.infer_type(value, cx.env)?;
             match ty.codegen_repr() {
-                PhpType::Array(element)
-                    if matches!(&*element, PhpType::Int | PhpType::Never) => {}
+                PhpType::Array(element) | PhpType::AssocArray { value: element, .. }
+                    if signal_element_type_supported(&element) => {}
                 other => {
                     return Err(CompileError::new(
                         value.span,
                         &format!(
-                            "{}() parameter $signals must be an indexed integer array, {other:?} given",
+                            "{}() parameter $signals must be an array of integer-coercible scalar values, {other:?} given",
                             cx.name
                         ),
                     ));
@@ -158,6 +159,23 @@ fn check_signal_arguments(
         cx.checker.infer_type(value, cx.env)?;
     }
     Ok(())
+}
+
+/// Returns whether an array element type can follow PHP's weak integer parameter coercion.
+fn signal_element_type_supported(ty: &PhpType) -> bool {
+    matches!(
+        ty.codegen_repr(),
+        PhpType::Int
+            | PhpType::Str
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::TaggedScalar
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
 }
 
 /// Finds a positional or named source argument for one canonical parameter.

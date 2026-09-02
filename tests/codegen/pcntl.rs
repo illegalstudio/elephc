@@ -99,6 +99,18 @@ fn test_pcntl_php_os_family_matches_host() {
     assert_eq!(out, "Linux|Linux");
 }
 
+/// Exposes the same target-derived OS family inside opaque eval fragments.
+#[test]
+fn test_pcntl_eval_php_os_family_matches_host() {
+    let out = compile_and_run(
+        "<?php echo eval('return (defined(\"PHP_OS_FAMILY\") ? PHP_OS_FAMILY : \"missing\");');",
+    );
+    #[cfg(target_os = "macos")]
+    assert_eq!(out, "Darwin");
+    #[cfg(target_os = "linux")]
+    assert_eq!(out, "Linux");
+}
+
 /// Prunes target-unavailable PCNTL calls behind literal availability and OS-family guards.
 #[test]
 fn test_pcntl_target_guards_prune_unavailable_calls_before_typecheck() {
@@ -125,6 +137,24 @@ fn test_pcntl_target_guards_prune_unavailable_calls_before_typecheck() {
         else { echo 'family|'; }
         echo guarded_target_call();";
     assert_eq!(compile_and_run(source), "function|family|nested");
+}
+
+/// Allows a user polyfill to own a registry name when that builtin is unavailable on the target.
+#[test]
+fn test_pcntl_target_unavailable_builtin_can_be_polyfilled() {
+    #[cfg(target_os = "linux")]
+    let source = "<?php
+        if (!function_exists('pcntl_getqos_class')) {
+            function pcntl_getqos_class(): int { return 7; }
+        }
+        echo pcntl_getqos_class();";
+    #[cfg(target_os = "macos")]
+    let source = "<?php
+        if (!function_exists('pcntl_getcpu')) {
+            function pcntl_getcpu(): int { return 7; }
+        }
+        echo pcntl_getcpu();";
+    assert_eq!(compile_and_run(source), "7");
 }
 
 /// Returns the previous alarm's remaining time while cancelling it.
@@ -326,6 +356,44 @@ fn test_pcntl_signal_masks_accept_php_coercible_literal_arrays() {
     assert_eq!(out, "numeric|assoc|done");
 }
 
+/// Applies signal-value coercion to variables and associative storage, not only inline literals.
+#[test]
+fn test_pcntl_signal_masks_accept_php_coercible_variable_arrays() {
+    let out = compile_and_run_capture(
+        "<?php
+        $indexed = ['9abc'];
+        $assoc = ['term' => '15'];
+        echo pcntl_sigprocmask(SIG_BLOCK, $indexed) ? 'indexed|' : 'bad|';
+        echo pcntl_sigprocmask(SIG_BLOCK, $assoc) ? 'assoc|' : 'bad|';
+        echo pcntl_sigprocmask(SIG_UNBLOCK, [9, 15]) ? 'done' : 'bad';",
+    );
+    assert_eq!(out.stdout, "indexed|assoc|done");
+    assert!(
+        out.stderr.contains("Warning: A non-numeric value encountered"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Emits PHP's float-string precision deprecation while still coercing the signal number.
+#[test]
+fn test_pcntl_signal_float_string_precision_loss_is_deprecated() {
+    let out = compile_and_run_capture(
+        "<?php
+        $signals = ['9.7'];
+        echo pcntl_sigprocmask(SIG_BLOCK, $signals) ? 'blocked|' : 'bad|';
+        echo pcntl_sigprocmask(SIG_UNBLOCK, [9]) ? 'done' : 'bad';",
+    );
+    assert_eq!(out.stdout, "blocked|done");
+    assert!(
+        out.stderr.contains(
+            "Deprecated: Implicit conversion from float-string \"9.7\" to int loses precision"
+        ),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Throws `TypeError`, rather than a signal-range `ValueError`, for eval nonnumeric strings.
 #[test]
 fn test_pcntl_eval_signal_mask_rejects_nonnumeric_string_with_type_error() {
@@ -336,6 +404,19 @@ fn test_pcntl_eval_signal_mask_rejects_nonnumeric_string_with_type_error() {
             catch (ValueError $error) { return "value"; }
             return "bad";
         ');"#,
+    );
+    assert_eq!(out, "type");
+}
+
+/// Throws the same catchable `TypeError` for nonnumeric strings in AOT variable arrays.
+#[test]
+fn test_pcntl_aot_signal_mask_rejects_nonnumeric_variable_string() {
+    let out = compile_and_run(
+        "<?php
+        $signals = ['abc'];
+        try { pcntl_sigprocmask(SIG_BLOCK, $signals); }
+        catch (TypeError $error) { echo 'type'; }
+        catch (ValueError $error) { echo 'value'; }",
     );
     assert_eq!(out, "type");
 }
@@ -578,6 +659,40 @@ fn test_pcntl_exec_coerces_scalar_environment_values() {
     assert_eq!(out, "K=123\nEMPTY=\n");
 }
 
+/// Uses `__toString()` for object values supplied through heterogeneous exec arrays.
+#[test]
+fn test_pcntl_exec_coerces_stringable_object_values() {
+    let out = compile_and_run(
+        r#"<?php
+        class ExecStringable {
+            public function __toString(): string { return 'object'; }
+        }
+        $child = pcntl_fork();
+        if ($child === 0) {
+            pcntl_exec('/bin/echo', ['value', new ExecStringable()]);
+            exit(1);
+        }
+        pcntl_waitpid($child, $status);"#,
+    );
+    assert_eq!(out, "value object\n");
+}
+
+/// Throws PHP's catchable `Error`, with the concrete class name, for non-stringable exec values.
+#[test]
+fn test_pcntl_exec_non_stringable_object_throws_error() {
+    let out = compile_and_run(
+        r#"<?php
+        class ExecPlainObject {}
+        try { pcntl_exec('/bin/echo', [new ExecPlainObject()]); }
+        catch (Error $error) { echo get_class($error) . ':' . $error->getMessage(); }
+        catch (TypeError $error) { echo 'wrong'; }"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Object of class ExecPlainObject could not be converted to string"
+    );
+}
+
 /// Enforces PHP's current-thread-only Darwin priority selector rule in AOT and eval.
 #[cfg(target_os = "macos")]
 #[test]
@@ -587,12 +702,16 @@ fn test_pcntl_darwin_thread_priority_requires_zero_process_id() {
         try { pcntl_getpriority(5, PRIO_DARWIN_THREAD); }
         catch (ValueError $error) { echo 'aot-get|'; }
         try { pcntl_setpriority(0, 5, PRIO_DARWIN_THREAD); }
-        catch (ValueError $error) { echo 'aot-set|'; }
+        catch (ValueError $error) {
+            echo (str_contains($error->getMessage(), 'provided as second parameter') ? 'aot-set|' : 'bad|');
+        }
         echo eval('
             try { pcntl_getpriority(5, PRIO_DARWIN_THREAD); }
             catch (ValueError $error) { echo "eval-get|"; }
             try { pcntl_setpriority(0, 5, PRIO_DARWIN_THREAD); }
-            catch (ValueError $error) { return "eval-set"; }
+            catch (ValueError $error) {
+                return str_contains($error->getMessage(), "provided as second parameter") ? "eval-set" : "bad";
+            }
             return "bad";
         ');"#,
     );

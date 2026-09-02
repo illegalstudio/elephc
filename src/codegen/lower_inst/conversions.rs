@@ -305,7 +305,7 @@ pub(in crate::codegen) fn emit_mixed_string_dispatch_from_result(
     }
 
     ctx.emitter.label(&no_match_label);
-    emit_mixed_missing_tostring_fatal(ctx);
+    emit_mixed_missing_tostring_error(ctx, receiver_reg);
     ctx.emitter.label(&done_label);
     Ok(())
 }
@@ -414,28 +414,57 @@ fn coerce_tostring_return_to_string_result(
     }
 }
 
-/// Emits a fatal when a boxed Mixed object has no matching public `__toString()`.
-fn emit_mixed_missing_tostring_fatal(ctx: &mut FunctionContext<'_>) {
-    let (label, len) = ctx
-        .data
-        .add_string(b"Fatal error: Object could not be converted to string\n");
+/// Throws PHP's catchable object-to-string `Error`, including the runtime class name.
+fn emit_mixed_missing_tostring_error(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
+    let (message_ptr, message_len) = abi::string_result_regs(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
+            ctx.emitter.instruction(&format!("ldr x9, [{}]", receiver_reg));    // load the receiver class id
+            abi::emit_symbol_address(ctx.emitter, "x10", "_class_name_entries");
+            ctx.emitter.instruction("add x10, x10, x9, lsl #4");                // address the receiver class-name row
+            ctx.emitter.instruction(&format!("ldr {}, [x10]", message_ptr));    // borrow the receiver class-name pointer
+            ctx.emitter.instruction(&format!("ldr {}, [x10, #8]", message_len)); // borrow the receiver class-name length
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
+            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [{}]", receiver_reg)); // load the receiver class id
+            abi::emit_symbol_address(ctx.emitter, "r10", "_class_name_entries");
+            ctx.emitter.instruction("shl r9, 4");                               // scale the class id to its metadata row
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9]", message_ptr)); // borrow the receiver class-name pointer
+            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", message_len)); // borrow the receiver class-name length
         }
+    }
+    emit_string_result_concat_prefix(ctx, "Object of class ");
+    emit_string_result_concat_suffix(ctx, " could not be converted to string");
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    super::exceptions::emit_error_from_string_result(ctx);
+}
+
+/// Prepends a static fragment to the active string result.
+fn emit_string_result_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
+    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
+    let (right_ptr, right_len) = concat_right_operand_regs(ctx);
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+    ctx.emitter.instruction(&format!("mov {}, {}", right_ptr, text_ptr));       // move the runtime class name into concat's right operand
+    ctx.emitter.instruction(&format!("mov {}, {}", right_len, text_len));       // preserve the runtime class-name length
+    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
+    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// Appends a static fragment to the active string result.
+fn emit_string_result_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
+    let (right_ptr, right_len) = concat_right_operand_regs(ctx);
+    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
+    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
+    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+}
+
+/// Returns the register pair used by the right operand of `__rt_concat`.
+fn concat_right_operand_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi"),
     }
 }
 

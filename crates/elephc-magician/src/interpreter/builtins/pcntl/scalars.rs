@@ -125,7 +125,6 @@ fn eval_pcntl_getpriority(
     eval_validate_darwin_thread_process_id(
         "pcntl_getpriority",
         1,
-        2,
         process_id,
         mode,
         context,
@@ -158,7 +157,6 @@ fn eval_pcntl_setpriority(
     eval_validate_darwin_thread_process_id(
         "pcntl_setpriority",
         2,
-        3,
         process_id,
         mode,
         context,
@@ -181,7 +179,6 @@ fn eval_pcntl_setpriority(
 fn eval_validate_darwin_thread_process_id(
     name: &str,
     argument: usize,
-    mode_argument: usize,
     process_id: i64,
     mode: i64,
     context: &mut ElephcEvalContext,
@@ -191,8 +188,7 @@ fn eval_validate_darwin_thread_process_id(
     if mode == 3 && process_id != 0 {
         let _: RuntimeCellHandle = eval_throw_builtin_value_error(
             &format!(
-                "{name}(): Argument #{argument} ($process_id) must be 0 (zero) if PRIO_DARWIN_THREAD is provided as {} parameter",
-                ordinal_parameter(mode_argument)
+                "{name}(): Argument #{argument} ($process_id) must be 0 (zero) if PRIO_DARWIN_THREAD is provided as second parameter"
             ),
             context,
             values,
@@ -203,23 +199,12 @@ fn eval_validate_darwin_thread_process_id(
     let _ = (
         name,
         argument,
-        mode_argument,
         process_id,
         mode,
         context,
         values,
     );
     Ok(())
-}
-
-/// Returns the ordinal word PHP uses for a one-based parameter position.
-#[cfg(target_os = "macos")]
-fn ordinal_parameter(position: usize) -> &'static str {
-    match position {
-        2 => "second",
-        3 => "third",
-        _ => "selected",
-    }
 }
 
 /// Raises PHP's target-specific `ValueError` for an unsupported priority selector.

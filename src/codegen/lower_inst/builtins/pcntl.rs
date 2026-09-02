@@ -1180,7 +1180,7 @@ fn lower_getpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve process id while materializing mode
             load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_getpriority mode")?;
             emit_validate_priority_mode(ctx, "pcntl_getpriority", 2);
-            emit_validate_darwin_thread_process_id(ctx, "pcntl_getpriority", 1, 2, 0);
+            emit_validate_darwin_thread_process_id(ctx, "pcntl_getpriority", 1, 0);
             ctx.emitter.instruction("mov x1, x0");                              // C arg1 = priority selector mode
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // C arg0 = process id
             ctx.emitter.instruction("add x2, sp, #8");                          // C arg2 = writable priority output
@@ -1202,7 +1202,7 @@ fn lower_getpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve process id while materializing mode
             load_optional_int(ctx, inst.operands.get(1).copied(), 0, "pcntl_getpriority mode")?;
             emit_validate_priority_mode(ctx, "pcntl_getpriority", 2);
-            emit_validate_darwin_thread_process_id(ctx, "pcntl_getpriority", 1, 2, 0);
+            emit_validate_darwin_thread_process_id(ctx, "pcntl_getpriority", 1, 0);
             ctx.emitter.instruction("mov esi, eax");                            // C arg1 = priority selector mode
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // C arg0 = process id
             ctx.emitter.instruction("lea rdx, [rsp + 8]");                      // C arg2 = writable priority output
@@ -1233,7 +1233,7 @@ fn lower_setpriority(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_optional_int(ctx, inst.operands.get(2).copied(), 0, "pcntl_setpriority mode")?;
     emit_validate_priority_mode(ctx, "pcntl_setpriority", 3);
-    emit_validate_darwin_thread_process_id(ctx, "pcntl_setpriority", 2, 3, 0);
+    emit_validate_darwin_thread_process_id(ctx, "pcntl_setpriority", 2, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x2, x0");                              // C arg2 = priority selector mode
@@ -1264,7 +1264,6 @@ fn emit_validate_darwin_thread_process_id(
     ctx: &mut FunctionContext<'_>,
     name: &str,
     argument: usize,
-    mode_argument: usize,
     process_id_stack_offset: usize,
 ) {
     if ctx.emitter.target.platform != Platform::MacOS {
@@ -1294,12 +1293,7 @@ fn emit_validate_darwin_thread_process_id(
     super::super::exceptions::emit_value_error(
         ctx,
         &format!(
-            "{name}(): Argument #{argument} ($process_id) must be 0 (zero) if PRIO_DARWIN_THREAD is provided as {} parameter",
-            match mode_argument {
-                2 => "second",
-                3 => "third",
-                _ => "selected",
-            }
+            "{name}(): Argument #{argument} ($process_id) must be 0 (zero) if PRIO_DARWIN_THREAD is provided as second parameter"
         ),
     );
     ctx.emitter.label(&valid);
