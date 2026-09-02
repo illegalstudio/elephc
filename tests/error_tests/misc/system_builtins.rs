@@ -138,12 +138,12 @@ fn test_error_pcntl_waitid_resource_usage_must_be_variable() {
     );
 }
 
-/// Verifies PCNTL signal sets require indexed integer array storage.
+/// Verifies PCNTL signal sets reject values outside PHP's integer-coercible scalar set.
 #[test]
-fn test_error_pcntl_signal_mask_requires_integer_array() {
+fn test_error_pcntl_signal_mask_rejects_non_scalar_values() {
     expect_error(
-        "<?php pcntl_sigprocmask(SIG_BLOCK, ['SIGUSR1']);",
-        "pcntl_sigprocmask() parameter $signals must be an indexed integer array",
+        "<?php pcntl_sigprocmask(SIG_BLOCK, [[SIGUSR1]]);",
+        "pcntl_sigprocmask() parameter $signals must be an array of integer-coercible scalar values",
     );
 }
 
