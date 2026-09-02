@@ -78,6 +78,7 @@ fn eval_pcntl_exec_add_arguments(
     for position in 0..values.array_len(arguments)? {
         let key = values.array_iter_key(arguments, position)?;
         let argument = values.array_get(arguments, key)?;
+        let argument = eval_string_context_value(argument, context, values)?;
         let bytes = values.string_bytes(argument)?;
         if bytes.contains(&0) {
             let _: RuntimeCellHandle = eval_throw_builtin_value_error(
@@ -109,6 +110,7 @@ fn eval_pcntl_exec_add_environment(
     for position in 0..values.array_len(environment)? {
         let key = values.array_iter_key(environment, position)?;
         let value = values.array_get(environment, key)?;
+        let value = eval_string_context_value(value, context, values)?;
         let value = values.string_bytes(value)?;
         if value.contains(&0) {
             let _: RuntimeCellHandle = eval_throw_builtin_value_error(

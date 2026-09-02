@@ -11,6 +11,137 @@
 use super::*;
 use elephc_pcntl::{ElephcPcntlRUsage, ElephcPcntlSigInfo};
 
+/// Describes the numeric prefix PHP accepts while coercing a string signal value.
+struct EvalPcntlNumericPrefix<'a> {
+    /// The numeric bytes without surrounding whitespace or a trailing nonnumeric suffix.
+    bytes: &'a [u8],
+    /// Whether the accepted prefix has float syntax and therefore may lose precision.
+    is_float: bool,
+    /// Whether everything after the prefix is PHP whitespace rather than an invalid suffix.
+    fully_numeric: bool,
+}
+
+/// Returns whether a byte is whitespace accepted around a PHP numeric string.
+fn eval_pcntl_is_numeric_whitespace(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
+}
+
+/// Scans the decimal numeric prefix PHP accepts for weak integer coercion.
+fn eval_pcntl_numeric_prefix(bytes: &[u8]) -> Option<EvalPcntlNumericPrefix<'_>> {
+    let mut start = 0;
+    while start < bytes.len() && eval_pcntl_is_numeric_whitespace(bytes[start]) {
+        start += 1;
+    }
+
+    let mut cursor = start;
+    if bytes.get(cursor).is_some_and(|byte| matches!(byte, b'+' | b'-')) {
+        cursor += 1;
+    }
+
+    let integer_start = cursor;
+    while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+        cursor += 1;
+    }
+    let integer_digits = cursor - integer_start;
+
+    let mut is_float = false;
+    let mut fractional_digits = 0;
+    if bytes.get(cursor) == Some(&b'.') {
+        is_float = true;
+        cursor += 1;
+        let fractional_start = cursor;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_digit) {
+            cursor += 1;
+        }
+        fractional_digits = cursor - fractional_start;
+    }
+    if integer_digits + fractional_digits == 0 {
+        return None;
+    }
+
+    if bytes.get(cursor).is_some_and(|byte| matches!(byte, b'e' | b'E')) {
+        let exponent_marker = cursor;
+        let mut exponent_cursor = cursor + 1;
+        if bytes
+            .get(exponent_cursor)
+            .is_some_and(|byte| matches!(byte, b'+' | b'-'))
+        {
+            exponent_cursor += 1;
+        }
+        let exponent_start = exponent_cursor;
+        while bytes
+            .get(exponent_cursor)
+            .is_some_and(u8::is_ascii_digit)
+        {
+            exponent_cursor += 1;
+        }
+        if exponent_cursor > exponent_start {
+            is_float = true;
+            cursor = exponent_cursor;
+        } else {
+            cursor = exponent_marker;
+        }
+    }
+
+    let numeric_end = cursor;
+    while cursor < bytes.len() && eval_pcntl_is_numeric_whitespace(bytes[cursor]) {
+        cursor += 1;
+    }
+    Some(EvalPcntlNumericPrefix {
+        bytes: &bytes[start..numeric_end],
+        is_float,
+        fully_numeric: cursor == bytes.len(),
+    })
+}
+
+/// Coerces one string signal value with PHP's leading-numeric warning and precision notice.
+fn eval_pcntl_numeric_string_to_int(
+    bytes: &[u8],
+    name: &str,
+    argument: usize,
+    parameter: &str,
+    element_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    let Some(prefix) = eval_pcntl_numeric_prefix(bytes) else {
+        let _: RuntimeCellHandle = eval_throw_type_error(
+            &format!(
+                "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, string given"
+            ),
+            context,
+            values,
+        )?;
+        return Err(EvalStatus::RuntimeFatal);
+    };
+
+    if !prefix.fully_numeric {
+        values.warning("Warning: A non-numeric value encountered\n")?;
+    }
+
+    let numeric = std::str::from_utf8(prefix.bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+    if prefix.is_float {
+        let float = numeric
+            .parse::<f64>()
+            .map_err(|_| EvalStatus::RuntimeFatal)?;
+        let integer = float as i64;
+        if float.is_finite() && float.trunc() != float {
+            values.warning(&format!(
+                "Deprecated: Implicit conversion from float-string \"{}\" to int loses precision\n",
+                String::from_utf8_lossy(bytes)
+            ))?;
+        }
+        Ok(integer)
+    } else {
+        numeric.parse::<i64>().or_else(|_| {
+            numeric
+                .parse::<f64>()
+                .map(|float| float as i64)
+                .map_err(|_| EvalStatus::RuntimeFatal)
+        })
+    }
+}
+
 /// Copies an eval indexed array into widened native integers.
 pub(super) fn eval_pcntl_int_array(
     array: RuntimeCellHandle,
@@ -30,19 +161,20 @@ pub(super) fn eval_pcntl_int_array(
         let key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, key)?;
         let tag = values.type_tag(value)?;
-        if tag == EVAL_TAG_STRING
-            && !eval_is_numeric_string(&values.string_bytes(value)?)
-        {
-            let _: RuntimeCellHandle = eval_throw_type_error(
-                &format!(
-                    "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, string given"
-                ),
+        let integer = if tag == EVAL_TAG_STRING {
+            eval_pcntl_numeric_string_to_int(
+                &values.string_bytes(value)?,
+                name,
+                argument,
+                parameter,
+                element_name,
                 context,
                 values,
-            )?;
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        result.push(eval_int_value(value, values)?);
+            )?
+        } else {
+            eval_int_value(value, values)?
+        };
+        result.push(integer);
     }
     Ok(result)
 }

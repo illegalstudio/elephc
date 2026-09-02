@@ -408,6 +408,46 @@ fn test_pcntl_eval_signal_mask_rejects_nonnumeric_string_with_type_error() {
     assert_eq!(out, "type");
 }
 
+/// Warns and uses the leading numeric prefix for eval signal-set strings.
+#[test]
+fn test_pcntl_eval_signal_mask_accepts_leading_numeric_string() {
+    let out = compile_and_run_capture(
+        r#"<?php echo eval('
+            $signals = ["9abc"];
+            $ok = pcntl_sigprocmask(SIG_BLOCK, $signals);
+            pcntl_sigprocmask(SIG_UNBLOCK, [9]);
+            return $ok ? "blocked" : "bad";
+        ');"#,
+    );
+    assert_eq!(out.stdout, "blocked");
+    assert!(
+        out.stderr.contains("Warning: A non-numeric value encountered"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Emits PHP's precision-loss deprecation while coercing an eval float string signal.
+#[test]
+fn test_pcntl_eval_signal_float_string_precision_loss_is_deprecated() {
+    let out = compile_and_run_capture(
+        r#"<?php echo eval('
+            $signals = ["9.7"];
+            $ok = pcntl_sigprocmask(SIG_BLOCK, $signals);
+            pcntl_sigprocmask(SIG_UNBLOCK, [9]);
+            return $ok ? "blocked" : "bad";
+        ');"#,
+    );
+    assert_eq!(out.stdout, "blocked");
+    assert!(
+        out.stderr.contains(
+            "Deprecated: Implicit conversion from float-string \"9.7\" to int loses precision"
+        ),
+        "{}",
+        out.stderr
+    );
+}
+
 /// Throws the same catchable `TypeError` for nonnumeric strings in AOT variable arrays.
 #[test]
 fn test_pcntl_aot_signal_mask_rejects_nonnumeric_variable_string() {
@@ -1829,6 +1869,50 @@ fn test_pcntl_eval_exec_rejects_embedded_null_bytes() {
     assert_eq!(
         out,
         "pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes"
+    );
+}
+
+/// Uses eval-declared `__toString()` methods for both exec arguments and environment values.
+#[test]
+fn test_pcntl_eval_exec_coerces_stringable_object_values() {
+    let out = compile_and_run(
+        r#"<?php echo eval('
+            class EvalExecStringable {
+                public function __toString(): string { return "object"; }
+            }
+            $pid = pcntl_fork();
+            if ($pid === 0) {
+                pcntl_exec("/bin/echo", ["value", new EvalExecStringable()]);
+                exit(99);
+            }
+            pcntl_waitpid($pid, $status);
+            $pid = pcntl_fork();
+            if ($pid === 0) {
+                pcntl_exec("/usr/bin/env", [], ["VALUE" => new EvalExecStringable()]);
+                exit(99);
+            }
+            pcntl_waitpid($pid, $status);
+            return "status=" . pcntl_wexitstatus($status);
+        ');"#,
+    );
+    assert_eq!(out, "value object\nVALUE=object\nstatus=0");
+}
+
+/// Throws PHP's catchable `Error` when an eval exec value has no `__toString()` method.
+#[test]
+fn test_pcntl_eval_exec_non_stringable_object_throws_error() {
+    let out = compile_and_run(
+        r#"<?php echo eval('
+            class EvalExecPlainObject {}
+            try { pcntl_exec("/bin/echo", [new EvalExecPlainObject()]); }
+            catch (Error $error) { return get_class($error) . ":" . $error->getMessage(); }
+            catch (TypeError $error) { return "wrong"; }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(
+        out,
+        "Error:Object of class EvalExecPlainObject could not be converted to string"
     );
 }
 
