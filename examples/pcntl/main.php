@@ -34,3 +34,10 @@ if ($groupPid === 0) {
 }
 
 pcntl_waitpid($groupPid, $groupStatus);
+
+$signalSet = ['user-signal' => (string) SIGUSR1];
+$oldMask = [];
+if (pcntl_sigprocmask(SIG_BLOCK, $signalSet, $oldMask)) {
+    echo "Blocked SIGUSR1 from an associative numeric-string signal set\n";
+    pcntl_sigprocmask(SIG_SETMASK, $oldMask);
+}

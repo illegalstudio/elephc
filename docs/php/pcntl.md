@@ -70,7 +70,8 @@ available. The usual status helpers are available: `pcntl_wifexited`,
 
 `pcntl_exec()` replaces the current process and never returns on success. Its
 argument and environment arrays are copied into native `argv`/`envp` storage;
-scalar values are converted to strings with PHP's normal weak coercion rules;
+scalar values are converted to strings with PHP's normal weak coercion rules,
+and objects use `__toString()` or raise PHP's catchable object-conversion `Error`;
 an omitted environment inherits the current process environment, while an
 explicit empty array clears it. Embedded null bytes raise PHP's position-specific
 `ValueError` before entering the OS. Other OS failures emit PHP's warning,
@@ -147,8 +148,9 @@ Signal masks use `pcntl_sigprocmask()`. Linux additionally provides
 Invalid dynamic mask modes, empty signal sets, out-of-range signals, and invalid
 timed-wait durations raise the same `ValueError` cases as PHP; they are not
 collapsed into a silent `false` result.
-Signal-set array keys are ignored, and numeric-string values are coerced to
-integers before validation, matching PHP.
+Signal-set array keys are ignored for literals and variables alike. Numeric
+strings are coerced to integers before validation: leading-numeric strings emit
+PHP's warning, and float strings that lose precision emit PHP's deprecation.
 
 ## Target-specific surface
 
@@ -161,7 +163,11 @@ Function availability and PCNTL constants are selected from the compilation
 target, not from the machine running the compiler. Linux-only functions are
 undefined in macOS output, and the macOS QoS API is undefined in Linux output.
 `function_exists()`, `PHP_OS`, and `PHP_OS_FAMILY` target guards are folded
-before availability checks, so one portable source can isolate those calls.
+before availability checks, so one portable source can isolate those calls;
+`PHP_OS_FAMILY` exposes the same target family inside `eval()`. A source may
+also declare a fallback function with a target-unavailable builtin name inside
+the negative `function_exists()` branch; builtins available on the selected
+target remain protected from redeclaration.
 Linux namespace and CPU-affinity argument failures are classified separately
 from OS permission/resource failures: invalid values raise `ValueError`, while
 operating-system failures emit a suppressible PHP warning and return `false`.
