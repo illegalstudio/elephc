@@ -16,6 +16,22 @@
 
 use crate::support::*;
 
+/// Lets a portable guarded polyfill own an image function when the image bridge is not enabled.
+#[test]
+fn test_image_function_guarded_polyfill_without_image_capability() {
+    let out = compile_and_run(
+        r#"<?php
+if (!function_exists('imagecreatetruecolor')) {
+    function imagecreatetruecolor(int $width, int $height): string {
+        return $width . 'x' . $height;
+    }
+}
+echo imagecreatetruecolor(4, 3);
+"#,
+    );
+    assert_eq!(out, "4x3");
+}
+
 /// Creating a true-color image, drawing a pixel, writing it as PNG, and probing
 /// the written file round-trips through the `elephc_image` bridge: the size is
 /// reported correctly and `getimagesize` reads back the PNG's dimensions, type
