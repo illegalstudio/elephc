@@ -264,7 +264,9 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fiber_switch_signal_ok_x86");                  // ordinary fiber switches proceed outside handlers
     abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_switch_signal");     // rdi = stable FiberError message
     emitter.instruction("mov esi, 49");                                         // rsi = message byte length
+    emitter.instruction("sub rsp, 8");                                          // align the SysV stack before calling the throwing helper
     emitter.instruction("call __rt_fiber_throw_state_error");                   // reject the context switch through PHP's exception path
+    emitter.instruction("add rsp, 8");                                          // restore the entry stack if the throwing helper unexpectedly returns
     emitter.label("__rt_fiber_switch_signal_ok_x86");
 
     // -- save callee-saved state on the current stack --
