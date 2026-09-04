@@ -354,25 +354,29 @@ fn dynamic_argument_matches_core_extensions() {
     );
 }
 
-/// Verifies the dynamic path consults the per-compilation linked-bridge set, not just the
-/// core list: the SAME loop over variable names reports PDO only when `--with-pdo` linked it.
-#[test]
-fn dynamic_argument_tracks_linked_bridges() {
-    let src = "<?php \
+/// Shared dynamic extension probe used with and without an explicitly linked bridge.
+const DYNAMIC_BRIDGE_PROBE_SOURCE: &str = "<?php \
         foreach (['json', 'curl', 'PDO', 'pcre'] as $x) { \
             echo $x, '=', extension_loaded($x) ? 'T' : 'F', ' '; \
         }";
 
+/// Verifies dynamic extension lookup keeps an unlinked bridge absent.
+#[test]
+fn dynamic_argument_keeps_unlinked_bridges_absent() {
     let without = make_test_dir("ext_dyn_nopdo");
-    let bin = compile_with_flags(&without, src, "app", &[]);
+    let bin = compile_with_flags(&without, DYNAMIC_BRIDGE_PROBE_SOURCE, "app", &[]);
     assert_eq!(
         run_binary(&bin),
         "json=T curl=F PDO=F pcre=T ",
         "dynamic loop without --with-pdo: PDO not linked"
     );
+}
 
+/// Verifies dynamic extension lookup consults the linked-bridge set.
+#[test]
+fn dynamic_argument_tracks_linked_bridges() {
     let with = make_test_dir("ext_dyn_pdo");
-    let bin = compile_with_flags(&with, src, "app", &["--with-pdo"]);
+    let bin = compile_with_flags(&with, DYNAMIC_BRIDGE_PROBE_SOURCE, "app", &["--with-pdo"]);
     assert_eq!(
         run_binary(&bin),
         "json=T curl=F PDO=T pcre=T ",
