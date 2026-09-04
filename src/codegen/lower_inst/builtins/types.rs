@@ -960,10 +960,20 @@ pub(crate) fn lower_get_resource_type(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
+    let raw_ty = ctx.raw_value_php_type(value)?;
     ctx.load_value_to_result(value)?;
-    match resource_type_name_shape(&ctx.raw_value_php_type(value)?) {
+    match resource_type_name_shape(&raw_ty) {
         ResourceTypeNameShape::Boxed => emit_boxed_resource_type_name(ctx),
         ResourceTypeNameShape::Unboxed => {
+            let subtype = match raw_ty {
+                PhpType::Resource(Some(ref kind)) if kind == "stream filter" => 9,
+                _ => 0,
+            };
+            let subtype_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x3",
+                Arch::X86_64 => "rcx",
+            };
+            abi::emit_load_int_immediate(ctx.emitter, subtype_reg, subtype);
             abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
         }
         ResourceTypeNameShape::Constant => emit_string_result(ctx, b"stream"),
@@ -1051,9 +1061,11 @@ fn emit_boxed_resource_type_name_asm(
     emitter.label(resource_label);
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction("mov x3, x2");                                  // preserve the resource subtype for runtime name selection
             emitter.instruction("mov x0, x1");                                  // move the unboxed Mixed low payload into the integer result register
         }
         Arch::X86_64 => {
+            emitter.instruction("mov rcx, rdx");                                // preserve the resource subtype for runtime name selection
             emitter.instruction("mov rax, rdi");                                // move the unboxed Mixed low payload into the integer result register
         }
     }
@@ -1511,6 +1523,7 @@ mod get_resource_type_asm_tests {
             "    mov x2, #6\n",
             "    b _gt_done\n",
             "_gt_resource:\n",
+            "    mov x3, x2\n",
             "    mov x0, x1\n",
             "    bl __rt_resource_type_name\n",
             "_gt_done:\n",
@@ -1532,6 +1545,7 @@ mod get_resource_type_asm_tests {
             "    mov rdx, 6\n",
             "    jmp _gt_done\n",
             "_gt_resource:\n",
+            "    mov rcx, rdx\n",
             "    mov rax, rdi\n",
             "    call __rt_resource_type_name\n",
             "_gt_done:\n",
