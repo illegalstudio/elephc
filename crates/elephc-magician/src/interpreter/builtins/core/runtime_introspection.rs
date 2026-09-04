@@ -262,10 +262,27 @@ fn eval_trigger_error(
         Err(EvalStatus::UnsupportedConstruct) => context.error_reporting_mask(),
         Err(status) => return Err(status),
     };
-    if !handled && reporting_mask & level != 0 {
-        values.warning(&message)?;
+    if !handled {
+        if reporting_mask & level != 0 {
+            values.warning(&format_user_error(&message, level, context))?;
+        }
+        if level == E_USER_ERROR {
+            return Err(EvalStatus::UserFatal);
+        }
     }
     values.bool_value(true)
+}
+
+/// Formats PHP's default user diagnostic with its category and source location.
+fn format_user_error(message: &str, level: i64, context: &ElephcEvalContext) -> String {
+    let category = match level {
+        E_USER_ERROR => "Fatal error",
+        E_USER_WARNING => "Warning",
+        E_USER_DEPRECATED => "Deprecated",
+        _ => "Notice",
+    };
+    let (file, _, line, _) = context.call_site();
+    format!("{category}: {message} in {file} on line {line}\n")
 }
 
 /// Invokes the active handler and returns whether it suppressed the default diagnostic.

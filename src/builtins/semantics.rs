@@ -274,6 +274,11 @@ pub trait BuiltinLoweringContext {
         None
     }
 
+    /// Returns the active PHP profile's `E_ALL` mask for profile-sensitive defaults.
+    fn error_reporting_mask(&self) -> i64 {
+        crate::php_version::PhpVersion::default().error_reporting_mask()
+    }
+
     /// Loads the caller-visible parameters from their current bindings for frame introspection.
     ///
     /// Synthetic callable wrappers have no PHP caller frame of their own, so the default is empty.

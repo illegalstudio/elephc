@@ -100,6 +100,8 @@ pub enum DefaultSpec {
     Str(&'static str),
     /// `PHP_INT_MAX` target sentinel.
     IntMax,
+    /// Profile-selected `E_ALL` error mask.
+    ErrorAll,
     /// Empty indexed array.
     EmptyArray,
 }

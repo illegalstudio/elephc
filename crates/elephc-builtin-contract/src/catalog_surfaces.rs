@@ -336,7 +336,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Function,
         [
             param!("callback", Mixed),
-            param!("error_levels", Int = DefaultSpec::Int(32_767)),
+            param!("error_levels", Int = DefaultSpec::ErrorAll),
         ],
         None,
         Mixed,

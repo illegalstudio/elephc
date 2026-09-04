@@ -15,10 +15,12 @@ pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     let parse_error_label = ctx.next_label("eval_status_parse_error");
     let throwable_label = ctx.next_label("eval_status_throwable");
     let unsupported_label = ctx.next_label("eval_status_unsupported");
+    let user_fatal_label = ctx.next_label("eval_status_user_fatal");
     abi::emit_branch_if_int_result_zero(ctx.emitter, &ok_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_PARSE_ERROR, &parse_error_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_UNCAUGHT_THROWABLE, &throwable_label);
     emit_branch_if_eval_status(ctx, EVAL_STATUS_UNSUPPORTED, &unsupported_label);
+    emit_branch_if_eval_status(ctx, EVAL_STATUS_USER_FATAL, &user_fatal_label);
     emit_eval_fatal_message(ctx, EVAL_RUNTIME_FATAL_MESSAGE);
     ctx.emitter.label(&parse_error_label);
     emit_eval_fatal_message(ctx, EVAL_PARSE_ERROR_MESSAGE);
@@ -26,6 +28,8 @@ pub(super) fn emit_eval_status_check(ctx: &mut FunctionContext<'_>) {
     emit_eval_throw_current(ctx);
     ctx.emitter.label(&unsupported_label);
     emit_eval_fatal_message(ctx, EVAL_UNSUPPORTED_MESSAGE);
+    ctx.emitter.label(&user_fatal_label);
+    abi::emit_exit(ctx.emitter, 255);
     ctx.emitter.label(&ok_label);
 }
 

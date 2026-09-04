@@ -3247,6 +3247,19 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         self.source_path.as_deref()
     }
 
+    /// Reads the profile-resolved `E_ALL` literal installed during compiler prescan.
+    fn error_reporting_mask(&self) -> i64 {
+        self.constants
+            .get("E_ALL")
+            .and_then(|(value, _)| match value {
+                ExprKind::IntLiteral(mask) => Some(*mask),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                crate::php_version::PhpVersion::default().error_reporting_mask()
+            })
+    }
+
     /// Loads each PHP-visible parameter through its current name binding.
     fn current_frame_arguments(&mut self, span: Span) -> Vec<ValueId> {
         let names = self

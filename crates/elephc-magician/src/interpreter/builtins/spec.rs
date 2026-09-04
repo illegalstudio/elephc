@@ -250,6 +250,9 @@ fn eval_default_value(default: DefaultSpec) -> EvalBuiltinDefaultValue {
         DefaultSpec::Float(value) => EvalBuiltinDefaultValue::Float(value),
         DefaultSpec::Str(value) => EvalBuiltinDefaultValue::String(value),
         DefaultSpec::IntMax => EvalBuiltinDefaultValue::Int(i64::MAX),
+        DefaultSpec::ErrorAll => {
+            EvalBuiltinDefaultValue::Int(crate::eval_php_profile::eval_all_error_mask())
+        }
         DefaultSpec::EmptyArray => EvalBuiltinDefaultValue::EmptyArray,
     }
 }
