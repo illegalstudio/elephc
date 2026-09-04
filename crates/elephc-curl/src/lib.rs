@@ -42,6 +42,7 @@ mod handles;
 mod info;
 mod mime;
 mod multi;
+mod monitoring;
 mod options;
 mod php_layer;
 mod share;

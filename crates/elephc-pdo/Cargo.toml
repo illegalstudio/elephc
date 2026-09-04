@@ -12,6 +12,7 @@ description = "Multi-driver database bridge staticlib for the elephc PHP-to-nati
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+elephc-monitoring-contract = { path = "../elephc-monitoring-contract" }
 # `bundled` compiles the SQLite amalgamation into the staticlib, so compiled
 # PHP binaries stay standalone (no system -lsqlite3 runtime dependency). Cost:
 # a C compile of sqlite at crate build time (cc is already required to build

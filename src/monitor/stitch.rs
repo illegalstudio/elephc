@@ -56,6 +56,16 @@ pub(crate) fn service_stats(slices: &[Slice]) -> Vec<ServiceStats> {
                 .flat_map(|s| s.graph.nodes.iter())
                 .map(|n| n.wait_exclusive)
                 .sum();
+            let network: u64 = members
+                .iter()
+                .flat_map(|s| s.graph.nodes.iter())
+                .map(|n| n.network_exclusive)
+                .sum();
+            let network_wait_ns: u64 = members
+                .iter()
+                .flat_map(|s| s.graph.nodes.iter())
+                .map(|n| n.network_wait_exclusive)
+                .sum();
             // The window runs from the first request opening to the last one
             // finishing, the only span a rate can honestly divide by.
             let starts: Option<Vec<u64>> = members
@@ -86,6 +96,10 @@ pub(crate) fn service_stats(slices: &[Slice]) -> Vec<ServiceStats> {
                 } else {
                     100.0 * wait_ns as f64 / total_ns as f64
                 },
+                network_per_request: network as f64 / members.len() as f64,
+                network_wait_seconds_per_request: network_wait_ns as f64
+                    / members.len() as f64
+                    / 1e9,
             }
         })
         .collect()
@@ -311,8 +325,20 @@ pub(crate) fn stitch_report(slices: &[Slice]) -> String {
             };
             let queries: u64 = slice.graph.nodes.iter().map(|n| n.io_exclusive).sum();
             let waited: u64 = slice.graph.nodes.iter().map(|n| n.wait_exclusive).sum();
+            let network: u64 = slice
+                .graph
+                .nodes
+                .iter()
+                .map(|node| node.network_exclusive)
+                .sum();
+            let network_wait: u64 = slice
+                .graph
+                .nodes
+                .iter()
+                .map(|node| node.network_wait_exclusive)
+                .sum();
             out.push_str(&format!(
-                "{:indent$}{} {}  {}  {}  {} fn{}{}\n",
+                "{:indent$}{} {}  {}  {}  {} fn{}{}{}{}\n",
                 "",
                 if depth == 0 { "●" } else { "└─" },
                 slice.service,
@@ -326,6 +352,16 @@ pub(crate) fn stitch_report(slices: &[Slice]) -> String {
                 },
                 if waited > 0 {
                     format!("  {} waiting", fmt_ns(waited))
+                } else {
+                    String::new()
+                },
+                if network > 0 {
+                    format!("  {network} network")
+                } else {
+                    String::new()
+                },
+                if network_wait > 0 {
+                    format!("  {} network-wait", fmt_ns(network_wait))
                 } else {
                     String::new()
                 },
@@ -450,6 +486,18 @@ pub(crate) fn run_stitch(cmd: &MonitorCommand) -> i32 {
                     functions: slice.graph.nodes.len(),
                     queries: slice.graph.nodes.iter().map(|n| n.io_exclusive).sum(),
                     wait_ns: slice.graph.nodes.iter().map(|n| n.wait_exclusive).sum(),
+                    network_ops: slice
+                        .graph
+                        .nodes
+                        .iter()
+                        .map(|node| node.network_exclusive)
+                        .sum(),
+                    network_wait_ns: slice
+                        .graph
+                        .nodes
+                        .iter()
+                        .map(|node| node.network_wait_exclusive)
+                        .sum(),
                     start_us: trace.start_us,
                     top,
                 })

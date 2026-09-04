@@ -21,6 +21,7 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+elephc-monitoring-contract = { path = "../elephc-monitoring-contract" }
 # The default (non-RETURNTRANSFER) write callback streams the response body
 # straight to fd 1 via `libc::write`, matching PHP CLI's `curl_exec()` output.
 libc = "0.2"

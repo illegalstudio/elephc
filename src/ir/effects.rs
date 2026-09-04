@@ -32,6 +32,8 @@ bitflags! {
         const MAY_FATAL      = 1 << 15;
         const MAY_WARN       = 1 << 16;
         const MAY_DEOPT      = 1 << 17;
+        const BLOCKING_IO    = 1 << 18;
+        const NETWORK_IO     = 1 << 19;
     }
 }
 
@@ -50,7 +52,8 @@ impl Effects {
                 | Effects::READS_HEAP
                 | Effects::READS_GLOBAL
                 | Effects::READS_FS
-                | Effects::READS_PROCESS,
+                | Effects::READS_PROCESS
+                | Effects::NETWORK_IO,
         )
     }
 
@@ -76,7 +79,9 @@ impl Effects {
                     | Effects::MAY_THROW
                     | Effects::MAY_FATAL
                     | Effects::MAY_WARN
-                    | Effects::MAY_DEOPT,
+                    | Effects::MAY_DEOPT
+                    | Effects::BLOCKING_IO
+                    | Effects::NETWORK_IO,
             )
     }
 
@@ -101,6 +106,8 @@ impl Effects {
             (Effects::MAY_FATAL, "may_fatal"),
             (Effects::MAY_WARN, "may_warn"),
             (Effects::MAY_DEOPT, "may_deopt"),
+            (Effects::BLOCKING_IO, "blocking_io"),
+            (Effects::NETWORK_IO, "network_io"),
         ];
         ordered
             .iter()

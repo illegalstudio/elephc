@@ -36,7 +36,7 @@
 //!   for the same reason: without it, a handle reused across two multi runs would
 //!   report the concatenation of both bodies from `curl_multi_getcontent()`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{c_char, c_int, c_long, c_uint, c_void};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -146,6 +146,10 @@ pub(crate) struct MultiEntry {
     /// Used ONLY to detach them before `curl_multi_cleanup`; the PHP-visible
     /// add-order list lives on the `CurlMultiHandle` object.
     attached: Vec<i64>,
+    /// Easy handles already counted as network operations for their current
+    /// attachment. Only removal clears the id, because reading a completion
+    /// message does not detach the handle from libcurl.
+    monitored_easy: HashSet<i64>,
     /// The `CURLMcode` from the most recent multi operation on this handle,
     /// backing PHP's `curl_multi_errno()`.
     last_errno: CURLMcode,
@@ -165,6 +169,14 @@ unsafe impl Send for MultiEntry {}
 fn multis() -> &'static Mutex<HashMap<i64, MultiEntry>> {
     static MULTIS: OnceLock<Mutex<HashMap<i64, MultiEntry>>> = OnceLock::new();
     MULTIS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Reports whether a test fixture's easy attachment has already emitted its operation.
+#[cfg(all(test, elephc_curl_native))]
+pub(crate) fn test_operation_was_counted(multi_id: i64, easy_id: i64) -> bool {
+    handles::lock_recover(multis())
+        .get(&multi_id)
+        .is_some_and(|entry| entry.monitored_easy.contains(&easy_id))
 }
 
 /// Allocates the next multi id. Monotonic, positive, never reused.
@@ -268,6 +280,7 @@ pub extern "C" fn elephc_curl_multi_init() -> i64 {
             MultiEntry {
                 multi,
                 attached: Vec::new(),
+                monitored_easy: HashSet::new(),
                 last_errno: CURLM_OK,
                 last_message: InfoMessage::default(),
             },
@@ -330,6 +343,7 @@ pub extern "C" fn elephc_curl_multi_remove(multi_id: i64, easy_id: i64) -> i32 {
         entry.last_errno = code;
         if code == CURLM_OK {
             entry.attached.retain(|&id| id != easy_id);
+            entry.monitored_easy.remove(&easy_id);
         }
         code
     })
@@ -351,20 +365,40 @@ pub extern "C" fn elephc_curl_multi_remove(multi_id: i64, easy_id: i64) -> i32 {
 #[no_mangle]
 pub extern "C" fn elephc_curl_multi_perform(multi_id: i64) -> i64 {
     handles::ffi_guard(pack_perform(0, CURLM_BAD_HANDLE), || {
-        let multi = {
-            let guard = handles::lock_recover(multis());
-            let Some(entry) = guard.get(&multi_id) else {
+        let (multi, new_operations) = {
+            // Lock easy handles before the multi table. This order lets trace headers be
+            // refreshed in place without cloning `attached`, and matches every path that
+            // needs both tables. Neither guard survives into libcurl, whose callbacks
+            // re-enter the easy table.
+            let mut easy_guard = handles::lock_recover(handles::handles());
+            let mut multi_guard = handles::lock_recover(multis());
+            let Some(entry) = multi_guard.get_mut(&multi_id) else {
                 return pack_perform(0, CURLM_BAD_HANDLE);
             };
-            entry.multi
+            for easy_id in &entry.attached {
+                if let Some(easy_entry) = easy_guard.get_mut(easy_id) {
+                    unsafe { crate::abi::refresh_monitor_traceparent(easy_entry) };
+                }
+            }
+            let new_operations = entry
+                .attached
+                .iter()
+                .filter(|easy_id| entry.monitored_easy.insert(**easy_id))
+                .count();
+            (entry.multi, new_operations)
         };
+        let hooks = crate::monitoring::hooks();
+        for _ in 0..new_operations {
+            hooks.note_operation();
+        }
         // Opens a fresh callback-throw scope, exactly as `elephc_curl_easy_perform` does.
         // Without it the process-wide gate raised by a throw in an EARLIER
         // `curl_multi_exec()` call would still be set here and would silently suppress
         // every callback on every attached handle for the rest of the program.
-        crate::callbacks::begin_transfer();
+        crate::callbacks::begin_transfer(false);
         let mut running: c_int = 0;
         let code = unsafe { curl_multi_perform(multi, &mut running as *mut c_int) };
+        let _ = crate::callbacks::finish_transfer(false);
         record_errno(multi_id, code);
         pack_perform(running.max(0) as i64, code)
     })
@@ -403,7 +437,8 @@ pub extern "C" fn elephc_curl_multi_select(multi_id: i64, timeout_ms: i64) -> i3
         // while never handing libcurl a truncated wrap-around.
         let timeout = timeout_ms.clamp(c_int::MIN as i64, c_int::MAX as i64) as c_int;
         let mut numfds: c_int = 0;
-        let code = unsafe {
+        let hooks = crate::monitoring::hooks();
+        let code = hooks.timed(|| unsafe {
             curl_multi_wait(
                 multi,
                 std::ptr::null_mut(),
@@ -411,7 +446,7 @@ pub extern "C" fn elephc_curl_multi_select(multi_id: i64, timeout_ms: i64) -> i3
                 timeout,
                 &mut numfds as *mut c_int,
             )
-        };
+        });
         record_errno(multi_id, code);
         if code != CURLM_OK {
             return -1;

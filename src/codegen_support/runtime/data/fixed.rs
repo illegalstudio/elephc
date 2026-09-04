@@ -323,6 +323,15 @@ pub(crate) fn emit_runtime_data_fixed(
     // it. One check, in one place: repeating it would consume the control
     // channel's marker twice and the second reader would see nothing.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_monitor_active"), 8, target));
+    // elephc_monitor_event_active_fn: optional callback for a monitoring
+    // consumer whose shared event window is not represented by the exact-slice
+    // word above. The sampled probe installs it so bridges can avoid clock reads
+    // while dormant without losing remote-probe wait measurements.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_monitor_event_active_fn"),
+        8,
+        target,
+    ));
     // elephc_probe_allocs_ptr: the ADDRESS of `_gc_allocs`, published under
     // --probe so the sampler can read the allocation counter without declaring
     // that symbol itself. `_gc_allocs` is spelled with a hardcoded underscore
@@ -345,6 +354,17 @@ pub(crate) fn emit_runtime_data_fixed(
     // reports the nanoseconds through it, which separates recorded DB wait from
     // each function's remaining wall time. Zero (inert) in a normal binary.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_wait_fn"), 8, target));
+    // elephc_instr_network_fn: category-specific companion used by outgoing
+    // network bridges. Keeping this separate from the DB slot preserves query
+    // budgets and N+1 analysis when a request also performs HTTP calls.
+    out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_network_fn"), 8, target));
+    // elephc_instr_network_wait_fn: blocked network duration reported without
+    // folding it into the DB-driver wait metric.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_instr_network_wait_fn"),
+        8,
+        target,
+    ));
     // elephc_instr_trace_fn: fourth companion slot, filled with
     // elephc_instr_trace_begin under --instrument. The web bridge calls it at
     // the start of every request with the inbound W3C `traceparent`, so a

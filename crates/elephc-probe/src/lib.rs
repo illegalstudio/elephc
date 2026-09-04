@@ -71,8 +71,8 @@ const ROUTE_NAME_MAX: usize = ROUTE_SLOT_BYTES - 1;
 const RING_BYTES: usize = 8 + RING_SLOTS * SLOT_WORDS * 8;
 /// Route-table bytes: an 8-byte count followed by the fixed route slots.
 const ROUTE_TABLE_BYTES: usize = 8 + MAX_ROUTES * ROUTE_SLOT_BYTES;
-/// Words per route in the event table: `[io_ops, wait_ns]`.
-const EVENT_WORDS: usize = 2;
+/// Words per route: `[db_ops, db_wait_ns, network_ops, network_wait_ns]`.
+const EVENT_WORDS: usize = 4;
 /// One extra bucket for id 0, which the route table reserves for "untagged" —
 /// a CLI run, or a `--web` request whose route did not fit the table. Dropping
 /// those events would understate the totals silently, which is worse than a row
@@ -135,12 +135,9 @@ const SPEND_ATTEMPTS: usize = 3;
 /// never seen it.
 const REPLAY_TABLE_BYTES: usize = REPLAY_SLOTS * REPLAY_SLOT_BYTES;
 /// Shared-region byte size: the ring, then the route table, then the per-route
-/// event counters, then the control word, then the replay table — all inherited
-/// across a `--web` fork, so route ids stay consistent, every worker's counters
-/// land in one place, and a signature spent on one worker is spent on all.
-///
-/// Each new area is appended LAST so adding it moves no existing offset: every
-/// other area is addressed from the constants above it.
+/// event counters, then the control word, then the replay table. All offsets are
+/// derived from the sizes above, and the whole internal layout is inherited
+/// across a `--web` fork so route ids, counters, and replay state stay shared.
 const REGION_BYTES: usize =
     RING_BYTES + ROUTE_TABLE_BYTES + EVENT_TABLE_BYTES + CONTROL_BYTES + REPLAY_TABLE_BYTES;
 
@@ -271,6 +268,17 @@ fn event_window_active(base: usize) -> bool {
     ASKED.load(Ordering::Relaxed)
         || unsafe { region_asked(base) }.load(Ordering::Acquire) == ASK_ACTIVE
 }
+
+/// Reports whether bridge-side event timing belongs to the probe's active window.
+///
+/// Reached through a runtime slot because a remote ask is shared across worker
+/// processes and is therefore not represented by each worker's exact-capture word.
+#[no_mangle]
+pub extern "C" fn elephc_probe_event_active() -> u32 {
+    let base = REGION.load(Ordering::Relaxed);
+    u32::from(base != 0 && event_window_active(base))
+}
+
 /// I/O events are **not sampled**. A driver call fires exactly one, so these
 /// counts are exact — the sampler's statistical nature applies to *time*, which
 /// it observes 1000x/second, not to events it is told about. Keeping the two
@@ -317,7 +325,19 @@ pub extern "C" fn elephc_probe_note_wait(ns: u64) {
     note_event(1, ns);
 }
 
-/// Renders the per-route event counters, one line per route that saw DB activity.
+/// Records one outgoing network operation against the current request.
+#[no_mangle]
+pub extern "C" fn elephc_probe_note_network() {
+    note_event(2, 1);
+}
+
+/// Records nanoseconds blocked in an outgoing network operation.
+#[no_mangle]
+pub extern "C" fn elephc_probe_note_network_wait(ns: u64) {
+    note_event(3, ns);
+}
+
+/// Renders database and network event counters for every route that saw activity.
 ///
 /// Deliberately its own line prefix rather than extra columns on the folded
 /// samples: a consumer must not be able to mistake an exact count for a sampled
@@ -333,7 +353,9 @@ pub fn event_report(base: usize) -> String {
     for route_id in 0..EVENT_BUCKETS {
         let io = unsafe { event_word(base, route_id, 0) }.load(Ordering::Relaxed);
         let wait = unsafe { event_word(base, route_id, 1) }.load(Ordering::Relaxed);
-        if io == 0 && wait == 0 {
+        let network = unsafe { event_word(base, route_id, 2) }.load(Ordering::Relaxed);
+        let network_wait = unsafe { event_word(base, route_id, 3) }.load(Ordering::Relaxed);
+        if io == 0 && wait == 0 && network == 0 && network_wait == 0 {
             continue;
         }
         let name = if route_id == 0 {
@@ -341,7 +363,14 @@ pub fn event_report(base: usize) -> String {
         } else {
             unsafe { read_route_slot(base, route_id - 1) }
         };
-        out.push_str(&format!("elephc-probe-io: {name} ops={io} wait_ns={wait}\n"));
+        if io != 0 || wait != 0 {
+            out.push_str(&format!("elephc-probe-io: {name} ops={io} wait_ns={wait}\n"));
+        }
+        if network != 0 || network_wait != 0 {
+            out.push_str(&format!(
+                "elephc-probe-network: {name} ops={network} wait_ns={network_wait}\n"
+            ));
+        }
     }
     out
 }
@@ -3315,6 +3344,9 @@ mod tests {
             elephc_probe_note_io();
         }
         elephc_probe_note_wait(2_290_874);
+        elephc_probe_note_network();
+        elephc_probe_note_network();
+        elephc_probe_note_network_wait(33);
 
         let id = unsafe { intern_route("GET /orders") };
         assert!(id > 0, "the route table must hand out a 1-based id");
@@ -3322,6 +3354,8 @@ mod tests {
         elephc_probe_note_io();
         elephc_probe_note_io();
         elephc_probe_note_wait(1_000);
+        elephc_probe_note_network();
+        elephc_probe_note_network_wait(9);
 
         let report = event_report(base);
         assert!(
@@ -3332,8 +3366,16 @@ mod tests {
             report.contains("elephc-probe-io: GET /orders ops=2 wait_ns=1000"),
             "{report}"
         );
-        // Routes that saw no I/O must not produce an empty row.
-        assert_eq!(report.lines().count(), 2, "{report}");
+        assert!(
+            report.contains("elephc-probe-network: <untagged> ops=2 wait_ns=33"),
+            "{report}"
+        );
+        assert!(
+            report.contains("elephc-probe-network: GET /orders ops=1 wait_ns=9"),
+            "{report}"
+        );
+        // Routes that saw no monitored event must not produce an empty row.
+        assert_eq!(report.lines().count(), 4, "{report}");
 
         REGION.store(0, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
@@ -3341,6 +3383,8 @@ mod tests {
         // With no region mapped the entry points are inert rather than unsafe.
         elephc_probe_note_io();
         elephc_probe_note_wait(1);
+        elephc_probe_note_network();
+        elephc_probe_note_network_wait(1);
         assert!(event_report(0).is_empty());
     }
 
@@ -3354,6 +3398,7 @@ mod tests {
         REGION.store(base, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         let was_asked = ASKED.swap(false, Ordering::Relaxed);
+        assert_eq!(elephc_probe_event_active(), 0);
 
         for _ in 0..7 {
             elephc_probe_note_io();
@@ -3362,6 +3407,7 @@ mod tests {
         assert!(event_report(base).is_empty(), "pre-ask callbacks must be inert");
 
         unsafe { region_asked(base) }.store(ASK_INITIALIZING, Ordering::Release);
+        assert_eq!(elephc_probe_event_active(), 0);
         elephc_probe_note_io();
         elephc_probe_note_wait(100);
         assert!(
@@ -3374,20 +3420,27 @@ mod tests {
         // publishes ACTIVE, so legacy/stale bytes cannot leak into this window.
         unsafe { event_word(base, 0, 0) }.store(11, Ordering::Relaxed);
         unsafe { event_word(base, 0, 1) }.store(1_100, Ordering::Relaxed);
+        unsafe { event_word(base, 0, 2) }.store(12, Ordering::Relaxed);
+        unsafe { event_word(base, 0, 3) }.store(1_200, Ordering::Relaxed);
         activate_shared_window(base);
+        assert_eq!(elephc_probe_event_active(), 1);
         elephc_probe_note_io();
         elephc_probe_note_io();
         elephc_probe_note_wait(23);
+        elephc_probe_note_network();
+        elephc_probe_note_network_wait(29);
         let report = event_report(base);
         assert_eq!(
             report,
-            "elephc-probe-io: <untagged> ops=2 wait_ns=23\n",
+            "elephc-probe-io: <untagged> ops=2 wait_ns=23\n\
+             elephc-probe-network: <untagged> ops=1 wait_ns=29\n",
             "the first report must contain only the active window"
         );
 
         ASKED.store(was_asked, Ordering::Relaxed);
         CURRENT_ROUTE.store(0, Ordering::Relaxed);
         REGION.store(0, Ordering::Relaxed);
+        assert_eq!(elephc_probe_event_active(), 0);
     }
 
     #[test]

@@ -181,6 +181,10 @@
                 retained_exclusive: 0,
                 wait_inclusive: 0,
                 wait_exclusive: 0,
+                network_inclusive: 0,
+                network_exclusive: 0,
+                network_wait_inclusive: 0,
+                network_wait_exclusive: 0,
                 causes: Vec::new(),
             }
         }
@@ -291,7 +295,12 @@
                 name: name.to_string(), inclusive, exclusive, call_count: None,
                 alloc_inclusive: 0, alloc_exclusive: 0, io_inclusive: 0, io_exclusive: 0,
                 retained_inclusive: 0, retained_exclusive: 0,
-                wait_inclusive: 0, wait_exclusive: 0, causes: Vec::new(),
+                wait_inclusive: 0, wait_exclusive: 0,
+                network_inclusive: 0,
+                network_exclusive: 0,
+                network_wait_inclusive: 0,
+                network_wait_exclusive: 0,
+                causes: Vec::new(),
             }
         }
 
@@ -464,7 +473,8 @@ Total number in stack (recursive counted multiple, when >=5):
         format!(
             "elephc-instr-trace: trace={trace} span={span} parent={parent}\n\
              elephc-instr: {fn_name} calls=1 incl_ns={ns} excl_ns={ns} incl_allocs=0 \
-             excl_allocs=0 incl_io=0 excl_io=0 incl_ret=0 excl_ret=0 incl_wait=0 excl_wait=0\n"
+             excl_allocs=0 incl_io=0 excl_io=0 incl_ret=0 excl_ret=0 incl_wait=0 excl_wait=0 \
+             incl_network=0 excl_network=0 incl_network_wait=0 excl_network_wait=0\n"
         )
     }
 
@@ -487,7 +497,8 @@ Total number in stack (recursive counted multiple, when >=5):
         let text = "elephc-probe: a;b 3\n\
                     elephc-probe-samples: 17\n\
                     elephc-probe-io: <untagged> ops=551 wait_ns=3449131\n\
-                    elephc-probe-io: GET /a b/c ops=2 wait_ns=1000\n";
+                    elephc-probe-io: GET /a b/c ops=2 wait_ns=1000\n\
+                    elephc-probe-network: GET /a b/c ops=3 wait_ns=2000\n";
         let out = probe_io_summary(text);
         assert!(out.contains("Database"), "{out}");
         // A route can contain spaces, so the counters are read from the RIGHT;
@@ -500,6 +511,7 @@ Total number in stack (recursive counted multiple, when >=5):
         assert!(untagged < other, "rows must sort by operation count:\n{out}");
         // The distinction the whole feature rests on.
         assert!(out.contains("Exact, not sampled"), "{out}");
+        assert!(out.contains("Network - 3 outgoing operation(s)"), "{out}");
 
         // Nothing to say when the capture carries no events.
         assert!(probe_io_summary("elephc-probe: a 1\n").is_empty());
@@ -514,6 +526,7 @@ Total number in stack (recursive counted multiple, when >=5):
         let text = "elephc-probe-alloc: a;b;load_price 900\n\
                     elephc-probe-alloc: a;record_audit 100\n";
         let out = probe_alloc_summary(text);
+        assert!(out.contains("Allocations - 1000"), "{out}");
         assert!(out.contains("1000 observed between samples"), "{out}");
         assert!(out.contains("attribution is sampled"), "{out}");
         assert!(out.contains("after the final sample are outside"), "{out}");
@@ -807,9 +820,13 @@ Total number in stack (recursive counted multiple, when >=5):
     /// quantile label inside the same brace group as the others.
     #[test]
     fn prometheus_output_is_a_valid_summary() {
-        let slices: Vec<Slice> = (0..25)
+        let mut slices: Vec<Slice> = (0..25)
             .map(|i| slice_of("api", 1_000_000 * (i + 1), None, &format!("s{i}")))
             .collect();
+        slices[0].graph.nodes[0].network_inclusive = 25;
+        slices[0].graph.nodes[0].network_exclusive = 25;
+        slices[0].graph.nodes[0].network_wait_inclusive = 25_000_000;
+        slices[0].graph.nodes[0].network_wait_exclusive = 25_000_000;
         let text = prometheus_text(&slices);
         assert!(text.contains("# TYPE elephc_request_duration_seconds summary"));
         assert!(
@@ -818,6 +835,14 @@ Total number in stack (recursive counted multiple, when >=5):
         );
         // Durations are seconds, as every Prometheus convention requires.
         assert!(text.contains(" 0.025000\n"), "p99 of 25ms should be 0.025 s:\n{text}");
+        assert!(
+            text.contains("elephc_network_operations_per_request{service=\"api\"} 1.000"),
+            "{text}"
+        );
+        assert!(
+            text.contains("elephc_network_wait_seconds_per_request{service=\"api\"} 0.001000"),
+            "{text}"
+        );
         // Every sample line must carry a value, or the scrape fails wholesale.
         for line in text.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
             let value = line.rsplit(' ').next().unwrap_or("");
@@ -933,8 +958,13 @@ Total number in stack (recursive counted multiple, when >=5):
             service: service.to_string(),
             graph: parse_instrument_dump(&chunk),
         };
+        let mut gateway = mk("gateway", slice_log("handle", 1_000, "tr", "aaaa", "-"));
+        gateway.graph.nodes[0].network_inclusive = 2;
+        gateway.graph.nodes[0].network_exclusive = 2;
+        gateway.graph.nodes[0].network_wait_inclusive = 300;
+        gateway.graph.nodes[0].network_wait_exclusive = 300;
         let slices = vec![
-            mk("gateway", slice_log("handle", 1_000, "tr", "aaaa", "-")),
+            gateway,
             mk("inventory", slice_log("stock", 400, "tr", "bbbb", "aaaa")),
             // Parent never appears in the logs (its service was not collected):
             // it must still render, as a root, not vanish.
@@ -943,6 +973,8 @@ Total number in stack (recursive counted multiple, when >=5):
         let out = stitch_report(&slices);
         assert!(out.contains("trace tr"), "{out}");
         assert!(out.contains("● gateway"), "root is un-indented: {out}");
+        assert!(out.contains("2 network"), "{out}");
+        assert!(out.contains("300 ns network-wait"), "{out}");
         assert!(out.contains("  └─ inventory"), "child is nested: {out}");
         assert!(out.contains("● billing"), "orphan survives as a root: {out}");
         assert!(out.contains("1 trace(s) over 3 slice(s)"), "{out}");
@@ -992,6 +1024,74 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
         assert!(graph
             .queries
             .contains(&("INSERT INTO users (name) VALUES (?)".to_string(), 200)));
+    }
+
+    /// Exact instrumentation dumps retain inclusive and exclusive network metrics.
+    #[test]
+    fn parses_instrument_network_metrics() {
+        let dump = "elephc-instr: fetch calls=2 incl_ns=500 excl_ns=400 incl_allocs=0 \
+                    excl_allocs=0 incl_io=0 excl_io=0 incl_ret=0 excl_ret=0 incl_wait=0 \
+                    excl_wait=0 incl_network=5 excl_network=2 incl_network_wait=700 \
+                    excl_network_wait=300\n";
+        let graph = parse_instrument_dump(dump);
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].network_inclusive, 5);
+        assert_eq!(graph.nodes[0].network_exclusive, 2);
+        assert_eq!(graph.nodes[0].network_wait_inclusive, 700);
+        assert_eq!(graph.nodes[0].network_wait_exclusive, 300);
+        let table = instrument_table(&graph);
+        assert!(table.contains("network 2"), "{table}");
+        assert!(table.contains("network-wait 300 ns"), "{table}");
+        let html = crate::call_graph::render_html_exact(&graph, "network profile", &[]);
+        assert!(html.contains("\"networkInclN\":5"), "{html}");
+        assert!(html.contains("\"networkExclN\":2"), "{html}");
+        assert!(html.contains("Net wait"), "{html}");
+    }
+
+    /// Logs written by the first monitoring implementation still load as direct metrics.
+    #[test]
+    fn parses_legacy_direct_network_metrics() {
+        let dump = "elephc-instr: fetch calls=1 incl_ns=500 excl_ns=400 incl_allocs=0 \
+                    excl_allocs=0 incl_io=0 excl_io=0 incl_ret=0 excl_ret=0 incl_wait=0 \
+                    excl_wait=0 network_ops=2 network_wait=300\n";
+        let graph = parse_instrument_dump(dump);
+        assert_eq!(graph.nodes[0].network_inclusive, 2);
+        assert_eq!(graph.nodes[0].network_exclusive, 2);
+        assert_eq!(graph.nodes[0].network_wait_inclusive, 300);
+        assert_eq!(graph.nodes[0].network_wait_exclusive, 300);
+    }
+
+    /// Saved graphs from before the network split restore direct values as inclusive too.
+    #[test]
+    fn loads_legacy_saved_network_metrics() {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-monitor-legacy-network-{}.json",
+            std::process::id()
+        ));
+        let legacy = r#"{
+            "nodes": [{
+                "name": "fetch",
+                "inclusive": 1,
+                "exclusive": 1,
+                "call_count": 1,
+                "alloc_inclusive": 0,
+                "alloc_exclusive": 0,
+                "network_ops": 2,
+                "network_wait": 300,
+                "causes": []
+            }],
+            "edges": [],
+            "total": 1
+        }"#;
+        std::fs::write(&path, legacy).expect("write legacy graph fixture");
+        let graph = load_exact_graph(path.to_str().expect("UTF-8 fixture path"))
+            .expect("load legacy graph fixture");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(graph.nodes[0].network_inclusive, 2);
+        assert_eq!(graph.nodes[0].network_exclusive, 2);
+        assert_eq!(graph.nodes[0].network_wait_inclusive, 300);
+        assert_eq!(graph.nodes[0].network_wait_exclusive, 300);
     }
 
     #[test]
@@ -1213,6 +1313,10 @@ echo call_hot(1);
             retained_exclusive: 0,
             wait_inclusive: 0,
             wait_exclusive: 0,
+            network_inclusive: 0,
+            network_exclusive: 0,
+            network_wait_inclusive: 0,
+            network_wait_exclusive: 0,
             causes: vec![],
         };
         CallGraph {
@@ -1237,7 +1341,11 @@ echo call_hot(1);
             Some(("calls".into(), "leaf".into(), "<=".into(), 1000.0))
         );
         assert_eq!(parse_assert("bogus"), None);
-        let graph = instr_graph();
+        let mut graph = instr_graph();
+        graph.nodes[1].network_inclusive = 3;
+        graph.nodes[1].network_exclusive = 3;
+        graph.nodes[1].network_wait_inclusive = 2_000_000;
+        graph.nodes[1].network_wait_exclusive = 2_000_000;
         let run = |specs: &[&str]| {
             let owned: Vec<(String, Option<String>)> =
                 specs.iter().map(|s| ((*s).to_string(), None)).collect();
@@ -1251,6 +1359,8 @@ echo call_hot(1);
         let (report, ok) = run(&["calls:leaf<=2000", "time_pct:run>=90"]);
         assert!(ok, "{report}");
         assert!(report.contains("2 passed, 0 failed"), "{report}");
+        let (report, ok) = run(&["network:leaf<=3", "network_wait_ms:*<=2"]);
+        assert!(ok, "{report}");
         // A function the run never reached is reported as unevaluated, not as a
         // failure of the code: the budget names something that is not there.
         let (report, ok) = run(&["calls:ghost<1"]);

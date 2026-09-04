@@ -72,6 +72,14 @@ pub(crate) struct EasyEntry {
     /// replacement, and `free_slists` releases whatever is left when the
     /// handle is reset or cleaned up.
     pub(crate) slists: HashMap<i32, *mut CurlSlist>,
+    /// The HTTP headers supplied by the PHP program, excluding any temporary
+    /// monitoring trace header. Keeping this source list separate lets the
+    /// bridge refresh or remove automatic propagation without losing user
+    /// headers or copying an injected header into duplicated handles.
+    pub(crate) user_http_headers: Option<Vec<Vec<u8>>>,
+    /// The traceparent value currently injected into `CURLOPT_HTTPHEADER`.
+    /// `None` means the applied list contains only user-provided headers.
+    pub(crate) applied_traceparent: Option<String>,
     /// A borrowed-until-overwritten byte buffer for the string-shaped operations
     /// (`curl_getinfo()`'s string/list/array forms, and Wave D's
     /// `curl_escape`/`curl_unescape`), the same convention `taken_body` uses for
@@ -194,6 +202,8 @@ impl EasyEntry {
             last_errno: 0,
             last_error: Vec::new(),
             slists: HashMap::new(),
+            user_http_headers: None,
+            applied_traceparent: None,
             scratch: Vec::new(),
             share_id: None,
             mime: None,
@@ -216,6 +226,8 @@ impl EasyEntry {
             // is freed, so no double free is reachable.
             unsafe { easy::slist_free_all(list) };
         }
+        self.user_http_headers = None;
+        self.applied_traceparent = None;
     }
 
     /// Frees this handle's ATTACHED and PENDING `curl_mime` structures (if any) and forgets

@@ -122,9 +122,11 @@ monitor` reads the binary you ran, or the service already serving traffic at
 `https://host:9411`.
 
 A program you *launch* is measured from inside: exact wall time, allocations,
-retained objects, database wait, SQL queries and call counts, rooted at
-`{main}`, so an N+1 is a certainty rather than a suspicion. File I/O is not yet
-counted or timed. A service you *connect to* answers from its sample ring by
+retained objects, database wait, SQL queries, outgoing network operations and
+network wait, plus call counts, rooted at `{main}`, so an N+1 is a certainty
+rather than a suspicion. Curl requests also propagate the active W3C
+`traceparent` unless user code supplied one. File I/O is not yet counted or
+timed. A service you *connect to* answers from its sample ring by
 default — sampled CPU-time shares, sampled allocation attribution and route
 tags, with no blocked wall time or query/wait summary in a combined monitoring
 build — and `elephc monitor

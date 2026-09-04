@@ -29,8 +29,9 @@ program or connects to one already running.
 
 A target this command **launches** — a source or a binary — is measured for its
 whole run and reports the full table: per-function calls, inclusive and self
-wall time, allocations, retained objects, DB queries and DB-driver wait. File
-I/O is not yet counted or timed. Every export follows:
+wall time, allocations, retained objects, DB queries, DB-driver wait, outgoing
+network operations and network wait. File I/O is not yet counted or timed.
+Every export follows:
 [Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
 Graphviz, the HTML call graph.
 
@@ -53,18 +54,18 @@ end of this page). Ask for those with `--exact`, or with a signed
 
 The capability matrix is explicit about each dimension:
 
-| Capture | CPU | Wall time | Calls | Allocations / retained | DB queries | File I/O | Wait | Routes |
-|---|---|---|---|---|---|---|---|---|
-| local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded DB wait | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | not available | exact DB-driver wait only | untagged local run |
-| service default | sampled CPU-time ring | unavailable; blocked time is invisible | unavailable | exact deltas only between samples, with sampled attribution; no retained count | unavailable in combined `--with-monitoring` | unavailable | unavailable in combined `--with-monitoring` | sampled stacks carry the exact route tag |
-| service `--exact` or signed request | not measured separately; wall minus recorded DB wait is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | not available | exact DB-driver wait only | exact request route/trace context |
-| `--live` | sampled externally | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
-| `--attach` | sampled externally | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+| Capture | CPU | Wall time | Calls | Allocations / retained | DB queries | Network | File I/O | Wait | Routes |
+|---|---|---|---|---|---|---|---|---|---|
+| local `monitor` | not measured as an OS CPU clock; the UI can show wall minus recorded waits | exact enter/exit time, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | untagged local run |
+| service default | sampled CPU-time ring | unavailable; blocked time is invisible | unavailable | exact deltas only between samples, with sampled attribution; no retained count | unavailable in combined `--with-monitoring` | unavailable in combined `--with-monitoring` | unavailable | unavailable in combined `--with-monitoring` | sampled stacks carry the exact route tag |
+| service `--exact` or signed request | not measured separately; wall minus recorded waits is only a derived remainder | exact for one completed request, rooted at `{main}` | exact | exact / exact | exact | exact curl operations and wait | not available | exact DB-driver and network wait | exact request route/trace context |
+| `--live` | sampled externally | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
+| `--attach` | sampled externally | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable | unavailable |
 
-A probe-only binary can emit exact per-route DB-operation and DB-wait counters
-beside its sampled stacks. `--with-monitoring` links both runtimes, and the exact
-runtime owns those callbacks, so the combined service-default row above is the
-one users of the public flag receive.
+A probe-only binary can emit exact per-route DB and outgoing-network operation
+and wait counters beside its sampled stacks. `--with-monitoring` links both
+runtimes, and the exact runtime owns those callbacks, so the combined
+service-default row above is the one users of the public flag receive.
 
 What *is* the same across all four is the mechanism. Profiling in production is
 normally a *different tool* answering a *smaller question*, an approximation you
@@ -509,9 +510,10 @@ that samples itself from boot whether or not anyone ever looks.
 
 The **exact** answer is the same measurement a local run gives:
 per-function calls, self and inclusive time, allocations, retained objects,
-DB queries and DB-driver wait, for one request, rooted at `{main}`. It does not
-count or time file I/O. It exists only once a request completes, so `--exact`
-waits up to thirty seconds for the next one.
+DB queries, DB-driver wait, outgoing network operations and network wait, for
+one request, rooted at `{main}`. It does not count or time file I/O. It exists
+only once a request completes, so `--exact` waits up to thirty seconds for the
+next one.
 
 One exact capture runs at a time. The rendezvous the worker leaves its slice in
 is a single slot, so a second `--exact` while one is in flight is told so rather
@@ -658,7 +660,7 @@ every call from a real enter/exit shadow stack, and writes the result to stderr
 at exit.
 
 ```text
-elephc-instr: {fn} calls=<n> incl_ns=<ns> excl_ns=<ns> incl_allocs=<n> excl_allocs=<n> incl_io=<n> excl_io=<n> incl_ret=<n> excl_ret=<n> incl_wait=<ns> excl_wait=<ns>
+elephc-instr: {fn} calls=<n> incl_ns=<ns> excl_ns=<ns> incl_allocs=<n> excl_allocs=<n> incl_io=<n> excl_io=<n> incl_ret=<n> excl_ret=<n> incl_wait=<ns> excl_wait=<ns> incl_network=<n> excl_network=<n> incl_network_wait=<ns> excl_network_wait=<ns>
 elephc-instr-edge: {caller} -> {callee} count=<n> ns=<callee ns under caller>
 elephc-instr-query: <count> <normalized SQL text>   (one per distinct statement, if any DB ran)
 ```
@@ -802,8 +804,17 @@ callee many times and that callee issues one query each, the recommendation says
 so outright — "*N+1: `list_all` calls `get_user` 200 times and `get_user`
 issues 200 DB queries — batch them into one query*". `monitor`
 shows a `queries` column and per-function query counts in the graph tooltips.
-(HTTP has no client bridge in elephc yet; filesystem I/O can be added on the same
-runtime hook, but is not counted today.)
+
+**And outgoing network work.** `incl_network` / `excl_network` count curl
+transfers with the same inclusive/exclusive attribution as DB queries, while
+`incl_network_wait` / `excl_network_wait` record blocking curl transfer,
+connection-upkeep, or multi-wait time. `curl_upkeep()` contributes maintenance
+wait but not a transfer operation, and PHP callback execution nested inside
+`curl_exec()` is subtracted from network wait. These counters are separate from
+the PDO dimensions, so an HTTP-heavy request cannot inflate query budgets or
+trigger a false N+1 diagnosis. The stdout table, interactive graph, distributed
+trace waterfall, OTLP and Prometheus exports, and performance assertions all
+carry the network dimensions. Filesystem I/O is still not counted.
 
 **And what stays behind.** `incl_ret` / `excl_ret` are **retained** objects —
 allocated minus freed — attributed per function the same exact way, by reading
@@ -828,9 +839,9 @@ spent **blocked inside a driver call** rather than running PHP. The PDO bridge
 times the database work — statement execution and `PDO::exec`, across every
 driver — and reports the elapsed time through the same pay-for-use slot
 mechanism, so the profiler can split every function's self time into recorded DB
-wait and a non-DB remainder. Note the scope: *database* work. File and network
-I/O outside PDO are not timed, so `wall - DB wait` is not an OS measurement of
-actual on-CPU time.
+wait and a non-DB remainder. Network wait is reported in its own curl-backed
+dimension, while file I/O remains unmeasured. Neither remainder is an OS
+measurement of actual on-CPU time.
 
 ```
 PDO::exec              self 1.8 ms   wait 1.4 ms   non-DB 363.7 µs
@@ -923,8 +934,10 @@ an island only elephc tooling can read. When a request arrives with a valid
 starts a new one. A malformed header always starts a fresh trace, so a caller
 cannot inject text into your profile output.
 
-To carry the trace onward, read the value the profiler publishes for the
-current request and pass it on:
+Curl carries the trace onward automatically while a monitoring capture is
+active. It injects the value the profiler publishes for the current request
+unless the program already supplied a `traceparent` header. Explicit user
+headers always win. The same value remains available for other HTTP clients:
 
 ```php
 $ctx = stream_context_create(['http' => [
@@ -933,7 +946,7 @@ $ctx = stream_context_create(['http' => [
 $fh = fopen('http://inventory.internal/stock', 'r', false, $ctx);
 ```
 
-`ELEPHC_TRACEPARENT` is refreshed at the start of every request and already
+`ELEPHC_TRACEPARENT` is refreshed at the start of every captured request and already
 carries *this* slice's span id, so the callee records it as its parent. Nothing
 else is needed — no extra flag, no new builtin, and non-instrument binaries
 carry none of this machinery (the runtime slot stays zero).
@@ -946,10 +959,10 @@ caller (any OTel service)  trace=1111…8888  span=aaaabbbbccccdddd
     service B              trace=1111…8888  span=13b8fb9994026a78  parent=604e39a69a8d26e2
 ```
 
-Propagation currently reaches the HTTP stream layer (`fopen("http://…")` with a
-stream context). elephc has no `curl` yet, so an application that calls out
-through curl cannot propagate; that is the practical limit today, not the
-mechanism.
+Propagation reaches curl automatically and the HTTP stream layer manually
+(`fopen("http://…")` with a stream context). Automatic curl propagation is
+dormant outside an active capture and removes a previously injected header when
+the handle is reused later.
 
 #### Correlating the services
 
@@ -1032,8 +1045,8 @@ elephc monitor --stitch gateway.log --stitch inventory.log \
 `--otlp` posts the slices as **OpenTelemetry spans**. elephc already carried the
 W3C trace identity — the service belonged to its caller's trace whether or not
 anything was exported — so what this adds is that the hop stops being a *gap* in
-that trace and starts being a span with its own duration, route, query count and
-time spent waiting.
+that trace and starts being a span with its own duration, route, query count,
+network-operation count and time spent waiting.
 
 Plain HTTP to a local agent is the intended deployment, so an https endpoint is
 refused with that advice rather than a socket error: a remote or authenticated
@@ -1063,7 +1076,9 @@ service:
 textfile collector. A file rather than an endpoint, because `monitor` runs and
 exits and leaves nothing to poll; percentiles are a `summary` rather than a
 histogram, because we hold exact per-request values and buckets would invent a
-resolution the capture does not have.
+resolution the capture does not have. Network data is exported as the
+`elephc_network_operations_per_request` and
+`elephc_network_wait_seconds_per_request` gauges.
 
 ### Timeline (Perfetto)
 
@@ -1106,7 +1121,8 @@ elephc monitor app.php \
 ```
 
 Every measured dimension is assertable — `calls`, `allocs`, `retained`,
-`queries`, `self_ms`, `incl_ms`, `wait_ms`, `time_pct` — with the operators
+`queries`, `self_ms`, `incl_ms`, `wait_ms`, `network`, `network_wait_ms`,
+`time_pct` - with the operators
 `<= >= == < >`. Use `*` as the function to assert on the **whole run**:
 
 ```bash

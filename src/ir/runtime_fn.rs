@@ -76,6 +76,8 @@ pub struct RuntimeFnDescriptor {
     pub backend_mapping: RuntimeFnBackendMapping,
     /// Explicit target availability.
     pub target_support: RuntimeFnTargetSupport,
+    /// Machine-audited observability decision for this runtime boundary.
+    pub monitoring: elephc_monitoring_contract::MonitoringPolicy,
 }
 
 /// Stable semantic identity for one runtime function callable from EIR.
@@ -700,6 +702,7 @@ impl RuntimeFnId {
             requirements: self.requirements(),
             backend_mapping: RuntimeFnBackendMapping::TargetAwareEmitter,
             target_support: RuntimeFnTargetSupport::AllSupported,
+            monitoring: self.monitoring_policy(),
         }
     }
 
@@ -930,6 +933,31 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            // Both transfer drivers may invoke arbitrary PHP callbacks. Keep the
+            // callback-capable conservative set, then preserve their typed network and
+            // blocking distinctions so optimizer and monitoring consumers agree.
+            RuntimeFnId::CurlEasyPerform => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::REFCOUNT_OP.bits()
+                    & !crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            RuntimeFnId::CurlMultiExec => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::REFCOUNT_OP.bits()
+                    & !crate::ir::Effects::WRITES_GLOBAL.bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits(),
+            ),
+            RuntimeFnId::CurlEasyUpkeep | RuntimeFnId::CurlMultiSelect => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::WRITES_HEAP.bits()
+                        | crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::MAY_WARN.bits()
+                    | crate::ir::Effects::BLOCKING_IO.bits()
+                        | crate::ir::Effects::NETWORK_IO.bits(),
+                )
+            }
             RuntimeFnId::BcScale => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_PROCESS.bits()
                     | crate::ir::Effects::WRITES_PROCESS.bits()
@@ -1240,7 +1268,9 @@ impl RuntimeFnId {
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
-                    & !crate::ir::Effects::WRITES_GLOBAL.bits(),
+                    & !crate::ir::Effects::WRITES_GLOBAL.bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
             ),
         }
     }
@@ -1277,6 +1307,129 @@ impl RuntimeFnId {
             RuntimeFnId::CallUserFunc => E::PURE,
             RuntimeFnId::CallUserFuncArray => E::READS_HEAP,
             _ => self.effects(),
+        }
+    }
+
+    /// Returns the explicit monitoring policy for bridge-backed or I/O runtime work.
+    ///
+    /// The registry audit rejects `Unspecified` whenever an operation requires a bridge
+    /// or carries `BLOCKING_IO`/`NETWORK_IO`. Adding another bridge operation therefore
+    /// requires updating this match in the same change, even inside an existing bridge.
+    pub const fn monitoring_policy(
+        self,
+    ) -> elephc_monitoring_contract::MonitoringPolicy {
+        use elephc_monitoring_contract::{
+            IoKind, MonitoringPolicy, TraceContextPolicy, WaitPolicy,
+        };
+        match self {
+            RuntimeFnId::CurlEasyPerform => MonitoringPolicy::Io {
+                kind: IoKind::Network,
+                wait: WaitPolicy::Measured,
+                trace_context: TraceContextPolicy::Automatic,
+            },
+            RuntimeFnId::CurlEasyUpkeep | RuntimeFnId::CurlMultiSelect => {
+                MonitoringPolicy::Io {
+                    kind: IoKind::Network,
+                    wait: WaitPolicy::Measured,
+                    trace_context: TraceContextPolicy::NotApplicable,
+                }
+            }
+            RuntimeFnId::CurlMultiExec => MonitoringPolicy::Io {
+                kind: IoKind::Network,
+                wait: WaitPolicy::GenericTiming,
+                trace_context: TraceContextPolicy::Automatic,
+            },
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcComp
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcScale
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub
+            | RuntimeFnId::ElephcPharBzip2Archive
+            | RuntimeFnId::ElephcPharDecompressArchive
+            | RuntimeFnId::ElephcPharGetFileMetadata
+            | RuntimeFnId::ElephcPharGetMetadata
+            | RuntimeFnId::ElephcPharGetSignatureHash
+            | RuntimeFnId::ElephcPharGetSignatureType
+            | RuntimeFnId::ElephcPharGetStub
+            | RuntimeFnId::ElephcPharGzipArchive
+            | RuntimeFnId::ElephcPharListEntries
+            | RuntimeFnId::ElephcPharSetCompression
+            | RuntimeFnId::ElephcPharSetFileMetadata
+            | RuntimeFnId::ElephcPharSetMetadata
+            | RuntimeFnId::ElephcPharSetStub
+            | RuntimeFnId::ElephcPharSetZipPassword
+            | RuntimeFnId::ElephcPharSignHash
+            | RuntimeFnId::ElephcPharSignOpenssl
+            | RuntimeFnId::CurlEasyBody
+            | RuntimeFnId::CurlEasyErrno
+            | RuntimeFnId::CurlEasyError
+            | RuntimeFnId::CurlEasyGetinfoLong
+            | RuntimeFnId::CurlEasyInit
+            | RuntimeFnId::CurlEasySetoptLong
+            | RuntimeFnId::CurlEasySetCallback
+            | RuntimeFnId::CurlEasyCopy
+            | RuntimeFnId::CurlEasyPause
+            | RuntimeFnId::CurlEasyReset
+            | RuntimeFnId::CurlStrerror
+            | RuntimeFnId::CurlEasyGetinfoDouble
+            | RuntimeFnId::CurlEasyStrOp
+            | RuntimeFnId::CurlEasySetoptSlist
+            | RuntimeFnId::CurlEasySetoptStr
+            | RuntimeFnId::CurlOptionKind
+            | RuntimeFnId::CurlEasyId
+            | RuntimeFnId::CurlMultiInit
+            | RuntimeFnId::CurlMultiAdd
+            | RuntimeFnId::CurlMultiRemove
+            | RuntimeFnId::CurlMultiInfoRead
+            | RuntimeFnId::CurlMultiSetopt
+            | RuntimeFnId::CurlMultiErrno
+            | RuntimeFnId::CurlMultiStrerror
+            | RuntimeFnId::CurlShareInit
+            | RuntimeFnId::CurlShareSetopt
+            | RuntimeFnId::CurlShareErrno
+            | RuntimeFnId::CurlShareStrerror
+            | RuntimeFnId::CurlEasySetShare
+            | RuntimeFnId::CurlShareInitPersistent
+            | RuntimeFnId::CurlMimeNew
+            | RuntimeFnId::CurlMimeAddPart
+            | RuntimeFnId::CurlMimePartField
+            | RuntimeFnId::CurlMimePost
+            | RuntimeFnId::CurlMimeAbort
+            | RuntimeFnId::CurlVersion
+            | RuntimeFnId::Hash
+            | RuntimeFnId::HashCopy
+            | RuntimeFnId::HashFile
+            | RuntimeFnId::HashFinal
+            | RuntimeFnId::HashHmac
+            | RuntimeFnId::HashInit
+            | RuntimeFnId::HashUpdate
+            | RuntimeFnId::OpensslCipherIvLength
+            | RuntimeFnId::OpensslDecrypt
+            | RuntimeFnId::OpensslEncrypt
+            | RuntimeFnId::OpensslGetCipherMethods
+            | RuntimeFnId::Iconv
+            | RuntimeFnId::IconvGetEncoding
+            | RuntimeFnId::IconvMimeDecode
+            | RuntimeFnId::IconvMimeDecodeHeaders
+            | RuntimeFnId::IconvMimeEncode
+            | RuntimeFnId::IconvSetEncoding
+            | RuntimeFnId::IconvStrlen
+            | RuntimeFnId::IconvStrpos
+            | RuntimeFnId::IconvStrrpos
+            | RuntimeFnId::IconvSubstr
+            | RuntimeFnId::Md5
+            | RuntimeFnId::Sha1
+            | RuntimeFnId::StreamSocketEnableCrypto => MonitoringPolicy::GenericTiming,
+            _ => MonitoringPolicy::Unspecified,
         }
     }
 

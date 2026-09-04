@@ -338,6 +338,10 @@ pub(crate) static EMPTY_NODE: std::sync::LazyLock<crate::call_graph::GraphNode> 
         retained_exclusive: 0,
         wait_inclusive: 0,
         wait_exclusive: 0,
+        network_inclusive: 0,
+        network_exclusive: 0,
+        network_wait_inclusive: 0,
+        network_wait_exclusive: 0,
         causes: Vec::new(),
     });
 
@@ -371,6 +375,8 @@ pub(crate) const ASSERT_METRICS: &[(&str, &str)] = &[
     ("self_ms", "milliseconds of its own time"),
     ("incl_ms", "milliseconds including everything it calls"),
     ("wait_ms", "milliseconds blocked inside a driver call"),
+    ("network", "outgoing network operations it issues itself"),
+    ("network_wait_ms", "milliseconds blocked in outgoing network work"),
     ("time_pct", "inclusive time as a percentage of the run"),
 ];
 
@@ -388,6 +394,8 @@ pub(crate) fn assert_metric_value(
         "self_ms" => Some(node.exclusive as f64 / 1_000_000.0),
         "incl_ms" => Some(node.inclusive as f64 / 1_000_000.0),
         "wait_ms" => Some(node.wait_exclusive as f64 / 1_000_000.0),
+        "network" => Some(node.network_exclusive as f64),
+        "network_wait_ms" => Some(node.network_wait_exclusive as f64 / 1_000_000.0),
         "time_pct" => Some(100.0 * node.inclusive as f64 / root_ns as f64),
         _ => None,
     }
@@ -409,6 +417,10 @@ pub(crate) fn assert_run_total(metric: &str, graph: &crate::call_graph::CallGrap
         "queries" => Some(sum_excl(|n| n.io_exclusive as f64)),
         "self_ms" | "incl_ms" => Some(root_ns as f64 / 1_000_000.0),
         "wait_ms" => Some(sum_excl(|n| n.wait_exclusive as f64) / 1_000_000.0),
+        "network" => Some(sum_excl(|n| n.network_exclusive as f64)),
+        "network_wait_ms" => {
+            Some(sum_excl(|n| n.network_wait_exclusive as f64) / 1_000_000.0)
+        }
         "time_pct" => Some(100.0),
         _ => None,
     }
@@ -558,6 +570,10 @@ pub(crate) struct ServiceStats {
     queries_per_request: f64,
     /// Share of request time spent blocked in a driver.
     wait_share: f64,
+    /// Mean outgoing network operations per request.
+    network_per_request: f64,
+    /// Mean seconds per request spent waiting on outgoing network work.
+    network_wait_seconds_per_request: f64,
 }
 
 /// Nearest-rank percentile: the value at position ceil(p/100 x n), 1-indexed.
@@ -576,7 +592,19 @@ pub(crate) fn percentile(sorted: &[u64], p: f64) -> u64 {
 /// Loads a saved exact call graph (`--save` output) for diffing.
 pub(crate) fn load_exact_graph(path: &str) -> Option<crate::call_graph::CallGraph> {
     let json = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&json).ok()
+    let mut graph: crate::call_graph::CallGraph = serde_json::from_str(&json).ok()?;
+    // Profiles saved before network metrics became inclusive/exclusive deserialize their
+    // direct values through serde aliases. An exclusive value with no inclusive partner
+    // can only be that legacy shape, so restore the minimum valid inclusive value.
+    for node in &mut graph.nodes {
+        if node.network_inclusive == 0 && node.network_exclusive > 0 {
+            node.network_inclusive = node.network_exclusive;
+        }
+        if node.network_wait_inclusive == 0 && node.network_wait_exclusive > 0 {
+            node.network_wait_inclusive = node.network_wait_exclusive;
+        }
+    }
+    Some(graph)
 }
 
 /// Formats nanoseconds as a human duration for the exact table.

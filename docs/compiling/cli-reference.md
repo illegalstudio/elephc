@@ -55,7 +55,7 @@ selection, toolchain overrides, and transactional behavior.
 
 | Command | Arguments and flags | Description |
 |---|---|---|
-| `monitor` | `<program\|source.php> [--html <file>] [--trace <file>] [--assert <expr>] [--assert-file <file>] [--save <file>] [--baseline <file>] [--out <file.speedscope.json>]` | Profile a program built with `--with-monitoring` (a `.php` source is built first): exact per-function wall time, allocations, retained objects, DB-driver wait, SQL queries and calls, rooted at `{main}`. File I/O is not measured. A service endpoint answers from the sampled CPU-time ring instead unless `--exact` requests one completed request. A binary without the capability is refused. |
+| `monitor` | `<program\|source.php> [--html <file>] [--trace <file>] [--assert <expr>] [--assert-file <file>] [--save <file>] [--baseline <file>] [--out <file.speedscope.json>]` | Profile a program built with `--with-monitoring` (a `.php` source is built first): exact per-function wall time, allocations, retained objects, DB-driver wait, SQL queries, outgoing network operations and network wait, plus calls, rooted at `{main}`. File I/O is not measured. A service endpoint answers from the sampled CPU-time ring instead unless `--exact` requests one completed request. A binary without the capability is refused. |
 | `monitor <address>` | `<host:port\|http://host\|https://host\|/path/to.sock> [--key <file>] [--out <file>] [--pprof <file>] [--dot <file>] [--html <file>]` | Profile a service already running. Sampled CPU time, allocation attribution and route tags by default; no blocked wall time or combined-build SQL/wait summary. `--exact` returns the measured table for the next completed request. Needs the build key. |
 | `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and macOS-only. |
 | `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled, and macOS-only. |
@@ -82,11 +82,11 @@ completes, at that request's expense. A binary built without `--with-monitoring`
 is **refused**, with both remedies printed — there is no reduced fallback,
 because a degraded profile that looks like the real one is worse than none.
 
-| Capture | CPU / wall | Calls | Allocation | Queries / file I/O / wait | Routes |
+| Capture | CPU / wall | Calls | Allocation | Queries / network / file I/O / wait | Routes |
 |---|---|---|---|---|---|
-| launched default | exact wall; `wall - DB wait` is a derived remainder, not OS CPU | exact | exact plus exact retained | exact DB queries; no file-I/O metrics; exact DB wait | untagged |
+| launched default | exact wall; recorded waits are derived dimensions, not OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | untagged |
 | service default | sampled CPU; no blocked wall time | none | exact inter-sample deltas with sampled attribution; no retained | none in combined `--with-monitoring`; no file-I/O metrics | sampled stacks carry route tags |
-| service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries; no file-I/O metrics; exact DB wait | exact request route/trace |
+| service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | exact request route/trace |
 | `--live` / `--attach` | external sampled CPU only | none | none | none | none |
 
 Reading a running service (`monitor <address>`) needs the build key: from
@@ -155,11 +155,12 @@ call boundary. This recovery is best-effort and silently degrades to plain
 frames without the source or the dSYM.
 
 What the capability buys is **measuring** rather than sampling: exact numbers,
-six dimensions, and true edge counts instead of statistical shares.
+eight dimensions, and true edge counts instead of statistical shares.
 `--assert '<metric>:<function><op><value>'` gates the run — for example
 `--assert 'queries:load_price<=1'` or `--assert 'self_ms:*<250'`. Metrics are
-`calls`, `allocs`, `retained`, `queries`, `self_ms`, `incl_ms`, `wait_ms` and
-`time_pct`; the operator is one of `<=`, `>=`, `==`, `<`, `>`; `*` as the
+`calls`, `allocs`, `retained`, `queries`, `self_ms`, `incl_ms`, `wait_ms`,
+`network`, `network_wait_ms` and `time_pct`; the operator is one of `<=`, `>=`,
+`==`, `<`, `>`; `*` as the
 function name means the whole run. Any failure exits 2. Repeat the flag for several budgets. A project's
 standing budget lives in a `.elephc` file found by walking up from the source,
 so `--assert` is for one-off checks and the file is for the ones you keep; both
@@ -206,7 +207,8 @@ service:
 format for a textfile collector — a file rather than an endpoint, because
 `monitor` runs and exits and leaves nothing to scrape. Percentiles are exposed as
 a `summary`, not a histogram: we hold exact per-request values, and buckets would
-invent a resolution the capture does not have.
+invent a resolution the capture does not have. It also writes mean network
+operations and network-wait seconds per request as gauges.
 
 `--serve <addr>` serves the HTML page over HTTP instead of writing it to disk,
 rewriting it in place as new captures arrive — the page updates without a
@@ -781,6 +783,14 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |
 | `--print-capabilities` | — | off | List the optional capabilities **this** binary accepts and the bridge archives each one needs, then exit successfully. One tab-separated line per capability: `<kind>\t<name>[\t<archive>...]`, where `kind` is `bridge` for a capability backed by one archive of its own and `capability` for one that is not — because it needs no archive (`regex`, whose provider is a managed native package) or because it is built out of several (`monitoring`). Every field is derived from the compiler's own bridge table, so this is the authoritative answer for the binary you are holding, not for the version the documentation was written against. A bridge archive is resolved from the directory the binary lives in or its sibling `lib/`, so `scripts/verify-release-artifact.sh` uses this to check a packaged tarball actually carries everything the compiler inside it advertises. |
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
+
+Exact monitoring rows also append inclusive/exclusive network operations and
+network wait. Curl reports those dimensions through network-specific runtime
+slots, separate from PDO query and wait counters, and propagates the active W3C
+`traceparent` unless the program supplied that header explicitly. Transfer
+operations exclude connection upkeep, and network wait excludes PHP callback
+execution nested inside `curl_exec()`. The exclusive network dimensions are
+available to `--assert` as `network` and `network_wait_ms`.
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
 

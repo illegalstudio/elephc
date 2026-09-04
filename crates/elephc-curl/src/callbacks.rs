@@ -43,8 +43,10 @@
 //!   a throw with `curl_errno() === 0`). The runtime re-raises the pending exception
 //!   once `curl_easy_perform` has returned.
 
+use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use crate::easy::{self, CURL};
 use crate::handles::{self, EasyEntry};
@@ -198,7 +200,12 @@ unsafe fn invoke(
     // SAFETY: the address came from `__elephc_curl_adapter_addr()`, whose only possible
     // value is the codegen adapter emitted with exactly this signature.
     let adapter: CallbackAdapter = std::mem::transmute(slot.adapter);
+    let started = callback_timing_active().then(Instant::now);
     let result = adapter(slot.descriptor, slot.self_obj, &mut spec);
+    if let Some(started) = started {
+        let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        note_callback_time(elapsed);
+    }
     (result, spec.out_len, spec.status != 0)
 }
 
@@ -218,6 +225,13 @@ unsafe fn invoke(
 /// (`__rt_curl_multi_exec`) is handed a MULTI id and the flag is raised on an EASY one;
 /// compiled PHP is effectively single-threaded, so at most one transfer is in flight.
 static CALLBACK_THREW: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    /// Per-transfer PHP callback time, nested so a callback may run curl on another handle.
+    static CALLBACK_TIMING: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    /// Inactive nested transfers suppress an active outer scope without allocating.
+    static CALLBACK_TIMING_SUPPRESSED: Cell<u32> = const { Cell::new(0) };
+}
 
 /// Reads the slot at `index` for `id` out of the handle table and drops the guard.
 /// Returns `None` for an unknown id, an empty slot, or a moment at which a PHP callback
@@ -260,8 +274,39 @@ fn take_slot(id: i64, index: usize) -> Option<CallbackSlot> {
 /// re-raise hook normally consumes the flag the moment either returns, so this is belt and
 /// braces — but it is what guarantees the flag can never wedge a later transfer if the
 /// bridge is ever driven without that hook.
-pub(crate) fn begin_transfer() {
+pub(crate) fn begin_transfer(measure_callback_time: bool) {
     CALLBACK_THREW.store(false, Ordering::SeqCst);
+    if measure_callback_time {
+        CALLBACK_TIMING.with(|timing| timing.borrow_mut().push(0));
+    } else {
+        CALLBACK_TIMING_SUPPRESSED.with(|depth| depth.set(depth.get().saturating_add(1)));
+    }
+}
+
+/// Closes the current transfer timing scope and returns PHP callback nanoseconds.
+pub(crate) fn finish_transfer(measure_callback_time: bool) -> u64 {
+    if measure_callback_time {
+        CALLBACK_TIMING.with(|timing| timing.borrow_mut().pop().unwrap_or(0))
+    } else {
+        CALLBACK_TIMING_SUPPRESSED.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        0
+    }
+}
+
+/// Returns whether the current transfer needs PHP callback timing.
+fn callback_timing_active() -> bool {
+    CALLBACK_TIMING_SUPPRESSED.with(|suppressed| {
+        suppressed.get() == 0 && CALLBACK_TIMING.with(|timing| !timing.borrow().is_empty())
+    })
+}
+
+/// Adds one completed PHP callback duration to the current transfer scope.
+fn note_callback_time(ns: u64) {
+    CALLBACK_TIMING.with(|timing| {
+        if let Some(total) = timing.borrow_mut().last_mut() {
+            *total = total.saturating_add(ns);
+        }
+    });
 }
 
 /// Records that a PHP callback threw: process-wide, which is what suppresses further
@@ -611,4 +656,44 @@ pub(crate) fn clear_all(entry: &mut EasyEntry) {
     entry.write_user = false;
     // SAFETY: as in `apply_callback`.
     unsafe { apply_registration(entry.curl, entry.id, &entry.callbacks) };
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::{
+        begin_transfer, callback_timing_active, finish_transfer, note_callback_time,
+    };
+
+    /// Nested curl calls keep their own callback exclusions without erasing the caller's.
+    #[test]
+    fn callback_timing_scopes_are_nested() {
+        begin_transfer(true);
+        note_callback_time(40);
+        begin_transfer(true);
+        note_callback_time(7);
+        assert_eq!(finish_transfer(true), 7);
+        note_callback_time(3);
+        assert_eq!(finish_transfer(true), 43);
+    }
+
+    /// Dormant transfers retain no callback duration and still balance their scope.
+    #[test]
+    fn dormant_callback_timing_is_inert() {
+        begin_transfer(false);
+        note_callback_time(99);
+        assert_eq!(finish_transfer(false), 0);
+    }
+
+    /// An inactive nested transfer cannot leak callback time into its active caller.
+    #[test]
+    fn dormant_nested_transfer_suppresses_outer_callback_timing() {
+        begin_transfer(true);
+        assert!(callback_timing_active());
+        begin_transfer(false);
+        assert!(!callback_timing_active());
+        assert_eq!(finish_transfer(false), 0);
+        assert!(callback_timing_active());
+        note_callback_time(11);
+        assert_eq!(finish_transfer(true), 11);
+    }
 }

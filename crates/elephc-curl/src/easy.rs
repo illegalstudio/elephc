@@ -44,6 +44,10 @@ pub(crate) const CURL_ERROR_SIZE: usize = 256;
 
 /// `CURLOPT_URL` (10002): the request URL. `CURLOPTTYPE_STRINGPOINT`.
 pub(crate) const CURLOPT_URL: c_int = 10002;
+/// `CURLOPT_HTTPHEADER` (10023): the caller-owned request header list.
+/// Monitoring may rebuild this list immediately before a transfer to add a
+/// validated traceparent while preserving all user-provided headers.
+pub(crate) const CURLOPT_HTTPHEADER: c_int = 10023;
 /// `CURLOPT_ERRORBUFFER` (10010): a caller-owned `>= CURL_ERROR_SIZE` byte
 /// buffer libcurl writes a human-readable error message into. Internal only;
 /// never PHP-visible (PHP surfaces this through `curl_error()` instead).

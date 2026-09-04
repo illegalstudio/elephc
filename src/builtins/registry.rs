@@ -833,6 +833,7 @@ mod tests {
                 assert_eq!(descriptor.effects, runtime_fn.effects());
                 assert_eq!(descriptor.result_ownership, runtime_fn.result_ownership());
                 assert_eq!(descriptor.requirements, runtime_fn.requirements());
+                assert_eq!(descriptor.monitoring, runtime_fn.monitoring_policy());
                 assert_eq!(
                     descriptor.backend_mapping,
                     crate::ir::RuntimeFnBackendMapping::TargetAwareEmitter,
@@ -841,6 +842,66 @@ mod tests {
                     descriptor.target_support,
                     crate::ir::RuntimeFnTargetSupport::AllSupported,
                 );
+                let bridge_backed = descriptor.requirements.iter().any(|requirement| {
+                    matches!(
+                        requirement,
+                        crate::builtins::semantics::BuiltinRequirement::Bridge(_)
+                    )
+                });
+                let io_effects = crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::BLOCKING_IO.bits()
+                        | crate::ir::Effects::NETWORK_IO.bits(),
+                );
+                if bridge_backed || descriptor.effects.intersects(io_effects) {
+                    assert!(
+                        descriptor.monitoring.is_reviewed(),
+                        "{} runtime target {} needs an explicit monitoring policy",
+                        name,
+                        descriptor.eir_name,
+                    );
+                }
+                if descriptor.effects.intersects(io_effects) {
+                    assert!(
+                        descriptor.monitoring.is_evented(),
+                        "{} runtime target {} declares I/O effects without evented monitoring",
+                        name,
+                        descriptor.eir_name,
+                    );
+                }
+                if descriptor
+                    .effects
+                    .contains(crate::ir::Effects::NETWORK_IO)
+                {
+                    assert!(
+                        matches!(
+                            descriptor.monitoring,
+                            elephc_monitoring_contract::MonitoringPolicy::Io {
+                                kind: elephc_monitoring_contract::IoKind::Network,
+                                ..
+                            }
+                        ),
+                        "{} runtime target {} must classify network effects as network events",
+                        name,
+                        descriptor.eir_name,
+                    );
+                }
+                if descriptor
+                    .effects
+                    .contains(crate::ir::Effects::BLOCKING_IO)
+                {
+                    assert!(
+                        matches!(
+                            descriptor.monitoring,
+                            elephc_monitoring_contract::MonitoringPolicy::Io {
+                                wait: elephc_monitoring_contract::WaitPolicy::Measured,
+                                ..
+                            }
+                        ),
+                        "{} runtime target {} must measure declared blocking I/O",
+                        name,
+                        descriptor.eir_name,
+                    );
+                }
             }
         }
     }

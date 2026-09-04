@@ -72,6 +72,29 @@ elephc app.php --with-curl
 `false` for a curl-free program. AOT code and `eval()` inside the same binary can
 never disagree about it.
 
+## Monitoring and trace propagation
+
+In a binary built with `--with-monitoring`, an active exact capture counts curl
+transfers separately from database queries and records their elapsed network
+wait. Easy transfers count once per `curl_exec()`; multi transfers count once
+per attached easy handle, while `curl_multi_select()` contributes its blocked
+duration. `curl_upkeep()` contributes maintenance wait without counting a new
+transfer, and time spent executing PHP callbacks inside `curl_exec()` is
+excluded from network wait. Network operation and wait counters use the same
+inclusive/exclusive attribution as query counters. The monitor table, HTML
+graph, performance assertions, Prometheus gauges and OpenTelemetry span
+attributes expose those network dimensions.
+
+During a captured web request, curl also injects the current W3C `traceparent`
+into `CURLOPT_HTTPHEADER` immediately before the transfer. A header supplied by
+the program, with any letter case, always wins. Automatic propagation performs
+no allocation or clock read in steady-state dormant execution, is not copied as
+a user header by `curl_copy_handle()`, and is removed when a reused handle runs
+outside the capture that introduced it.
+
+See [Profiling](../beyond-php/profiling.md) for the `network` and
+`network_wait_ms` gates and distributed-trace stitching.
+
 ## Protocol matrix
 
 The pinned libcurl carries 25 schemes — everything a stock distribution libcurl

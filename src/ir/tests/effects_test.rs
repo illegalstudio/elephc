@@ -82,6 +82,37 @@ fn runtime_function_probes_expose_targeted_effects() {
     );
 }
 
+/// Curl transfer boundaries identify network work without classifying internal adapters.
+#[test]
+fn curl_runtime_effects_mark_network_boundaries() {
+    let perform = RuntimeFnId::CurlEasyPerform.effects();
+    assert!(perform.contains(Effects::NETWORK_IO));
+    assert!(perform.contains(Effects::BLOCKING_IO));
+    assert!(perform.contains(Effects::MAY_THROW));
+    assert!(perform.contains(Effects::OUTPUT));
+    assert!(perform.contains(Effects::ALLOC_HEAP));
+
+    let progress = RuntimeFnId::CurlMultiExec.effects();
+    assert!(progress.contains(Effects::NETWORK_IO));
+    assert!(!progress.contains(Effects::BLOCKING_IO));
+    assert!(progress.contains(Effects::MAY_THROW));
+    assert!(progress.contains(Effects::OUTPUT));
+    assert!(progress.contains(Effects::ALLOC_HEAP));
+
+    let adapter = RuntimeFnId::CurlAdapterAddr.effects();
+    assert!(!adapter.contains(Effects::NETWORK_IO));
+    assert!(!adapter.contains(Effects::BLOCKING_IO));
+
+    assert!(matches!(
+        RuntimeFnId::CurlEasyPerform.monitoring_policy(),
+        elephc_monitoring_contract::MonitoringPolicy::Io {
+            kind: elephc_monitoring_contract::IoKind::Network,
+            wait: elephc_monitoring_contract::WaitPolicy::Measured,
+            trace_context: elephc_monitoring_contract::TraceContextPolicy::Automatic,
+        }
+    ));
+}
+
 /// Formatting calls retain arbitrary `__toString()` effects, including throws and globals.
 #[test]
 fn printf_family_effects_cover_userland_string_conversion() {

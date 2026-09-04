@@ -1,0 +1,10 @@
+[package]
+name = "elephc-monitoring-contract"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Typed monitoring policy and bridge-side event helpers for elephc"
+publish = false
+
+[lib]
+crate-type = ["rlib"]

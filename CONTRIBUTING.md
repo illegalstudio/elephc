@@ -406,6 +406,13 @@ enum), implement it under `src/codegen/lower_inst/runtime_functions/` or
 `runtime_calls.rs`, and keep every supported ABI in the same path. If it needs a
 runtime routine, add it under `src/codegen_support/runtime/<category>/`.
 
+Every bridge-backed `RuntimeFnId` must also return a reviewed
+`MonitoringPolicy` from `RuntimeFnId::monitoring_policy()`. Operations marked
+with `BLOCKING_IO` or `NETWORK_IO` effects must use an evented I/O policy. The
+registry test rejects an unspecified decision, so a new runtime boundary cannot
+land until its generic timing, typed events, wait measurement and trace-context
+behavior have been reviewed explicitly.
+
 For a builtin that is naturally expressed as reusable EIR operations, use
 `BuiltinLowering::Eir(lower)`. The hook receives only `BuiltinLoweringContext` and a
 `NormalizedBuiltinCall`; it may emit typed EIR values/runtime calls, but must not
@@ -569,7 +576,7 @@ Every supported target must build and link the crate: `macos-aarch64`,
 artifacts are libraries cross-compiled from macOS. A bridge that only works on
 one target is not acceptable (see the supported-target policy in `CLAUDE.md`).
 
-### 3. Register the bridge in `BRIDGES` (`src/linker.rs`)
+### 3. Register the bridge in `BRIDGES` (`src/linker/bridges.rs`)
 
 Add one `BridgeStaticlib` entry. This is the only linker change required —
 discovery, on-demand build, search paths, whole-archiving, and macOS frameworks
@@ -584,8 +591,28 @@ BridgeStaticlib {
     whole_archive: false,               // true if link-time side effects / owns entry
     macos_frameworks: &[],              // transitive native deps' frameworks
     needs_libdl: true,                  // Rust runtime/unwinder needs -ldl on Linux
+    php_extension: None,                // canonical PHP extension, when distinct
+    monitoring: MonitoringPolicy::GenericTiming,
 },
 ```
+
+The `monitoring` field is mandatory. Use `GenericTiming` when function timing
+fully describes the bridge, `Io { ... }` when it must publish a distinct I/O
+operation or wait dimension, and `Infrastructure { reason }` only for monitor or
+runtime plumbing that is not a PHP-visible work boundary. The bridge-catalog
+test rejects `Unspecified` and empty infrastructure reasons.
+
+I/O bridges should depend on `elephc-monitoring-contract` and call its
+`EventHooks` helper through category-specific runtime slots. Keep database and
+network slots separate so query budgets, N+1 analysis and network budgets
+cannot contaminate each other. The event consumer owns its capture-window gate,
+and must publish an active-window callback when that state is not represented
+by the exact-capture word. Bridge-side timing must avoid clock reads outside
+either active window, while trace propagation stays scoped to an exact trace
+context. Count only actual external operations, not maintenance calls such as
+connection upkeep. Measured wait must exclude time spent in user callbacks so
+network-bound diagnostics describe the driver boundary rather than PHP work.
+Steady-state dormant paths must not allocate per operation.
 
 Set `whole_archive: true` only when the staticlib has link-time side effects that
 must survive (e.g. a provider registration) or owns the program entry point (like

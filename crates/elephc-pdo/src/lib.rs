@@ -44,7 +44,10 @@
 /// non-null makes query counting pay-for-use — a non-instrument binary leaves
 /// the slot zero — with no dlsym and no compile-time coupling to the instr crate.
 mod instr_io {
+    use elephc_monitoring_contract::EventHooks;
+
     extern "C" {
+        static elephc_monitor_event_active_fn: usize;
         static elephc_instr_io_fn: usize;
         static elephc_instr_query_fn: usize;
         static elephc_instr_wait_fn: usize;
@@ -52,17 +55,21 @@ mod instr_io {
         /// every compiled program carries, so reading it here needs no new slot.
         static elephc_monitor_active: u64;
     }
-    type IoFn = unsafe extern "C" fn();
     type QueryFn = unsafe extern "C" fn(*const u8, usize);
-    type WaitFn = unsafe extern "C" fn(u64);
+
+    /// Reads the database event slots into the shared bridge-side helper.
+    fn hooks() -> EventHooks {
+        EventHooks::new(
+            asked(),
+            unsafe { std::ptr::addr_of!(elephc_monitor_event_active_fn).read() },
+            unsafe { std::ptr::addr_of!(elephc_instr_io_fn).read() },
+            unsafe { std::ptr::addr_of!(elephc_instr_wait_fn).read() },
+        )
+    }
 
     /// Records one query with the exact profiler, if `--instrument` is linked.
     pub fn note() {
-        let addr = unsafe { std::ptr::addr_of!(elephc_instr_io_fn).read() };
-        if addr != 0 {
-            let f = unsafe { std::mem::transmute::<usize, IoFn>(addr) };
-            unsafe { f() };
-        }
+        hooks().note_operation();
     }
 
     /// Whether an exact slice is being recorded RIGHT NOW.
@@ -101,18 +108,7 @@ mod instr_io {
     /// is not linked the slot is zero and `body` runs without even reading the
     /// clock — the measurement costs nothing in a normal binary.
     pub fn timed<T>(body: impl FnOnce() -> T) -> T {
-        let addr = unsafe { std::ptr::addr_of!(elephc_instr_wait_fn).read() };
-        if addr == 0 || !asked() {
-            // Not linked, or linked and dormant: either way the clock stays
-            // unread. Two `Instant` reads per statement is not "costs nothing".
-            return body();
-        }
-        let started = std::time::Instant::now();
-        let out = body();
-        let ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
-        let f = unsafe { std::mem::transmute::<usize, WaitFn>(addr) };
-        unsafe { f(ns) };
-        out
+        hooks().timed(body)
     }
 
     // Standalone `cargo test -p elephc-pdo` has no compiled elephc program to
@@ -120,6 +116,8 @@ mod instr_io {
     // never in the staticlib, so a real program's `.comm` is not duplicated.
     #[cfg(test)]
     mod slot_stub {
+        #[no_mangle]
+        static elephc_monitor_event_active_fn: usize = 0;
         #[no_mangle]
         static elephc_instr_io_fn: usize = 0;
         #[no_mangle]

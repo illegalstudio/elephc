@@ -161,9 +161,20 @@ by EIR lowering and `src/codegen/`.
 Optional, heavyweight functionality that is naturally expressed with Rust
 libraries lives in a workspace crate under `crates/elephc-<name>/`, compiled as a
 `staticlib` and linked into the user program on demand. Every such bridge is
-described by one entry in the `BRIDGES` table in `src/linker.rs`; `link()` and the
+described by one entry in the `BRIDGES` table in `src/linker/bridges.rs`; `link()` and the
 discovery/auto-build helpers are fully table-driven, so adding a bridge is a
 single table entry rather than new linker logic.
+
+Every bridge entry must declare a reviewed `MonitoringPolicy`. Use generic
+timing when ordinary function timing is sufficient, typed I/O policy when the
+bridge performs database or network work, and an infrastructure policy with a
+nonempty reason only for monitor/runtime plumbing. The bridge-catalog gate
+rejects an unspecified policy. Bridge-backed `RuntimeFnId` values must also
+declare their operation policy, and any runtime operation carrying
+`BLOCKING_IO` or `NETWORK_IO` effects must use evented monitoring. I/O bridges
+share the dependency-neutral `elephc-monitoring-contract` helper and distinct
+database/network runtime slots, which must remain dormant outside an active
+capture.
 
 A bridge is linked when its `lib_name` appears in `extra_link_libs`. That set is
 populated automatically by feature detection: the type checker records a needed

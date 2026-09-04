@@ -400,6 +400,10 @@ pub unsafe extern "C" fn elephc_curl_easy_setopt_slist(
         if let Some(previous) = entry.slists.insert(opt, list) {
             unsafe { easy::slist_free_all(previous) };
         }
+        if opt == easy::CURLOPT_HTTPHEADER {
+            entry.user_http_headers = Some(items.iter().map(|item| item.to_vec()).collect());
+            entry.applied_traceparent = None;
+        }
         1
     })
 }
@@ -518,22 +522,32 @@ pub extern "C" fn elephc_curl_easy_perform(id: i64) -> i32 {
             let Some(entry) = guard.get_mut(&id) else {
                 return 0;
             };
+            unsafe { refresh_monitor_traceparent(entry) };
             entry.body.clear();
             entry.callback_threw = false;
             // Opens a fresh callback-throw scope: the process-wide gate that suppresses
             // further callbacks after a throw must not survive into this transfer.
-            crate::callbacks::begin_transfer();
             // Zero the error buffer first: libcurl is not guaranteed to
             // write it on success (only documented to write it on error).
             entry.error_buf.iter_mut().for_each(|byte| *byte = 0);
             entry.curl
         };
+        let hooks = crate::monitoring::hooks();
+        hooks.note_operation();
+        let measure_wait = hooks.is_active();
+        crate::callbacks::begin_transfer(measure_wait);
         // The table lock is NOT held across the blocking transfer: the write
         // callback (crate::php_layer::write_callback) re-locks the table
         // per chunk from the same thread, which would deadlock on a
         // non-reentrant `Mutex` otherwise. See this function's doc comment
         // for the resulting caller contract (no concurrent calls on `id`).
+        let started = measure_wait.then(std::time::Instant::now);
         let code = unsafe { easy::perform(curl) };
+        let callback_ns = crate::callbacks::finish_transfer(measure_wait);
+        if let Some(started) = started {
+            let elapsed = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+            hooks.note_wait_excluding(elapsed, callback_ns);
+        }
         let mut guard = handles::lock_recover(handles::handles());
         let Some(entry) = guard.get_mut(&id) else {
             return 0;
@@ -983,7 +997,8 @@ pub extern "C" fn elephc_curl_easy_upkeep(id: i64) -> i32 {
         let Some(entry) = guard.get(&id) else {
             return 0;
         };
-        (unsafe { easy::upkeep(entry.curl) } == easy::CURLE_OK) as i32
+        let hooks = crate::monitoring::hooks();
+        (hooks.timed(|| unsafe { easy::upkeep(entry.curl) }) == easy::CURLE_OK) as i32
     })
 }
 
@@ -1073,7 +1088,14 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
             let slist_items: Vec<(i32, Vec<Vec<u8>>)> = source
                 .slists
                 .iter()
-                .map(|(&opt, &list)| (opt, unsafe { easy::read_slist(list) }))
+                .map(|(&opt, &list)| {
+                    let items = if opt == easy::CURLOPT_HTTPHEADER {
+                        source.user_http_headers.clone().unwrap_or_default()
+                    } else {
+                        unsafe { easy::read_slist(list) }
+                    };
+                    (opt, items)
+                })
                 .collect();
             let copied = unsafe { easy::duphandle(source.curl) };
             if copied.is_null() {
@@ -1170,6 +1192,9 @@ pub extern "C" fn elephc_curl_easy_duphandle(id: i64) -> i64 {
             let code = unsafe { easy::setopt_slist(copied, opt as c_int, rebuilt) };
             if code == easy::CURLE_OK {
                 entry.slists.insert(opt, rebuilt);
+                if opt == easy::CURLOPT_HTTPHEADER {
+                    entry.user_http_headers = Some(items);
+                }
             } else {
                 unsafe {
                     easy::slist_free_all(rebuilt);
@@ -1315,6 +1340,136 @@ unsafe fn build_slist(items: &[impl AsRef<[u8]>]) -> Option<*mut easy::CurlSlist
         }
     }
     Some(list)
+}
+
+/// Returns whether a user header explicitly owns the traceparent field.
+fn is_traceparent_header(header: &[u8]) -> bool {
+    let Some(delimiter) = header
+        .iter()
+        .position(|byte| matches!(*byte, b':' | b';'))
+    else {
+        return false;
+    };
+    let name = &header[..delimiter];
+    let start = name
+        .iter()
+        .position(|byte| !byte.is_ascii_whitespace())
+        .unwrap_or(name.len());
+    let end = name
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(start, |index| index + 1);
+    name[start..end].eq_ignore_ascii_case(b"traceparent")
+}
+
+/// Builds the effective HTTP header list and reports the automatic trace value
+/// represented by it. An explicit user traceparent always wins.
+#[cfg(test)]
+fn effective_http_headers(
+    user_headers: &[Vec<u8>],
+    traceparent: Option<String>,
+) -> (Vec<Vec<u8>>, Option<String>) {
+    let injected = automatic_traceparent(user_headers, traceparent);
+    let mut effective = user_headers.to_vec();
+    if let Some(value) = injected.as_deref() {
+        let mut header = b"traceparent: ".to_vec();
+        header.extend_from_slice(value.as_bytes());
+        effective.push(header);
+    }
+    (effective, injected)
+}
+
+/// Resolves the automatic trace value after applying user-header precedence.
+fn automatic_traceparent(
+    user_headers: &[Vec<u8>],
+    traceparent: Option<String>,
+) -> Option<String> {
+    if user_headers
+        .iter()
+        .any(|header| is_traceparent_header(header))
+    {
+        None
+    } else {
+        traceparent
+    }
+}
+
+/// Refreshes the automatic traceparent on an easy handle before a transfer.
+///
+/// The applied slist is rebuilt only when the propagated value changes. User
+/// headers remain authoritative, and a failed allocation or setopt leaves the
+/// previous live list untouched.
+///
+/// # Safety
+/// `entry.curl` must be a live easy handle, and no transfer may be using its
+/// current HTTP header list concurrently.
+pub(crate) unsafe fn refresh_monitor_traceparent(entry: &mut EasyEntry) {
+    let user_headers = entry.user_http_headers.as_deref().unwrap_or(&[]);
+    let injected = automatic_traceparent(user_headers, crate::monitoring::traceparent());
+    if entry.applied_traceparent == injected {
+        return;
+    }
+    let mut headers = user_headers.to_vec();
+    if let Some(value) = injected.as_deref() {
+        let mut header = b"traceparent: ".to_vec();
+        header.extend_from_slice(value.as_bytes());
+        headers.push(header);
+    }
+    let Some(list) = (unsafe { build_slist(&headers) }) else {
+        return;
+    };
+    // An easy handle may already be attached to a multi handle here. Attachment does
+    // not start a transfer or make its options immutable: this refresh runs before
+    // `curl_multi_perform`, while neither libcurl nor a callback can be walking the old
+    // list. The accepted replacement becomes the live option before the old owned list
+    // is freed below.
+    let code = unsafe { easy::setopt_slist(entry.curl, easy::CURLOPT_HTTPHEADER, list) };
+    if code != easy::CURLE_OK {
+        unsafe { easy::slist_free_all(list) };
+        return;
+    }
+    if let Some(previous) = entry.slists.insert(easy::CURLOPT_HTTPHEADER, list) {
+        unsafe { easy::slist_free_all(previous) };
+    }
+    entry.applied_traceparent = injected;
+}
+
+#[cfg(test)]
+mod monitoring_header_tests {
+    use super::{effective_http_headers, is_traceparent_header};
+
+    /// Verifies traceparent header-name matching is whitespace tolerant and
+    /// case insensitive without accepting similarly prefixed names.
+    #[test]
+    fn detects_explicit_traceparent_headers() {
+        assert!(is_traceparent_header(b"TraceParent: 00-value"));
+        assert!(is_traceparent_header(b" traceparent :"));
+        assert!(is_traceparent_header(b"traceparent;"));
+        assert!(!is_traceparent_header(b"x-traceparent: value"));
+        assert!(!is_traceparent_header(b"traceparent"));
+    }
+
+    /// Verifies automatic propagation appends one header while preserving the
+    /// original user header sequence.
+    #[test]
+    fn appends_automatic_traceparent() {
+        let user = vec![b"accept: application/json".to_vec()];
+        let trace = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01".to_owned();
+        let (headers, injected) = effective_http_headers(&user, Some(trace.clone()));
+        assert_eq!(injected, Some(trace.clone()));
+        assert_eq!(headers[0], user[0]);
+        assert_eq!(headers[1], format!("traceparent: {trace}").into_bytes());
+    }
+
+    /// Verifies an explicit user traceparent suppresses automatic propagation.
+    #[test]
+    fn preserves_explicit_traceparent() {
+        let user = vec![b"TRACEPARENT: user-value".to_vec()];
+        let automatic = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01".to_owned();
+        let (headers, injected) = effective_http_headers(&user, Some(automatic));
+        assert_eq!(headers, user);
+        assert_eq!(injected, None);
+    }
 }
 
 /// Applies `CURLOPT_POSTFIELDS` as libcurl's copying, length-aware pair:

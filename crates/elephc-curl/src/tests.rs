@@ -771,7 +771,7 @@ mod native {
         elephc_curl_easy_setopt_slist, elephc_curl_easy_setopt_str, elephc_curl_easy_take_body,
         elephc_curl_global_info, elephc_curl_version_abi,
     };
-    use crate::handles;
+    use crate::{easy, handles, monitoring};
     use crate::php_layer::CURLOPT_RETURNTRANSFER;
 
     /// Whether `id` is currently present in the shared handle table. Used
@@ -780,6 +780,91 @@ mod native {
     /// same process-wide table.
     fn handle_exists(id: i64) -> bool {
         handles::lock_recover(handles::handles()).contains_key(&id)
+    }
+
+    /// Exercises automatic trace injection, removal, and user precedence through the
+    /// real handle table and libcurl slist path used immediately before a transfer.
+    #[test]
+    fn perform_refreshes_the_real_traceparent_slist() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        const TRACE: &str =
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        const CURLOPT_HTTPHEADER: i32 = 10_023;
+        let _environment = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let previous = std::env::var_os("ELEPHC_TRACEPARENT");
+        unsafe { std::env::set_var("ELEPHC_TRACEPARENT", TRACE) };
+
+        let id = elephc_curl_easy_init();
+        assert_ne!(id, 0);
+        let url = b"file:///dev/null";
+        assert_eq!(
+            unsafe { elephc_curl_easy_set_url(id, url.as_ptr(), url.len()) },
+            1
+        );
+
+        monitoring::set_test_active(true);
+        assert_eq!(elephc_curl_easy_perform(id), 1);
+        {
+            let guard = handles::lock_recover(handles::handles());
+            let entry = guard.get(&id).expect("live handle");
+            assert_eq!(entry.applied_traceparent.as_deref(), Some(TRACE));
+            let list = *entry
+                .slists
+                .get(&CURLOPT_HTTPHEADER)
+                .expect("automatic HTTP header list");
+            assert_eq!(
+                unsafe { easy::read_slist(list) },
+                vec![format!("traceparent: {TRACE}").into_bytes()]
+            );
+        }
+
+        monitoring::set_test_active(false);
+        assert_eq!(elephc_curl_easy_perform(id), 1);
+        {
+            let guard = handles::lock_recover(handles::handles());
+            let entry = guard.get(&id).expect("live handle");
+            assert_eq!(entry.applied_traceparent, None);
+            let list = *entry
+                .slists
+                .get(&CURLOPT_HTTPHEADER)
+                .expect("cleared HTTP header list");
+            assert!(unsafe { easy::read_slist(list) }.is_empty());
+        }
+
+        let user_header = b"TraceParent: user-owned\0";
+        assert_eq!(
+            unsafe {
+                elephc_curl_easy_setopt_slist(
+                    id,
+                    CURLOPT_HTTPHEADER,
+                    user_header.as_ptr(),
+                    user_header.len(),
+                )
+            },
+            1
+        );
+        monitoring::set_test_active(true);
+        assert_eq!(elephc_curl_easy_perform(id), 1);
+        {
+            let guard = handles::lock_recover(handles::handles());
+            let entry = guard.get(&id).expect("live handle");
+            assert_eq!(entry.applied_traceparent, None);
+            let list = *entry
+                .slists
+                .get(&CURLOPT_HTTPHEADER)
+                .expect("user HTTP header list");
+            assert_eq!(
+                unsafe { easy::read_slist(list) },
+                vec![b"TraceParent: user-owned".to_vec()]
+            );
+        }
+
+        monitoring::set_test_active(false);
+        elephc_curl_easy_free(id);
+        match previous {
+            Some(value) => unsafe { std::env::set_var("ELEPHC_TRACEPARENT", value) },
+            None => unsafe { std::env::remove_var("ELEPHC_TRACEPARENT") },
+        }
     }
 
     /// `elephc_curl_easy_init`/`elephc_curl_easy_free` leave the
@@ -1716,7 +1801,7 @@ mod native_multi {
         elephc_curl_multi_remove, elephc_curl_multi_select, elephc_curl_multi_setopt,
         elephc_curl_multi_strerror, INFO_FIELD_ADVANCE, INFO_FIELD_EASY_ID, INFO_FIELD_MSG,
         INFO_FIELD_QUEUED, INFO_FIELD_RESULT, MULTI_SETOPT_APPLIED, MULTI_SETOPT_INVALID,
-        MULTI_SETOPT_UNSUPPORTED,
+        MULTI_SETOPT_UNSUPPORTED, test_operation_was_counted,
     };
     use crate::php_layer::CURLOPT_RETURNTRANSFER;
 
@@ -1785,6 +1870,7 @@ mod native_multi {
             guard += 1;
         }
         assert_eq!(running, 0, "the transfer must finish");
+        assert!(test_operation_was_counted(multi, easy));
 
         assert_eq!(
             elephc_curl_multi_info_read(multi, INFO_FIELD_ADVANCE),
@@ -1804,6 +1890,13 @@ mod native_multi {
             0,
             "the queue is drained after one message"
         );
+        assert!(
+            test_operation_was_counted(multi, easy),
+            "reading completion must not make an attached transfer count again"
+        );
+        let packed = elephc_curl_multi_perform(multi);
+        assert_eq!((packed & 0xFFFF_FFFF) as u32 as i32, 0);
+        assert!(test_operation_was_counted(multi, easy));
 
         let mut body_ptr: *mut u8 = std::ptr::null_mut();
         let mut body_len = 0usize;
@@ -1818,6 +1911,7 @@ mod native_multi {
         assert_eq!(second_len, body_len, "the capture buffer survives being read");
 
         assert_eq!(elephc_curl_multi_remove(multi, easy), 0);
+        assert!(!test_operation_was_counted(multi, easy));
         elephc_curl_multi_free(multi);
         elephc_curl_easy_free(easy);
         std::fs::remove_dir_all(&dir).ok();

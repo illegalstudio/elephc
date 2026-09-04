@@ -1476,6 +1476,16 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
         0,
     );
     if !ctx.shared.instrument.is_on() {
+        // Let bridges ask whether the probe's shared event window is active.
+        // Unlike the exact-capture word, this observes remote asks in workers.
+        let event_active = target.extern_symbol("elephc_probe_event_active");
+        abi::emit_symbol_address(ctx.emitter, scratch, &event_active);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_monitor_event_active_fn"),
+            0,
+        );
         let note_io = target.extern_symbol("elephc_probe_note_io");
         abi::emit_symbol_address(ctx.emitter, scratch, &note_io);
         abi::emit_store_reg_to_symbol(
@@ -1490,6 +1500,22 @@ fn emit_probe_init(ctx: &mut FunctionContext<'_>) {
             ctx.emitter,
             scratch,
             &target.extern_symbol("elephc_instr_wait_fn"),
+            0,
+        );
+        let note_network = target.extern_symbol("elephc_probe_note_network");
+        abi::emit_symbol_address(ctx.emitter, scratch, &note_network);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_instr_network_fn"),
+            0,
+        );
+        let note_network_wait = target.extern_symbol("elephc_probe_note_network_wait");
+        abi::emit_symbol_address(ctx.emitter, scratch, &note_network_wait);
+        abi::emit_store_reg_to_symbol(
+            ctx.emitter,
+            scratch,
+            &target.extern_symbol("elephc_instr_network_wait_fn"),
             0,
         );
     }
@@ -1552,6 +1578,23 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     let wait_fn = target.extern_symbol("elephc_instr_wait");
     abi::emit_symbol_address(ctx.emitter, scratch, &wait_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_wait_fn"), 0);
+    // Network slots remain separate so HTTP requests never inflate DB query or wait metrics.
+    let network_fn = target.extern_symbol("elephc_instr_network");
+    abi::emit_symbol_address(ctx.emitter, scratch, &network_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_network_fn"),
+        0,
+    );
+    let network_wait_fn = target.extern_symbol("elephc_instr_network_wait");
+    abi::emit_symbol_address(ctx.emitter, scratch, &network_wait_fn);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_network_wait_fn"),
+        0,
+    );
     // Fourth slot: elephc_instr_trace_begin, so the web bridge can open each
     // request's W3C trace context (distributed profiling).
     let trace_fn = target.extern_symbol("elephc_instr_trace_begin");
