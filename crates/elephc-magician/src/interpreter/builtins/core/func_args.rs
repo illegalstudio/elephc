@@ -33,14 +33,30 @@ pub(in crate::interpreter) fn eval_current_function_arg(
     values.retain(value)
 }
 
-/// Throws the PHP global-scope error for a `func_get_arg*` builtin.
+/// Returns the canonical `func_*` name selected by a literal callback expression.
+pub(super) fn eval_literal_func_args_callback(callback: &EvalExpr) -> Option<&'static str> {
+    let EvalExpr::Const(EvalConst::String(name)) = callback else {
+        return None;
+    };
+    if name.eq_ignore_ascii_case("func_get_arg") {
+        Some("func_get_arg")
+    } else if name.eq_ignore_ascii_case("func_get_args") {
+        Some("func_get_args")
+    } else if name.eq_ignore_ascii_case("func_num_args") {
+        Some("func_num_args")
+    } else {
+        None
+    }
+}
+
+/// Throws the PHP global-scope error shared by `func_get_arg()` and `func_get_args()`.
 pub(super) fn eval_throw_func_get_global_scope<T>(
     name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
     eval_throw_error(
-        &format!("{name}() cannot be called from the global scope"),
+        &format!("{name}() must be called from a function context"),
         context,
         values,
     )

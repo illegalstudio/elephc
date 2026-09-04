@@ -291,6 +291,24 @@ echo spread(...[1, 2, 3, 4]), "|", call_user_func('spread', 1, 2);
     assert_eq!(out, "4|2");
 }
 
+/// Verifies PHP's literal `call_user_func*` special cases inspect the caller's frame.
+#[test]
+fn test_func_args_support_literal_call_user_func_forms() {
+    let out = compile_and_run(
+        r#"<?php
+function inspect_literal_callbacks($first, $second) {
+    echo call_user_func("FUNC_NUM_ARGS"), "|";
+    echo implode(",", call_user_func("func_get_args")), "|";
+    echo call_user_func("func_get_arg", 1), "|";
+    echo call_user_func_array("func_num_args", []), "|";
+    echo call_user_func_array("func_get_arg", [1]);
+}
+inspect_literal_callbacks(7, 8);
+"#,
+    );
+    assert_eq!(out, "2|7,8|8|2|8");
+}
+
 /// Verifies that one introspection construct can be nested inside another: the position
 /// argument of `func_get_arg()` is itself computed from `func_num_args()`.
 #[test]
