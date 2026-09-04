@@ -9,6 +9,7 @@
 //! - Inventory nodes are append-only so descriptor reuse cannot erase closed resources.
 //! - Nodes store PHP id, native payload, subtype, and close state independently.
 //! - Returned hashes use integer PHP resource ids as keys and raw tag-9 values.
+//! - Reset frees every raw node before process diagnostics or a Web arena reset.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -32,9 +33,38 @@ pub(crate) fn emit_resource_inventory(emitter: &mut Emitter) {
 fn emit_resource_inventory_aarch64(emitter: &mut Emitter) {
     emit_register_aarch64(emitter);
     emit_close_aarch64(emitter);
+    emit_reset_aarch64(emitter);
     emit_insert_aarch64(emitter);
     emit_type_selector_aarch64(emitter);
     emit_get_resources_aarch64(emitter);
+}
+
+/// Frees every inventory node and restores request-local resource state on AArch64.
+fn emit_reset_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: resource_inventory_reset ---");
+    emitter.label_global("__rt_resource_inventory_reset");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve an aligned frame and one next-node spill
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve caller frame state across heap frees
+    emitter.instruction("add x29, sp, #16");                                    // establish the reset frame
+    abi::emit_symbol_address(emitter, "x9", "_resource_inventory_head");
+    emitter.instruction("ldr x9, [x9]");                                        // start at the oldest node
+    emitter.label("__rt_resource_inventory_reset_loop");
+    emitter.instruction("cbz x9, __rt_resource_inventory_reset_done");          // finish after the final node
+    emitter.instruction("ldr x10, [x9]");                                       // preserve next before freeing this node
+    emitter.instruction("str x10, [sp, #0]");                                   // heap free may clobber all scratch registers
+    emitter.instruction("mov x0, x9");                                          // free the raw inventory node
+    abi::emit_call_label(emitter, "__rt_heap_free");
+    emitter.instruction("ldr x9, [sp, #0]");                                    // continue from the saved next pointer
+    emitter.instruction("b __rt_resource_inventory_reset_loop");
+    emitter.label("__rt_resource_inventory_reset_done");
+    abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
+    abi::emit_load_int_immediate(emitter, "x9", 5);
+    abi::emit_store_reg_to_symbol(emitter, "x9", "_resource_id_next", 0);
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore caller frame state
+    emitter.instruction("add sp, sp, #32");                                     // release reset storage
+    emitter.instruction("ret");                                                 // return with an empty inventory
 }
 
 /// Registers one resource id exactly once in creation order on AArch64.
@@ -261,9 +291,38 @@ fn emit_get_resources_aarch64(emitter: &mut Emitter) {
 fn emit_resource_inventory_x86_64(emitter: &mut Emitter) {
     emit_register_x86_64(emitter);
     emit_close_x86_64(emitter);
+    emit_reset_x86_64(emitter);
     emit_insert_x86_64(emitter);
     emit_type_selector_x86_64(emitter);
     emit_get_resources_x86_64(emitter);
+}
+
+/// Frees every inventory node and restores request-local resource state on x86_64.
+fn emit_reset_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: resource_inventory_reset ---");
+    emitter.label_global("__rt_resource_inventory_reset");
+    emitter.instruction("push rbp");                                            // preserve caller frame pointer and align nested calls
+    emitter.instruction("mov rbp, rsp");                                        // establish the reset frame
+    emitter.instruction("sub rsp, 16");                                         // reserve one next-node spill while keeping alignment
+    abi::emit_symbol_address(emitter, "r10", "_resource_inventory_head");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // start at the oldest node
+    emitter.label("__rt_resource_inventory_reset_loop_x86");
+    emitter.instruction("test r10, r10");                                       // did the list end?
+    emitter.instruction("jz __rt_resource_inventory_reset_done_x86");           // finish after the final node
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // preserve next before freeing this node
+    emitter.instruction("mov QWORD PTR [rbp - 8], r11");                        // heap free may clobber all scratch registers
+    emitter.instruction("mov rax, r10");                                        // free the raw inventory node
+    abi::emit_call_label(emitter, "__rt_heap_free");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // continue from the saved next pointer
+    emitter.instruction("jmp __rt_resource_inventory_reset_loop_x86");
+    emitter.label("__rt_resource_inventory_reset_done_x86");
+    abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
+    abi::emit_load_int_immediate(emitter, "r10", 5);
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_resource_id_next", 0);
+    emitter.instruction("leave");                                               // release reset storage and restore rbp
+    emitter.instruction("ret");                                                 // return with an empty inventory
 }
 
 /// Registers one resource id exactly once in creation order on x86_64.
@@ -517,6 +576,7 @@ mod tests {
             for symbol in [
                 "__rt_resource_inventory_register:",
                 "__rt_resource_inventory_close:",
+                "__rt_resource_inventory_reset:",
                 "__rt_resource_inventory_insert:",
                 "__rt_resource_type_selector:",
                 "__rt_get_resources:",

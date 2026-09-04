@@ -506,6 +506,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
     // The exact root brackets every PHP callback that shutdown can invoke:
     // output handlers above and object destructors from the cleanup paths. If
     // it exits earlier, those functions become disconnected graph roots and

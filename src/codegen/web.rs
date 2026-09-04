@@ -102,6 +102,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     super::enum_singletons::emit_enum_slot_resets(emitter, module);
 
     emit_concat_offset_reset(emitter);
+    abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
 
     // The heap arena reset MUST be the final reset step: the static/global releases
     // above may run destructors or decref shared values, which require the arena to
