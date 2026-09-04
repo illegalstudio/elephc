@@ -137,6 +137,82 @@ impl ElephcEvalContext {
         self.included_files.insert(path.into());
     }
 
+    /// Returns included file names in stable lexical order, including the active main file.
+    pub(crate) fn included_file_names(&self) -> Vec<String> {
+        let mut names = self.included_files.iter().cloned().collect::<Vec<_>>();
+        if !self.call_file.is_empty() && !names.iter().any(|name| name == &self.call_file) {
+            names.push(self.call_file.clone());
+        }
+        names.sort();
+        if let Some(position) = names.iter().position(|name| name == &self.call_file) {
+            let main = names.remove(position);
+            names.insert(0, main);
+        }
+        names
+    }
+
+    /// Returns the current error reporting mask, replacing it when a new mask is supplied.
+    pub(crate) fn update_error_reporting(&mut self, replacement: Option<i64>) -> i64 {
+        let previous = self.error_reporting;
+        if let Some(replacement) = replacement {
+            self.error_reporting = replacement;
+        }
+        previous
+    }
+
+    /// Returns the current error reporting mask without mutating it.
+    pub(crate) const fn error_reporting_mask(&self) -> i64 {
+        self.error_reporting
+    }
+
+    /// Installs an eval user error handler and returns the previously active handler.
+    pub(crate) fn push_error_handler(
+        &mut self,
+        replacement: Option<EvalErrorHandlerState>,
+    ) -> Option<EvalErrorHandlerState> {
+        let previous = self.error_handler;
+        self.error_handler_stack.push(previous);
+        self.error_handler = replacement;
+        previous
+    }
+
+    /// Restores the previous eval user error handler and returns the discarded current handler.
+    pub(crate) fn restore_error_handler_state(
+        &mut self,
+    ) -> Option<EvalErrorHandlerState> {
+        let discarded = self.error_handler.take();
+        self.error_handler = self.error_handler_stack.pop().flatten();
+        discarded
+    }
+
+    /// Returns the currently active eval user error handler.
+    pub(crate) const fn error_handler_state(&self) -> Option<EvalErrorHandlerState> {
+        self.error_handler
+    }
+
+    /// Installs an eval uncaught-exception handler and returns the previous handler.
+    pub(crate) fn push_exception_handler(
+        &mut self,
+        replacement: Option<RuntimeCellHandle>,
+    ) -> Option<RuntimeCellHandle> {
+        let previous = self.exception_handler;
+        self.exception_handler_stack.push(previous);
+        self.exception_handler = replacement;
+        previous
+    }
+
+    /// Restores the previous eval exception handler and returns the discarded handler.
+    pub(crate) fn restore_exception_handler_state(&mut self) -> Option<RuntimeCellHandle> {
+        let discarded = self.exception_handler.take();
+        self.exception_handler = self.exception_handler_stack.pop().flatten();
+        discarded
+    }
+
+    /// Returns active eval call frames from the current frame to the outermost frame.
+    pub(crate) fn backtrace_frames(&self) -> Vec<EvalBacktraceFrame> {
+        self.function_args_stack.iter().rev().cloned().collect()
+    }
+
     /// Stores the non-owned global scope handle used by eval `global` aliases.
     pub fn set_global_scope(&mut self, scope: *mut ElephcEvalScope) -> bool {
         if scope.is_null() {
@@ -166,6 +242,55 @@ impl ElephcEvalContext {
     /// Returns the current eval-executed function name, if execution is inside one.
     pub fn current_function(&self) -> Option<&str> {
         self.function_stack.last().map(String::as_str)
+    }
+
+    /// Pushes PHP argument-introspection metadata for a free-function activation.
+    pub(crate) fn push_function_args(&mut self, frame: EvalFunctionArgsFrame) {
+        self.push_function_args_with_backtrace(frame, None, None, false);
+    }
+
+    /// Pushes PHP argument metadata together with method or bound-closure backtrace metadata.
+    pub(crate) fn push_function_args_with_backtrace(
+        &mut self,
+        frame: EvalFunctionArgsFrame,
+        class_name: Option<String>,
+        object: Option<RuntimeCellHandle>,
+        is_static: bool,
+    ) {
+        let function = self
+            .current_function()
+            .unwrap_or_default()
+            .trim_start_matches('\\')
+            .to_string();
+        let function = class_name
+            .as_ref()
+            .and_then(|_| function.rsplit_once("::").map(|(_, method)| method.to_string()))
+            .unwrap_or(function);
+        let (file, _, line, _) = self.call_site();
+        let call_type = class_name
+            .as_ref()
+            .map(|_| if is_static { "::" } else { "->" });
+        self.function_args_stack.push(EvalBacktraceFrame::new(
+            function,
+            frame,
+            file,
+            line,
+            class_name,
+            object,
+            call_type,
+        ));
+    }
+
+    /// Pops PHP argument-introspection metadata after a callable activation completes.
+    pub(crate) fn pop_function_args(&mut self) {
+        self.function_args_stack.pop();
+    }
+
+    /// Returns PHP argument-introspection metadata for the active callable.
+    pub(crate) fn current_function_args(&self) -> Option<&EvalFunctionArgsFrame> {
+        self.function_args_stack
+            .last()
+            .map(EvalBacktraceFrame::arguments)
     }
 
     /// Pushes the eval class whose method is currently executing.

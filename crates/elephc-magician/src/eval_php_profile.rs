@@ -84,6 +84,20 @@ pub(crate) fn eval_php_minor_version() -> i64 {
     i64::from((eval_php_version_id() / 100) % 100)
 }
 
+/// Returns the profile-specific PHP `E_ALL` and default error-reporting mask.
+pub(crate) fn eval_all_error_mask() -> i64 {
+    if eval_php_version_id() >= 80_500 {
+        30_719
+    } else {
+        32_767
+    }
+}
+
+/// Returns the Zend Engine profile corresponding to the active PHP minor version.
+pub(crate) fn eval_zend_version_string() -> String {
+    format!("4.{}.0", eval_php_minor_version())
+}
+
 /// RAII guard restoring the previous profile on drop.
 ///
 /// Test fixtures hold one of these instead of calling [`set_eval_php_version_id`]
@@ -131,6 +145,18 @@ mod tests {
             assert_eq!(eval_php_version_id(), *id);
             assert_eq!(eval_php_version_string(), *spelling);
             assert_eq!(eval_php_minor_version(), i64::from((*id / 100) % 100));
+        }
+    }
+
+    /// Verifies every supported PHP profile maps to its Zend Engine 4 minor.
+    #[test]
+    fn zend_version_tracks_the_php_profile_minor() {
+        for (id, _) in EVAL_PHP_PROFILES {
+            let _guard = scoped_profile(*id);
+            assert_eq!(
+                eval_zend_version_string(),
+                format!("4.{}.0", (id / 100) % 100)
+            );
         }
     }
 

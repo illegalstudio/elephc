@@ -72,7 +72,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let static_names = static_var_names(function.body());
     context.push_function(function.name());
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    let bound_call = match bind_evaluated_function_args_with_ref_mode(
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -89,15 +89,23 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = bound_call;
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
     let mut function_scope = ElephcEvalScope::new();
     bind_method_scope_args(
         &mut function_scope,
-        function.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
     );
+    frame.bind_scope(&function_scope);
+    context.push_function_args(frame);
     let result = execute_statements(function.body(), context, &mut function_scope, values);
     let persist_result = persist_static_locals(
         context,
@@ -124,6 +132,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             values,
         ),
     };
+    context.pop_function_args();
     context.pop_function();
     return_result
 }
@@ -366,7 +375,7 @@ fn eval_closure_with_optional_binding(
         context.push_class_scope(binding.class_scope.clone());
         context.push_called_class_scope(binding.called_class.clone());
     }
-    let evaluated_args = match bind_evaluated_method_args_with_ref_mode(
+    let bound_call = match bind_evaluated_function_args_with_ref_mode(
         function.params(),
         function.parameter_types(),
         function.parameter_defaults(),
@@ -387,18 +396,35 @@ fn eval_closure_with_optional_binding(
             return Err(status);
         }
     };
+    let BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args: evaluated_args,
+        mut frame,
+    } = bound_call;
     let mut function_scope = ElephcEvalScope::new();
     bind_closure_captures(&mut function_scope, closure.captures());
-    if let Some(object) = binding.and_then(|binding| binding.this_object) {
+    let backtrace_class = binding
+        .as_ref()
+        .map(|binding| binding.class_scope.clone());
+    let backtrace_object = binding.as_ref().and_then(|binding| binding.this_object);
+    if let Some(object) = backtrace_object {
         function_scope.set("this", object, ScopeCellOwnership::Borrowed);
     }
     let scope_parameter_is_by_ref =
-        method_scope_parameter_ref_flags(parameter_is_by_ref, &evaluated_args, by_ref_mode);
+        method_scope_parameter_ref_flags(&binding_by_ref, &evaluated_args, by_ref_mode);
     bind_method_scope_args(
         &mut function_scope,
-        function.params(),
+        &binding_params,
         &scope_parameter_is_by_ref,
         &evaluated_args,
+    );
+    frame.bind_scope(&function_scope);
+    context.push_function_args_with_backtrace(
+        frame,
+        backtrace_class,
+        backtrace_object,
+        backtrace_object.is_none(),
     );
     let result = execute_statements(function.body(), context, &mut function_scope, values);
     let persist_result = persist_static_locals(
@@ -440,6 +466,7 @@ fn eval_closure_with_optional_binding(
         context.pop_called_class_scope();
         context.pop_class_scope();
     }
+    context.pop_function_args();
     context.pop_function();
     return_result
 }

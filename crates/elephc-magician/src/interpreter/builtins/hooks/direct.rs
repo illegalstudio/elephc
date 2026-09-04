@@ -259,7 +259,7 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Sinh,
     /// Dispatches string ASCII case-conversion builtins.
     StringCase,
-    /// Dispatches string comparison builtins.
+    /// Dispatches byte-string comparisons with and without a length limit.
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
@@ -497,6 +497,8 @@ impl EvalDirectHook {
             Self::StringCompare => match name {
                 "strcasecmp" => eval_builtin_strcasecmp(args, context, scope, values),
                 "strcmp" => eval_builtin_strcmp(args, context, scope, values),
+                "strncasecmp" => eval_builtin_strncasecmp(args, context, scope, values),
+                "strncmp" => eval_builtin_strncmp(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StringPosition => match name {

@@ -75,6 +75,26 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
     match name.trim_start_matches('\\') {
+        "E_ERROR" => Some(EvalPredefinedConstant::Int(1)),
+        "E_WARNING" => Some(EvalPredefinedConstant::Int(2)),
+        "E_PARSE" => Some(EvalPredefinedConstant::Int(4)),
+        "E_NOTICE" => Some(EvalPredefinedConstant::Int(8)),
+        "E_CORE_ERROR" => Some(EvalPredefinedConstant::Int(16)),
+        "E_CORE_WARNING" => Some(EvalPredefinedConstant::Int(32)),
+        "E_COMPILE_ERROR" => Some(EvalPredefinedConstant::Int(64)),
+        "E_COMPILE_WARNING" => Some(EvalPredefinedConstant::Int(128)),
+        "E_USER_ERROR" => Some(EvalPredefinedConstant::Int(256)),
+        "E_USER_WARNING" => Some(EvalPredefinedConstant::Int(512)),
+        "E_USER_NOTICE" => Some(EvalPredefinedConstant::Int(1_024)),
+        "E_STRICT" => Some(EvalPredefinedConstant::Int(2_048)),
+        "E_RECOVERABLE_ERROR" => Some(EvalPredefinedConstant::Int(4_096)),
+        "E_DEPRECATED" => Some(EvalPredefinedConstant::Int(8_192)),
+        "E_USER_DEPRECATED" => Some(EvalPredefinedConstant::Int(16_384)),
+        "E_ALL" => Some(EvalPredefinedConstant::Int(
+            crate::eval_php_profile::eval_all_error_mask(),
+        )),
+        "DEBUG_BACKTRACE_PROVIDE_OBJECT" => Some(EvalPredefinedConstant::Int(1)),
+        "DEBUG_BACKTRACE_IGNORE_ARGS" => Some(EvalPredefinedConstant::Int(2)),
         "ICONV_MIME_DECODE_STRICT" => {
             Some(EvalPredefinedConstant::Int(EVAL_ICONV_MIME_DECODE_STRICT))
         }

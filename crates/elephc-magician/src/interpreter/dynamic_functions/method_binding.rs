@@ -8,6 +8,114 @@
 //! - Reference targets, scalar coercion, defaults, and object type checks stay aligned by index.
 
 use super::*;
+use crate::context::EvalFunctionArgsFrame;
+
+const EVAL_FUNC_ARGS_TAIL: &str = "__elephc_eval_func_args";
+
+/// Bound arguments plus the activation metadata needed by PHP's `func_*` family.
+pub(in crate::interpreter) struct BoundEvalFunctionArgs {
+    pub(in crate::interpreter) params: Vec<String>,
+    pub(in crate::interpreter) parameter_is_by_ref: Vec<bool>,
+    pub(in crate::interpreter) args: Vec<BoundMethodArg>,
+    pub(in crate::interpreter) frame: EvalFunctionArgsFrame,
+}
+
+/// Binds one eval-declared callable while retaining PHP's actual-argument frame.
+pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
+    params: &[String],
+    parameter_types: &[Option<EvalParameterType>],
+    parameter_defaults: &[Option<EvalExpr>],
+    parameter_is_by_ref: &[bool],
+    parameter_is_variadic: &[bool],
+    evaluated_args: Vec<EvaluatedCallArg>,
+    by_ref_mode: EvalByRefBindingMode<'_>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<BoundEvalFunctionArgs, EvalStatus> {
+    let source_variadic_index = parameter_is_variadic
+        .iter()
+        .position(|is_variadic| *is_variadic);
+    let regular_count = source_variadic_index.unwrap_or(params.len());
+    let regular_params = params[..regular_count].to_vec();
+    let (actual_count, positional_surplus_count) = eval_actual_argument_shape(
+        &regular_params,
+        source_variadic_index.is_some(),
+        &evaluated_args,
+    )?;
+
+    let mut binding_params = params.to_vec();
+    let mut binding_types = parameter_types.to_vec();
+    let mut binding_defaults = parameter_defaults.to_vec();
+    let mut binding_by_ref = parameter_is_by_ref.to_vec();
+    let mut binding_variadic = parameter_is_variadic.to_vec();
+    let variadic_index = if let Some(index) = source_variadic_index {
+        index
+    } else {
+        let index = binding_params.len();
+        binding_params.push(EVAL_FUNC_ARGS_TAIL.to_string());
+        binding_types.push(None);
+        binding_defaults.push(None);
+        binding_by_ref.push(false);
+        binding_variadic.push(true);
+        index
+    };
+
+    let args = bind_evaluated_method_args_with_ref_mode(
+        &binding_params,
+        &binding_types,
+        &binding_defaults,
+        &binding_by_ref,
+        &binding_variadic,
+        evaluated_args,
+        by_ref_mode,
+        context,
+        values,
+    )?;
+    let surplus_array = args
+        .get(variadic_index)
+        .map(|arg| arg.value)
+        .ok_or(EvalStatus::RuntimeFatal)?;
+    let mut surplus = Vec::with_capacity(positional_surplus_count);
+    for position in 0..positional_surplus_count {
+        let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+        surplus.push(values.array_get(surplus_array, key)?);
+    }
+
+    Ok(BoundEvalFunctionArgs {
+        params: binding_params,
+        parameter_is_by_ref: binding_by_ref,
+        args,
+        frame: EvalFunctionArgsFrame::new(regular_params, actual_count, surplus),
+    })
+}
+
+/// Computes PHP's `func_num_args()` count and positional surplus length before binding.
+fn eval_actual_argument_shape(
+    regular_params: &[String],
+    has_source_variadic: bool,
+    evaluated_args: &[EvaluatedCallArg],
+) -> Result<(usize, usize), EvalStatus> {
+    let mut next_positional = 0usize;
+    let mut highest_regular = 0usize;
+    let mut positional_surplus = 0usize;
+    for arg in evaluated_args {
+        if let Some(name) = arg.name.as_deref() {
+            if let Some(position) = regular_params.iter().position(|param| param == name) {
+                highest_regular = highest_regular.max(position + 1);
+            } else if !has_source_variadic {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            continue;
+        }
+        if next_positional < regular_params.len() {
+            highest_regular = highest_regular.max(next_positional + 1);
+            next_positional += 1;
+        } else {
+            positional_surplus += 1;
+        }
+    }
+    Ok((highest_regular + positional_surplus, positional_surplus))
+}
 
 /// Binds evaluated method arguments using a selected by-reference target policy.
 pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(

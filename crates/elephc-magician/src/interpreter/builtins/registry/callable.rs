@@ -32,6 +32,34 @@ enum EvalObjectCallbackKind {
     Method,
 }
 
+/// Returns the canonical name of a scope builtin that PHP forbids through dynamic invocation.
+fn eval_forbidden_dynamic_scope_builtin(name: &str) -> Option<&'static str> {
+    if name.eq_ignore_ascii_case("func_get_arg") {
+        Some("func_get_arg")
+    } else if name.eq_ignore_ascii_case("func_get_args") {
+        Some("func_get_args")
+    } else if name.eq_ignore_ascii_case("func_num_args") {
+        Some("func_num_args")
+    } else if name.eq_ignore_ascii_case("get_defined_vars") {
+        Some("get_defined_vars")
+    } else {
+        None
+    }
+}
+
+/// Throws PHP's dynamic-call diagnostic for one forbidden scope builtin.
+fn eval_throw_forbidden_dynamic_scope_builtin<T>(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_throw_error(
+        &format!("Cannot call {name}() dynamically"),
+        context,
+        values,
+    )
+}
+
 /// Dispatches `call_user_func_array` with optional lexical scope for special class receivers.
 pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
     callback: RuntimeCellHandle,
@@ -40,6 +68,7 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let callback_is_object = values.type_tag(callback)? == EVAL_TAG_OBJECT;
     let callback = eval_call_user_func_callback(
         callback,
         "call_user_func_array",
@@ -51,6 +80,27 @@ pub(in crate::interpreter) fn eval_call_user_func_array_with_values_from_scope(
         return Err(EvalStatus::RuntimeFatal);
     }
     let evaluated_args = eval_array_call_arg_values(arg_array, context, values)?;
+    if let EvaluatedCallable::Named { name, .. } = &callback {
+        if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+            if forbidden != "get_defined_vars" || callback_is_object {
+                return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+            }
+        }
+        if name.eq_ignore_ascii_case("get_defined_vars") {
+            if let Some(lexical_scope) = lexical_scope {
+                if evaluated_args.iter().any(|arg| arg.name.is_some()) {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                let evaluated_values =
+                    evaluated_args.iter().map(|arg| arg.value).collect::<Vec<_>>();
+                return eval_get_defined_vars_from_scope(
+                    &evaluated_values,
+                    lexical_scope,
+                    values,
+                );
+            }
+        }
+    }
     eval_evaluated_callable_with_call_array_args(&callback, evaluated_args, context, values)
 }
 
@@ -64,8 +114,21 @@ pub(in crate::interpreter) fn eval_call_user_func_with_values_from_scope(
     let Some((callback, callback_args)) = evaluated_args.split_first() else {
         return Err(EvalStatus::RuntimeFatal);
     };
+    let callback_is_object = values.type_tag(*callback)? == EVAL_TAG_OBJECT;
     let callback =
         eval_call_user_func_callback(*callback, "call_user_func", lexical_scope, context, values)?;
+    if let EvaluatedCallable::Named { name, .. } = &callback {
+        if let Some(forbidden) = eval_forbidden_dynamic_scope_builtin(name) {
+            if forbidden != "get_defined_vars" || callback_is_object {
+                return eval_throw_forbidden_dynamic_scope_builtin(forbidden, context, values);
+            }
+        }
+        if name.eq_ignore_ascii_case("get_defined_vars") {
+            if let Some(lexical_scope) = lexical_scope {
+                return eval_get_defined_vars_from_scope(callback_args, lexical_scope, values);
+            }
+        }
+    }
     eval_evaluated_callable_with_call_user_func_values(
         &callback,
         callback_args.to_vec(),
