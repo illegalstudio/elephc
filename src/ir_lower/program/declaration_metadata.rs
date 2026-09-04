@@ -152,7 +152,7 @@ pub(super) fn collect_declared_trait_method_names(program: &Program) -> HashMap<
                     name.clone(),
                     trait_methods
                         .iter()
-                        .map(|method| method.name.clone())
+                        .map(|method| php_symbol_key(&method.name))
                         .collect(),
                 );
             }
