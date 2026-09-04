@@ -2,7 +2,7 @@
 title: "openssl_encrypt() — internals"
 description: "Compiler internals for openssl_encrypt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 474
+  order: 769
 ---
 
 ## `openssl_encrypt()` — internals

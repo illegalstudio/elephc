@@ -2,7 +2,7 @@
 title: "json_last_error() — internals"
 description: "Compiler internals for json_last_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 258
+  order: 542
 ---
 
 ## `json_last_error()` — internals

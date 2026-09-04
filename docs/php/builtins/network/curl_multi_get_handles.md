@@ -2,7 +2,7 @@
 title: "curl_multi_get_handles()"
 description: "Returns the cURL handles currently attached to a cURL multi handle."
 sidebar:
-  order: 346
+  order: 641
 ---
 
 ## curl_multi_get_handles()

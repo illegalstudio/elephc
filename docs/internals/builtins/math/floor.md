@@ -2,7 +2,7 @@
 title: "floor() — internals"
 description: "Compiler internals for floor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 292
+  order: 576
 ---
 
 ## `floor()` — internals

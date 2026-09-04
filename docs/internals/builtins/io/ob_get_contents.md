@@ -2,7 +2,7 @@
 title: "ob_get_contents() — internals"
 description: "Compiler internals for ob_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 203
+  order: 345
 ---
 
 ## `ob_get_contents()` — internals

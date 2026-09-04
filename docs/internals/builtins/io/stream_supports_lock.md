@@ -2,7 +2,7 @@
 title: "stream_supports_lock() — internals"
 description: "Compiler internals for stream_supports_lock(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 251
+  order: 393
 ---
 
 ## `stream_supports_lock()` — internals

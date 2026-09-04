@@ -2,7 +2,7 @@
 title: "fstat() — internals"
 description: "Compiler internals for fstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 185
+  order: 327
 ---
 
 ## `fstat()` — internals

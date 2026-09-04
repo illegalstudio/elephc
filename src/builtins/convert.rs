@@ -50,6 +50,16 @@ pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr {
         DefaultSpec::Str(s) => Expr::new(ExprKind::StringLiteral(s.to_string()), Span::dummy()),
         DefaultSpec::IntMax => Expr::new(ExprKind::IntLiteral(i64::MAX), Span::dummy()),
         DefaultSpec::EmptyArray => Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
+        DefaultSpec::Constant(name) => Expr::new(
+            ExprKind::ConstRef(crate::names::Name::from(*name)),
+            Span::dummy(),
+        ),
+        // Only prelude-provided contracts declare a non-literal default, and those have no
+        // AOT registry binding: the prelude's own PHP declaration carries the expression.
+        DefaultSpec::Expr(source) => panic!(
+            "DefaultSpec::Expr({source:?}) reached an AOT registry binding; only \
+             prelude-provided contracts may declare a non-literal default"
+        ),
     }
 }
 

@@ -2,7 +2,7 @@
 title: "mkdir() — internals"
 description: "Compiler internals for mkdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 147
+  order: 289
 ---
 
 ## `mkdir()` — internals

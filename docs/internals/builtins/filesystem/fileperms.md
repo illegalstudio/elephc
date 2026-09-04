@@ -2,7 +2,7 @@
 title: "fileperms() — internals"
 description: "Compiler internals for fileperms(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 128
+  order: 270
 ---
 
 ## `fileperms()` — internals

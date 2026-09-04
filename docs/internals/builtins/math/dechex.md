@@ -2,7 +2,7 @@
 title: "dechex() — internals"
 description: "Compiler internals for dechex(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 287
+  order: 571
 ---
 
 ## `dechex()` — internals

@@ -2,7 +2,7 @@
 title: "iconv_substr() — internals"
 description: "Compiler internals for iconv_substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 459
+  order: 754
 ---
 
 ## `iconv_substr()` — internals

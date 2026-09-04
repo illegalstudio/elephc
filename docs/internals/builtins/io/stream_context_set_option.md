@@ -2,7 +2,7 @@
 title: "stream_context_set_option() — internals"
 description: "Compiler internals for stream_context_set_option(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 222
+  order: 364
 ---
 
 ## `stream_context_set_option()` — internals

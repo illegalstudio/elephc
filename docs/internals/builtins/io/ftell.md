@@ -2,7 +2,7 @@
 title: "ftell() — internals"
 description: "Compiler internals for ftell(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 187
+  order: 329
 ---
 
 ## `ftell()` — internals

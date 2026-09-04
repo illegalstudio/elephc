@@ -75,6 +75,14 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             "opcache_prelude(state)",
             crate::opcache_prelude::build::state_helper_decls(),
         ),
+        ("opcache_prelude(api)", opcache_api_program()),
+        (
+            "opcache_prelude(cli-ini)",
+            vec![
+                crate::opcache_prelude::build::cli_ini_get_decl(),
+                crate::opcache_prelude::build::cli_ini_set_decl(),
+            ],
+        ),
         (
             "web_prelude",
             crate::web_prelude::build::web_declarations(
@@ -100,6 +108,42 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         built.push((name, program));
     }
     built
+}
+
+/// The eight PHP-visible `opcache_*` declarations, obtained by injecting the OPcache prelude
+/// into a program that references every one of them (the injector declares on demand, so
+/// no single builder returns the whole surface).
+fn opcache_api_program() -> crate::parser::ast::Program {
+    let source = "<?php opcache_get_configuration(); opcache_reset(); opcache_get_status(); \
+                  opcache_is_script_cached('a.php'); opcache_invalidate('a.php'); \
+                  opcache_compile_file('a.php'); opcache_is_script_cached_in_file_cache('a.php'); \
+                  opcache_jit_blacklist(null);";
+    let tokens = crate::lexer::tokenize(source).expect("opcache probe must tokenize");
+    let program = crate::parser::parse(&tokens).expect("opcache probe must parse");
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    let (program, _sites) = crate::opcache_prelude::inject_if_used(
+        program,
+        crate::php_version::PhpVersion::Php85,
+        false,
+        None,
+        &[],
+        &[],
+        None,
+        false,
+        &mut inventory,
+    );
+    // Keep the injected declarations only: the probe's own call statements are not prelude
+    // code and must not enter the call-site audits.
+    program
+        .into_iter()
+        .filter(|stmt| {
+            matches!(
+                stmt.kind,
+                crate::parser::ast::StmtKind::FunctionDecl { .. }
+                    | crate::parser::ast::StmtKind::Synthetic(_)
+            )
+        })
+        .collect()
 }
 
 /// Parses `CURL_PRELUDE_SRC` exactly as `curl_prelude::inject_if_used_for_version` does.
@@ -148,10 +192,9 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
 fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
     prelude_sources()
         .into_iter()
-        .filter_map(|(name, source)| match name {
-            "hash_prelude" => Some((name, source, true)),
-            "curl_prelude" => Some((name, source, cfg!(feature = "curl"))),
-            _ => None,
+        .map(|(name, source)| {
+            let published = name != "curl_prelude" || cfg!(feature = "curl");
+            (name, source, published)
         })
         .collect()
 }
@@ -300,12 +343,21 @@ fn prelude_contracts_match_their_injected_signatures() {
             })
             .collect::<Vec<_>>();
         let declaring = found.iter().map(|(prelude, _)| *prelude).collect::<Vec<_>>();
-        assert_eq!(
-            found.len(),
-            1,
-            "{} must be declared by exactly one prelude, found {declaring:?}",
+        assert!(
+            !found.is_empty(),
+            "{} has a prelude route but no prelude declares it",
             contract.name
         );
+        // Mode-exclusive preludes may each declare the same function (`ini_get` in the
+        // `--web` prelude and in the OPcache CLI shim); every declaration must then agree.
+        for (other, declared) in &found[1..] {
+            assert_eq!(
+                declared, &found[0].1,
+                "{} is declared differently by {} and {other}",
+                contract.name, found[0].0
+            );
+        }
+        let _ = &declaring;
 
         let (prelude, declared) = &found[0];
         let name = contract.name;
@@ -358,7 +410,10 @@ fn prelude_contracts_match_their_injected_signatures() {
             let actual = declared.last().expect("names matched, so a tail exists");
             let at = format!("{name}(...${variadic}) in {prelude}");
             assert!(actual.variadic, "{at}: must be declared `...${variadic}`");
-            assert!(!actual.by_ref, "{at}: contract has no by-reference variadic");
+            assert_eq!(
+                actual.by_ref, contract.variadic_by_ref,
+                "{at}: by-reference marker on the variadic"
+            );
             assert_eq!(actual.default, None, "{at}: a variadic takes no default");
         }
 
@@ -530,8 +585,14 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         DefaultSpec::Str(value) => {
             declared == format!("\"{value}\"") || declared == format!("'{value}'")
         }
-        DefaultSpec::IntMax => declared == "PHP_INT_MAX",
+        // A built prelude carries the folded literal; PHP text spells the constant.
+        DefaultSpec::IntMax => declared == "PHP_INT_MAX" || declared.parse::<i64>() == Ok(i64::MAX),
         DefaultSpec::EmptyArray => declared == "[]" || declared.replace(' ', "") == "array()",
+        DefaultSpec::Constant(name) => declared == *name,
+        DefaultSpec::Expr(source) => {
+            declared.split_whitespace().collect::<String>()
+                == source.split_whitespace().collect::<String>()
+        }
     }
 }
 
@@ -545,6 +606,8 @@ fn default_text(default: &DefaultSpec) -> String {
         DefaultSpec::Str(value) => format!("\"{value}\""),
         DefaultSpec::IntMax => "PHP_INT_MAX".to_string(),
         DefaultSpec::EmptyArray => "[]".to_string(),
+        DefaultSpec::Constant(name) => (*name).to_string(),
+        DefaultSpec::Expr(source) => (*source).to_string(),
     }
 }
 
@@ -597,11 +660,9 @@ fn catalog_hosted_preludes_declare_no_uncontracted_php_function() {
             );
         }
     }
-    assert_eq!(
-        audited,
-        if cfg!(feature = "curl") { 2 } else { 1 },
-        "the hash prelude is always audited; the curl prelude whenever its catalog slice \
-         is published"
+    assert!(
+        audited >= 12,
+        "every injected prelude is catalog-hosted and audited, saw only {audited}"
     );
 }
 
@@ -712,4 +773,97 @@ fn php_visible_declarations(source: &str) -> Vec<String> {
         .filter(|name| !name.is_empty() && !name.starts_with("__elephc_"))
         .map(str::to_string)
         .collect()
+}
+
+/// Migration tool, not an audit: dumps every PHP-visible function each injected prelude
+/// declares, with its declared signature, as JSON — the seed for their shared contracts.
+///
+/// Runs only when `ELEPHC_CONTRACT_SEED_OUT` names the output path, exactly like
+/// `synthetic_class::transcribe::tests::dump_prelude_on_request`. Once the contracts exist the
+/// two-way prelude audits above own the invariant; this dump is how a new prelude surface gets
+/// its first draft without hand-transcribing hundreds of signatures.
+#[test]
+fn dump_prelude_contract_seed_on_request() {
+    let Ok(out) = std::env::var("ELEPHC_CONTRACT_SEED_OUT") else {
+        return;
+    };
+    use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
+
+    fn type_text(ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Int => "int".to_string(),
+            TypeExpr::Float => "float".to_string(),
+            TypeExpr::Bool => "bool".to_string(),
+            TypeExpr::False => "false".to_string(),
+            TypeExpr::Str => "string".to_string(),
+            TypeExpr::Void => "void".to_string(),
+            TypeExpr::Never => "never".to_string(),
+            TypeExpr::Iterable => "iterable".to_string(),
+            TypeExpr::Array(_) => "array".to_string(),
+            TypeExpr::Ptr(_) => "ptr".to_string(),
+            TypeExpr::Buffer(_) => "buffer".to_string(),
+            TypeExpr::Named(name) => name.as_str().to_string(),
+            TypeExpr::Nullable(inner) => format!("?{}", type_text(inner)),
+            TypeExpr::Union(members) => members.iter().map(type_text).collect::<Vec<_>>().join("|"),
+            TypeExpr::Intersection(members) => {
+                members.iter().map(type_text).collect::<Vec<_>>().join("&")
+            }
+        }
+    }
+    fn default_text(expr: &Expr) -> String {
+        crate::synthetic_class::print::print_expr(expr)
+    }
+    fn collect(stmts: &[Stmt], prelude: &str, out: &mut Vec<serde_json::Value>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::FunctionDecl {
+                    name,
+                    params,
+                    variadic,
+                    variadic_by_ref,
+                    variadic_type,
+                    return_type,
+                    by_ref_return,
+                    ..
+                } => {
+                    let params: Vec<serde_json::Value> = params
+                        .iter()
+                        .map(|(name, ty, default, by_ref)| {
+                            serde_json::json!({
+                                "name": name,
+                                "type": ty.as_ref().map(type_text),
+                                "default": default.as_ref().map(default_text),
+                                "by_ref": by_ref,
+                            })
+                        })
+                        .collect();
+                    out.push(serde_json::json!({
+                        "prelude": prelude,
+                        "name": name,
+                        "params": params,
+                        "variadic": variadic,
+                        "variadic_by_ref": variadic_by_ref,
+                        "variadic_type": variadic_type.as_ref().map(type_text),
+                        "returns": return_type.as_ref().map(type_text),
+                        "by_ref_return": by_ref_return,
+                    }));
+                }
+                StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
+                    collect(body, prelude, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut records = Vec::new();
+    for (prelude, program) in injected_prelude_programs() {
+        collect(&program, prelude, &mut records);
+    }
+    std::fs::write(
+        &out,
+        serde_json::to_string_pretty(&records).expect("serialize seed"),
+    )
+    .expect("write seed");
+    eprintln!("wrote {} prelude function declarations to {out}", records.len());
 }

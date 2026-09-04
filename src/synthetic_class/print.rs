@@ -99,6 +99,7 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
             params,
             param_attributes,
             variadic,
+            variadic_by_ref,
             variadic_type,
             return_type,
             body,
@@ -113,7 +114,8 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                     Some(ty) => format!("{} ", type_expr(ty)),
                     None => String::new(),
                 };
-                list.push_str(&format!("{hint}...${tail}"));
+                let by_ref = if *variadic_by_ref { "&" } else { "" };
+                list.push_str(&format!("{hint}{by_ref}...${tail}"));
             }
             let signature = format!(
                 "{indent}function {name}({list}){}",
@@ -220,7 +222,8 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                         Some(ty) => format!("{} ", type_expr(ty)),
                         None => String::new(),
                     };
-                    list.push_str(&format!("{hint}...${tail}"));
+                    let by_ref = if method.variadic_by_ref { "&" } else { "" };
+                    list.push_str(&format!("{hint}{by_ref}...${tail}"));
                 }
                 out.push_str(&format!(
                     "{}{visibility}{modifiers}function {}({list}){} {}\n",

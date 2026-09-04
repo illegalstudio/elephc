@@ -53,6 +53,13 @@ fn area_str(area: Area) -> &'static str {
         Area::Spl => "spl",
         Area::Pointers => "pointers",
         Area::Curl => "curl",
+        Area::Date => "date",
+        Area::Calendar => "calendar",
+        Area::Mysqli => "mysqli",
+        Area::Pdo => "pdo",
+        Area::Web => "web",
+        Area::Image => "image",
+        Area::Opcache => "opcache",
     }
 }
 
@@ -66,6 +73,8 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
         DefaultSpec::Str(v) => json!(v),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
         DefaultSpec::EmptyArray => json!([]),
+        DefaultSpec::Constant(name) => json!({ "constant": name }),
+        DefaultSpec::Expr(source) => json!({ "expr": source }),
     }
 }
 

@@ -2,7 +2,7 @@
 title: "ob_implicit_flush() — internals"
 description: "Compiler internals for ob_implicit_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 208
+  order: 350
 ---
 
 ## `ob_implicit_flush()` — internals

@@ -2,7 +2,7 @@
 title: "microtime() — internals"
 description: "Compiler internals for microtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 107
+  order: 237
 ---
 
 ## `microtime()` — internals

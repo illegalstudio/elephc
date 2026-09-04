@@ -43,6 +43,8 @@ pub enum BackendImplementation {
     LanguageIntrinsic,
     /// Interpreter-owned surface: Magician provides the class-like or constant itself.
     Interpreter,
+    /// Name-resolver rewrite onto a builtin class (the `date_*` / `cal_*` families).
+    NameResolverRewrite,
 }
 
 /// Why a shared catalog surface is deliberately absent from one backend.
@@ -133,6 +135,7 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
         BuiltinKind::LanguageConstruct => BackendImplementation::LanguageConstruct,
         BuiltinKind::DedicatedSyntax => BackendImplementation::DedicatedSyntax,
         BuiltinKind::PreludeProvided => BackendImplementation::Prelude,
+        BuiltinKind::NameResolverRewrite => BackendImplementation::NameResolverRewrite,
     };
     BackendSupport::Implemented(implementation)
 }
@@ -148,8 +151,24 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
     {
         return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
     }
+    // Prelude-declared and name-resolver-rewritten functions exist in eval only where
+    // Magician re-implements them: the whole `ext/curl` surface and the hash prelude. The
+    // rest (mysqli, PDO, sessions, image, date/calendar procedural families) is an explicit,
+    // auditable absence rather than a missing binding.
+    if matches!(
+        contract.kind,
+        BuiltinKind::PreludeProvided | BuiltinKind::NameResolverRewrite
+    ) && !matches!(contract.area, Area::Curl)
+        && !EVAL_IMPLEMENTED_PRELUDE_SURFACES.contains(&contract.name)
+    {
+        return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
+    }
     BackendSupport::Implemented(BackendImplementation::Registry)
 }
+
+/// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
+const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
+    &["hash_copy", "hash_final", "hash_init", "hash_update"];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
@@ -364,14 +383,20 @@ mod tests {
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(eval_registry, 484 + curl_surface);
-        assert_eq!(eval_internal, 82);
-        assert_eq!(eval_pending, 31);
+        // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        // image prelude declares for its own use.
+        assert_eq!(eval_internal, 99);
+        // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
+        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
+        assert_eq!(eval_pending, 357);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
         // entry points.
         assert_eq!(aot_registry, 584);
-        assert_eq!(aot_external, 10 + curl_surface);
+        // Ten constructs/dedicated-syntax/hash surfaces, the 343 prelude-provided and
+        // name-resolver-rewritten contracts, and the curl prelude when published.
+        assert_eq!(aot_external, 353 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -420,7 +445,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463 + curl_surface);
-        assert_eq!(unsupported, 113);
+        assert_eq!(unsupported, 456);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

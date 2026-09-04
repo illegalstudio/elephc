@@ -32,6 +32,9 @@ AREAS: list[str] = [
     "Pointer",
     "Buffer",
     "Misc",
+    "Database",
+    "Web",
+    "Image",
 ]
 
 
@@ -67,6 +70,15 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # generated pages and the CI drift gate alike. `extract.run_gen_builtins` refuses
     # to run against a default-feature exporter for exactly this reason.
     "curl": ("Network", "Network"),
+    # Prelude-provided and name-resolver-rewritten surfaces (contracts seeded from the
+    # built prelude declarations and PHP's own date/calendar signatures).
+    "date": ("Date", "Date"),
+    "calendar": ("Date", "Calendar"),
+    "mysqli": ("Database", "mysqli"),
+    "pdo": ("Database", "PDO"),
+    "web": ("Web", "Web"),
+    "image": ("Image", "Image"),
+    "opcache": ("Misc", "OPcache"),
 }
 
 

@@ -2,7 +2,7 @@
 title: "glob() — internals"
 description: "Compiler internals for glob(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 134
+  order: 276
 ---
 
 ## `glob()` — internals

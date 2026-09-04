@@ -2,7 +2,7 @@
 title: "curl_multi_info_read() — internals"
 description: "Compiler internals for curl_multi_info_read(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 348
+  order: 643
 ---
 
 ## `curl_multi_info_read()` — internals

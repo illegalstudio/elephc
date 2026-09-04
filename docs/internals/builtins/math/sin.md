@@ -2,7 +2,7 @@
 title: "sin() — internals"
 description: "Compiler internals for sin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 313
+  order: 597
 ---
 
 ## `sin()` — internals

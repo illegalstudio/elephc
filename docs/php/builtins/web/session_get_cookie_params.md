@@ -1,0 +1,29 @@
+---
+title: "session_get_cookie_params()"
+description: "Implemented by the compiler-injected web prelude."
+sidebar:
+  order: 859
+---
+
+## session_get_cookie_params()
+
+```php
+function session_get_cookie_params(): mixed
+```
+
+Implemented by the compiler-injected web prelude.
+
+**Parameters**: none.
+
+**Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
+- **`eval()` (magician interpreter)**: not available inside eval'd code.
+
+_No examples yet — check `examples/` and `showcases/` for usage patterns._
+
+## Internals
+
+For how `session_get_cookie_params` is implemented in the compiler, see [the internals page](../../../internals/builtins/web/session_get_cookie_params.md).

@@ -2,7 +2,7 @@
 title: "chown() — internals"
 description: "Compiler internals for chown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 115
+  order: 257
 ---
 
 ## `chown()` — internals
