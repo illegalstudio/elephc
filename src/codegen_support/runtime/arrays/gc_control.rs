@@ -216,7 +216,7 @@ fn emit_gc_mem_caches_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x20, x20, x11");                                  // include the payload in the released cache total
     emitter.instruction("add x20, x20, #16");                                  // include the uniform allocator header
     emitter.instruction("add x0, x9, #16");                                    // provide the user pointer expected by shared insertion cleanup
-    emitter.instruction("bl __rt_heap_free_insert");                           // coalesce this cached block through the ordered free-list path
+    emitter.instruction("bl __rt_heap_free_insert_cached");                    // coalesce this cached block through the shared cache-drain trampoline
     abi::emit_symbol_address(emitter, "x10", "_gc_frees");
     emitter.instruction("ldr x11, [x10]");                                     // undo the shared insertion path's historical free count
     emitter.instruction("sub x11, x11, #1");                                   // this block was counted when it first entered the cache
@@ -260,7 +260,7 @@ fn emit_gc_mem_caches_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add QWORD PTR [rbp - 16], r11");                      // include the payload in the released cache total
     emitter.instruction("add QWORD PTR [rbp - 16], 16");                       // include the uniform allocator header
     emitter.instruction("lea rax, [r9 + 16]");                                 // provide the user pointer expected by shared insertion cleanup
-    emitter.instruction("call __rt_heap_free_insert");                         // coalesce this cached block through the ordered free-list path
+    emitter.instruction("call __rt_heap_free_insert_cached");                  // coalesce this cached block through the shared cache-drain trampoline
     abi::emit_symbol_address(emitter, "r8", "_gc_frees");
     emitter.instruction("sub QWORD PTR [r8], 1");                              // avoid recounting a block already freed into the cache
     emitter.instruction("jmp __rt_gc_mem_caches_bin");                         // continue draining the same bin
@@ -673,11 +673,11 @@ mod tests {
             );
             match target.arch {
                 Arch::AArch64 => {
-                    assert!(asm.contains("bl __rt_heap_free_insert"));
+                    assert!(asm.contains("bl __rt_heap_free_insert_cached"));
                     assert!(asm.contains("fmov x0, d0"));
                 }
                 Arch::X86_64 => {
-                    assert!(asm.contains("call __rt_heap_free_insert"));
+                    assert!(asm.contains("call __rt_heap_free_insert_cached"));
                     assert!(asm.contains("movq rax, xmm0"));
                 }
             }
