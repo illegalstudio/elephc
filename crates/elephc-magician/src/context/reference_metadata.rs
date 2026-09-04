@@ -22,6 +22,134 @@ pub struct ElephcEvalExecutionScope {
     pub(super) called_class_stack: Vec<String>,
 }
 
+/// PHP argument-introspection metadata for one active eval-declared callable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalFunctionArgsFrame {
+    regular_params: Vec<String>,
+    actual_count: usize,
+    surplus: Vec<RuntimeCellHandle>,
+    scope: *const ElephcEvalScope,
+}
+
+/// One active eval callable as exposed through PHP backtrace functions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EvalBacktraceFrame {
+    function: String,
+    arguments: EvalFunctionArgsFrame,
+    file: String,
+    line: i64,
+    class_name: Option<String>,
+    object: Option<RuntimeCellHandle>,
+    call_type: Option<&'static str>,
+}
+
+impl EvalBacktraceFrame {
+    /// Creates an active frame with its entry-site and callable-kind metadata.
+    pub(crate) fn new(
+        function: String,
+        arguments: EvalFunctionArgsFrame,
+        file: String,
+        line: i64,
+        class_name: Option<String>,
+        object: Option<RuntimeCellHandle>,
+        call_type: Option<&'static str>,
+    ) -> Self {
+        Self {
+            function,
+            arguments,
+            file,
+            line,
+            class_name,
+            object,
+            call_type,
+        }
+    }
+
+    /// Returns the PHP function or method name without a class prefix.
+    pub(crate) fn function(&self) -> &str {
+        &self.function
+    }
+
+    /// Returns the live PHP argument metadata for this activation.
+    pub(crate) const fn arguments(&self) -> &EvalFunctionArgsFrame {
+        &self.arguments
+    }
+
+    /// Returns the source file containing the call that entered this activation.
+    pub(crate) fn file(&self) -> &str {
+        &self.file
+    }
+
+    /// Returns the source line containing the call that entered this activation.
+    pub(crate) const fn line(&self) -> i64 {
+        self.line
+    }
+
+    /// Returns the PHP class name for method and class-bound closure frames.
+    pub(crate) fn class_name(&self) -> Option<&str> {
+        self.class_name.as_deref()
+    }
+
+    /// Returns the borrowed active object for an instance frame.
+    pub(crate) const fn object(&self) -> Option<RuntimeCellHandle> {
+        self.object
+    }
+
+    /// Returns `->` for instance calls, `::` for static calls, or no marker for functions.
+    pub(crate) const fn call_type(&self) -> Option<&'static str> {
+        self.call_type
+    }
+}
+
+impl EvalFunctionArgsFrame {
+    /// Builds an active frame from fixed parameter names and positional surplus values.
+    pub(crate) fn new(
+        regular_params: Vec<String>,
+        actual_count: usize,
+        surplus: Vec<RuntimeCellHandle>,
+    ) -> Self {
+        Self {
+            regular_params,
+            actual_count,
+            surplus,
+            scope: std::ptr::null(),
+        }
+    }
+
+    /// Associates the frame with the stable stack scope used for this activation.
+    pub(crate) fn bind_scope(&mut self, scope: &ElephcEvalScope) {
+        self.scope = scope as *const ElephcEvalScope;
+    }
+
+    /// Returns the live activation scope associated before the frame was pushed.
+    pub(crate) fn scope(&self) -> Option<&ElephcEvalScope> {
+        // SAFETY: callable execution binds this pointer after the scope reaches its final
+        // stack location, pops the frame before that local is dropped, and never moves the
+        // scope while the frame is active.
+        unsafe { self.scope.as_ref() }
+    }
+
+    /// Returns the number of arguments PHP considers passed to this invocation.
+    pub(crate) const fn actual_count(&self) -> usize {
+        self.actual_count
+    }
+
+    /// Returns the fixed parameter name at one PHP argument position.
+    pub(crate) fn regular_param(&self, position: usize) -> Option<&str> {
+        self.regular_params.get(position).map(String::as_str)
+    }
+
+    /// Returns a positional surplus argument after the fixed parameter prefix.
+    pub(crate) fn surplus_arg(&self, position: usize) -> Option<RuntimeCellHandle> {
+        self.surplus.get(position).copied()
+    }
+
+    /// Returns the number of fixed parameters preceding the positional surplus tail.
+    pub(crate) const fn regular_param_count(&self) -> usize {
+        self.regular_params.len()
+    }
+}
+
 /// PHP-visible magic-constant names for the current eval execution frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct EvalMagicScope {

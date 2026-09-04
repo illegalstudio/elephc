@@ -30,6 +30,26 @@ impl ElephcEvalContext {
         self.constants.get(&normalize_constant_name(name)).copied()
     }
 
+    /// Returns user-defined constants in stable name order for PHP introspection.
+    pub(crate) fn defined_constant_entries(&self) -> Vec<(String, RuntimeCellHandle)> {
+        let mut entries = self
+            .constants
+            .iter()
+            .map(|(name, value)| (name.clone(), *value))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
+    /// Returns eval and generated native user-function names in stable order.
+    pub(crate) fn defined_user_function_names(&self) -> Vec<String> {
+        let mut names = self.functions.keys().cloned().collect::<Vec<_>>();
+        names.extend(self.native_functions.keys().cloned());
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// Defines a dynamic user function, failing if the name already exists.
     pub fn define_function(
         &mut self,

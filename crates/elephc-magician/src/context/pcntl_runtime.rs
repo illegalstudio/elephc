@@ -185,7 +185,9 @@ pub(crate) fn defer_context_free(context: *mut ElephcEvalContext) -> bool {
     let Ok(mut state) = pcntl_runtime().lock() else {
         return false;
     };
-    if state.handlers.values().any(|entry| entry.context == context) {
+    if state.handlers.values().any(|entry| entry.context == context)
+        || state.active_contexts.contains_key(&context)
+    {
         state.detached_contexts.insert(context);
         true
     } else {

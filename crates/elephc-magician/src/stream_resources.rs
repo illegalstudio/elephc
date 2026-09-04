@@ -44,6 +44,9 @@
 /// through `raw_value_word()` and `i64::try_from`.
 pub(crate) const EVAL_RESOURCE_PAYLOAD_BASE: i64 = 1 << 62;
 
+/// Synthetic payload whose generated-runtime resource id is PHP's reserved default-context id 4.
+pub(crate) const EVAL_DEFAULT_CONTEXT_PAYLOAD: i64 = EVAL_RESOURCE_PAYLOAD_BASE - 1;
+
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::fs::{File, Metadata, OpenOptions};
@@ -104,6 +107,7 @@ pub(crate) struct EvalStreamResources {
     #[cfg(feature = "curl")]
     curl_share_handles: HashMap<i64, EvalCurlShareHandle>,
     process_children: HashMap<i64, Child>,
+    resource_types: HashMap<i64, &'static str>,
     socket_listeners: HashMap<i64, TcpListener>,
     socket_names: HashMap<i64, EvalSocketNames>,
     stream_contexts: HashMap<i64, EvalStreamContext>,
