@@ -125,13 +125,8 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
         "x10",
         "__rt_gc_mark_reachable_array_next",
     );
-    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the child kind word to check whether it is already marked
-    emitter.instruction("mov x11, #1");                                         // prepare a single-bit reachable mask
-    emitter.instruction("lsl x11, x11, #16");                                   // x11 = GC reachable bit inside the kind word
-    emitter.instruction("tst x10, x11");                                        // is this child already marked reachable?
-    emitter.instruction("b.ne __rt_gc_mark_reachable_array_next");              // skip the recursive call for already-marked children
     emitter.instruction("str x9, [sp, #24]");                                   // preserve the array index across recursion
-    emitter.instruction("bl __rt_gc_mark_reachable");                           // recursively mark the nested child reachable
+    emitter.instruction("bl __rt_gc_mark_reachable");                           // validate and recursively mark the nested child reachable
     emitter.instruction("ldr x9, [sp, #24]");                                   // restore the array index after recursion
     emitter.label("__rt_gc_mark_reachable_array_next");
     emitter.instruction("add x9, x9, #1");                                      // advance to the next array element
