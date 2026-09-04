@@ -132,6 +132,12 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
             values,
         ),
     };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &function_scope,
+        values,
+    );
     context.pop_function_args();
     context.pop_function();
     return_result
@@ -462,6 +468,12 @@ fn eval_closure_with_optional_binding(
             values,
         ),
     };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &function_scope,
+        values,
+    );
     if bound_class_pushed {
         context.pop_called_class_scope();
         context.pop_class_scope();
@@ -552,6 +564,24 @@ pub(in crate::interpreter) fn persist_static_locals(
         }
     }
     Ok(())
+}
+
+/// Retains a successful return value when it aliases a persistent static-local owner.
+pub(in crate::interpreter) fn retain_static_local_return(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    static_names: &[String],
+    scope: &ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = result?;
+    if static_names
+        .iter()
+        .any(|name| scope.visible_cell(name) == Some(result))
+    {
+        values.retain(result)
+    } else {
+        Ok(result)
+    }
 }
 
 /// One source-order static local declaration and its initializer expression.
