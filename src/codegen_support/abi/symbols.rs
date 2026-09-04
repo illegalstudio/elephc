@@ -140,16 +140,34 @@ pub fn emit_extern_symbol_address(emitter: &mut Emitter, dest: &str, symbol: &st
 /// Loads a value from an external symbol into `reg`.
 /// First resolves the extern symbol address via the GOT, then performs a
 /// load from `byte_offset` into `reg`.  Used for reading global variables
-/// defined in external libraries or other compilation units.
+/// defined in external libraries or other compilation units. AArch64 integer
+/// destinations double as the address scratch, while floating-point loads
+/// preserve the borrowed x9 register on the stack.
 pub fn emit_load_extern_symbol_to_reg(
     emitter: &mut Emitter,
     reg: &str,
     symbol: &str,
     byte_offset: usize,
 ) {
-    let scratch = symbol_scratch_reg(emitter);
-    emit_extern_symbol_address(emitter, scratch, symbol);
-    emit_load_from_address(emitter, reg, scratch, byte_offset);
+    match emitter.target.arch {
+        Arch::AArch64 if is_float_register(reg) => {
+            emitter.instruction("sub sp, sp, #16");                            // reserve one aligned scratch-preservation slot
+            emitter.instruction("str x9, [sp]");                              // preserve the caller-visible symbol scratch register
+            emit_extern_symbol_address(emitter, "x9", symbol);
+            emit_load_from_address(emitter, reg, "x9", byte_offset);
+            emitter.instruction("ldr x9, [sp]");                              // restore the borrowed symbol scratch register
+            emitter.instruction("add sp, sp, #16");                            // release the aligned preservation slot
+        }
+        Arch::AArch64 => {
+            emit_extern_symbol_address(emitter, reg, symbol);
+            emit_load_from_address(emitter, reg, reg, byte_offset);
+        }
+        Arch::X86_64 => {
+            let scratch = symbol_scratch_reg(emitter);
+            emit_extern_symbol_address(emitter, scratch, symbol);
+            emit_load_from_address(emitter, reg, scratch, byte_offset);
+        }
+    }
 }
 
 /// Stores the contents of `reg` into an external symbol at a byte offset.
@@ -172,15 +190,12 @@ pub fn emit_store_reg_to_extern_symbol(
 }
 
 /// Loads a value from a local/internal symbol into `reg`.
-/// Uses a temporary scratch register (x9 on AArch64) to compute the symbol
-/// address, then loads from `byte_offset`.  On x86_64 uses RIP-relative
-/// addressing directly when offset is zero.  Dispatches on register type
-/// for float vs. integer moves on x86_64.
+/// On AArch64, integer destinations double as the address scratch and float
+/// destinations borrow x9 behind an aligned stack save. On x86_64, zero-offset
+/// loads use RIP-relative addressing directly.
 ///
-/// In PIC mode the x86_64 path keeps the register footprint identical to the
-/// non-PIC emission: integer destinations resolve the GOT entry through the
-/// destination register itself, and float destinations borrow r11 behind a
-/// push/pop so call sites never see an extra clobbered register.
+/// PIC mode keeps the caller-visible register footprint identical to non-PIC
+/// emission on both targets.
 pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, byte_offset: usize) {
     if emitter.pic_data_refs {
         match emitter.target.arch {
@@ -203,11 +218,16 @@ pub fn emit_load_symbol_to_reg(emitter: &mut Emitter, reg: &str, symbol: &str, b
     }
     match emitter.target.arch {
         Arch::AArch64 => {
-            emit_symbol_address(emitter, "x9", symbol);
-            if byte_offset == 0 {
-                emitter.instruction(&format!("ldr {}, [x9]", reg));             // load the symbol payload directly from its base address
+            if is_float_register(reg) {
+                emitter.instruction("sub sp, sp, #16");                        // reserve one aligned scratch-preservation slot
+                emitter.instruction("str x9, [sp]");                          // preserve the caller-visible symbol scratch register
+                emit_symbol_address(emitter, "x9", symbol);
+                emit_load_from_address(emitter, reg, "x9", byte_offset);
+                emitter.instruction("ldr x9, [sp]");                          // restore the borrowed symbol scratch register
+                emitter.instruction("add sp, sp, #16");                        // release the aligned preservation slot
             } else {
-                emitter.instruction(&format!("ldr {}, [x9, #{}]", reg, byte_offset)); // load the symbol payload from the requested byte offset
+                emit_symbol_address(emitter, reg, symbol);
+                emit_load_from_address(emitter, reg, reg, byte_offset);
             }
         }
         Arch::X86_64 => {
