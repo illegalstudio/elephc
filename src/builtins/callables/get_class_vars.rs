@@ -1,11 +1,11 @@
 //! Purpose:
-//! Home of PHP's `get_class_vars` builtin and its literal-class AOT contract.
+//! Home of PHP's `get_class_vars` builtin and its AOT contract.
 //!
 //! Called from:
 //! - Checker, optimizer, ownership, and direct-call EIR specialization through the registry.
 //!
 //! Key details:
-//! - Direct calls are materialized from class metadata in `ir_lower::expr::class_introspection`.
+//! - Direct calls, including runtime class-name strings, are materialized from class metadata.
 //! - Runtime-selected callable use is refused because class default expressions need EIR lowering.
 
 use crate::builtins::semantics::{
@@ -27,7 +27,9 @@ builtin! {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Checked,
         effects: BuiltinEffects::Static(Effects::from_bits_retain(
-            Effects::READS_GLOBAL.bits() | Effects::ALLOC_HEAP.bits(),
+            Effects::READS_GLOBAL.bits()
+                | Effects::ALLOC_HEAP.bits()
+                | Effects::MAY_THROW.bits(),
         )),
         result_ownership: BuiltinResultOwnership::Fresh,
         requirements: BuiltinRequirements::Static(&[]),
@@ -36,13 +38,13 @@ builtin! {
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly(
-            "get_class_vars() requires a literal class name in AOT mode",
+            "get_class_vars() requires direct EIR metadata lowering in AOT mode",
         ),
         lowering: BuiltinLowering::Eir(lower_unreachable),
     },
 }
 
-/// Requires a literal known class name and returns a string-keyed Mixed array.
+/// Requires a string class name and returns a string-keyed Mixed array.
 fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
     let argument = match &cx.args[0].kind {
         ExprKind::NamedArg { name, value } if crate::names::php_symbol_key(name) == "class" => {
@@ -50,36 +52,11 @@ fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
         }
         _ => &cx.args[0],
     };
-    let class_name = match &argument.kind {
-        ExprKind::StringLiteral(class_name) => Some(class_name.clone()),
-        ExprKind::ClassConstant { receiver } => match receiver {
-            crate::parser::ast::StaticReceiver::Named(name) => Some(name.as_str().to_string()),
-            crate::parser::ast::StaticReceiver::Self_
-            | crate::parser::ast::StaticReceiver::Static => cx.checker.current_class.clone(),
-            crate::parser::ast::StaticReceiver::Parent => cx
-                .checker
-                .current_class
-                .as_ref()
-                .and_then(|current| cx.checker.classes.get(current))
-                .and_then(|info| info.parent.clone()),
-        },
-        _ => None,
-    };
-    let Some(class_name) = class_name else {
+    let ty = cx.checker.infer_type(argument, cx.env)?;
+    if ty.codegen_repr() != PhpType::Str {
         return Err(CompileError::new(
             cx.span,
-            "get_class_vars() argument must be a string literal in AOT mode",
-        ));
-    };
-    let class_name = class_name.trim_start_matches('\\');
-    if !cx.checker.classes.contains_key(class_name)
-        && !cx.checker.interfaces.contains_key(class_name)
-        && !cx.checker.declared_traits.contains(class_name)
-        && !cx.checker.enums.contains_key(class_name)
-    {
-        return Err(CompileError::new(
-            cx.span,
-            &format!("get_class_vars(): Class \"{}\" not found", class_name),
+            "get_class_vars() argument must be a string in AOT mode",
         ));
     }
     Ok(PhpType::AssocArray {

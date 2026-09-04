@@ -39,6 +39,8 @@ impl DataId {
 /// Method metadata retained for standalone trait reflection.
 #[derive(Debug, Clone)]
 pub struct TraitMethodInfo {
+    /// PHP-visible source spelling retained alongside the case-insensitive map key.
+    pub name: String,
     pub signature: FunctionSig,
     pub visibility: Visibility,
     pub is_static: bool,

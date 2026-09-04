@@ -190,6 +190,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub classes: &'m HashMap<String, ClassInfo>,
     pub enums: &'m HashMap<String, EnumInfo>,
     pub interfaces: &'m HashMap<String, InterfaceInfo>,
+    pub declared_trait_names: &'m [String],
+    pub declared_trait_methods:
+        &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
@@ -300,6 +303,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         classes: &'m HashMap<String, ClassInfo>,
         enums: &'m HashMap<String, EnumInfo>,
         interfaces: &'m HashMap<String, InterfaceInfo>,
+        declared_trait_names: &'m [String],
+        declared_trait_methods: &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -354,6 +359,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             classes,
             enums,
             interfaces,
+            declared_trait_names,
+            declared_trait_methods,
             packed_classes,
             throw_access_sites,
             builtin_call_types,

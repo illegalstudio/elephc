@@ -78,3 +78,65 @@ fn test_core_get_class_vars_aot_defaults_and_visibility() {
     );
     assert_eq!(out, "41s:--:42pTs");
 }
+
+/// Verifies runtime class-name strings and concrete object subclasses select AOT metadata.
+#[test]
+fn test_core_class_introspection_aot_dynamic_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreDynamicBase {
+            public int $base = 4;
+            public function baseMethod(): void {}
+        }
+        class CoreDynamicChild extends CoreDynamicBase {
+            public string $child = "c";
+            public function childMethod(): void {}
+        }
+        trait CoreDynamicTrait {
+            public function traitMethod(): void {}
+            protected function hiddenTraitMethod(): void {}
+        }
+        function core_dynamic_name(): string { return "CoreDynamicChild"; }
+        function core_dynamic_object(): CoreDynamicBase { return new CoreDynamicChild(); }
+
+        $name = core_dynamic_name();
+        $vars = get_class_vars($name);
+        $methods = get_class_methods(core_dynamic_object());
+        $traitName = "CoreDynamicTrait";
+        $traitMethods = get_class_methods($traitName);
+        $traitVars = get_class_vars($traitName);
+        echo $vars["base"], $vars["child"], ":",
+             in_array("baseMethod", $methods) ? "B" : "b",
+             in_array("childMethod", $methods) ? "C" : "c", ":",
+             in_array("traitMethod", $traitMethods) ? "T" : "t",
+             in_array("hiddenTraitMethod", $traitMethods) ? "H" : "h",
+             count($traitVars);
+        "#,
+    );
+    assert_eq!(out, "4c:BC:Th0");
+}
+
+/// Verifies unknown runtime class names throw catchable PHP-compatible TypeErrors.
+#[test]
+fn test_core_class_introspection_aot_dynamic_invalid_names() {
+    let output = compile_and_run_capture(
+        r#"<?php
+        $missing = "CoreMissingClass";
+        try {
+            get_class_vars($missing);
+        } catch (TypeError $error) {
+            echo $error->getMessage(), "\n";
+        }
+        try {
+            get_class_methods($missing);
+        } catch (TypeError $error) {
+            echo $error->getMessage();
+        }
+        "#,
+    );
+    assert_eq!(
+        (output.success, output.stdout.as_str(), output.stderr.as_str()),
+        (true, "get_class_vars(): Argument #1 ($class) must be a valid class name, CoreMissingClass given\n\
+get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given", "")
+    );
+}

@@ -19,7 +19,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     let canonical = name.as_str();
-    if let Some(value) = lower_static_get_class_vars(ctx, canonical, args, expr) {
+    if let Some(value) = lower_class_introspection(ctx, canonical, args, expr) {
         return value;
     }
     if let Some(value) = lower_get_defined_vars(ctx, canonical, args, expr) {
