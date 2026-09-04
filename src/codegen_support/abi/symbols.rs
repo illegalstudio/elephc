@@ -268,11 +268,12 @@ pub fn emit_store_reg_to_symbol(
     }
     match emitter.target.arch {
         Arch::AArch64 => {
-            emit_symbol_address(emitter, "x9", symbol);
+            let scratch = if reg == "x9" { "x10" } else { "x9" };
+            emit_symbol_address(emitter, scratch, symbol);
             if byte_offset == 0 {
-                emitter.instruction(&format!("str {}, [x9]", reg));             // store the register payload directly into the symbol base slot
+                emitter.instruction(&format!("str {}, [{}]", reg, scratch));   // store the register payload directly into the symbol base slot
             } else {
-                emitter.instruction(&format!("str {}, [x9, #{}]", reg, byte_offset)); // store the register payload into the requested symbol byte offset
+                emitter.instruction(&format!("str {}, [{}, #{}]", reg, scratch, byte_offset)); // store the register payload into the requested symbol byte offset
             }
         }
         Arch::X86_64 => {
