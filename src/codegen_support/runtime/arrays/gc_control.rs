@@ -277,7 +277,8 @@ fn emit_gc_mem_caches_x86_64(emitter: &mut Emitter) {
 fn emit_gc_roots_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_status_roots");
     abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_heap_off", 0);
+    abi::emit_symbol_address(emitter, "x10", "_heap_off");
+    emitter.instruction("ldr x10, [x10]");                                    // keep the heap base live in the documented x9 symbol scratch
     emitter.instruction("add x10, x9, x10");                                   // compute the current heap scan end
     emitter.instruction("mov x0, #0");                                          // initialize the candidate count
     emitter.label("__rt_gc_status_roots_loop");
