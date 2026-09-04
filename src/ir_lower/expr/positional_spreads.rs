@@ -84,7 +84,6 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     if sig.variadic.is_some() {
         let tail_offset = regular_param_count.saturating_sub(spread_idx);
-        let tail = positional_spread_tail_expr(&spread_expr, tail_offset, args[spread_idx].span);
         let actual_count = positional_spread_actual_count_expr(
             &spread_expr,
             spread_idx,
@@ -94,22 +93,56 @@ pub(super) fn lower_positional_spread_args_with_signature(
             operands.push(lower_expr(ctx, &actual_count).value);
         }
         let tail = if crate::func_args::sig_collects_optional_arg_count(sig) {
-            Expr::new(
+            let tail = positional_spread_tail_expr(
+                &spread_expr,
+                tail_offset,
+                args[spread_idx].span,
+            );
+            let tail = Expr::new(
                 ExprKind::ArrayLiteral(vec![
                     actual_count,
                     Expr::new(ExprKind::Spread(Box::new(tail)), args[spread_idx].span),
                 ]),
                 args[spread_idx].span,
-            )
+            );
+            lower_expr(ctx, &tail)
         } else {
-            tail
+            lower_positional_spread_tail(
+                ctx,
+                sig,
+                &spread_expr,
+                tail_offset,
+                args[spread_idx].span,
+            )
         };
-        let tail = lower_expr(ctx, &tail);
         let tail = coerce_spread_variadic_array(ctx, sig, tail, args[spread_idx].span);
         operands.push(tail.value);
     }
 
     Some(operands)
+}
+
+/// Lowers a compiler-generated spread tail with the variadic slot's concrete element layout.
+fn lower_positional_spread_tail(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    spread: &Expr,
+    offset: usize,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let source = lower_expr(ctx, spread);
+    let offset = emit_i64_at_span(ctx, offset as i64, span);
+    let target = crate::ir::RuntimeFnId::ArraySlice;
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![source.value, offset.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::Function(target),
+        )),
+        variadic_array_type(sig),
+        target.effects(),
+        Some(span),
+    )
 }
 
 /// Builds `array_slice($spread, $offset)` for the values beyond regular parameters.
