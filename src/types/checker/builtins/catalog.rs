@@ -7,8 +7,8 @@
 //! - `crate::name_resolver`
 //!
 //! Key details:
-//! - `COMPILER_RESIDENT_BUILTIN_FUNCTIONS` lists only language constructs or
-//!   dedicated syntax that cannot be represented by an ordinary registry call.
+//! - `COMPILER_RESIDENT_BUILTIN_FUNCTIONS` lists language constructs, dedicated
+//!   syntax, and lexical-frame transforms that cannot use an ordinary registry call.
 //! - `LANGUAGE_CONSTRUCT_FUNCTIONS` participates in call resolution but stays
 //!   hidden from `function_exists()` and first-class callable surfaces.
 
@@ -23,6 +23,9 @@ const COMPILER_RESIDENT_BUILTIN_FUNCTIONS: &[&str] = &[
     "die",
     "empty",
     "exit",
+    "func_get_arg",
+    "func_get_args",
+    "func_num_args",
     "isset",
     "unset",
 ];

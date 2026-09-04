@@ -119,6 +119,9 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a CurlShareHandle/CurlSharePersistentHandle is an OBJECT in PHP and must consume no resource id
     emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
     emitter.instruction("bl __rt_resource_id_of");                              // bind a display id if this payload does not already have one
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload native payload for incarnation tracking
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload resource subtype for introspection filtering
+    emitter.instruction("bl __rt_resource_inventory_register");                 // record this PHP id exactly once for get_resources
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // the id lives in the side table; the cell is boxed unchanged
 
     emitter.label("__rt_mixed_from_value_null_container");
@@ -207,6 +210,10 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_alloc");                      // a CurlShareHandle/CurlSharePersistentHandle is an OBJECT in PHP and must consume no resource id
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the native resource payload into the registry argument
     emitter.instruction("call __rt_resource_id_of");                            // bind a display id if this payload does not already have one
+    emitter.instruction("mov rdi, rax");                                        // pass the resolved PHP id to incarnation tracking
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload native payload for the inventory node
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload resource subtype for filtering
+    emitter.instruction("call __rt_resource_inventory_register");               // record this PHP id exactly once for get_resources
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // the id lives in the side table; the cell is boxed unchanged
 
     emitter.label("__rt_mixed_from_value_null_container");

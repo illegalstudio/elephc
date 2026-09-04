@@ -16,6 +16,8 @@ mod enum_singletons;
 mod eval_callable_helpers;
 mod eval_class_constant_helpers;
 mod eval_constructor_helpers;
+mod eval_error_handler_helpers;
+mod eval_handler_helpers;
 mod eval_method_helpers;
 mod eval_property_helpers;
 mod eval_ref_arg_helpers;
@@ -353,6 +355,16 @@ fn finalize_user_asm(
         eval_callable_support_needed,
     );
     if eval_bridge {
+        eval_error_handler_helpers::emit_eval_error_handler_helpers(
+            module,
+            &mut emitter,
+            &eval_callable_support,
+        );
+        eval_handler_helpers::emit_eval_exception_handler_helpers(
+            module,
+            &mut emitter,
+            &eval_callable_support,
+        );
         eval_constructor_helpers::emit_eval_constructor_helpers(
             module,
             &mut emitter,

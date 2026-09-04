@@ -109,6 +109,8 @@ pub type CallableSourceFn = for<'a> fn(Option<&'a PhpType>) -> bool;
 pub enum BuiltinCallablePolicy {
     /// Direct, first-class, and runtime-known dynamic callable paths are supported.
     Dynamic(CallableSourceFn),
+    /// Only direct calls work; PHP forbids first-class and generic dynamic invocation.
+    DirectOnly(&'static str),
     /// Dynamic dispatch eligibility is defined by the typed builtin target descriptor.
     DynamicRuntime(RuntimeFnId),
     /// Direct and first-class calls work, but runtime-selected names are unsupported.
@@ -276,8 +278,26 @@ impl fmt::Display for BuiltinLoweringError {
 
 /// Minimal EIR construction surface exposed to builtin semantic lowering.
 pub trait BuiltinLoweringContext {
+    /// Returns the current source path when the lowering owns a user-written call site.
+    fn source_path(&self) -> Option<&str> {
+        None
+    }
+
+    /// Loads the caller-visible parameters from their current bindings for frame introspection.
+    ///
+    /// Synthetic callable wrappers have no PHP caller frame of their own, so the default is empty.
+    fn current_frame_arguments(&mut self, _span: Span) -> Vec<ValueId> {
+        Vec::new()
+    }
+
     /// Returns the PHP type metadata attached to an existing SSA operand.
     fn value_php_type(&self, value: ValueId) -> PhpType;
+
+    /// Interns a class-name literal for EIR operations such as `ConstClassName`.
+    fn intern_class_name(&mut self, value: &str) -> crate::ir::DataId;
+
+    /// Interns an ordinary string literal for graph-based builtin lowering.
+    fn intern_string(&mut self, value: &str) -> crate::ir::DataId;
 
     /// Emits one typed value-producing EIR operation with explicit effects and span.
     fn emit_value(
@@ -289,6 +309,16 @@ pub trait BuiltinLoweringContext {
         effects: Effects,
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
+
+    /// Emits one void EIR operation with explicit effects and source span.
+    fn emit_void(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        effects: Effects,
+        span: Option<Span>,
+    );
 
     /// Emits one typed runtime operation whose symbol and ABI are backend-owned.
     fn emit_runtime_call(
@@ -616,7 +646,7 @@ fn type_predicate_effects(_input: &BuiltinSemanticInput<'_>) -> Effects {
 }
 
 /// Accepts every source representation for a fully generic callable wrapper.
-fn callable_accepts_any_source(_source: Option<&PhpType>) -> bool {
+pub fn callable_accepts_any_source(_source: Option<&PhpType>) -> bool {
     true
 }
 

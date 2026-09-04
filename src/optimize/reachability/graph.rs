@@ -264,6 +264,9 @@ impl GraphState {
 
     /// Applies dynamic hazard widening accumulated from executable and reachable bodies.
     fn apply_global_hazards(&mut self) {
+        if self.reach.hazards.enumerates_functions {
+            self.reach.functions.extend(self.index.functions.keys().cloned());
+        }
         if self.reach.hazards.dynamic_function {
             self.reach.functions.extend(self.index.functions.keys().cloned());
             self.reach.externs.extend(self.index.externs.iter().cloned());
@@ -648,6 +651,7 @@ impl GraphState {
             self.keep_instantiable_subclasses(root, behavioral);
         }
         if behavioral {
+            self.reach.hazards.enumerates_functions |= usage.hazards.enumerates_functions;
             self.reach.hazards.dynamic_function |= usage.hazards.dynamic_function;
             self.reach.hazards.dynamic_method |= usage.hazards.dynamic_method;
             self.reach.hazards.dynamic_class |= usage.hazards.dynamic_class;
@@ -823,6 +827,7 @@ impl GraphState {
                 .map(HashSet::len)
                 .sum::<usize>()
             + usize::from(self.reach.hazards.dynamic_function)
+            + usize::from(self.reach.hazards.enumerates_functions)
             + usize::from(self.reach.hazards.dynamic_method)
             + usize::from(self.reach.hazards.dynamic_class)
     }

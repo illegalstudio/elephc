@@ -58,7 +58,8 @@ pub(crate) fn runtime_builtin_wrapper_supported(
         crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {
             target.callable_accepts(source_arg_ty)
         }
-        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(_)
+        | crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
     }
 }
 

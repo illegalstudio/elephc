@@ -23,9 +23,9 @@
 //!   function exists. A program that declares its own function with one of the three names
 //!   disables the pass entirely (see `program_declares_introspection_name`).
 //! - Supported scopes are functions, methods (instance and static) and closures/arrow
-//!   functions whose declared parameters are all mandatory and which declare no variadic of
-//!   their own. Every other shape is a hard error rather than a silently wrong answer —
-//!   see `walk::Rewriter::scope_replacement` for the exact diagnostics.
+//!   functions. Source variadics are snapshotted on entry so later writes do not rewrite the
+//!   argument history. Optional parameters carry internal count metadata so omitted defaults
+//!   remain distinguishable from arguments the caller supplied.
 
 mod build;
 mod walk;
@@ -41,6 +41,9 @@ use crate::types::FunctionSig;
 /// name never appears in a PHP-visible signature position because it is added after the
 /// source declaration has been parsed.
 pub(crate) const HIDDEN_ARGS_PARAM: &str = "__elephc_func_args";
+
+/// Hidden regular parameter carrying the actual count when a source variadic owns the tail slot.
+pub(crate) const HIDDEN_ARGC_PARAM: &str = "__elephc_func_argc";
 
 /// Name of the hidden local that holds the evaluated `func_get_arg()` position when the
 /// position expression is not already side-effect free, so it is evaluated exactly once
@@ -108,11 +111,13 @@ impl IntrospectionCall {
 /// A program that declares its own function named after one of the three constructs is
 /// returned untouched, so the user's declaration keeps winning exactly as it does in PHP.
 pub fn desugar(program: Program) -> Result<Program, CompileError> {
-    if program_declares_introspection_name(&program) {
+    let capture_all_frames = walk::program_uses_backtrace(&program);
+    let rewrite_introspection = !program_declares_introspection_name(&program);
+    if !rewrite_introspection && !capture_all_frames {
         return Ok(program);
     }
     let mut program = program;
-    let mut rewriter = walk::Rewriter::new();
+    let mut rewriter = walk::Rewriter::new(capture_all_frames, rewrite_introspection);
     rewriter.walk_stmts(&mut program);
     match rewriter.into_errors() {
         errors if errors.is_empty() => Ok(program),
@@ -129,6 +134,25 @@ pub fn desugar(program: Program) -> Result<Program, CompileError> {
 /// is exactly what a scope carrying only the hidden parameter still is.
 pub(crate) fn sig_collects_surplus_args(sig: &FunctionSig) -> bool {
     sig.variadic.as_deref() == Some(HIDDEN_ARGS_PARAM)
+}
+
+/// Returns whether the hidden collector must begin with the actual PHP argument count.
+pub(crate) fn sig_collects_optional_arg_count(sig: &FunctionSig) -> bool {
+    if !sig_collects_surplus_args(sig) {
+        return false;
+    }
+    let regular = crate::types::call_args::regular_param_count(sig);
+    sig.defaults
+        .iter()
+        .take(regular)
+        .any(|default| default.is_some())
+}
+
+/// Returns whether a source-variadic signature carries the internal actual-count parameter.
+pub(crate) fn sig_has_hidden_argc_param(sig: &FunctionSig) -> bool {
+    sig.params
+        .iter()
+        .any(|(name, _)| name == HIDDEN_ARGC_PARAM)
 }
 
 /// Returns whether the program declares a function or method named after one of the three

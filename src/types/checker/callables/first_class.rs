@@ -43,9 +43,14 @@ impl Checker {
                     && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
                         &function_key,
                         true,
-                    );
+                );
                 if prefer_extension_builtin {
                     self.require_first_class_callable_builtin_libraries(&function_key);
+                    if let Some(message) =
+                        crate::builtins::registry::first_class_callable_rejection(&function_key)
+                    {
+                        return Err(CompileError::new(span, message));
+                    }
                     return crate::types::first_class_callable_builtin_sig(&function_key)
                         .ok_or_else(|| {
                             CompileError::new(
@@ -88,6 +93,11 @@ impl Checker {
                 }
                 if crate::name_resolver::is_builtin_function(function_name) {
                     self.require_first_class_callable_builtin_libraries(&function_key);
+                    if let Some(message) =
+                        crate::builtins::registry::first_class_callable_rejection(&function_key)
+                    {
+                        return Err(CompileError::new(span, message));
+                    }
                     return crate::types::first_class_callable_builtin_sig(function_name)
                         .ok_or_else(|| {
                             CompileError::new(

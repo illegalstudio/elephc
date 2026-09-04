@@ -23,7 +23,7 @@ use crate::codegen::{
 };
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::TRY_HANDLER_SLOT_SIZE;
-use crate::ir::{Function, Immediate, LocalKind, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{CoreBuiltinOp, Function, Immediate, LocalKind, LocalSlotId, Module, Op, ValueDef, ValueId};
 use crate::ir_passes::{allocate_registers, Allocation};
 use crate::names::ir_global_symbol;
 use crate::types::PhpType;
@@ -52,6 +52,8 @@ pub(super) struct FrameLayout {
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
+    pub(super) exception_cleanup_activation: bool,
+    pub(super) backtrace_activation: bool,
     pub(super) frame_size: usize,
     pub(super) allocation: Allocation,
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
@@ -70,6 +72,7 @@ pub(super) fn layout_for_function(
     target: Target,
     regalloc_linear: bool,
     exception_activations: bool,
+    backtrace_activations: bool,
 ) -> FrameLayout {
     let allocation = if regalloc_linear {
         allocate_registers(function, target)
@@ -130,8 +133,8 @@ pub(super) fn layout_for_function(
     }
     offset += 8;
     let concat_base_offset = offset;
-    let exception_activation_offset = if exception_activations {
-        offset += 24;
+    let exception_activation_offset = if exception_activations || backtrace_activations {
+        offset += if backtrace_activations { 40 } else { 24 };
         Some(offset)
     } else {
         None
@@ -144,11 +147,38 @@ pub(super) fn layout_for_function(
         try_handler_offsets,
         concat_base_offset,
         exception_activation_offset,
+        exception_cleanup_activation: exception_activations,
+        backtrace_activation: backtrace_activations,
         frame_size,
         allocation,
         callee_saved_offsets,
         local_analysis,
     }
+}
+
+/// Returns whether any emitted EIR body can request a PHP Core backtrace.
+pub(super) fn module_uses_backtrace(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .flat_map(|function| function.instructions.iter())
+        .any(|inst| {
+            inst.op == Op::CoreBuiltin
+                && matches!(
+                    inst.immediate,
+                    Some(Immediate::I64(selector))
+                        if matches!(
+                            CoreBuiltinOp::from_i64(selector),
+                            Some(CoreBuiltinOp::DebugBacktrace | CoreBuiltinOp::DebugPrintBacktrace)
+                        )
+                )
+        })
 }
 
 /// Saves the callee-saved registers the allocator used into their reserved
@@ -349,26 +379,36 @@ pub(super) fn emit_function_prologue_with_label(
     Ok(())
 }
 
-/// Publishes one cleanup activation for a cdylib-callable PHP frame.
+/// Publishes one cleanup and/or backtrace activation for a PHP frame.
 fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &str) {
     let Some(offset) = ctx.exception_activation_offset else {
         return;
     };
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
-    ctx.emitter.comment("publish cdylib exception cleanup activation");
+    ctx.emitter.comment("publish PHP frame activation");
     let scratch = match ctx.emitter.target.arch {
         Arch::AArch64 => "x10",
         Arch::X86_64 => "r10",
     };
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_exc_call_frame_top", 0);
     abi::store_at_offset(ctx.emitter, scratch, offset);
-    abi::emit_symbol_address(ctx.emitter, scratch, &callback);
+    if ctx.exception_cleanup_activation {
+        abi::emit_symbol_address(ctx.emitter, scratch, &callback);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    }
     abi::store_at_offset(ctx.emitter, scratch, offset - 8);
     let frame_pointer = match ctx.emitter.target.arch {
         Arch::AArch64 => "x29",
         Arch::X86_64 => "rbp",
     };
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
+    if ctx.backtrace_activation {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+        abi::store_at_offset(ctx.emitter, scratch, offset - 24);
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
+        abi::store_at_offset(ctx.emitter, scratch, offset - 32);
+    }
     abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
@@ -391,7 +431,7 @@ pub(super) fn emit_exception_cleanup_callback(
     ctx: &mut FunctionContext<'_>,
     entry_label: &str,
 ) {
-    if ctx.exception_activation_offset.is_none() {
+    if !ctx.exception_cleanup_activation {
         return;
     }
     let callback = format!("{entry_label}__cdylib_exception_cleanup");

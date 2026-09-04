@@ -22,6 +22,9 @@ pub(super) fn lower(
         RuntimeFnId::GetClass => Some({
             crate::codegen::lower_inst::builtins::types::lower_class_name_lookup(ctx, inst, "get_class")
         }),
+        RuntimeFnId::GetClassMethods => Some({
+            crate::codegen::lower_inst::builtins::types::lower_get_class_methods(ctx, inst)
+        }),
         RuntimeFnId::GetObjectVars => Some({
             crate::codegen::lower_inst::builtins::types::lower_get_object_vars(ctx, inst)
         }),

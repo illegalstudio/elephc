@@ -355,6 +355,12 @@ fn validate_instruction_immediate(
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))
         }),
+        GcControl => require_immediate(inst_id, inst, "GC control selector", |imm| {
+            matches!(imm, Imm::I64(value) if crate::ir::GcControlOp::from_i64(*value).is_some())
+        }),
+        CoreBuiltin => require_immediate(inst_id, inst, "Core builtin selector", |imm| {
+            matches!(imm, Imm::I64(value) if crate::ir::CoreBuiltinOp::from_i64(*value).is_some())
+        }),
         Nop => {
             if matches!(inst.immediate, None | Some(Imm::Data(_))) {
                 Ok(())
@@ -425,8 +431,32 @@ fn validate_opcode_rules(
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
-        | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
+        | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect
+        | GcControl | Nop => {
             check_count(inst_id, inst, 0, "0")
+        }
+        CoreBuiltin => {
+            let Some(Immediate::I64(selector)) = inst.immediate.as_ref() else {
+                return Ok(());
+            };
+            let Some(operation) = crate::ir::CoreBuiltinOp::from_i64(*selector) else {
+                return Ok(());
+            };
+            let count = operation.operand_count();
+            if matches!(
+                operation,
+                crate::ir::CoreBuiltinOp::DebugBacktrace
+                    | crate::ir::CoreBuiltinOp::DebugPrintBacktrace
+            ) {
+                check_count_at_least(
+                    inst_id,
+                    inst,
+                    count,
+                    "the Core backtrace options plus current frame arguments",
+                )
+            } else {
+                check_count(inst_id, inst, count, "the selector-specific Core builtin arity")
+            }
         }
         EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet => {
             check_count(inst_id, inst, 1, "1")

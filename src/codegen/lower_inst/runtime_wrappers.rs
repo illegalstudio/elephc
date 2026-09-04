@@ -103,6 +103,19 @@ fn emit_runtime_call_wrapper_inline(
     };
     let label = ctx.next_global_label(label_prefix);
     let done_label = ctx.next_label(&format!("{}_done", label_prefix));
+    // Reserve the label before lowering the synthetic body. A callable-taking builtin
+    // can itself require the open runtime callable table while its wrapper is being
+    // emitted. Publishing the reservation here makes that recursion reuse this entry
+    // instead of recursively cloning and lowering the same wrapper forever.
+    match kind {
+        RuntimeCallWrapperKind::Builtin { strict_php } => {
+            ctx.shared
+                .cache_runtime_builtin_wrapper(name, sig, strict_php, &label)
+        }
+        RuntimeCallWrapperKind::Extern => {
+            ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
+        }
+    }
     let mut wrapper_module = ctx.module.clone();
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     let enclosing = ctx.emitter.current_text_section();
@@ -118,15 +131,6 @@ fn emit_runtime_call_wrapper_inline(
     )?;
     ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
-    match kind {
-        RuntimeCallWrapperKind::Builtin { strict_php } => {
-            ctx.shared
-                .cache_runtime_builtin_wrapper(name, sig, strict_php, &label)
-        }
-        RuntimeCallWrapperKind::Extern => {
-            ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
-        }
-    }
     Ok(label)
 }
 
@@ -172,6 +176,7 @@ fn build_runtime_call_wrapper_function(
             })?;
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
+                data: &mut module.data,
                 strict_php,
             };
             Some(crate::builtins::semantics::lower_registry_call(
@@ -205,6 +210,7 @@ fn build_runtime_call_wrapper_function(
 /// EIR construction adapter used by synthetic builtin callable wrappers.
 struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
+    data: &'a mut crate::ir::DataPool,
     strict_php: bool,
 }
 
@@ -214,6 +220,16 @@ impl crate::builtins::semantics::BuiltinLoweringContext
     /// Returns PHP metadata attached to one synthetic-wrapper operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
         self.builder.value_php_type(value)
+    }
+
+    /// Rejects class-name interning because synthetic wrappers do not own the module data pool.
+    fn intern_class_name(&mut self, _value: &str) -> crate::ir::DataId {
+        panic!("static-only builtin lowering cannot intern class names in a callable wrapper")
+    }
+
+    /// Interns an ordinary string into the synthetic wrapper module's data pool.
+    fn intern_string(&mut self, value: &str) -> crate::ir::DataId {
+        self.data.intern_string(value)
     }
 
     /// Emits one backend-neutral operation into the synthetic wrapper body.
@@ -240,6 +256,27 @@ impl crate::builtins::semantics::BuiltinLoweringContext
             )
             .expect("builtin wrapper operation produces a value");
         crate::builtins::semantics::LoweredBuiltinValue { value }
+    }
+
+    /// Emits one void operation into the synthetic wrapper body.
+    fn emit_void(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        effects: crate::ir::Effects,
+        span: Option<crate::span::Span>,
+    ) {
+        self.builder.emit_with_effects(
+            op,
+            operands,
+            immediate,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            effects,
+            span,
+        );
     }
 
     /// Emits one typed runtime operation into the synthetic wrapper body.
