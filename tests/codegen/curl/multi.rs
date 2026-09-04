@@ -311,6 +311,7 @@ fn multi_attached_handle_survives_unset() {
         echo curl_multi_getcontent($kept), "\n";
         "#
     ));
+    assert!(output.success, "program failed: {}", output.stderr);
     assert_eq!(output.stdout, "same\nbody-a\n");
     let (allocs, frees) = parse_gc_stats(&output.stderr);
     assert_eq!(
