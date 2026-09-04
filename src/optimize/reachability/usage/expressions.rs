@@ -1009,6 +1009,8 @@ mod tests {
         "iterator_apply",
         "ob_start",
         "preg_replace_callback",
+        "set_error_handler",
+        "set_exception_handler",
         "spl_autoload_register",
         "spl_autoload_unregister",
         "uasort",

@@ -56,11 +56,11 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
     ("__rt_hash_key_eq", "frameless: calls __rt_str_eq, integer-only assembly"),
     ("__rt_array_rand", "frameless: calls __rt_random_uniform, integer-only assembly"),
     ("__rt_mixed_is_empty", "frameless: calls __rt_mixed_unbox, integer-only assembly"),
-    // __rt_report_uncaught_exception deliberately has NO entry here: it lives in
-    // NOT_STATICALLY_ANALYZABLE (its `and rsp, -16` realigns every call and defeats the
-    // walker), and a second entry in this list would silently absorb a real violation if
-    // the realignment were ever removed — analyze() drops `misaligned` findings for
-    // unanalyzable helpers, so this list must never double-cover one.
+    // The two uncaught-exception helpers deliberately have NO entry here: they live in
+    // NOT_STATICALLY_ANALYZABLE because their `and rsp, -16` instructions realign every
+    // call and defeat the walker. A second entry in this list would silently absorb a real
+    // violation if either realignment were removed because analyze() drops `misaligned`
+    // findings for unanalyzable helpers, so this list must never double-cover one.
     (
         "__rt_incref",
         "frameless: calls __rt_heap_debug_check_live, and only in --heap-debug builds. \
@@ -155,7 +155,14 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "__rt_report_uncaught_exception",
         "realigns explicitly with `and rsp, -16` before draining the output buffers. The \
          walk tracks rsp as an exact offset from the entry, and a hard realignment has no \
-         such offset — but it is also the one construct that cannot BE misaligned: the \
+         such offset - but it is also the one construct that cannot BE misaligned: the \
+         following `call` runs on a 16-byte boundary by construction, whatever the path in",
+    ),
+    (
+        "__rt_dispatch_uncaught_exception",
+        "realigns explicitly with `and rsp, -16` before invoking the registered handler. The \
+         walk tracks rsp as an exact offset from the entry, and a hard realignment has no \
+         such offset - but it is also the one construct that cannot BE misaligned: the \
          following `call` runs on a 16-byte boundary by construction, whatever the path in",
     ),
     (
@@ -163,7 +170,7 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "shares a tail between the framed body and a frameless early-out",
     ),
     (
-        "__rt_gc_collect_cycles",
+        "__rt_gc_collect_cycles_explicit",
         "shares a tail between the framed body and a frameless early-out",
     ),
     (

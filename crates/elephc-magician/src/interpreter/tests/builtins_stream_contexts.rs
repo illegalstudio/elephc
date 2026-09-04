@@ -17,7 +17,7 @@ fn execute_program_dispatches_stream_context_builtins() {
     let program = parse_fragment(
         br#"$ctx = stream_context_create(["http" => ["method" => "POST"]]);
 echo is_resource($ctx) ? "ctx" : "bad"; echo ":";
-echo get_resource_type($ctx) === "stream" ? "rtype" : "bad"; echo ":";
+echo get_resource_type($ctx) === "stream-context" ? "rtype" : "bad"; echo ":";
 $opts = stream_context_get_options($ctx);
 echo $opts["http"]["method"] === "POST" ? "initial" : "bad"; echo ":";
 echo stream_context_set_option($ctx, "http", "header", "X-Test: 1") ? "setone" : "bad"; echo ":";
