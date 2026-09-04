@@ -238,8 +238,10 @@ impl Scanner<'_> {
                     .insert((php_symbol_key("jsonSerialize"), false));
             }
             "function_exists" => self.literal_function_or_hazard(first),
+            "get_defined_functions" => self.usage.hazards.enumerates_functions = true,
             "is_callable" | "call_user_func" | "call_user_func_array" => self.callable_or_hazard(first),
             "method_exists" => self.method_exists(args),
+            "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
             "eval" => {
@@ -257,7 +259,8 @@ impl Scanner<'_> {
         match name {
             "class_attribute_args" | "class_attribute_names" | "class_get_attributes"
             | "ptr_sizeof" | "class_implements" | "class_parents" | "class_uses"
-            | "get_parent_class" | "property_exists" | "spl_autoload" | "spl_autoload_call" => {
+            | "get_class_methods" | "get_class_vars" | "get_parent_class" | "property_exists"
+            | "spl_autoload" | "spl_autoload_call" => {
                 self.scan_class_argument(name, args, 0, false);
             }
             "is_a" | "is_subclass_of" => {

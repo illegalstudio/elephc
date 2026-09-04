@@ -70,7 +70,7 @@ pub(in crate::codegen::lower_inst) use eval_facade::*;
 pub(crate) use function_queries::*;
 pub(crate) use member_queries::*;
 pub(crate) use scalar_metadata::*;
-use shared::*;
+pub(in crate::codegen::lower_inst) use shared::*;
 pub(crate) use type_predicates::*;
 
 const DEFINE_ALREADY_DEFINED_WARNING: &str =

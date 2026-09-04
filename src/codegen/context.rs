@@ -62,6 +62,9 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
+    pub(super) exception_cleanup_activation: bool,
+    pub(super) backtrace_activation: bool,
+    pub(super) backtrace_enabled: bool,
     pub(super) epilogue_emitted: bool,
     /// `--instrument` id assigned to this function in its prologue, consumed by
     /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
@@ -127,6 +130,9 @@ impl<'a> FunctionContext<'a> {
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
             exception_activation_offset: layout.exception_activation_offset,
+            exception_cleanup_activation: layout.exception_cleanup_activation,
+            backtrace_activation: layout.backtrace_activation,
+            backtrace_enabled: super::frame::module_uses_backtrace(module),
             epilogue_emitted: false,
             instr_id: None,
             is_main,
@@ -208,14 +214,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select the aliased storage address after runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select the aliased storage address after runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select the aliased storage address after runtime promotion
                     }
@@ -557,14 +563,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell loading after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell loading after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell loading after a runtime promotion
                     }
@@ -670,14 +676,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell storage after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell storage after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
@@ -784,14 +790,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell storage after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell storage after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }

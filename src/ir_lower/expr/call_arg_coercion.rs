@@ -296,7 +296,10 @@ pub(super) fn lower_args_with_signature(
         } else {
             &[]
         };
-        operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
+        if crate::func_args::sig_has_hidden_argc_param(sig) {
+            operands.push(emit_i64_at_span(ctx, args.len() as i64, crate::span::Span::dummy()).value);
+        }
+        operands.push(lower_variadic_tail_array(ctx, sig, tail, args.len()).value);
     }
     coerce_operands_to_params(ctx, sig, operands)
 }

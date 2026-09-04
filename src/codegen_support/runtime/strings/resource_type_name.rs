@@ -31,14 +31,13 @@
 //!   runtime-allocated string instead would turn that release into a double free.
 //! - IT IS A LEAF. The body is a sign test and two symbol loads with no `bl`/`call`, so
 //!   `ret` is correct and the AArch64 LR-clobber rule does not apply.
-//! - ONE PLACE, NOT TWO. PHP has further resource type names this compiler does not yet
-//!   distinguish (`stream-context` from `stream_context_create()`, `stream filter` from
-//!   `stream_filter_append()`). Concentrating the payload-to-name mapping here keeps
-//!   that a one-file extension rather than a change to every display site.
+//! - ONE PLACE, NOT TWO. The implicit default stream context has a reserved payload so it
+//!   can be distinguished without consulting the mutable resource inventory.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::resource_inventory::DEFAULT_CONTEXT_PAYLOAD;
 
 /// Byte length of the open-resource type name `"stream"`.
 const RESOURCE_TYPE_STREAM_LEN: i64 = 6;
@@ -68,6 +67,9 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     emitter.comment("--- runtime: resource_type_name (PHP type label for a resource payload) ---");
     emitter.label_global("__rt_resource_type_name");
 
+    abi::emit_load_int_immediate(emitter, "x9", DEFAULT_CONTEXT_PAYLOAD);
+    emitter.instruction("cmp x0, x9");                                          // recognize PHP's implicit default stream context
+    emitter.instruction("b.eq __rt_resource_type_name_context");                // the reserved context has its own type label
     emitter.instruction("tbnz x0, #63, __rt_resource_type_name_closed");        // a negative payload is the -id sentinel an explicit close stamped
     abi::emit_symbol_address(emitter, "x1", "_resource_type_stream");
     abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_STREAM_LEN);      // an open resource reports the type it was created with
@@ -77,6 +79,11 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_resource_type_unknown");
     abi::emit_load_int_immediate(emitter, "x2", RESOURCE_TYPE_UNKNOWN_LEN);     // PHP renames every closed resource to Unknown, whatever it was
     emitter.instruction("ret");                                                 // return the closed type name without touching any other register
+
+    emitter.label("__rt_resource_type_name_context");
+    abi::emit_symbol_address(emitter, "x1", "_resource_type_stream_context");
+    abi::emit_load_int_immediate(emitter, "x2", 14);                           // byte length of stream-context
+    emitter.instruction("ret");                                                 // return the implicit context type name
 }
 
 /// x86_64 counterpart of `emit_resource_type_name`.
@@ -88,6 +95,9 @@ fn emit_resource_type_name_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: resource_type_name (PHP type label for a resource payload) ---");
     emitter.label_global("__rt_resource_type_name");
 
+    abi::emit_load_int_immediate(emitter, "r10", DEFAULT_CONTEXT_PAYLOAD);
+    emitter.instruction("cmp rax, r10");                                        // recognize PHP's implicit default stream context
+    emitter.instruction("je __rt_resource_type_name_context_x86");              // the reserved context has its own type label
     emitter.instruction("test rax, rax");                                       // inspect the payload sign before rax is reused as the result pointer
     emitter.instruction("js __rt_resource_type_name_closed_x86");               // a negative payload is the -id sentinel an explicit close stamped
     abi::emit_symbol_address(emitter, "rax", "_resource_type_stream");
@@ -98,6 +108,11 @@ fn emit_resource_type_name_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rax", "_resource_type_unknown");
     abi::emit_load_int_immediate(emitter, "rdx", RESOURCE_TYPE_UNKNOWN_LEN);    // PHP renames every closed resource to Unknown, whatever it was
     emitter.instruction("ret");                                                 // return the closed type name without touching any other register
+
+    emitter.label("__rt_resource_type_name_context_x86");
+    abi::emit_symbol_address(emitter, "rax", "_resource_type_stream_context");
+    abi::emit_load_int_immediate(emitter, "rdx", 14);                           // byte length of stream-context
+    emitter.instruction("ret");                                                 // return the implicit context type name
 }
 
 #[cfg(test)]
@@ -124,6 +139,12 @@ mod tests {
         let asm = emitter.output();
         let expected = concat!(
             "__rt_resource_type_name:\n",
+            "    movz x9, #0xffff\n",
+            "    movk x9, #0xffff, lsl #16\n",
+            "    movk x9, #0xffff, lsl #32\n",
+            "    movk x9, #0x3fff, lsl #48\n",
+            "    cmp x0, x9\n",
+            "    b.eq __rt_resource_type_name_context\n",
             "    tbnz x0, #63, __rt_resource_type_name_closed\n",
             "    adrp x1, _resource_type_stream@PAGE\n",
             "    add x1, x1, _resource_type_stream@PAGEOFF\n",
@@ -133,6 +154,11 @@ mod tests {
             "    adrp x1, _resource_type_unknown@PAGE\n",
             "    add x1, x1, _resource_type_unknown@PAGEOFF\n",
             "    mov x2, #7\n",
+            "    ret\n",
+            "__rt_resource_type_name_context:\n",
+            "    adrp x1, _resource_type_stream_context@PAGE\n",
+            "    add x1, x1, _resource_type_stream_context@PAGEOFF\n",
+            "    mov x2, #14\n",
             "    ret\n",
         );
         assert!(asm.contains(expected), "expected block missing:\n{asm}");
@@ -147,6 +173,9 @@ mod tests {
         let asm = emitter.output();
         let expected = concat!(
             "__rt_resource_type_name:\n",
+            "    mov r10, 4611686018427387903\n",
+            "    cmp rax, r10\n",
+            "    je __rt_resource_type_name_context_x86\n",
             "    test rax, rax\n",
             "    js __rt_resource_type_name_closed_x86\n",
             "    lea rax, [rip + _resource_type_stream]\n",
@@ -155,6 +184,10 @@ mod tests {
             "__rt_resource_type_name_closed_x86:\n",
             "    lea rax, [rip + _resource_type_unknown]\n",
             "    mov rdx, 7\n",
+            "    ret\n",
+            "__rt_resource_type_name_context_x86:\n",
+            "    lea rax, [rip + _resource_type_stream_context]\n",
+            "    mov rdx, 14\n",
             "    ret\n",
         );
         assert!(asm.contains(expected), "expected block missing:\n{asm}");
@@ -178,9 +211,16 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_resource_type_name(&mut emitter);
             let asm = emitter.output();
-            let (open_arm, closed_arm) = asm
+            let (open_arm, closed_and_context) = asm
                 .split_once(closed_label)
                 .unwrap_or_else(|| panic!("missing closed arm for {target:?}:\n{asm}"));
+            let context_label = match target.arch {
+                Arch::AArch64 => "__rt_resource_type_name_context:\n",
+                Arch::X86_64 => "__rt_resource_type_name_context_x86:\n",
+            };
+            let (closed_arm, context_arm) = closed_and_context
+                .split_once(context_label)
+                .unwrap_or_else(|| panic!("missing context arm for {target:?}:\n{asm}"));
             assert!(
                 !open_arm.contains("_resource_type_unknown"),
                 "the open arm must not name the closed literal ({target:?}):\n{open_arm}"
@@ -196,6 +236,10 @@ mod tests {
             assert!(
                 closed_arm.contains("_resource_type_unknown"),
                 "the closed arm must name the closed literal ({target:?}):\n{closed_arm}"
+            );
+            assert!(
+                context_arm.contains("_resource_type_stream_context"),
+                "the context arm must name the context literal ({target:?}):\n{context_arm}"
             );
         }
     }

@@ -19,6 +19,7 @@
 pub(crate) const MIN_WRAPPER_SCHEME_LEN: usize = 2;
 
 mod basename;
+mod backtrace_arg;
 mod cstr;
 mod disk_space;
 mod dirname;
@@ -140,6 +141,7 @@ mod var_dump_object;
 mod var_dump_walk;
 
 pub(crate) use basename::emit_basename;
+pub(crate) use backtrace_arg::emit_backtrace_print_arg;
 pub(crate) use cstr::emit_cstr;
 pub(crate) use disk_space::emit_disk_space;
 pub(crate) use dirname::emit_dirname;

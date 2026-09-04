@@ -159,6 +159,7 @@ pub enum RuntimeFnId {
     EnumExists,
     FunctionExists,
     GetClass,
+    GetClassMethods,
     GetObjectVars,
     GetDeclaredClasses,
     GetDeclaredInterfaces,
@@ -1115,6 +1116,7 @@ impl RuntimeFnId {
                     | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
             RuntimeFnId::GetClass
+            | RuntimeFnId::GetClassMethods
             | RuntimeFnId::GetParentClass
             | RuntimeFnId::ElephcObjectIsEnum
             | RuntimeFnId::ElephcObjectPropCount
@@ -1758,6 +1760,7 @@ impl RuntimeFnId {
                 // fresh Mixed cell. Neither result can alias the variable-name argument, so
                 // retaining an owned name temporary leaks one block per call.
                 | RuntimeFnId::Getenv
+                | RuntimeFnId::GetClassMethods
                 | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
@@ -1937,6 +1940,7 @@ impl RuntimeFnId {
             RuntimeFnId::EnumExists => "enum_exists",
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
+            RuntimeFnId::GetClassMethods => "get_class_methods",
             RuntimeFnId::GetObjectVars => "get_object_vars",
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",

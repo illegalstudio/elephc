@@ -34,6 +34,7 @@ mod objects;
 mod pdo;
 mod pointers;
 mod resource_ids;
+mod resource_inventory;
 /// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
 mod round_mode;
 /// Standard PHP library constants, functions, and classes.

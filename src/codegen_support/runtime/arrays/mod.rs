@@ -108,6 +108,7 @@ mod decref_mixed;
 mod decref_object;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
+mod gc_control;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
 mod hash_count;
@@ -386,6 +387,8 @@ pub use hash_clone_shallow::emit_hash_clone_shallow;
 /// Emit shallow hash clone helper.
 pub use gc_collect_cycles::emit_gc_collect_cycles;
 /// Emit garbage collection cycle collector.
+pub use gc_control::emit_gc_control;
+/// Emit garbage collection control and status helpers.
 pub use gc_mark_reachable::emit_gc_mark_reachable;
 /// Emit GC mark reachable helper.
 pub use gc_note_child_ref::emit_gc_note_child_ref;

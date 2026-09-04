@@ -602,6 +602,7 @@ pub(crate) fn compile(config: CliConfig) {
             web,
             ir_opt,
             &exported_functions,
+            &opcache_manifest,
             &mut timings,
         );
         return;
@@ -622,6 +623,10 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
+    ir_module.included_files = opcache_manifest
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
     timings.record_since("ir-lower", phase_started);
 
     if emit.is_library() || (check_only && !exported_functions.is_empty()) {

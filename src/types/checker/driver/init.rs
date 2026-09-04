@@ -47,6 +47,7 @@ impl Checker {
     pub(super) fn new(target: Target) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
         // The PHP version surface. Only the TYPES are declared here — the values are baked per
         // compilation from `--php-version` / `--web` by `codegen::prescan::collect_constants`,
         // exactly as `PHP_OS`'s value is baked from the target platform.
@@ -60,6 +61,10 @@ impl Checker {
         // Deprecated session-id constant; elephc is cookie-only so it always
         // resolves to the empty string (see `codegen::prescan::collect_constants`).
         constants.insert("SID".to_string(), PhpType::Str);
+        constants.insert("PHP_INT_SIZE".to_string(), PhpType::Int);
+        constants.insert("PHP_MAXPATHLEN".to_string(), PhpType::Int);
+        constants.insert("DEBUG_BACKTRACE_PROVIDE_OBJECT".to_string(), PhpType::Int);
+        constants.insert("DEBUG_BACKTRACE_IGNORE_ARGS".to_string(), PhpType::Int);
         constants.insert("PATHINFO_DIRNAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_BASENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);

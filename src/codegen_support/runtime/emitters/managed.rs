@@ -8,7 +8,8 @@
 //! - Keeps heap, GC, eval-scope, SPL, object, and buffer helpers in dependency order.
 
 use super::super::{
-    arrays, buffers, compare, eval_bridge, eval_scope, objects, resource_ids, spl,
+    arrays, buffers, compare, eval_bridge, eval_scope, io, objects, resource_ids,
+    resource_inventory, spl,
 };
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
@@ -164,6 +165,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_decref_mixed(emitter);
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_mark_reachable(emitter);
+    arrays::emit_gc_control(emitter);
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
@@ -190,6 +192,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
+    io::emit_backtrace_print_arg(emitter);
     arrays::emit_object_free_deep(emitter, features);
     arrays::emit_refcount(emitter);
     if features.eval_bridge {
@@ -209,6 +212,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
 
     // PHP resource-id registry (its own numbering space, unrelated to object handles)
     resource_ids::emit_resource_ids(emitter);
+    resource_inventory::emit_resource_inventory(emitter);
 
     // Object runtime functions
     objects::emit_object_handles(emitter);

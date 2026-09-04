@@ -8,6 +8,7 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::names::NameKind;
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.
 pub(super) fn lower_positional_spread_args_with_signature(
@@ -15,9 +16,6 @@ pub(super) fn lower_positional_spread_args_with_signature(
     sig: &FunctionSig,
     args: &[Expr],
 ) -> Option<Vec<crate::ir::ValueId>> {
-    if sig.variadic.is_some() {
-        return None;
-    }
     let spread_idx = single_trailing_indexed_spread_arg(ctx, args)?;
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     if spread_idx > regular_param_count {
@@ -84,7 +82,99 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(lower_expr(ctx, &expr).value);
     }
 
+    if sig.variadic.is_some() {
+        let tail_offset = regular_param_count.saturating_sub(spread_idx);
+        let tail = positional_spread_tail_expr(&spread_expr, tail_offset, args[spread_idx].span);
+        let actual_count = positional_spread_actual_count_expr(
+            &spread_expr,
+            spread_idx,
+            args[spread_idx].span,
+        );
+        if crate::func_args::sig_has_hidden_argc_param(sig) {
+            operands.push(lower_expr(ctx, &actual_count).value);
+        }
+        let tail = if crate::func_args::sig_collects_optional_arg_count(sig) {
+            Expr::new(
+                ExprKind::ArrayLiteral(vec![
+                    actual_count,
+                    Expr::new(ExprKind::Spread(Box::new(tail)), args[spread_idx].span),
+                ]),
+                args[spread_idx].span,
+            )
+        } else {
+            tail
+        };
+        let tail = lower_expr(ctx, &tail);
+        let tail = coerce_spread_variadic_array(ctx, sig, tail, args[spread_idx].span);
+        operands.push(tail.value);
+    }
+
     Some(operands)
+}
+
+/// Builds `array_slice($spread, $offset)` for the values beyond regular parameters.
+fn positional_spread_tail_expr(spread: &Expr, offset: usize, span: crate::span::Span) -> Expr {
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["array_slice".to_string()]),
+            args: vec![
+                spread.clone(),
+                Expr::new(ExprKind::IntLiteral(offset as i64), span),
+            ],
+        },
+        span,
+    )
+}
+
+/// Builds the runtime count of explicit prefix values plus one dynamic indexed spread.
+fn positional_spread_actual_count_expr(
+    spread: &Expr,
+    prefix_len: usize,
+    span: crate::span::Span,
+) -> Expr {
+    let spread_count = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["count".to_string()]),
+            args: vec![spread.clone()],
+        },
+        span,
+    );
+    if prefix_len == 0 {
+        spread_count
+    } else {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(Expr::new(ExprKind::IntLiteral(prefix_len as i64), span)),
+                op: BinOp::Add,
+                right: Box::new(spread_count),
+            },
+            span,
+        )
+    }
+}
+
+/// Converts a sliced dynamic tail to the variadic slot's indexed storage representation.
+fn coerce_spread_variadic_array(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    tail: LoweredValue,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let expected = variadic_array_type(sig);
+    let actual = ctx.builder.value_php_type(tail.value).codegen_repr();
+    let needs_mixed = matches!(expected.codegen_repr(), PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed)
+        && !matches!(actual, PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
+    if !needs_mixed {
+        return tail;
+    }
+    ctx.emit_value(
+        Op::ArrayToMixed,
+        vec![tail.value],
+        None,
+        expected,
+        Op::ArrayToMixed.default_effects(),
+        Some(span),
+    )
 }
 
 /// Returns the element count for a statically-known indexed spread source.
@@ -191,4 +281,3 @@ pub(super) fn emit_positional_spread_min_len_guard(
 
     ctx.builder.position_at_end(ok);
 }
-

@@ -18,6 +18,7 @@ mod catalog_data;
 #[cfg(feature = "curl")]
 mod catalog_curl;
 mod catalog_surfaces;
+mod core_functions;
 mod eval_profile;
 mod id;
 mod registry;
@@ -33,6 +34,7 @@ pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
 pub use id::BuiltinId;
+pub use core_functions::CORE_FUNCTION_NAMES;
 pub use registry::{contracts, lookup, lookup_id};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{

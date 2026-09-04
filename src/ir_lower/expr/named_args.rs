@@ -62,6 +62,10 @@ pub(super) fn lower_named_args_with_signature(
         }
     }
     if sig.variadic.is_some() {
+        if crate::func_args::sig_has_hidden_argc_param(sig) {
+            let actual_count = named_plan_actual_arg_count(&plan.source_values);
+            operands.push(emit_i64_at_span(ctx, actual_count as i64, call_span).value);
+        }
         operands.push(lower_named_variadic_tail_array(ctx, sig, &plan.source_values, &source_values).value);
     }
     operands
@@ -151,7 +155,7 @@ pub(super) fn lower_dynamic_named_spread_variadic_args(
             }
         }
     }
-    operands.push(lower_variadic_tail_array(ctx, sig, &[]).value);
+    operands.push(lower_variadic_tail_array(ctx, sig, &[], 0).value);
     Some(operands)
 }
 
@@ -345,4 +349,3 @@ pub(super) fn lower_named_args_with_spread_plan(
     }
     Some(operands)
 }
-

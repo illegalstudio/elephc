@@ -102,8 +102,8 @@ pub(crate) fn positional_param_type(sig: &FunctionSig, index: usize) -> Option<P
 /// tolerated on purpose: a path that stores the element type directly still answers correctly, so
 /// this cannot become the silent half of a disagreement.
 pub(crate) fn variadic_element_type(sig: &FunctionSig) -> Option<PhpType> {
-    sig.variadic.as_ref()?;
-    let (_, collector) = sig.params.get(regular_param_count(sig))?;
+    let variadic = sig.variadic.as_ref()?;
+    let (_, collector) = sig.params.iter().find(|(name, _)| name == variadic)?;
     Some(match collector {
         PhpType::Array(element) => (**element).clone(),
         other => other.clone(),
@@ -113,11 +113,14 @@ pub(crate) fn variadic_element_type(sig: &FunctionSig) -> Option<PhpType> {
 /// If the signature is variadic, excludes the variadic slot from the count so that
 /// named arguments address only the caller-visible parameters.
 pub(crate) fn regular_param_count(sig: &FunctionSig) -> usize {
-    if sig.variadic.is_some() {
+    let physical = if sig.variadic.is_some() {
         sig.params.len().saturating_sub(1)
     } else {
         sig.params.len()
-    }
+    };
+    physical.saturating_sub(usize::from(
+        crate::func_args::sig_has_hidden_argc_param(sig),
+    ))
 }
 
 /// Searches for a parameter named `name` among the first `regular_param_count` parameters.

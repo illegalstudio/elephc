@@ -38,9 +38,10 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");
-    emitter.label_global("__rt_gc_collect_cycles");
+    emitter.label_global("__rt_gc_collect_cycles_explicit");
 
     // -- avoid recursive re-entry while the collector is already running --
+    emitter.instruction("mov x0, #0");                                          // a nested collection reports zero collected nodes
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("ldr x10, [x9]");                                       // load the current collector-active flag
     emitter.instruction("cbnz x10, __rt_gc_collect_cycles_done");               // nested collection attempts are ignored
@@ -55,7 +56,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     //   [sp, #56] = saved x20
     //   [sp, #64] = saved x29
     //   [sp, #72] = saved x30
-    emitter.instruction("sub sp, sp, #80");                                     // allocate collector stack frame
+    //   [sp, #80] = collected graph-node count
+    emitter.instruction("sub sp, sp, #96");                                     // allocate collector stack frame
     emitter.instruction("str x19, [sp, #48]");                                  // preserve the callee-saved scratch register used during child scans
     emitter.instruction("str x20, [sp, #56]");                                  // preserve the callee-saved payload-size register used during heap scans
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
@@ -69,6 +71,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
     emitter.instruction("str x10, [sp, #8]");                                   // save the initial heap end for the metadata passes
     emitter.instruction("str x9, [sp, #0]");                                    // initialize the scan pointer to the heap base
+    emitter.instruction("str xzr, [sp, #80]");                                  // initialize the collected graph-node count
 
     // -- pass 1: clear all transient GC metadata while preserving kind + array value_type --
     emitter.label("__rt_gc_collect_cycles_clear_loop");
@@ -335,6 +338,9 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("lsl x15, x15, #16");                                   // x15 = GC reachable bit in the kind word
     emitter.instruction("tst x13, x15");                                        // did the root-mark pass keep this block reachable?
     emitter.instruction("b.ne __rt_gc_collect_cycles_free_next");               // reachable blocks stay alive
+    emitter.instruction("ldr x10, [sp, #80]");                                  // load the number of graph nodes selected so far
+    emitter.instruction("add x10, x10, #1");                                    // count this unreachable graph node
+    emitter.instruction("str x10, [sp, #80]");                                  // persist the updated collection result
     emitter.instruction("add x10, x9, x11");                                    // compute the next header before reclaiming this block
     emitter.instruction("add x10, x10, #16");                                   // account for the 16-byte heap header
     emitter.instruction("str x10, [sp, #0]");                                   // save the next header before deep-freeing this block
@@ -363,12 +369,23 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning for unreachable graph nodes
 
     emitter.label("__rt_gc_collect_cycles_finish");
+    emitter.instruction("ldr x0, [sp, #80]");                                   // return the number of unreachable graph nodes reclaimed
+    emitter.instruction("cbz x0, __rt_gc_collect_cycles_stats_done");           // empty passes do not count as productive collector runs
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_runs");
+    emitter.instruction("ldr x10, [x9]");                                       // load productive collector runs
+    emitter.instruction("add x10, x10, #1");                                    // include this productive pass
+    emitter.instruction("str x10, [x9]");                                       // persist productive collector runs
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collected");
+    emitter.instruction("ldr x10, [x9]");                                       // load the cumulative collected-node count
+    emitter.instruction("add x10, x10, x0");                                    // include the nodes reclaimed by this pass
+    emitter.instruction("str x10, [x9]");                                       // persist the cumulative collected-node count
+    emitter.label("__rt_gc_collect_cycles_stats_done");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("str xzr, [x9]");                                       // mark the collector as inactive again
     emitter.instruction("ldr x19, [sp, #48]");                                  // restore the callee-saved scratch register after collection
     emitter.instruction("ldr x20, [sp, #56]");                                  // restore the callee-saved payload-size register after collection
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // tear down the collector stack frame
+    emitter.instruction("add sp, sp, #96");                                     // tear down the collector stack frame
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return to the caller

@@ -172,6 +172,9 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     };
     let callable = match semantics.callable {
         BuiltinCallablePolicy::Dynamic(_) => json!({"kind": "dynamic"}),
+        BuiltinCallablePolicy::DirectOnly(reason) => {
+            json!({"kind": "direct_only", "reason": reason})
+        }
         BuiltinCallablePolicy::DynamicRuntime(target) => {
             json!({"kind": "dynamic_target", "target": target.as_eir()})
         }
