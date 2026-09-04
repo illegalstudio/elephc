@@ -169,7 +169,7 @@ fn test_error_pcntl_exec_requires_argument_array() {
 #[test]
 fn test_error_pcntl_exec_requires_string_array_values() {
     expect_error(
-        "<?php pcntl_exec('/bin/echo', [[1]]);",
+        "<?php pcntl_exec('/bin/echo', [fn() => 1]);",
         "pcntl_exec() array values must be coercible to string",
     );
 }
