@@ -37,6 +37,10 @@
 //! - The scan (`reads_of`) covers the vocabulary these builders can produce. A variant it does
 //!   not know is read as "no variable in there", so a missed read can only ADD a redundant
 //!   `$_unused = $p;` — never leave a parameter unconsumed. Extend it alongside any new helper.
+//! - `keep_unread_params()` is the one opt-out, for TRANSCRIBED preludes only: where the PHP
+//!   form itself left a parameter unread, the parse-parity oracle needs the built body to
+//!   match it statement for statement, consumption included. The transcriber emits the call
+//!   from the parse; hand-written builders should keep consuming.
 //! - Method-local variables should stay `$_`-prefixed for the same reason `pdo_prelude` does
 //!   it: the checker resolves a method-body variable's type against top-level variables of the
 //!   same name, so a user global named `$node` would otherwise clash with a plain method-local
@@ -1291,8 +1295,30 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
         | ExprKind::Not(inner)
         | ExprKind::Negate(inner) => walk_expr(inner, out),
         ExprKind::InstanceOf { value, .. } => walk_expr(value, out),
+        // `new $class(...$args)`: the spread argument READS `$args`, so a parameter that
+        // only ever reaches a constructor this way counts as used.
+        ExprKind::Spread(inner) => walk_expr(inner, out),
         _ => {}
     }
+}
+
+/// Names the by-value parameters `body` never reads — the ones `consume_unread_params`
+/// would consume. Shared with the transcriber so it can tell, from the parse, where the PHP
+/// form left a parameter unread and emit `keep_unread_params()` there.
+pub(crate) fn unread_params(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    body: &[Stmt],
+) -> Vec<String> {
+    let read = reads_of(body);
+    params
+        .iter()
+        // A BY-REF parameter is never consumed. It is an OUT-parameter: the caller reads what
+        // the body writes into it, so writing is its use. Adding `$_unused = $width;` to
+        // `exif_thumbnail(&$width, …)` would be dead code the PHP form never had.
+        .filter(|(_, _, _, by_ref)| !by_ref)
+        .filter(|(name, _, _, _)| !read.iter().any(|seen| seen == name))
+        .map(|(name, _, _, _)| name.clone())
+        .collect()
 }
 
 /// Prepends the `$_unused` consumption for every parameter `body` does not read.
@@ -1303,15 +1329,9 @@ fn consume_unread_params(
     params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
     body: Vec<Stmt>,
 ) -> Vec<Stmt> {
-    let read = reads_of(&body);
-    let unread: Vec<Expr> = params
-        .iter()
-        // A BY-REF parameter is never consumed. It is an OUT-parameter: the caller reads what
-        // the body writes into it, so writing is its use. Adding `$_unused = $width;` to
-        // `exif_thumbnail(&$width, …)` would be dead code the PHP form never had.
-        .filter(|(_, _, _, by_ref)| !by_ref)
-        .filter(|(name, _, _, _)| !read.iter().any(|seen| seen == name))
-        .map(|(name, _, _, _)| Expr::var(name.clone()))
+    let unread: Vec<Expr> = unread_params(params, &body)
+        .into_iter()
+        .map(Expr::var)
         .collect();
 
     if unread.is_empty() {
@@ -1339,12 +1359,20 @@ struct Signature {
     params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
     /// The variadic tail (`mixed ...$args`) — its name and its declared element type.
     variadic: Option<(String, Option<TypeExpr>)>,
+    /// Whether the variadic tail collects REFERENCES (`&...$vars`), as
+    /// `mysqli_stmt::bind_param` does so it can write the bound variables back.
+    variadic_by_ref: bool,
     return_type: Option<TypeExpr>,
     body: Vec<Stmt>,
+    /// Skip the `$_unused = …;` consumption: the body is reproduced exactly as a PHP form
+    /// that left a parameter unread (`mysqli::store_result(int $mode = 0)`), which a
+    /// parse-parity oracle then requires the built node to match statement for statement.
+    keep_unread_params: bool,
 }
 
 impl Signature {
-    /// Consumes the signature into its parts, with unread parameters consumed.
+    /// Consumes the signature into its parts, with unread parameters consumed unless the
+    /// builder asked to keep them.
     fn finish(
         self,
     ) -> (
@@ -1352,7 +1380,11 @@ impl Signature {
         Option<TypeExpr>,
         Vec<Stmt>,
     ) {
-        let body = consume_unread_params(&self.params, self.body);
+        let body = if self.keep_unread_params {
+            self.body
+        } else {
+            consume_unread_params(&self.params, self.body)
+        };
         (self.params, self.return_type, body)
     }
 }
@@ -1449,6 +1481,16 @@ impl MethodBuilder {
     /// the array the tail collects into — `int ...$xs` hints each argument, not the array.
     pub fn variadic(mut self, name: &str, element_type: Option<TypeExpr>) -> Self {
         self.signature.variadic = Some((name.to_string(), element_type));
+        self.signature.variadic_by_ref = false;
+        self
+    }
+
+    /// Declares a BY-REFERENCE variadic tail (`function bind_param(string $types, mixed &...$vars)`):
+    /// the collected arguments alias the caller's variables, so a body that assigns through
+    /// them writes the caller's storage back.
+    pub fn variadic_by_ref(mut self, name: &str, element_type: Option<TypeExpr>) -> Self {
+        self.signature.variadic = Some((name.to_string(), element_type));
+        self.signature.variadic_by_ref = true;
         self
     }
 
@@ -1530,6 +1572,18 @@ impl MethodBuilder {
         self
     }
 
+    /// Leaves unread parameters UNCONSUMED — no synthesized `$_unused = $p;`.
+    ///
+    /// For a transcribed prelude whose PHP form left a parameter unread (an accepted-but-
+    /// ignored `$mode`): the oracle compares the built body against the parse statement by
+    /// statement, so the consumption the builder would add is a divergence there. The
+    /// transcriber emits this call exactly where the parse shows an unread parameter; do not
+    /// reach for it in hand-written builders, which should consume like the rest.
+    pub fn keep_unread_params(mut self) -> Self {
+        self.signature.keep_unread_params = true;
+        self
+    }
+
     /// Builds the method as a bodiless SIGNATURE, for an interface.
     ///
     /// The parameters are NOT consumed: `$_unused = $p;` is a statement, and a signature has no
@@ -1568,6 +1622,7 @@ impl MethodBuilder {
     fn build(mut self) -> ClassMethod {
         let param_attributes = std::mem::take(&mut self.param_attributes);
         let variadic = self.signature.variadic.take();
+        let variadic_by_ref = self.signature.variadic_by_ref;
         let (params, return_type, body) = self.signature.finish();
         // The parser emits one group list per parameter, so pad rather than leave the vector
         // short: a comparison against the parsed AST is length-sensitive, and a builder that
@@ -1592,7 +1647,7 @@ impl MethodBuilder {
             params,
             param_attributes,
             variadic: variadic_name,
-            variadic_by_ref: false,
+            variadic_by_ref,
             variadic_type,
             return_type,
             by_ref_return: false,
@@ -1683,6 +1738,15 @@ impl FunctionBuilder {
     /// which is a different thing from the collected array's type.
     pub fn variadic(mut self, name: &str, element_type: Option<TypeExpr>) -> Self {
         self.signature.variadic = Some((name.to_string(), element_type));
+        self.signature.variadic_by_ref = false;
+        self
+    }
+
+    /// Declares a BY-REFERENCE variadic tail (`function mysqli_stmt_bind_param(..., mixed &...$vars)`),
+    /// the procedural twin of `MethodBuilder::variadic_by_ref`.
+    pub fn variadic_by_ref(mut self, name: &str, element_type: Option<TypeExpr>) -> Self {
+        self.signature.variadic = Some((name.to_string(), element_type));
+        self.signature.variadic_by_ref = true;
         self
     }
 
@@ -1698,12 +1762,20 @@ impl FunctionBuilder {
         self
     }
 
+    /// Leaves unread parameters UNCONSUMED, the free-function twin of
+    /// `MethodBuilder::keep_unread_params` (same reason: parse parity for a transcription).
+    pub fn keep_unread_params(mut self) -> Self {
+        self.signature.keep_unread_params = true;
+        self
+    }
+
     /// Emits the function declaration statement.
     pub fn build(self) -> Stmt {
         let (variadic_name, variadic_type) = match self.signature.variadic.clone() {
             Some((name, ty)) => (Some(name), ty),
             None => (None, None),
         };
+        let variadic_by_ref = self.signature.variadic_by_ref;
         let (params, return_type, body) = self.signature.finish();
         // The parser aligns `param_attributes` with the declared parameters PLUS the variadic
         // tail when there is one, so the vector is one longer than `params` for a variadic.
@@ -1715,7 +1787,7 @@ impl FunctionBuilder {
                 params,
                 param_attributes,
                 variadic: variadic_name,
-                variadic_by_ref: false,
+                variadic_by_ref,
                 variadic_type,
                 return_type,
                 by_ref_return: false,
@@ -2907,6 +2979,111 @@ function stage(string $data): ptr {
                 format!("{:?}", strip_spans(parsed_stmt)),
             );
         }
+    }
+
+    /// The vocabulary the mysqli prelude added: a BY-REFERENCE variadic tail
+    /// (`mixed &...$vars`, on a method and on a free function) and a parameter the PHP body
+    /// leaves unread on purpose (`store_result(int $mode = 0)`), which `keep_unread_params`
+    /// must reproduce WITHOUT the synthesized `$_unused = $mode;` — the parse has no such
+    /// statement, and a parity oracle would report the extra one.
+    #[test]
+    fn parser_agreement_by_ref_variadics_and_kept_unread_params() {
+        let parsed = parse_php(
+            r#"<?php
+class Binder {
+    public function bind(string $types, mixed &...$vars): bool {
+        $_values = [];
+        $_given = count($vars);
+        for ($_i = 0; $_i < $_given; $_i++) {
+            $_values[] = $vars[$_i];
+        }
+        return count($_values) == strlen($types);
+    }
+    public function store_result(int $mode = 0): bool {
+        return true;
+    }
+}
+function bind_all(mixed $binder, string $types, mixed &...$vars): bool {
+    return $binder->bind($types, $vars);
+}
+function ignore_mode(int $mode = 0): bool {
+    return true;
+}
+"#,
+        );
+
+        let built = internal_declarations(|| {
+            vec![
+                class("Binder")
+                    .method(
+                        method("bind")
+                            .param("types", TypeExpr::Str)
+                            .variadic_by_ref("vars", Some(t_mixed()))
+                            .returns(TypeExpr::Bool)
+                            .body(vec![
+                                s_assign("_values", e_array(vec![])),
+                                s_assign("_given", e_call("count", vec![e_var("vars")])),
+                                s_for(
+                                    Some(s_assign("_i", e_int(0))),
+                                    Some(e_binop(e_var("_i"), BinOp::Lt, e_var("_given"))),
+                                    Some(s_expr(e_post_inc("_i"))),
+                                    vec![s_array_push(
+                                        "_values",
+                                        e_index(e_var("vars"), e_var("_i")),
+                                    )],
+                                ),
+                                s_return(e_binop(
+                                    e_call("count", vec![e_var("_values")]),
+                                    BinOp::Eq,
+                                    e_call("strlen", vec![e_var("types")]),
+                                )),
+                            ]),
+                    )
+                    .method(
+                        method("store_result")
+                            .param_default("mode", TypeExpr::Int, e_int(0))
+                            .keep_unread_params()
+                            .returns(TypeExpr::Bool)
+                            .returning(e_bool(true)),
+                    )
+                    .build(),
+                function("bind_all")
+                    .param("binder", t_mixed())
+                    .param("types", TypeExpr::Str)
+                    .variadic_by_ref("vars", Some(t_mixed()))
+                    .returns(TypeExpr::Bool)
+                    .returning(e_method_call(
+                        e_var("binder"),
+                        "bind",
+                        vec![e_var("types"), e_var("vars")],
+                    ))
+                    .build(),
+                function("ignore_mode")
+                    .param_default("mode", TypeExpr::Int, e_int(0))
+                    .keep_unread_params()
+                    .returns(TypeExpr::Bool)
+                    .returning(e_bool(true))
+                    .build(),
+            ]
+        });
+
+        assert_eq!(built.len(), parsed.len());
+        for (built_stmt, parsed_stmt) in built.iter().zip(parsed.iter()) {
+            assert_eq!(
+                format!("{:?}", strip_spans(built_stmt)),
+                format!("{:?}", strip_spans(parsed_stmt)),
+            );
+        }
+        // And the opt-out is exactly that — without it the same method still consumes.
+        let consuming = method("store_result")
+            .param_default("mode", TypeExpr::Int, e_int(0))
+            .returns(TypeExpr::Bool)
+            .returning(e_bool(true))
+            .build();
+        assert!(matches!(
+            &consuming.body[0].kind,
+            StmtKind::Assign { name, .. } if name == "_unused"
+        ));
     }
 
     /// Renders a statement without its spans so a synthetic node (`Span::dummy()`) and a parsed
