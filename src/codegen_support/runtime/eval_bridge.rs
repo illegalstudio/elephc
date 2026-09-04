@@ -156,7 +156,7 @@ fn emit_gc_lifecycle_wrappers(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
 
     /// Emits the whole eval bridge for one target and returns the assembly text.
     fn emit_for(target: Target) -> String {
@@ -172,6 +172,21 @@ mod tests {
             (
                 Target::new(Platform::MacOS, Arch::AArch64),
                 "_",
+                "b",
+            ),
+            (
+                Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+                "_",
+                "b",
+            ),
+            (
+                Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+                "_",
+                "b",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::AArch64),
+                "",
                 "b",
             ),
             (

@@ -436,6 +436,14 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
     out.push_str(&comm_directive("_gc_runs", 8, target));
     out.push_str(&comm_directive("_gc_collected", 8, target));
+    out.push_str(&comm_directive("_gc_application_started", 8, target));
+    out.push_str(&comm_directive("_gc_collector_started", 8, target));
+    out.push_str(&comm_directive("_gc_free_started", 8, target));
+    out.push_str(&comm_directive("_gc_destructor_started", 8, target));
+    out.push_str(&comm_directive("_gc_collector_time", 8, target));
+    out.push_str(&comm_directive("_gc_destructor_time", 8, target));
+    out.push_str(&comm_directive("_gc_free_time", 8, target));
+    out.push_str(&comm_directive("_gc_destructor_depth", 8, target));
     out.push_str(&format!(
         ".globl _php_error_reporting\n_php_error_reporting:\n    .quad {}\n",
         php_version.error_reporting_mask()

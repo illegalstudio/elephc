@@ -279,8 +279,16 @@ pub enum GcControlOp {
     Runs = 7,
     /// Reads the cumulative number of collected graph nodes.
     Collected = 8,
-    /// Reads the number of buffered collector roots.
+    /// Reads the number of live cycle-collector candidate blocks.
     Roots = 9,
+    /// Reads elapsed application time in seconds.
+    ApplicationTime = 10,
+    /// Reads cumulative collector time in seconds.
+    CollectorTime = 11,
+    /// Reads cumulative destructor time during collection in seconds.
+    DestructorTime = 12,
+    /// Reads cumulative graph-free time in seconds.
+    FreeTime = 13,
 }
 
 impl GcControlOp {
@@ -302,6 +310,10 @@ impl GcControlOp {
             7 => Some(Self::Runs),
             8 => Some(Self::Collected),
             9 => Some(Self::Roots),
+            10 => Some(Self::ApplicationTime),
+            11 => Some(Self::CollectorTime),
+            12 => Some(Self::DestructorTime),
+            13 => Some(Self::FreeTime),
             _ => None,
         }
     }
@@ -323,7 +335,13 @@ impl GcControlOp {
             | Self::Protected
             | Self::Runs
             | Self::Collected
-            | Self::Roots => E::READS_GLOBAL,
+            | Self::Roots
+            | Self::CollectorTime
+            | Self::DestructorTime
+            | Self::FreeTime => E::READS_GLOBAL,
+            Self::ApplicationTime => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::READS_PROCESS.bits())
+            }
             Self::MemCaches => {
                 Effects::from_bits_retain(E::READS_HEAP.bits() | E::WRITES_HEAP.bits())
             }

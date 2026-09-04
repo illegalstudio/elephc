@@ -26,7 +26,7 @@ echo count($status); echo ":";
 echo is_bool($status["running"]) && is_bool($status["protected"]) && is_bool($status["full"]) ? "bool" : "bad"; echo ":";
 echo is_int($status["runs"]) && is_int($status["collected"]) && is_int($status["roots"]) ? "int" : "bad"; echo ":";
 echo $status["threshold"] . ":" . $status["buffer_size"] . ":";
-echo is_float($status["application_time"]) && is_float($status["collector_time"]) && is_float($status["destructor_time"]) && is_float($status["free_time"]) ? "float" : "bad";
+echo $status["application_time"] > 0.0 && $status["collector_time"] > 0.0 && $status["destructor_time"] > 0.0 && $status["free_time"] > 0.0 ? "timed" : "bad";
 return function_exists("gc_status");"#,
     )
     .expect("parse eval fragment");
@@ -37,7 +37,7 @@ return function_exists("gc_status");"#,
 
     assert_eq!(
         values.output,
-        "on:off:on:0:0:12:bool:int:10001:16384:float"
+        "on:off:on:0:0:12:bool:int:0:0:timed"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

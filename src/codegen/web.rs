@@ -112,6 +112,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // future persistent-statics worker-script mode (`--web-worker`, PR #456) must NOT
     // route through this routine, or its surviving statics would be freed underneath it.
     emit_heap_arena_reset(emitter);
+    abi::emit_call_label(emitter, "__rt_gc_request_start");
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
@@ -132,6 +133,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
         "_gc_release_suppressed",
         "_gc_runs",
         "_gc_collected",
+        "_gc_destructor_depth",
     ] {
         abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     }

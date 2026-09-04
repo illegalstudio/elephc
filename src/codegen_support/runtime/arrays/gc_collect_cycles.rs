@@ -62,6 +62,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("str x20, [sp, #56]");                                  // preserve the callee-saved payload-size register used during heap scans
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // set up the collector frame pointer
+    emitter.instruction("bl __rt_gc_collector_begin");                          // start timing this complete collector pass
 
     // -- capture heap bounds once for the initial passes --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
@@ -299,6 +300,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     // -- pass 4: free every live refcounted block that was never marked reachable --
     emitter.label("__rt_gc_collect_cycles_free_init");
+    emitter.instruction("bl __rt_gc_free_begin");                               // start timing graph reclamation separately
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("mov x10, #1");                                         // mark the collector as active while reclaiming blocks
     emitter.instruction("str x10, [x9]");                                       // store collector-active = 1
@@ -369,6 +371,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning for unreachable graph nodes
 
     emitter.label("__rt_gc_collect_cycles_finish");
+    emitter.instruction("bl __rt_gc_collector_end");                            // accumulate collector and graph-free phase durations
     emitter.instruction("ldr x0, [sp, #80]");                                   // return the number of unreachable graph nodes reclaimed
     emitter.instruction("cbz x0, __rt_gc_collect_cycles_stats_done");           // empty passes do not count as productive collector runs
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_runs");

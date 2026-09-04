@@ -5,7 +5,7 @@
 //! - The builtin registry through `crate::builtins::system`.
 //!
 //! Key details:
-//! - elephc's fixed managed heap has no detachable allocator caches, so it reports zero bytes.
+//! - The runtime drains segregated small-block bins into the reusable general allocator pool.
 
 use crate::builtins::semantics::{
     callable_accepts_any_source, BuiltinArgumentLowering, BuiltinCallablePolicy,

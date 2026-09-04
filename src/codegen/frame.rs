@@ -292,6 +292,7 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
     // is never guarded — it is the root of every call chain and runs before the floor exists.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
+    abi::emit_call_label(ctx.emitter, "__rt_gc_request_start");
     emit_probe_init(ctx);
     register_main_instr(ctx);
     emit_instr_init(ctx);
