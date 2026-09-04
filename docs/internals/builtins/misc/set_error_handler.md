@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/set_error_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/set_error_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function set_error_handler(mixed $callback, int $error_levels = 32767): mixed
+function set_error_handler(mixed $callback, int $error_levels = E_ALL): mixed
 ```
 
 ## What the type checker enforces

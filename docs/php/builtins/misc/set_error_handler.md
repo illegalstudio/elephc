@@ -8,14 +8,14 @@ sidebar:
 ## set_error_handler()
 
 ```php
-function set_error_handler(mixed $callback, int $error_levels = 32767): mixed
+function set_error_handler(mixed $callback, int $error_levels = E_ALL): mixed
 ```
 
 Installs a user error handler and returns the previous handler.
 
 **Parameters**:
 - `$callback` (`mixed`)
-- `$error_levels` (`int`), default `32767`, optional
+- `$error_levels` (`int`), default `E_ALL`, optional
 
 **Returns**: `mixed`
 
