@@ -143,6 +143,12 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
             values,
         ),
     };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &method_scope,
+        values,
+    );
     context.pop_function_args();
     context.pop_magic_scope();
     context.pop_called_class_scope();
@@ -279,6 +285,12 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
             values,
         ),
     };
+    let return_result = retain_static_local_return(
+        return_result,
+        &static_names,
+        &method_scope,
+        values,
+    );
     context.pop_function_args();
     context.pop_magic_scope();
     context.pop_called_class_scope();
