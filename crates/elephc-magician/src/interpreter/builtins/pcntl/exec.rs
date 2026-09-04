@@ -78,8 +78,7 @@ fn eval_pcntl_exec_add_arguments(
     for position in 0..values.array_len(arguments)? {
         let key = values.array_iter_key(arguments, position)?;
         let argument = values.array_get(arguments, key)?;
-        let argument = eval_string_context_value(argument, context, values)?;
-        let bytes = values.string_bytes(argument)?;
+        let bytes = eval_pcntl_exec_string_bytes(argument, context, values)?;
         if bytes.contains(&0) {
             let _: RuntimeCellHandle = eval_throw_builtin_value_error(
                 "pcntl_exec(): Argument #2 ($args) individual argument must not contain null bytes",
@@ -110,8 +109,7 @@ fn eval_pcntl_exec_add_environment(
     for position in 0..values.array_len(environment)? {
         let key = values.array_iter_key(environment, position)?;
         let value = values.array_get(environment, key)?;
-        let value = eval_string_context_value(value, context, values)?;
-        let value = values.string_bytes(value)?;
+        let value = eval_pcntl_exec_string_bytes(value, context, values)?;
         if value.contains(&0) {
             let _: RuntimeCellHandle = eval_throw_builtin_value_error(
                 "pcntl_exec(): Argument #3 ($env_vars) value for environment variable must not contain null bytes",
@@ -149,4 +147,18 @@ fn eval_pcntl_exec_add_environment(
         }
     }
     Ok(())
+}
+
+/// Applies PHP string-context conversion to one exec array entry.
+fn eval_pcntl_exec_string_bytes(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<u8>, EvalStatus> {
+    if matches!(values.type_tag(value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+        values.warning("Warning: Array to string conversion\n")?;
+        return Ok(b"Array".to_vec());
+    }
+    let value = eval_string_context_value(value, context, values)?;
+    values.string_bytes(value)
 }

@@ -14398,6 +14398,7 @@ pub fn inject_if_used(
     if !force && !detect::program_uses_image(&program) {
         return detect::activate_guarded_image_polyfills(program);
     }
+    let program = detect::deactivate_guarded_image_polyfills(program);
     // Injecting the surface is pay-for-use; what gets injected was not. A program calling two GD
     // functions was dragging Imagick, Gmagick and Cairo through codegen, the assembler and the
     // linker — measured at 162,630 lines of assembly against 9,501.

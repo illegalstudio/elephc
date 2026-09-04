@@ -32,6 +32,24 @@ echo imagecreatetruecolor(4, 3);
     assert_eq!(out, "4x3");
 }
 
+/// Lets the real image declaration win when another image call enables the bridge.
+#[test]
+fn test_image_guarded_polyfill_beside_real_image_call() {
+    let out = compile_and_run(
+        r#"<?php
+if (!function_exists('imagecreatetruecolor')) {
+    function imagecreatetruecolor(int $width, int $height): string {
+        return 'polyfill';
+    }
+}
+$image = imagecreatetruecolor(2, 2);
+var_dump(is_string($image));
+var_dump(imagesx($image));
+"#,
+    );
+    assert_eq!(out, "bool(false)\nint(2)\n");
+}
+
 /// Creating a true-color image, drawing a pixel, writing it as PNG, and probing
 /// the written file round-trips through the `elephc_image` bridge: the size is
 /// reported correctly and `getimagesize` reads back the PNG's dimensions, type

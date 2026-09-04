@@ -212,7 +212,7 @@ pub(super) fn eval_literal_call_scope_constraints_supported(
     })
 }
 
-/// Returns true when one caller read can be boxed or represented as undefined null.
+/// Returns true when one caller read is initialized and can be boxed directly.
 pub(super) fn eval_literal_call_scope_read_param_supported(
     _module: &Module,
     function: &Function,
@@ -223,7 +223,7 @@ pub(super) fn eval_literal_call_scope_read_param_supported(
         return false;
     }
     let Some(slot) = eval_scope_local_slot(function, name) else {
-        return true;
+        return false;
     };
     eval_scope_read_param_type_supported(&slot.php_type)
         && eval_scope_read_slot_initialized(function, slot.id, inst_index)

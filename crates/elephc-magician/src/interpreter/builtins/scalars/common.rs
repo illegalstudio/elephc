@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Runtime cells remain opaque and all PHP coercions flow through `RuntimeValueOps`.
+//! - Weak float-to-int coercion reports PHP's precision-loss deprecation before casting.
 
 use super::super::super::*;
 use crate::stream_resources::EVAL_RESOURCE_PAYLOAD_BASE;
@@ -101,6 +102,19 @@ pub(in crate::interpreter) fn eval_int_value(
     value: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
+    if values.type_tag(value)? == EVAL_TAG_FLOAT {
+        let display = values.string_bytes(value)?;
+        let float = std::str::from_utf8(&display)
+            .map_err(|_| EvalStatus::RuntimeFatal)?
+            .parse::<f64>()
+            .map_err(|_| EvalStatus::RuntimeFatal)?;
+        if float.is_finite() && float.trunc() != float {
+            values.warning(&format!(
+                "Deprecated: Implicit conversion from float {} to int loses precision\n",
+                String::from_utf8_lossy(&display)
+            ))?;
+        }
+    }
     let value = values.cast_int(value)?;
     let bytes = values.string_bytes(value)?;
     std::str::from_utf8(&bytes)

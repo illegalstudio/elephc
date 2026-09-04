@@ -157,6 +157,24 @@ fn test_pcntl_target_unavailable_builtin_can_be_polyfilled() {
     assert_eq!(compile_and_run(source), "7");
 }
 
+/// Resolves a namespaced guarded polyfill before falling back to a global target builtin.
+#[test]
+fn test_pcntl_namespaced_target_unavailable_builtin_can_be_polyfilled() {
+    #[cfg(target_os = "linux")]
+    let source = "<?php namespace App;
+        if (!function_exists('pcntl_getqos_class')) {
+            function pcntl_getqos_class(): int { return 7; }
+        }
+        echo pcntl_getqos_class();";
+    #[cfg(target_os = "macos")]
+    let source = "<?php namespace App;
+        if (!function_exists('pcntl_getcpu')) {
+            function pcntl_getcpu(): int { return 7; }
+        }
+        echo pcntl_getcpu();";
+    assert_eq!(compile_and_run(source), "7");
+}
+
 /// Returns the previous alarm's remaining time while cancelling it.
 #[test]
 fn test_pcntl_alarm_returns_previous_remaining_seconds() {
@@ -394,6 +412,32 @@ fn test_pcntl_signal_float_string_precision_loss_is_deprecated() {
     );
 }
 
+/// Emits PHP's real-float precision deprecation in AOT and eval signal arrays.
+#[test]
+fn test_pcntl_signal_float_precision_loss_is_deprecated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        $signals = [9.7];
+        echo pcntl_sigprocmask(SIG_BLOCK, $signals) ? 'aot|' : 'bad|';
+        pcntl_sigprocmask(SIG_UNBLOCK, [9]);
+        echo eval('
+            $signals = [9.7];
+            $ok = pcntl_sigprocmask(SIG_BLOCK, $signals);
+            pcntl_sigprocmask(SIG_UNBLOCK, [9]);
+            return $ok ? "eval" : "bad";
+        ');"#,
+    );
+    assert_eq!(out.stdout, "aot|eval");
+    assert_eq!(
+        out.stderr
+            .matches("Deprecated: Implicit conversion from float 9.7 to int loses precision")
+            .count(),
+        2,
+        "{}",
+        out.stderr
+    );
+}
+
 /// Throws `TypeError`, rather than a signal-range `ValueError`, for eval nonnumeric strings.
 #[test]
 fn test_pcntl_eval_signal_mask_rejects_nonnumeric_string_with_type_error() {
@@ -445,6 +489,28 @@ fn test_pcntl_eval_signal_float_string_precision_loss_is_deprecated() {
         ),
         "{}",
         out.stderr
+    );
+}
+
+/// Throws the exact catchable type error for object signal-set values in AOT and eval.
+#[test]
+fn test_pcntl_signal_mask_rejects_object_values_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+        class SignalObject {}
+        try { pcntl_sigprocmask(SIG_BLOCK, [new SignalObject()]); }
+        catch (TypeError $error) { echo $error->getMessage() . "|"; }
+        echo eval('
+            class EvalSignalObject {}
+            try { pcntl_sigprocmask(SIG_BLOCK, [new EvalSignalObject()]); }
+            catch (TypeError $error) { return $error->getMessage(); }
+            return "bad";
+        ');"#,
+    );
+    assert_eq!(
+        out,
+        "pcntl_sigprocmask(): Argument #2 ($signals) signals must be of type int, SignalObject given|\
+pcntl_sigprocmask(): Argument #2 ($signals) signals must be of type int, EvalSignalObject given"
     );
 }
 
@@ -646,6 +712,22 @@ pcntl_signal(): Argument #2 ($handler) must be of type callable|int, false given
     );
 }
 
+/// Recognizes a returned closure handler as an instance of PHP's `Closure` class.
+#[test]
+fn test_pcntl_signal_get_handler_closure_is_instanceof_closure() {
+    let out = compile_and_run(
+        "<?php
+        $direct = function(): void {};
+        echo get_class($direct) . '|';
+        pcntl_signal(SIGUSR1, function(int $signal): void {});
+        $handler = pcntl_signal_get_handler(SIGUSR1);
+        echo get_class($handler) . '|';
+        echo $handler instanceof Closure ? 'closure' : 'bad';
+        pcntl_signal(SIGUSR1, SIG_DFL);",
+    );
+    assert_eq!(out, "Closure|Closure|closure");
+}
+
 /// Raises a catchable PHP type error for a non-scalar restart-syscalls argument.
 #[test]
 fn test_pcntl_signal_rejects_array_restart_flag_without_backend_error() {
@@ -697,6 +779,54 @@ fn test_pcntl_exec_coerces_scalar_environment_values() {
         pcntl_waitpid($child, $status);"#,
     );
     assert_eq!(out, "K=123\nEMPTY=\n");
+}
+
+/// Stringifies nested arrays in homogeneous and heterogeneous AOT exec arguments.
+#[test]
+fn test_pcntl_exec_stringifies_nested_array_arguments() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        $child = pcntl_fork();
+        if ($child === 0) { pcntl_exec('/bin/echo', [[1], [2]]); exit(1); }
+        pcntl_waitpid($child, $status);
+        $child = pcntl_fork();
+        if ($child === 0) { pcntl_exec('/bin/echo', [[], 'tail']); exit(1); }
+        pcntl_waitpid($child, $status);"#,
+    );
+    assert_eq!(out.stdout, "Array Array\nArray tail\n");
+    assert_eq!(
+        out.stderr.matches("Warning: Array to string conversion").count(),
+        3,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Stringifies nested arrays and resources in heterogeneous AOT exec environments.
+#[test]
+fn test_pcntl_exec_stringifies_array_and_resource_environment_values() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        $resource = fopen('php://memory', 'r');
+        $child = pcntl_fork();
+        if ($child === 0) {
+            pcntl_exec('/usr/bin/env', [], ['NESTED' => [], 'RESOURCE' => $resource]);
+            exit(1);
+        }
+        pcntl_waitpid($child, $status);"#,
+    );
+    assert!(out.stdout.contains("NESTED=Array\n"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("RESOURCE=Resource id #"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: Array to string conversion").count(),
+        1,
+        "{}",
+        out.stderr
+    );
 }
 
 /// Uses `__toString()` for object values supplied through heterogeneous exec arrays.
@@ -1896,6 +2026,35 @@ fn test_pcntl_eval_exec_coerces_stringable_object_values() {
         ');"#,
     );
     assert_eq!(out, "value object\nVALUE=object\nstatus=0");
+}
+
+/// Applies PHP array and resource stringification to eval exec values.
+#[test]
+fn test_pcntl_eval_exec_stringifies_array_and_resource_values() {
+    let out = compile_and_run_capture(
+        r#"<?php echo eval('
+            $resource = fopen("php://memory", "r");
+            $pid = pcntl_fork();
+            if ($pid === 0) {
+                pcntl_exec("/bin/echo", [[], $resource]);
+                exit(99);
+            }
+            pcntl_waitpid($pid, $status);
+            return "status=" . pcntl_wexitstatus($status);
+        ');"#,
+    );
+    assert!(
+        out.stdout.starts_with("Array Resource id #"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.ends_with("\nstatus=0"), "{}", out.stdout);
+    assert_eq!(
+        out.stderr.matches("Warning: Array to string conversion").count(),
+        1,
+        "{}",
+        out.stderr
+    );
 }
 
 /// Throws PHP's catchable `Error` when an eval exec value has no `__toString()` method.

@@ -117,7 +117,7 @@ pub(super) fn eval_literal_scope_constraints_supported_by_lowering(
         })
 }
 
-/// Returns true when one read variable has no eval runtime state dependency.
+/// Returns true when one read variable is initialized and needs no eval runtime state.
 pub(super) fn eval_literal_scope_read_param_supported_by_lowering(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
@@ -128,7 +128,7 @@ pub(super) fn eval_literal_scope_read_param_supported_by_lowering(
         return false;
     }
     let Some(slot) = ctx.local_slots.get(name) else {
-        return true;
+        return false;
     };
     if ctx.is_ref_bound_local(name) {
         return false;
@@ -413,4 +413,3 @@ pub(super) fn aot_class_exists_for_eval_probe(ctx: &LoweringContext<'_, '_>, cla
         .keys()
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
 }
-

@@ -44,8 +44,12 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             }
         };
         if !matches!(
-            value_ty.codegen_repr(),
-            PhpType::Str
+            value_ty,
+            PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Iterable
+                | PhpType::Resource(_)
+                | PhpType::Str
                 | PhpType::Int
                 | PhpType::Float
                 | PhpType::Bool

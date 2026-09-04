@@ -525,6 +525,12 @@ fn lower_array_like_to_string(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Materializes PHP's array-to-string placeholder in the active string result registers.
 pub(super) fn emit_array_like_string_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_call_label(ctx.emitter, "__rt_sprintf_warn_array_to_string"),
+        Arch::X86_64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_sprintf_warn_array_to_string_x64")
+        }
+    }
     let (label, len) = ctx.data.add_string(b"Array");
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);

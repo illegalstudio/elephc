@@ -210,6 +210,80 @@ pub(super) fn activate_guarded_image_polyfills(program: Vec<Stmt>) -> Vec<Stmt> 
         .collect()
 }
 
+/// Removes guarded image polyfill declarations when the image capability is present.
+pub(super) fn deactivate_guarded_image_polyfills(program: Vec<Stmt>) -> Vec<Stmt> {
+    program
+        .into_iter()
+        .flat_map(|mut stmt| {
+            let guarded_polyfill = match &stmt.kind {
+                StmtKind::If {
+                    condition,
+                    then_body,
+                    ..
+                } => missing_function_guard_target(condition).is_some_and(|target| {
+                    string_is_image_function(target)
+                        && crate::opcache_prelude::detect::program_declares(then_body, target)
+                }),
+                _ => false,
+            };
+            if guarded_polyfill {
+                let StmtKind::If {
+                    elseif_clauses,
+                    else_body,
+                    ..
+                } = &mut stmt.kind
+                else {
+                    unreachable!("guarded polyfill only comes from an if statement");
+                };
+                if elseif_clauses.is_empty() {
+                    return deactivate_guarded_image_polyfills(
+                        std::mem::take(else_body).unwrap_or_default(),
+                    );
+                }
+                let (condition, then_body) = elseif_clauses.remove(0);
+                let remaining_elseifs = std::mem::take(elseif_clauses)
+                    .into_iter()
+                    .map(|(condition, body)| {
+                        (condition, deactivate_guarded_image_polyfills(body))
+                    })
+                    .collect();
+                let replacement_else = std::mem::take(else_body)
+                    .map(deactivate_guarded_image_polyfills);
+                stmt.kind = StmtKind::If {
+                    condition,
+                    then_body: deactivate_guarded_image_polyfills(then_body),
+                    elseif_clauses: remaining_elseifs,
+                    else_body: replacement_else,
+                };
+                return vec![stmt];
+            }
+            match &mut stmt.kind {
+                StmtKind::If {
+                    then_body,
+                    elseif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    *then_body = deactivate_guarded_image_polyfills(std::mem::take(then_body));
+                    for (_, body) in elseif_clauses {
+                        *body = deactivate_guarded_image_polyfills(std::mem::take(body));
+                    }
+                    if let Some(body) = else_body {
+                        *body = deactivate_guarded_image_polyfills(std::mem::take(body));
+                    }
+                }
+                StmtKind::NamespaceBlock { body, .. }
+                | StmtKind::IncludeOnceGuard { body, .. }
+                | StmtKind::Synthetic(body) => {
+                    *body = deactivate_guarded_image_polyfills(std::mem::take(body));
+                }
+                _ => {}
+            }
+            vec![stmt]
+        })
+        .collect()
+}
+
 /// Returns whether `name`'s last segment is an image *function*: any GD function
 /// (and `image_type_to_*`) via the `image` prefix, the Exif/IPTC families via
 /// their prefixes, the procedural `cairo_*` family via the `cairo_` prefix,
@@ -738,6 +812,18 @@ mod tests {
             "<?php if (!function_exists('imagecreatetruecolor')) { function imagecreatetruecolor(int $w, int $h): string { return 'polyfill'; } } echo imagecreatetruecolor(8, 8);"
         ));
         assert!(crate::opcache_prelude::detect::program_declares(
+            &program,
+            "imagecreatetruecolor"
+        ));
+    }
+
+    /// Removes a guarded polyfill when another image reference enables the bridge.
+    #[test]
+    fn deactivates_guarded_image_function_polyfill() {
+        let program = deactivate_guarded_image_polyfills(parse(
+            "<?php if (!function_exists('imagecreatetruecolor')) { function imagecreatetruecolor(int $w, int $h): string { return 'polyfill'; } } imagepng($im);"
+        ));
+        assert!(!crate::opcache_prelude::detect::program_declares(
             &program,
             "imagecreatetruecolor"
         ));

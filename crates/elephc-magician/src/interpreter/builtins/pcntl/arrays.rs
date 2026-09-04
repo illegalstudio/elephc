@@ -171,6 +171,29 @@ pub(super) fn eval_pcntl_int_array(
                 context,
                 values,
             )?
+        } else if tag == EVAL_TAG_OBJECT {
+            let identity = values.object_identity(value)?;
+            let class_name = match context.dynamic_object_class_name(identity) {
+                Some(name) => name,
+                None => runtime_object_class_name(value, values)?,
+            };
+            let _: RuntimeCellHandle = eval_throw_type_error(
+                &format!(
+                    "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, {class_name} given"
+                ),
+                context,
+                values,
+            )?;
+            return Err(EvalStatus::RuntimeFatal);
+        } else if tag == EVAL_TAG_CALLABLE {
+            let _: RuntimeCellHandle = eval_throw_type_error(
+                &format!(
+                    "{name}(): Argument #{argument} (${parameter}) {element_name} must be of type int, Closure given"
+                ),
+                context,
+                values,
+            )?;
+            return Err(EvalStatus::RuntimeFatal);
         } else {
             eval_int_value(value, values)?
         };

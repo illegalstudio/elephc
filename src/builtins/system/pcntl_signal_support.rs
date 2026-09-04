@@ -173,6 +173,8 @@ fn signal_element_type_supported(ty: &PhpType) -> bool {
             | PhpType::Void
             | PhpType::Never
             | PhpType::TaggedScalar
+            | PhpType::Object(_)
+            | PhpType::Callable
             | PhpType::Mixed
             | PhpType::Union(_)
     )

@@ -166,6 +166,15 @@ fn emit_string_array(
 
 /// Returns whether one array storage type can follow PHP's scalar string conversion path.
 fn exec_array_value_type_supported(ty: &PhpType) -> bool {
+    if matches!(
+        ty,
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Iterable
+            | PhpType::Resource(_)
+    ) {
+        return true;
+    }
     matches!(
         ty.codegen_repr(),
         PhpType::Str
@@ -392,18 +401,42 @@ fn emit_loaded_exec_value_as_string(
     value: ValueId,
     element: &PhpType,
 ) -> Result<()> {
-    match element.codegen_repr() {
-        PhpType::Int => emit_exec_int_string(ctx),
-        PhpType::Float => emit_exec_float_string(ctx),
-        PhpType::Bool | PhpType::False => emit_exec_bool_string(ctx),
-        PhpType::Void => emit_exec_empty_string(ctx),
-        PhpType::TaggedScalar => emit_exec_tagged_scalar_string(ctx),
-        PhpType::Object(_) => emit_exec_object_string(ctx, value),
-        PhpType::Mixed | PhpType::Union(_) => emit_exec_mixed_string(ctx, value),
-        other => Err(CodegenIrError::unsupported(format!(
-            "pcntl_exec scalar string coercion for {other:?}",
-        ))),
+    match element {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            emit_exec_array_string(ctx)
+        }
+        PhpType::Resource(_) => emit_exec_resource_string(ctx),
+        _ => match element.codegen_repr() {
+            PhpType::Int => emit_exec_int_string(ctx),
+            PhpType::Float => emit_exec_float_string(ctx),
+            PhpType::Bool | PhpType::False => emit_exec_bool_string(ctx),
+            PhpType::Void => emit_exec_empty_string(ctx),
+            PhpType::TaggedScalar => emit_exec_tagged_scalar_string(ctx),
+            PhpType::Object(_) => emit_exec_object_string(ctx, value),
+            PhpType::Mixed | PhpType::Union(_) => emit_exec_mixed_string(ctx, value),
+            other => Err(CodegenIrError::unsupported(format!(
+                "pcntl_exec scalar string coercion for {other:?}",
+            ))),
+        },
     }
+}
+
+/// Converts an array payload to PHP's warning plus fixed `Array` string pair.
+fn emit_exec_array_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    super::super::conversions::emit_array_like_string_result(ctx);
+    move_exec_string_result(ctx);
+    Ok(())
+}
+
+/// Converts a native resource payload to PHP's `Resource id #N` display string.
+fn emit_exec_resource_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x3"),                 // pass the native resource payload to the formatter
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rcx"),                // pass the native resource payload to the formatter
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_to_string");
+    move_exec_string_result(ctx);
+    Ok(())
 }
 
 /// Converts an inline nullable integer, whose tag is in `x5`/`r9`, to PHP string registers.
@@ -515,57 +548,28 @@ fn emit_exec_mixed_string(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resu
 
 /// Converts one hash-iterator Mixed payload whose tag is already in `x5`/`r9`.
 fn emit_exec_assoc_mixed_string(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
-    let from_int = ctx.next_label("pcntl_exec_assoc_mixed_int");
-    let from_string = ctx.next_label("pcntl_exec_assoc_mixed_string");
-    let from_float = ctx.next_label("pcntl_exec_assoc_mixed_float");
-    let from_bool = ctx.next_label("pcntl_exec_assoc_mixed_bool");
-    let from_null = ctx.next_label("pcntl_exec_assoc_mixed_null");
-    let from_object = ctx.next_label("pcntl_exec_assoc_mixed_object");
-    let done = ctx.next_label("pcntl_exec_assoc_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            for (tag, label) in [(0, &from_int), (1, &from_string), (2, &from_float), (3, &from_bool), (6, &from_object), (8, &from_null)] {
-                ctx.emitter.instruction(&format!("cmp x5, #{tag}"));            // compare the associative payload's runtime tag
-                ctx.emitter.instruction(&format!("b.eq {label}"));              // dispatch its PHP string conversion
-            }
+            abi::emit_temporary_stack_address(ctx.emitter, "x9", EXEC_MIXED_CELL_OFFSET);
+            ctx.emitter.instruction("str x5, [x9]");                            // stage the hash iterator's runtime tag
+            ctx.emitter.instruction("str x3, [x9, #8]");                        // stage the hash iterator's low payload word
+            ctx.emitter.instruction("str x4, [x9, #16]");                       // stage the hash iterator's high payload word
+            ctx.emitter.instruction("mov x0, x9");                              // pass the borrowed Mixed-shaped cell to shared dispatch
         }
         Arch::X86_64 => {
-            for (tag, label) in [(0, &from_int), (1, &from_string), (2, &from_float), (3, &from_bool), (6, &from_object), (8, &from_null)] {
-                ctx.emitter.instruction(&format!("cmp r9, {tag}"));             // compare the associative payload's runtime tag
-                ctx.emitter.instruction(&format!("je {label}"));                // dispatch its PHP string conversion
-            }
+            abi::emit_temporary_stack_address(ctx.emitter, "r10", EXEC_MIXED_CELL_OFFSET);
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // stage the hash iterator's runtime tag
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rcx");            // stage the hash iterator's low payload word
+            ctx.emitter.instruction("mov QWORD PTR [r10 + 16], r8");            // stage the hash iterator's high payload word
+            ctx.emitter.instruction("mov rax, r10");                            // pass the borrowed Mixed-shaped cell to shared dispatch
         }
     }
-    super::super::exceptions::emit_type_error(
+    super::super::conversions::emit_mixed_string_dispatch_from_result(
         ctx,
-        "pcntl_exec(): array value could not be converted to string",
-    );
-    ctx.emitter.label(&from_int);
-    emit_exec_int_string(ctx)?;
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&from_string);
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&from_float);
-    emit_exec_float_string(ctx)?;
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&from_bool);
-    emit_exec_bool_string(ctx)?;
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&from_object);
-    emit_exec_object_string(ctx, value)?;
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&from_null);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, xzr");                             // null stringifies to an empty pointer sentinel
-            ctx.emitter.instruction("mov x4, xzr");                             // null stringifies to zero bytes
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("xor ecx, ecx");                            // null stringifies to an empty pointer sentinel
-            ctx.emitter.instruction("xor r8d, r8d");                            // null stringifies to zero bytes
-        }
-    }
-    ctx.emitter.label(&done);
+        value,
+        super::super::conversions::MixedStringContextMode::Result,
+    )?;
+    move_exec_string_result(ctx);
     Ok(())
 }
 

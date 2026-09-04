@@ -734,6 +734,53 @@ fn test_join_empty_array() {
     assert_eq!(out, "[]");
 }
 
+/// Emits PHP's precision-loss deprecation for weak float-to-int builtin arguments.
+#[test]
+fn test_str_repeat_float_count_precision_loss_is_deprecated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo str_repeat("a", 2.7), "|";
+$counts = [2.7, 2];
+echo str_repeat("b", $counts[0]), "|";
+echo eval('return str_repeat("c", 2.7);');
+"#,
+    );
+    assert_eq!(out.stdout, "aa|bb|cc");
+    assert_eq!(
+        out.stderr
+            .matches("Deprecated: Implicit conversion from float 2.7 to int loses precision")
+            .count(),
+        3,
+        "{}",
+        out.stderr
+    );
+}
+
+/// Stringifies boxed arrays and resources consistently in concat and `implode()`.
+#[test]
+fn test_boxed_arrays_and_resources_use_php_string_conversion() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function boxed_string_value(mixed $value): mixed { return $value; }
+$resource = fopen("php://memory", "r");
+echo boxed_string_value([0]), "|";
+echo "[" . boxed_string_value([1]) . "]|";
+echo implode(",", [boxed_string_value([2]), boxed_string_value($resource)]);
+"#,
+    );
+    assert!(
+        out.stdout.starts_with("Array|[Array]|Array,Resource id #"),
+        "{}",
+        out.stdout
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: Array to string conversion").count(),
+        3,
+        "{}",
+        out.stderr
+    );
+}
+
 /// Verifies `ucwords()` accepts PHP's second `$separators` argument positionally and by
 /// name. `$separators` is a byte SET: each listed byte ends a word, an empty set leaves only
 /// the very first character capitalized, and a separator run capitalizes only the byte after

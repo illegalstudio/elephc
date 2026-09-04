@@ -73,16 +73,13 @@ fn escaped_dollar_stays_literal_and_suppresses_interpolation() {
     );
 }
 
-/// Verifies the double-quoted escape table is unchanged by the interpolation rewrite.
-///
-/// `\x`, octal and `\u{}` escapes are still unsupported in this lexer (a separate,
-/// declared debt), so they keep their backslash exactly as before.
+/// Verifies simple, hexadecimal, and octal double-quoted escapes.
 #[test]
 fn double_quoted_escape_table_is_unchanged() {
     assert_eq!(
-        kinds(r#""a\nb\tc\\d\"e\q\x41";"#),
+        kinds(r#""a\nb\tc\\d\"e\q\x41\101\0";"#),
         vec![
-            string("a\nb\tc\\d\"e\\q\\x41"),
+            string("a\nb\tc\\d\"e\\qAA\0"),
             TokenKind::Semicolon,
             TokenKind::Eof
         ]

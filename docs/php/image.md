@@ -14,6 +14,12 @@ Linux arm64, and Linux x86_64.
 The image library is only linked when a program references an image symbol, so
 programs that do not use images are unaffected.
 
+A guarded polyfill such as `if (!function_exists('imagecreatetruecolor'))` is
+treated as user-owned when it is the program's only image reference. In that
+case elephc does not link the image bridge and compiles the fallback branch. Use
+`--with-image`, or make another real image call, to enable the bridge explicitly;
+the generated image declaration then wins and the guarded fallback stays inactive.
+
 > The GD, Exif/IPTC, Imagick, Gmagick, and Cairo surfaces are all implemented.
 > Documented gaps (operations with no pure-Rust path) are called out inline.
 

@@ -53,6 +53,8 @@ fn signal_codegen_element_supported(ty: &PhpType) -> bool {
             | PhpType::Void
             | PhpType::Never
             | PhpType::TaggedScalar
+            | PhpType::Object(_)
+            | PhpType::Callable
             | PhpType::Mixed
             | PhpType::Union(_)
     )
@@ -249,15 +251,10 @@ fn emit_loaded_signal_value_as_int(
         }
         PhpType::Float => {
             match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction("fmov d0, x3");                     // reinterpret the loaded float payload
-                    ctx.emitter.instruction("fcvtzs x0, d0");                   // truncate the signal number toward zero
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("movq xmm0, rcx");                  // reinterpret the loaded float payload
-                    ctx.emitter.instruction("cvttsd2si rax, xmm0");             // truncate the signal number toward zero
-                }
+                Arch::AArch64 => ctx.emitter.instruction("fmov d0, x3"),        // move the loaded signal float into the shared FP result register
+                Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rcx"),      // move the loaded signal float into the shared FP result register
             }
+            super::strings::emit_float_result_to_int_with_precision_deprecation(ctx);
         }
         PhpType::TaggedScalar => {
             let null = ctx.next_label("pcntl_signal_tagged_null");
@@ -279,6 +276,12 @@ fn emit_loaded_signal_value_as_int(
             ctx.emitter.label(&done);
         }
         PhpType::Str => emit_signal_string_to_int(ctx, name, argument),
+        PhpType::Object(class_name) => {
+            emit_loaded_signal_type_error(ctx, name, argument, &class_name);
+        }
+        PhpType::Callable => {
+            emit_loaded_signal_type_error(ctx, name, argument, "Closure");
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_loaded_mixed_signal_value_as_int(ctx, name, argument)?;
         }
@@ -289,6 +292,22 @@ fn emit_loaded_signal_value_as_int(
         }
     }
     Ok(())
+}
+
+/// Releases partial normalization and throws the exact signal element `TypeError`.
+fn emit_loaded_signal_type_error(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    argument: usize,
+    actual_type: &str,
+) {
+    release_in_progress_normalized_signal_array(ctx, 0);
+    super::super::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "{name}(): Argument #{argument} ($signals) signals must be of type int, {actual_type} given"
+        ),
+    );
 }
 
 /// Moves the common loaded low payload word into the integer result register.
@@ -356,15 +375,10 @@ fn emit_loaded_mixed_signal_value_as_int(
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&from_float);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float payload
-            ctx.emitter.instruction("fcvtzs x0, d0");                           // truncate the signal number toward zero
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float payload
-            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // truncate the signal number toward zero
-        }
+        Arch::AArch64 => ctx.emitter.instruction("fmov d0, x1"),                // move the unboxed float payload into the shared FP result register
+        Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rdi"),              // move the unboxed float payload into the shared FP result register
     }
+    super::strings::emit_float_result_to_int_with_precision_deprecation(ctx);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&from_null);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);

@@ -20,6 +20,7 @@ const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "ArrayObject",
     "CachingIterator",
     "CallbackFilterIterator",
+    "Closure",
     "Countable",
     "EmptyIterator",
     "Throwable",
@@ -133,6 +134,20 @@ pub(super) fn collect_symbols(
             StmtKind::NamespaceBlock { name, body } => {
                 let block_namespace = Some(namespace_name(name));
                 collect_symbols(body, block_namespace.as_deref(), symbols);
+            }
+            StmtKind::If {
+                then_body,
+                elseif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_symbols(then_body, namespace.as_deref(), symbols);
+                for (_, body) in elseif_clauses {
+                    collect_symbols(body, namespace.as_deref(), symbols);
+                }
+                if let Some(body) = else_body {
+                    collect_symbols(body, namespace.as_deref(), symbols);
+                }
             }
             StmtKind::FunctionDecl { name, .. } => {
                 insert_folded_symbol(

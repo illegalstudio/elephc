@@ -114,7 +114,6 @@ struct EvalSyncGlobal {
 /// Source location for one direct Mixed parameter passed into scope-read eval AOT.
 enum EvalScopeReadParamSource {
     Local(EvalSyncLocal),
-    Null,
 }
 
 /// Local-to-global alias metadata inherited by eval from the caller function scope.

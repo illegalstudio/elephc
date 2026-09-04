@@ -9,16 +9,17 @@
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
 //! - Every scalar branch routes its terminal write through `__rt_stdout_write` (not a raw `write` syscall) so `--web`
 //!   output capture applies: echoing a boxed `Mixed` value reaches the response body instead of the worker's stdout.
+//! - Indexed and associative arrays emit PHP's warning and the fixed `Array` text.
 
 use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::codegen_support::{abi, platform::Arch};
 
 /// Emits the `__rt_mixed_write_stdout` runtime helper for the active target.
 ///
 /// Takes a boxed `Mixed` pointer in `x0` (ARM64) or `rax` (x86_64) and dispatches
 /// on the runtime tag to write the appropriate scalar representation to stdout.
-/// Handles null, bool, int, float, resource, and string payloads; non-scalar
-/// types (array, object, callable, etc.) print nothing consistent with PHP echo semantics.
+/// Handles null, bool, int, float, array, resource, and string payloads; objects and
+/// callables remain owned by their higher-level string-context dispatcher.
 /// Each branch funnels its (pointer, length) into the shared emit tail, which calls
 /// `__rt_stdout_write` so the `--web` capture indirection sees the bytes.
 pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
@@ -45,6 +46,10 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_write_stdout_resource");               // resources print with PHP's Resource id marker
     emitter.instruction("cmp x9, #2");                                          // is the boxed value a float?
     emitter.instruction("b.eq __rt_mixed_write_stdout_float");                  // floats print via ftoa
+    emitter.instruction("cmp x9, #4");                                          // is the boxed value an indexed array?
+    emitter.instruction("b.eq __rt_mixed_write_stdout_array");                  // arrays warn and print PHP's fixed Array text
+    emitter.instruction("cmp x9, #5");                                          // is the boxed value an associative array?
+    emitter.instruction("b.eq __rt_mixed_write_stdout_array");                  // hashes share PHP's array stringification
     emitter.instruction("cmp x9, #1");                                          // is the boxed value a string?
     emitter.instruction("b.ne __rt_mixed_write_stdout_done");                   // non-scalar boxed payloads print nothing for echo
     emitter.instruction("ldr x1, [x0, #8]");                                    // load the boxed string pointer
@@ -66,6 +71,12 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed native resource payload
     emitter.instruction("bl __rt_resource_write_stdout");                       // print the resource marker through the shared (capture-aware) helper
     emitter.instruction("b __rt_mixed_write_stdout_done");                      // restore x30 and return after printing the boxed resource
+
+    emitter.label("__rt_mixed_write_stdout_array");
+    emitter.instruction("bl __rt_sprintf_warn_array_to_string");                // emit PHP's suppressible array-to-string warning
+    abi::emit_symbol_address(emitter, "x1", "_iterable_array_str");
+    emitter.instruction("mov x2, #5");                                          // pass the fixed Array byte length to the write tail
+    emitter.instruction("b __rt_mixed_write_stdout_emit");                      // print the fixed Array text through capture-aware output
 
     emitter.label("__rt_mixed_write_stdout_float");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the boxed float bits
@@ -110,6 +121,10 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_write_stdout_resource");                 // resources print with PHP's Resource id marker
     emitter.instruction("cmp r10, 2");                                          // is the boxed value a float?
     emitter.instruction("je __rt_mixed_write_stdout_float");                    // floats print through the shared float-to-string helper
+    emitter.instruction("cmp r10, 4");                                          // is the boxed value an indexed array?
+    emitter.instruction("je __rt_mixed_write_stdout_array");                    // arrays warn and print PHP's fixed Array text
+    emitter.instruction("cmp r10, 5");                                          // is the boxed value an associative array?
+    emitter.instruction("je __rt_mixed_write_stdout_array");                    // hashes share PHP's array stringification
     emitter.instruction("cmp r10, 1");                                          // is the boxed value a string?
     emitter.instruction("jne __rt_mixed_write_stdout_done");                    // non-scalar boxed payloads print nothing for echo
     emitter.instruction("mov rdx, QWORD PTR [rax + 16]");                       // load the boxed string length into the length register
@@ -133,6 +148,12 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_resource_write_stdout");                     // print the resource marker through the shared (capture-aware) helper
     emitter.instruction("jmp __rt_mixed_write_stdout_done");                    // return after printing the boxed resource payload
 
+    emitter.label("__rt_mixed_write_stdout_array");
+    emitter.instruction("call __rt_sprintf_warn_array_to_string_x64");          // emit PHP's suppressible array-to-string warning
+    abi::emit_symbol_address(emitter, "rax", "_iterable_array_str");
+    emitter.instruction("mov edx, 5");                                          // pass the fixed Array byte length to the write tail
+    emitter.instruction("jmp __rt_mixed_write_stdout_emit");                    // print the fixed Array text through capture-aware output
+
     emitter.label("__rt_mixed_write_stdout_float");
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the boxed float bits into a scratch register before the conversion call
     emitter.instruction("movq xmm0, r10");                                      // move the boxed float bits into the standard x86_64 float argument register
@@ -147,4 +168,33 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_write_stdout_done");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning from the mixed echo helper
     emitter.instruction("ret");                                                 // return to the caller after the mixed echo path completes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits the mixed stdout helper for one supported target.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_mixed_write_stdout(&mut emitter);
+        emitter.output()
+    }
+
+    /// Verifies both target families warn and print boxed indexed and associative arrays.
+    #[test]
+    fn test_mixed_write_stdout_dispatches_array_tags_on_both_targets() {
+        let arm64 = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(arm64.contains("cmp x9, #4\n    b.eq __rt_mixed_write_stdout_array"));
+        assert!(arm64.contains("cmp x9, #5\n    b.eq __rt_mixed_write_stdout_array"));
+        assert!(arm64.contains("bl __rt_sprintf_warn_array_to_string"));
+        assert!(arm64.contains("_iterable_array_str"));
+
+        let x64 = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(x64.contains("cmp r10, 4\n    je __rt_mixed_write_stdout_array"));
+        assert!(x64.contains("cmp r10, 5\n    je __rt_mixed_write_stdout_array"));
+        assert!(x64.contains("call __rt_sprintf_warn_array_to_string_x64"));
+        assert!(x64.contains("_iterable_array_str"));
+    }
 }

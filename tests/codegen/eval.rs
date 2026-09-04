@@ -29369,3 +29369,25 @@ echo ":"; echo intval("42");');
     );
     assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
 }
+
+/// Decodes NUL escapes and warns only for observable undefined-variable reads in eval.
+#[test]
+fn test_eval_nul_escapes_and_undefined_variable_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo eval('echo strlen("\0") . ":" . strlen("\x00") . ":";
+echo $missing;
+return ":" . ($quiet ?? "fallback");');
+"#,
+    );
+    assert_eq!(out.stdout, "1:1::fallback");
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Undefined variable $missing")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
+}
