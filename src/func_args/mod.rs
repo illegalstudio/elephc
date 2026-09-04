@@ -13,9 +13,8 @@
 //!   `mixed ...$__elephc_func_args`, so the *existing* variadic call machinery (planner,
 //!   EIR lowering, ABI) packs the surplus with no new ABI surface.
 //! - Because the introspection calls are rewritten away here, no builtin registry entry
-//!   exists for them: they behave like the language constructs PHP itself special-cases
-//!   (php-src rejects `$f = 'func_num_args'; $f();` with "Cannot call func_num_args()
-//!   dynamically" for the same reason).
+//!   exists for them. PHP accepts direct calls and literal `call_user_func*` forms, while
+//!   rejecting a callback first stored in a variable or created with first-class syntax.
 //! - The pass runs *after* name resolution and autoloading so autoloaded declarations are
 //!   covered too. Call names are therefore matched on their unqualified last segment,
 //!   case-insensitively, which accepts both the canonical `func_num_args` and the

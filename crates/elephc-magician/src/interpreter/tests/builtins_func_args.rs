@@ -74,16 +74,21 @@ return 1;"#,
 
     assert_eq!(
         values.output,
-        "negative|range|func_get_args() cannot be called from the global scope"
+        "negative|range|func_get_args() must be called from a function context"
     );
     assert_eq!(values.get(result), FakeValue::Int(1));
 }
 
-/// Verifies eval rejects argument introspection through PHP dynamic-call surfaces.
+/// Verifies eval permits literal `call_user_func*` forms but rejects truly dynamic callbacks.
 #[test]
-fn execute_program_func_args_reject_dynamic_invocation() {
+fn execute_program_func_args_match_literal_and_dynamic_callback_rules() {
     let program = parse_fragment(
         br#"function probe_dynamic_args() {
+    echo call_user_func("func_num_args") . "|";
+    echo implode(",", call_user_func("func_get_args")) . "|";
+    echo call_user_func("func_get_arg", 0) . "|";
+    echo call_user_func_array("FUNC_NUM_ARGS", []) . "|";
+    echo call_user_func_array("func_get_arg", ["position" => 0]) . "|";
     try {
         $callback = func_num_args(...);
         $callback();
@@ -91,12 +96,8 @@ fn execute_program_func_args_reject_dynamic_invocation() {
         echo $error->getMessage() . "|";
     }
     try {
-        call_user_func("func_get_args");
-    } catch (Error $error) {
-        echo $error->getMessage() . "|";
-    }
-    try {
-        call_user_func("func_get_arg", 0);
+        $callback = "func_get_arg";
+        call_user_func($callback, 0);
     } catch (Error $error) {
         echo $error->getMessage();
     }
@@ -112,7 +113,7 @@ return true;"#,
 
     assert_eq!(
         values.output,
-        "Cannot call func_num_args() dynamically|Cannot call func_get_args() dynamically|Cannot call func_get_arg() dynamically"
+        "1|7|7|1|7|Cannot call func_num_args() dynamically|Cannot call func_get_arg() dynamically"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

@@ -551,9 +551,8 @@ impl Rewriter {
         self.try_rewrite_call(expr);
     }
 
-    /// Replaces `expr` in place when it is a call to one of the three introspection
-    /// constructs, recording a diagnostic instead when the enclosing scope cannot support
-    /// it. Any other expression is left untouched.
+    /// Replaces direct and literal `call_user_func*` invocations of the three introspection
+    /// constructs, recording a diagnostic when the enclosing scope cannot support them.
     fn try_rewrite_call(&mut self, expr: &mut Expr) {
         let ExprKind::FunctionCall { name, args } = &expr.kind else {
             return;
@@ -567,10 +566,12 @@ impl Rewriter {
         if !self.rewrite_introspection {
             return;
         }
-        let Some(call) = IntrospectionCall::from_name(name) else {
+        let replacement = IntrospectionCall::from_name(name)
+            .map(|call| (call, args.clone()))
+            .or_else(|| literal_call_user_func_introspection(name, args));
+        let Some((call, args)) = replacement else {
             return;
         };
-        let args = args.clone();
         match self.scope_replacement(call, &args, expr.span) {
             Ok(kind) => expr.kind = kind,
             Err(error) => self.errors.push(error),
@@ -630,6 +631,35 @@ impl Rewriter {
             scope.optional_param.is_some(),
             span,
         ))
+    }
+}
+
+/// Extracts PHP's special literal `call_user_func*('func_*', ...)` call shapes.
+fn literal_call_user_func_introspection(
+    name: &Name,
+    args: &[Expr],
+) -> Option<(IntrospectionCall, Vec<Expr>)> {
+    let function = name.last_segment()?;
+    let ExprKind::StringLiteral(callback) = &args.first()?.kind else {
+        return None;
+    };
+    let call = IntrospectionCall::from_segment(callback)?;
+    if function.eq_ignore_ascii_case("call_user_func") {
+        return Some((call, args[1..].to_vec()));
+    }
+    if !function.eq_ignore_ascii_case("call_user_func_array") || args.len() != 2 {
+        return None;
+    }
+    match &args[1].kind {
+        ExprKind::ArrayLiteral(values) => Some((call, values.clone())),
+        ExprKind::ArrayLiteralAssoc(entries)
+            if entries
+                .iter()
+                .all(|(key, _)| matches!(key.kind, ExprKind::IntLiteral(_))) =>
+        {
+            Some((call, entries.iter().map(|(_, value)| value.clone()).collect()))
+        }
+        _ => None,
     }
 }
 
