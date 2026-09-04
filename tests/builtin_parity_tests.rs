@@ -67,10 +67,11 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             contract.name
         );
     }
-    assert_eq!(exceptional.len(), 13);
+    assert_eq!(exceptional.len(), 14);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
+    let mut compiler_transforms = BTreeSet::new();
     let mut preludes = BTreeSet::new();
     let mut unsupported = 0;
     for contract in exceptional {
@@ -81,6 +82,9 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             BackendSupport::Implemented(BackendImplementation::DedicatedSyntax) => {
                 dedicated_syntax += 1;
             }
+            BackendSupport::Implemented(BackendImplementation::CompilerTransform) => {
+                compiler_transforms.insert(contract.name);
+            }
             BackendSupport::Implemented(BackendImplementation::Prelude) => {
                 preludes.insert(contract.name);
             }
@@ -90,10 +94,20 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     }
     assert_eq!(language_constructs, 5);
     assert_eq!(dedicated_syntax, 1);
-    assert_eq!(unsupported, 3);
+    assert_eq!(unsupported, 0);
+    assert_eq!(
+        compiler_transforms,
+        BTreeSet::from(["func_get_arg", "func_get_args", "func_num_args"])
+    );
     assert_eq!(
         preludes,
-        BTreeSet::from(["hash_copy", "hash_final", "hash_init", "hash_update"])
+        BTreeSet::from([
+            "hash_copy",
+            "hash_final",
+            "hash_init",
+            "hash_update",
+            "zend_version",
+        ])
     );
 
     let hash_init = contracts()
@@ -261,6 +275,7 @@ fn backend_public_name_sets_derive_from_shared_support() {
                     BackendImplementation::Registry
                         | BackendImplementation::LanguageConstruct
                         | BackendImplementation::DedicatedSyntax
+                        | BackendImplementation::CompilerTransform
                 )
             )
         })

@@ -52,6 +52,24 @@ fn context_new_returns_current_version_handle() {
     assert_eq!(version, ABI_VERSION);
 }
 
+/// Verifies a callback owner keeps a heap eval context alive until its matching release.
+#[test]
+fn context_retain_defers_heap_context_destruction() {
+    let ctx = __elephc_eval_context_new();
+    assert!(!ctx.is_null());
+    let status = unsafe { __elephc_eval_context_retain(ctx) };
+    assert_eq!(status, EvalStatus::Ok.code());
+
+    unsafe {
+        __elephc_eval_context_free(ctx);
+    }
+    assert_eq!(unsafe { (*ctx).abi_version() }, ABI_VERSION);
+
+    unsafe {
+        __elephc_eval_context_free(ctx);
+    }
+}
+
 /// Verifies call-site metadata can be set through the stable context ABI.
 #[test]
 fn context_set_call_site_records_file_dir_and_line() {

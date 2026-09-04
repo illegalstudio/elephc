@@ -36,6 +36,36 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn release(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus> {
         self.runtime_release(value)
     }
+    /// Reports no collectible nodes in the stable fake heap.
+    fn gc_collect_cycles(&mut self) -> Result<i64, EvalStatus> {
+        Ok(0)
+    }
+    /// Disables fake automatic cycle collection.
+    fn gc_disable(&mut self) -> Result<(), EvalStatus> {
+        self.gc_disabled = true;
+        Ok(())
+    }
+    /// Enables fake automatic cycle collection.
+    fn gc_enable(&mut self) -> Result<(), EvalStatus> {
+        self.gc_disabled = false;
+        Ok(())
+    }
+    /// Reports the fake automatic collection flag.
+    fn gc_enabled(&mut self) -> Result<bool, EvalStatus> {
+        Ok(!self.gc_disabled)
+    }
+    /// Reports zero bytes because the fake heap has no allocator caches.
+    fn gc_mem_caches(&mut self) -> Result<i64, EvalStatus> {
+        Ok(0)
+    }
+    /// Reads one fake GC status counter using the generated-runtime selector numbers.
+    fn gc_status_metric(&mut self, metric: u64) -> Result<i64, EvalStatus> {
+        Ok(match metric {
+            7 => self.gc_runs,
+            8 => self.gc_collected,
+            _ => 0,
+        })
+    }
     /// Returns the same fake handle because fake cells do not refcount.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_retain(value)

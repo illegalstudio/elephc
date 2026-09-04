@@ -215,7 +215,8 @@ fn shared_php_visible_extension_contracts(
             matches!(
                 aot_support(contract),
                 BackendSupport::Implemented(
-                    BackendImplementation::Registry | BackendImplementation::DedicatedSyntax
+                    BackendImplementation::Registry
+                        | BackendImplementation::DedicatedSyntax
                 )
             )
         })
