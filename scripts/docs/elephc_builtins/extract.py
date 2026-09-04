@@ -430,8 +430,8 @@ def _render_default(value, optional: bool) -> Optional[str]:
 
     Required params (``optional`` false) have no default (``None``). Optional
     params render their default: ``null``, ``true``/``false``, integers/floats
-    verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN`` sentinels
-    as constants, and the empty-array sentinel as ``[]``.
+    verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN`` and
+    ``E_ALL`` sentinels as constants, and the empty-array sentinel as ``[]``.
     """
     if not optional:
         return None
@@ -445,7 +445,7 @@ def _render_default(value, optional: bool) -> Optional[str]:
     if isinstance(value, list):
         return "[]"
     if isinstance(value, str):
-        if value in ("PHP_INT_MAX", "PHP_INT_MIN"):
+        if value in ("PHP_INT_MAX", "PHP_INT_MIN", "E_ALL"):
             return value
         return repr(value)
     return str(value)

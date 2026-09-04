@@ -66,6 +66,11 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertEqual([param["name"] for param in hash_init["aot"]["params"]], ["algo"])
         self.assertEqual(self.by_name["exit"]["params"][0]["default"], 0)
 
+    def test_error_all_default_renders_as_a_php_constant(self) -> None:
+        """Keep the profile-aware error mask symbolic in generated signatures."""
+        default = self.render_by_name["set_error_handler"]["sig"]["params"][1]["default"]
+        self.assertEqual(default, "E_ALL")
+
     def test_getenv_user_signature_preserves_checked_union(self) -> None:
         """Render the checked `string|false` result instead of contract-level `mixed`."""
         self.assertEqual(
