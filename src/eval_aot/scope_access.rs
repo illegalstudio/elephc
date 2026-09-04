@@ -294,6 +294,21 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
                 collect_assignment_target_scope_access(result_target, access);
             }
         }
+        ExprKind::FunctionCall { name, args }
+            if matches!(
+                name.trim_start_matches('\\'),
+                builtin if builtin.eq_ignore_ascii_case("isset")
+                    || builtin.eq_ignore_ascii_case("empty")
+            ) =>
+        {
+            for arg in args {
+                if let ExprKind::Variable(name) = &arg.kind {
+                    access.quiet_read(name);
+                } else {
+                    collect_expr_scope_access(arg, access);
+                }
+            }
+        }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
         | ExprKind::ExprCall { args, .. }
