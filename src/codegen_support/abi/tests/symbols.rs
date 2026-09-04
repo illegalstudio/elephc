@@ -26,8 +26,7 @@ fn test_emit_symbol_address_uses_platform_relocations() {
     );
 }
 
-/// Checks that string result stores use a separate scratch while loads reuse
-/// each destination register for address materialization without clobbering x9.
+/// Checks that string result stores and loads use the AArch64 symbol scratch.
 #[test]
 fn test_emit_store_and_load_result_to_symbol_for_string() {
     let mut emitter = test_emitter();
@@ -37,10 +36,8 @@ fn test_emit_store_and_load_result_to_symbol_for_string() {
 
     assert!(out.contains("    str x1, [x9]\n"));
     assert!(out.contains("    str x2, [x9, #8]\n"));
-    assert!(out.contains("    adrp x1, _demo_symbol@PAGE\n"));
-    assert!(out.contains("    ldr x1, [x1]\n"));
-    assert!(out.contains("    adrp x2, _demo_symbol@PAGE\n"));
-    assert!(out.contains("    ldr x2, [x2, #8]\n"));
+    assert!(out.contains("    ldr x1, [x9]\n"));
+    assert!(out.contains("    ldr x2, [x9, #8]\n"));
 }
 
 /// Verifies that an x9 destination survives address materialization by serving
@@ -60,23 +57,19 @@ fn test_non_pic_load_x9_self_scratches_on_aarch64() {
     );
 }
 
-/// Verifies that a non-PIC AArch64 floating-point symbol load preserves x9
-/// behind a 16-byte stack slot while using it for the address.
+/// Verifies that a non-PIC AArch64 floating-point symbol load uses x9 as its
+/// documented address scratch without changing the stack pointer.
 #[test]
-fn test_non_pic_float_load_preserves_x9_on_aarch64() {
+fn test_non_pic_float_load_uses_x9_scratch_on_aarch64() {
     let mut emitter = test_emitter();
     emit_load_symbol_to_reg(&mut emitter, "d0", "_demo_symbol", 8);
 
     assert_eq!(
         emitter.output(),
         concat!(
-            "    sub sp, sp, #16\n",
-            "    str x9, [sp]\n",
             "    adrp x9, _demo_symbol@PAGE\n",
             "    add x9, x9, _demo_symbol@PAGEOFF\n",
             "    ldr d0, [x9, #8]\n",
-            "    ldr x9, [sp]\n",
-            "    add sp, sp, #16\n",
         )
     );
 }
@@ -130,23 +123,19 @@ fn test_pic_load_x9_self_scratches_on_aarch64() {
     );
 }
 
-/// Verifies that a PIC AArch64 floating-point symbol load preserves x9 while
+/// Verifies that a PIC AArch64 floating-point symbol load uses x9 while
 /// resolving the external address through the GOT.
 #[test]
-fn test_pic_float_load_preserves_x9_on_aarch64() {
+fn test_pic_float_load_uses_x9_scratch_on_aarch64() {
     let mut emitter = Emitter::new_pic(Target::new(Platform::MacOS, Arch::AArch64));
     emit_load_symbol_to_reg(&mut emitter, "d0", "_demo_extern", 8);
 
     assert_eq!(
         emitter.output(),
         concat!(
-            "    sub sp, sp, #16\n",
-            "    str x9, [sp]\n",
             "    adrp x9, _demo_extern@GOTPAGE\n",
             "    ldr x9, [x9, _demo_extern@GOTPAGEOFF]\n",
             "    ldr d0, [x9, #8]\n",
-            "    ldr x9, [sp]\n",
-            "    add sp, sp, #16\n",
         )
     );
 }
