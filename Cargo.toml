@@ -85,7 +85,7 @@ elephc-pcntl = { path = "crates/elephc-pcntl" }
 indicatif = "0.17"
 console = "0.15"
 
-# Most bridge crates are runtime staticlibs, not used by the Rust compiler itself,
+# Bridge crates are runtime staticlibs, not used by the Rust compiler itself,
 # but codegen tests link their libelephc_*.a artifacts into compiled PHP
 # programs. They ship as dev-dependencies so `cargo test` / `cargo nextest run`
 # build them automatically. Without this, staticlibs are only built by `cargo

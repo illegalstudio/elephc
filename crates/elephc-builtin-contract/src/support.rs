@@ -285,8 +285,8 @@ mod tests {
         assert_eq!(eval_pending, 31);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
-        // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
-        // entry points. PCNTL contributes thirty-five registry contracts.
+        // adds the ten iconv contracts, thirty-five PCNTL contracts, and forty-three
+        // internal `__elephc_curl_*` entry points.
         assert_eq!(aot_registry, 619);
         assert_eq!(aot_external, 10 + curl_surface);
         assert_eq!(aot_unsupported, 3);

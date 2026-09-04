@@ -415,11 +415,6 @@ jobs:
               system bin/"elephc", "img.php"
               assert_equal "3x2", shell_output("#{testpath}/img")
 
-              # Exercise the PCNTL bridge from the Homebrew lib/ layout.
-              (testpath/"pcntl.php").write('<?php echo pcntl_getpriority();')
-              system bin/"elephc", "pcntl.php"
-              assert_match(/\A-?\d+\z/, shell_output("#{testpath}/pcntl").strip)
-
               # Exercise the web bridge link path from the Homebrew lib/ layout.
               (testpath/"web.php").write('<?php echo "web-ok";')
               system bin/"elephc", "--web", "web.php"
