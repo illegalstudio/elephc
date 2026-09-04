@@ -231,7 +231,6 @@ fn test_macos_dead_strip_runtime_assembles() {
 /// (not `L`-localized) so they are correctly excluded; numeric local labels
 /// never start an atom and are ignored.
 #[test]
-#[cfg(target_os = "macos")]
 fn test_macos_dead_strip_no_cross_atom_internal_refs() {
     let asm = crate::codegen_support::generate_runtime_with_features_pic(
         8 * 1024 * 1024,

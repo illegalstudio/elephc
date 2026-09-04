@@ -161,7 +161,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_free_post_validate");                      // finish through the common debug validation and free counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
-    emitter.label("__rt_heap_free_insert");
+    emitter.label_shared("__rt_heap_free_insert");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_free_list");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current free block while scanning for insertion point
 
