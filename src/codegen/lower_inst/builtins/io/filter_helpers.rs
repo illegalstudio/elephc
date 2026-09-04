@@ -219,7 +219,7 @@ pub(super) fn lower_user_stream_filter_attach(
     store_if_result(ctx, inst)
 }
 
-/// Boxes the current integer result as a PHP stream resource Mixed cell.
+/// Boxes the current integer result as a PHP stream-filter resource Mixed cell.
 ///
 /// Mints a fresh resource id first: like a descriptor, a filter handle can repeat a
 /// number a previous, now-released filter used, and PHP never hands the same
@@ -229,13 +229,13 @@ pub(super) fn emit_boxed_stream_resource(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // use the descriptor as the resource payload
-            ctx.emitter.instruction("mov x2, #0");                              // resource Mixed payloads do not use the high word
+            ctx.emitter.instruction("mov x2, #9");                              // resource subtype 9 identifies a stream filter
             ctx.emitter.instruction("mov x0, #9");                              // runtime tag 9 = resource
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // use the descriptor as the resource payload
-            ctx.emitter.instruction("xor esi, esi");                            // resource Mixed payloads do not use the high word
+            ctx.emitter.instruction("mov esi, 9");                              // resource subtype 9 identifies a stream filter
             ctx.emitter.instruction("mov eax, 9");                              // runtime tag 9 = resource
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
         }
@@ -260,4 +260,3 @@ pub(super) fn emit_null_mixed(ctx: &mut FunctionContext<'_>) {
     }
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
 }
-

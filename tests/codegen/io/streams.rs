@@ -549,6 +549,20 @@ fn test_get_resource_type_returns_stream() {
     assert_eq!(out, "stream");
 }
 
+/// Verifies compiled PHP keeps stream and stream-filter resources distinct.
+#[test]
+fn test_get_resource_type_returns_stream_filter() {
+    let out = compile_and_run(
+        r#"<?php
+$stream = fopen("php://memory", "r+");
+$filter = stream_filter_append($stream, "string.rot13", STREAM_FILTER_READ);
+echo get_resource_type($stream), "|", get_resource_type($filter), "|";
+var_dump($filter);
+"#,
+    );
+    assert_eq!(out, "stream|stream filter|resource(6) of type (stream filter)\n");
+}
+
 /// Verifies compiled PHP output for get resource id matches display marker.
 #[test]
 fn test_get_resource_id_matches_display_marker() {
