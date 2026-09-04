@@ -50,13 +50,13 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Forces a generated-runtime cycle-collection pass.
     fn gc_collect_cycles(&mut self) -> Result<i64, EvalStatus> {
-        Ok(unsafe { __rt_gc_collect_cycles_explicit() })
+        Ok(unsafe { __elephc_eval_gc_collect_cycles() })
     }
 
     /// Disables generated-runtime automatic collection safe points.
     fn gc_disable(&mut self) -> Result<(), EvalStatus> {
         unsafe {
-            __rt_gc_disable();
+            __elephc_eval_gc_disable();
         }
         Ok(())
     }
@@ -64,24 +64,24 @@ macro_rules! impl_lifecycle_scalar_ops {
     /// Enables generated-runtime automatic collection safe points.
     fn gc_enable(&mut self) -> Result<(), EvalStatus> {
         unsafe {
-            __rt_gc_enable();
+            __elephc_eval_gc_enable();
         }
         Ok(())
     }
 
     /// Reads the generated-runtime automatic collection flag.
     fn gc_enabled(&mut self) -> Result<bool, EvalStatus> {
-        Ok(unsafe { __rt_gc_enabled() } != 0)
+        Ok(unsafe { __elephc_eval_gc_enabled() } != 0)
     }
 
     /// Flushes generated-runtime allocator caches and returns reclaimed bytes.
     fn gc_mem_caches(&mut self) -> Result<i64, EvalStatus> {
-        Ok(unsafe { __rt_gc_mem_caches() })
+        Ok(unsafe { __elephc_eval_gc_mem_caches() })
     }
 
     /// Reads one generated-runtime GC status metric.
     fn gc_status_metric(&mut self, metric: u64) -> Result<i64, EvalStatus> {
-        Ok(unsafe { __rt_gc_status_metric(metric) })
+        Ok(unsafe { __elephc_eval_gc_status_metric(metric) })
     }
 
     /// Retains one boxed Mixed cell through the generated runtime wrapper.

@@ -31,6 +31,7 @@ pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
         Arch::AArch64 => emit_aarch64_wrappers(emitter),
         Arch::X86_64 => emit_x86_64_wrappers(emitter),
     }
+    emit_gc_lifecycle_wrappers(emitter);
 }
 
 
@@ -133,6 +134,25 @@ fn label_c_global(emitter: &mut Emitter, name: &str) {
     emitter.label_global(&symbol);
 }
 
+/// Exposes GC controls to Rust through platform-mangled C ABI tail wrappers.
+fn emit_gc_lifecycle_wrappers(emitter: &mut Emitter) {
+    let branch = match emitter.target.arch {
+        Arch::AArch64 => "b",
+        Arch::X86_64 => "jmp",
+    };
+    for (wrapper, target) in [
+        ("__elephc_eval_gc_collect_cycles", "__rt_gc_collect_cycles_explicit"),
+        ("__elephc_eval_gc_disable", "__rt_gc_disable"),
+        ("__elephc_eval_gc_enable", "__rt_gc_enable"),
+        ("__elephc_eval_gc_enabled", "__rt_gc_enabled"),
+        ("__elephc_eval_gc_mem_caches", "__rt_gc_mem_caches"),
+        ("__elephc_eval_gc_status_metric", "__rt_gc_status_metric"),
+    ] {
+        label_c_global(emitter, wrapper);
+        emitter.instruction(&format!("{branch} {target}"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +163,38 @@ mod tests {
         let mut emitter = Emitter::new(target);
         emit_eval_bridge_runtime(&mut emitter);
         emitter.output()
+    }
+
+    /// Verifies GC bridge exports use the platform C symbol while targeting internal helpers.
+    #[test]
+    fn gc_lifecycle_wrappers_apply_platform_c_symbol_mangling() {
+        for (target, c_prefix, branch) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "_",
+                "b",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "",
+                "jmp",
+            ),
+        ] {
+            let asm = emit_for(target);
+            for (wrapper, internal) in [
+                ("__elephc_eval_gc_collect_cycles", "__rt_gc_collect_cycles_explicit"),
+                ("__elephc_eval_gc_disable", "__rt_gc_disable"),
+                ("__elephc_eval_gc_enable", "__rt_gc_enable"),
+                ("__elephc_eval_gc_enabled", "__rt_gc_enabled"),
+                ("__elephc_eval_gc_mem_caches", "__rt_gc_mem_caches"),
+                ("__elephc_eval_gc_status_metric", "__rt_gc_status_metric"),
+            ] {
+                let export = format!("{c_prefix}{wrapper}:");
+                let tail = format!("{branch} {internal}");
+                assert!(asm.contains(&export), "missing {export} on {target:?}:\n{asm}");
+                assert!(asm.contains(&tail), "missing {tail} on {target:?}:\n{asm}");
+            }
+        }
     }
 
     /// Pins the AArch64 tag-9 arm of `__elephc_eval_value_cast_string`.
