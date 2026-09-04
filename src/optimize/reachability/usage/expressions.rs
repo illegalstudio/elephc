@@ -1015,6 +1015,8 @@ mod tests {
         "ob_start",
         "pcntl_signal",
         "preg_replace_callback",
+        "set_error_handler",
+        "set_exception_handler",
         "spl_autoload_register",
         "spl_autoload_unregister",
         "uasort",
