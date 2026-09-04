@@ -133,7 +133,9 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
 fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_dispatch_uncaught_exception");
     abi::emit_load_symbol_to_reg(emitter, "x19", "_php_exception_handler_callable", 0);
-    emitter.instruction("cbz x19, __rt_report_uncaught_exception");             // preserve the ordinary fatal report when no PHP handler is active
+    emitter.instruction("cbnz x19, 1f");                                       // dispatch through the PHP handler when one is active
+    emitter.instruction("b __rt_report_uncaught_exception");                   // preserve the ordinary fatal report through a linkable branch
+    emitter.label("1");
     abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_callable", 0);
     abi::emit_load_symbol_to_reg(emitter, "x22", "_php_exception_handler_value", 0);
     abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_value", 0);
@@ -161,7 +163,9 @@ fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // the boxed container now owns the array
 
     emitter.instruction(&format!("ldr x9, [x19, #{CALLABLE_DESC_INVOKER_OFFSET}]")); // load the handler's uniform invoker entry
-    emitter.instruction("cbz x9, __rt_report_uncaught_exception");              // a malformed descriptor falls back to the safe fatal report
+    emitter.instruction("cbnz x9, 2f");                                        // continue only with a valid uniform invoker
+    emitter.instruction("b __rt_report_uncaught_exception");                   // fall back to the safe fatal report through a linkable branch
+    emitter.label("2");
     emitter.instruction("mov x0, x19");                                         // invoker argument 0 is the callable descriptor
     emitter.instruction("mov x1, x20");                                         // invoker argument 1 is the boxed argument array
     emitter.instruction("blr x9");                                              // execute the user exception handler exactly once

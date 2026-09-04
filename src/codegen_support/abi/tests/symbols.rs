@@ -73,3 +73,19 @@ fn test_pic_store_x9_uses_distinct_aarch64_got_scratch() {
         )
     );
 }
+
+/// Preserves an x9 payload through a non-PIC AArch64 symbol-address calculation.
+#[test]
+fn test_non_pic_store_x9_uses_distinct_aarch64_scratch() {
+    let mut emitter = test_emitter();
+    emit_store_reg_to_symbol(&mut emitter, "x9", "_demo_symbol", 0);
+
+    assert_eq!(
+        emitter.output(),
+        concat!(
+            "    adrp x10, _demo_symbol@PAGE\n",
+            "    add x10, x10, _demo_symbol@PAGEOFF\n",
+            "    str x9, [x10]\n",
+        )
+    );
+}

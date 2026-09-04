@@ -57,11 +57,11 @@ const fn dynamic_capture_offset(index: usize) -> usize {
 fn emit_error_reporting_aarch64(module: &Module, emitter: &mut Emitter) {
     let done = "__elephc_eval_error_reporting_done";
     label_c_global(module, emitter, "__elephc_eval_error_reporting");
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_error_reporting", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_php_error_reporting", 0);
     emitter.instruction(&format!("cbz x1, {done}"));                            // a zero replace flag makes this a read-only query
     abi::emit_store_reg_to_symbol(emitter, "x0", "_php_error_reporting", 0);
     emitter.label(done);
-    emitter.instruction("mov x0, x9");                                          // return the reporting mask that was active on entry
+    emitter.instruction("mov x0, x10");                                         // return the reporting mask that was active on entry
     emitter.instruction("ret");                                                 // return to the magician runtime adapter
 }
 
@@ -329,11 +329,12 @@ fn emit_dispatch_error_handler_aarch64(module: &Module, emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x3]");                                       // report no invocation unless the descriptor call completes
     abi::emit_load_symbol_to_reg(emitter, "x9", "_php_error_handler_callable", 0);
     emitter.instruction(&format!("cbz x9, {done}"));                            // no active descriptor means default error handling
+    emitter.instruction("str x9, [sp, #32]");                                   // preserve the descriptor before the next symbol load borrows x9
     abi::emit_load_symbol_to_reg(emitter, "x10", "_php_error_handler_mask", 0);
     emitter.instruction("ldr x11, [sp, #0]");                                   // reload the emitted PHP error level
     emitter.instruction("tst x10, x11");                                        // check whether the handler accepts this error category
     emitter.instruction(&format!("b.eq {done}"));                               // a masked handler delegates to the default path
-    emitter.instruction("str x9, [sp, #32]");                                   // preserve the active descriptor across invocation setup
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the active descriptor after mask lookup
     emitter.instruction(&format!(                                               // load the descriptor's uniform invoker entry
         "ldr x12, [x9, #{}]",
         callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET

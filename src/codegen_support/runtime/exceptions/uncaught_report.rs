@@ -425,7 +425,7 @@ mod tests {
         let mut x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         super::super::emit_throw_current(&mut x86);
         let x86_asm = x86.output();
-        assert!(x86_asm.contains("jmp __rt_report_uncaught_exception"));
+        assert!(x86_asm.contains("jz __rt_report_uncaught_exception"));
         assert!(!x86_asm.contains("_uncaught_exc_msg"));
     }
 }
