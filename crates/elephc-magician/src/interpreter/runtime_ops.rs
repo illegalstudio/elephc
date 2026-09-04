@@ -564,6 +564,9 @@ pub trait RuntimeValueOps {
     /// Reads one integer GC status metric using the shared runtime selector ABI.
     fn gc_status_metric(&mut self, metric: u64) -> Result<i64, EvalStatus>;
 
+    /// Reads one floating-point GC status metric through the shared scalar selector ABI.
+    fn gc_status_time(&mut self, metric: u64) -> Result<f64, EvalStatus>;
+
     /// Retains one runtime cell so the eval caller receives an independent owner.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus>;
 

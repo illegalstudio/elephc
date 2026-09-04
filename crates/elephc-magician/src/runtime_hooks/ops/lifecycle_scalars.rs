@@ -84,6 +84,12 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(unsafe { __elephc_eval_gc_status_metric(metric) })
     }
 
+    /// Reads one generated-runtime GC timing metric from its scalar ABI bit pattern.
+    fn gc_status_time(&mut self, metric: u64) -> Result<f64, EvalStatus> {
+        let bits = unsafe { __elephc_eval_gc_status_metric(metric) } as u64;
+        Ok(f64::from_bits(bits))
+    }
+
     /// Retains one boxed Mixed cell through the generated runtime wrapper.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(RuntimeCellHandle::from_raw(unsafe {

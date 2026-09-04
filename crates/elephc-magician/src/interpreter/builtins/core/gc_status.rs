@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - The result exposes the PHP 8 twelve-field status shape with runtime-backed counters.
-//! - Timing values are zero because the elephc collector does not instrument wall-clock phases.
+//! - Timing values come from the same generated-runtime phase clocks used by AOT calls.
 
 use super::super::super::*;
 
@@ -15,6 +15,10 @@ const GC_STATUS_PROTECTED: u64 = 6;
 const GC_STATUS_RUNS: u64 = 7;
 const GC_STATUS_COLLECTED: u64 = 8;
 const GC_STATUS_ROOTS: u64 = 9;
+const GC_STATUS_APPLICATION_TIME: u64 = 10;
+const GC_STATUS_COLLECTOR_TIME: u64 = 11;
+const GC_STATUS_DESTRUCTOR_TIME: u64 = 12;
+const GC_STATUS_FREE_TIME: u64 = 13;
 
 eval_builtin! {
     contract: "gc_status",
@@ -64,20 +68,21 @@ fn eval_gc_status_result(
     let collected = values.gc_status_metric(GC_STATUS_COLLECTED)?;
     let value = values.int(collected)?;
     result = set_status_entry(result, "collected", value, values)?;
-    let value = values.int(10_001)?;
+    let value = values.int(0)?;
     result = set_status_entry(result, "threshold", value, values)?;
-    let value = values.int(16_384)?;
+    let value = values.int(0)?;
     result = set_status_entry(result, "buffer_size", value, values)?;
     let roots = values.gc_status_metric(GC_STATUS_ROOTS)?;
     let value = values.int(roots)?;
     result = set_status_entry(result, "roots", value, values)?;
-    for key in [
-        "application_time",
-        "collector_time",
-        "destructor_time",
-        "free_time",
+    for (key, metric) in [
+        ("application_time", GC_STATUS_APPLICATION_TIME),
+        ("collector_time", GC_STATUS_COLLECTOR_TIME),
+        ("destructor_time", GC_STATUS_DESTRUCTOR_TIME),
+        ("free_time", GC_STATUS_FREE_TIME),
     ] {
-        let value = values.float(0.0)?;
+        let seconds = values.gc_status_time(metric)?;
+        let value = values.float(seconds)?;
         result = set_status_entry(result, key, value, values)?;
     }
     Ok(result)

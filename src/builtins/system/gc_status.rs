@@ -5,7 +5,7 @@
 //! - The builtin registry through `crate::builtins::system`.
 //!
 //! Key details:
-//! - Dynamic counters come from typed GC controls; stable capacity and timing fields are literals.
+//! - Collector counters and timings come from typed GC controls backed by live runtime state.
 //! - The associative array is boxed as Mixed so direct and callable wrappers share one ABI.
 
 use crate::builtins::semantics::{
@@ -41,6 +41,7 @@ const fn status_effects() -> Effects {
     Effects::from_bits_retain(
         Effects::READS_GLOBAL.bits()
             | Effects::READS_HEAP.bits()
+            | Effects::READS_PROCESS.bits()
             | Effects::WRITES_HEAP.bits()
             | Effects::ALLOC_HEAP.bits()
             | Effects::REFCOUNT_OP.bits(),
@@ -75,19 +76,19 @@ fn lower(
     insert_status_entry(ctx, hash.value, "runs", runs, call.span);
     let collected = emit_metric(ctx, GcControlOp::Collected, PhpType::Int, call.span);
     insert_status_entry(ctx, hash.value, "collected", collected, call.span);
-    let threshold = emit_int(ctx, 10_001, call.span);
+    let threshold = emit_int(ctx, 0, call.span);
     insert_status_entry(ctx, hash.value, "threshold", threshold, call.span);
-    let buffer_size = emit_int(ctx, 16_384, call.span);
+    let buffer_size = emit_int(ctx, 0, call.span);
     insert_status_entry(ctx, hash.value, "buffer_size", buffer_size, call.span);
     let roots = emit_metric(ctx, GcControlOp::Roots, PhpType::Int, call.span);
     insert_status_entry(ctx, hash.value, "roots", roots, call.span);
-    for key in [
-        "application_time",
-        "collector_time",
-        "destructor_time",
-        "free_time",
+    for (key, op) in [
+        ("application_time", GcControlOp::ApplicationTime),
+        ("collector_time", GcControlOp::CollectorTime),
+        ("destructor_time", GcControlOp::DestructorTime),
+        ("free_time", GcControlOp::FreeTime),
     ] {
-        let value = emit_float(ctx, 0.0, call.span);
+        let value = emit_metric(ctx, op, PhpType::Float, call.span);
         insert_status_entry(ctx, hash.value, key, value, call.span);
     }
 
@@ -101,7 +102,7 @@ fn lower(
     ))
 }
 
-/// Emits one dynamic integer or boolean collector metric.
+/// Emits one dynamic scalar collector metric.
 fn emit_metric(
     ctx: &mut dyn BuiltinLoweringContext,
     op: GcControlOp,
@@ -146,22 +147,6 @@ fn emit_bool(
         Some(Immediate::Bool(value)),
         PhpType::Bool,
         Op::ConstBool.default_effects(),
-        Some(span),
-    )
-}
-
-/// Emits one floating-point literal used by the stable GC timing schema.
-fn emit_float(
-    ctx: &mut dyn BuiltinLoweringContext,
-    value: f64,
-    span: Span,
-) -> LoweredBuiltinValue {
-    ctx.emit_value(
-        Op::ConstF64,
-        Vec::new(),
-        Some(Immediate::F64(value)),
-        PhpType::Float,
-        Op::ConstF64.default_effects(),
         Some(span),
     )
 }

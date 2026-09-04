@@ -66,6 +66,16 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
             _ => 0,
         })
     }
+    /// Returns deterministic fake GC timing values for schema and dispatch assertions.
+    fn gc_status_time(&mut self, metric: u64) -> Result<f64, EvalStatus> {
+        Ok(match metric {
+            10 => 0.25,
+            11 => 0.125,
+            12 => 0.0625,
+            13 => 0.03125,
+            _ => 0.0,
+        })
+    }
     /// Returns the same fake handle because fake cells do not refcount.
     fn retain(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_retain(value)

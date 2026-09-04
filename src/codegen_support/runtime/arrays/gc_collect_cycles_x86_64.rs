@@ -45,6 +45,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving x86_64 collector locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the x86_64 collector locals
     emitter.instruction("sub rsp, 64");                                         // reserve aligned collector locals, including the result counter
+    emitter.instruction("call __rt_gc_collector_begin");                        // start timing this complete collector pass
 
     // -- capture heap bounds once for the current collection pass --
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
@@ -268,6 +269,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
 
     // -- pass 3: free every still-unreachable live refcounted node --
     emitter.label("__rt_gc_collect_cycles_free_init");
+    emitter.instruction("call __rt_gc_free_begin");                             // start timing graph reclamation separately
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the heap base before starting the unreachable-node free scan
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // restart the outer scan pointer at the heap base for the free pass
     emitter.label("__rt_gc_collect_cycles_free_loop");
@@ -325,6 +327,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gc_collect_cycles_free_loop");                // continue scanning the initial heap window for unreachable graph nodes
 
     emitter.label("__rt_gc_collect_cycles_finish");
+    emitter.instruction("call __rt_gc_collector_end");                          // accumulate collector and graph-free phase durations
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the number of unreachable graph nodes reclaimed
     emitter.instruction("test rax, rax");                                       // did this pass reclaim any graph nodes?
     emitter.instruction("jz __rt_gc_collect_cycles_stats_done");                // empty passes do not count as productive collector runs

@@ -28,10 +28,11 @@ echo is_bool($status["running"]) && is_bool($status["protected"]) && is_bool($st
 echo is_int($status["runs"]) && is_int($status["collected"]) && is_int($status["roots"]) ? "int" : "bad"; echo ":";
 echo $status["threshold"] . ":" . $status["buffer_size"] . ":";
 echo is_float($status["application_time"]) && is_float($status["collector_time"]) && is_float($status["destructor_time"]) && is_float($status["free_time"]) ? "float" : "bad"; echo ":";
-echo gc_mem_caches();
+echo $status["application_time"] >= 0.0 && $status["collector_time"] >= 0.0 && $status["destructor_time"] >= 0.0 && $status["free_time"] >= 0.0 ? "nonnegative" : "bad"; echo ":";
+echo gc_mem_caches() >= 0 ? "cache" : "bad";
 "#,
     );
-    assert_eq!(out, "on:off:on:12:bool:int:10001:16384:float:0");
+    assert_eq!(out, "on:off:on:12:bool:int:0:0:float:nonnegative:cache");
 }
 
 /// Verifies explicit collection reclaims a cycle while automatic collection is disabled.
@@ -54,4 +55,54 @@ gc_enable();
 "#,
     );
     assert_eq!(out, "collected:ran:counted:disabled");
+}
+
+/// Verifies collector roots and phase clocks report live runtime work.
+#[test]
+fn test_core_gc_status_reports_live_roots_and_timings() {
+    let out = compile_and_run(
+        r#"<?php
+class TimedGcNode {
+    public $next = null;
+    public function __destruct() { usleep(2000); }
+}
+$node = new TimedGcNode();
+$node->next = $node;
+$before = gc_status();
+unset($node);
+gc_collect_cycles();
+$after = gc_status();
+echo $before["roots"] > 0 ? "roots" : "bad"; echo ":";
+echo $after["application_time"] >= 0.0 ? "app" : "bad"; echo ":";
+echo $after["collector_time"] > 0.0 ? "collector" : "bad"; echo ":";
+echo $after["destructor_time"] > 0.0 ? "destructor" : "bad"; echo ":";
+echo $after["free_time"] > 0.0 ? "free" : "bad";
+"#,
+    );
+    assert_eq!(out, "roots:app:collector:destructor:free");
+}
+
+/// Verifies cache reclamation drains small bins once and leaves reusable heap state valid.
+#[test]
+fn test_core_gc_mem_caches_drains_small_bins_once() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$first = str_repeat("a", 8);
+$guard = str_repeat("b", 8);
+unset($first);
+$released = gc_mem_caches();
+$again = gc_mem_caches();
+$reuse = str_repeat("c", 8);
+echo $released > 0 ? "released" : "bad"; echo ":";
+echo $again === 0 ? "empty" : "bad"; echo ":";
+echo $guard . $reuse;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "released:empty:bbbbbbbbcccccccc");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "cache drain corrupted allocator state: {}",
+        out.stderr
+    );
 }
