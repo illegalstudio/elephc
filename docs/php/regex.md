@@ -155,3 +155,21 @@ requirement only when a final native link is performed.
 - Only the pattern modifiers listed above are mapped to PCRE2 flags today.
 - Pattern and subject strings cross the current shim as NUL-terminated strings,
   preserving the existing embedded-NUL limitation.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = []): int` | `int` | ✓ | ✓ |
+| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject): int` | `int` | ✓ | ✓ |
+| [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): string` | `string` | ✓ | ✓ |
+| [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): string` | `string` | ✓ | ✓ |
+| [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array` | `array` | ✓ | ✓ |
+
+Constants: `PREG_OFFSET_CAPTURE`, `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, `PREG_SPLIT_DELIM_CAPTURE`, `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_OFFSET_CAPTURE`, `PREG_UNMATCHED_AS_NULL`.
+
+<!-- elephc:generated:symbols:end -->

@@ -402,3 +402,41 @@ standalone server binary.
   `false`. There is no `error_reporting`/`display_errors` layer, so these messages are
   always written. PHP's "headers already sent" warning genuinely cannot occur because
   output is buffered until the request completes.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`session_abort()`](./builtins/web/session_abort.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_cache_expire()`](./builtins/web/session_cache_expire.md) | `(int $value = null): mixed` | `mixed` | ✓ | — |
+| [`session_cache_limiter()`](./builtins/web/session_cache_limiter.md) | `(string $value = null): mixed` | `mixed` | ✓ | — |
+| [`session_commit()`](./builtins/web/session_commit.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_create_id()`](./builtins/web/session_create_id.md) | `(string $prefix = ''): mixed` | `mixed` | ✓ | — |
+| [`session_decode()`](./builtins/web/session_decode.md) | `(string $data): bool` | `bool` | ✓ | — |
+| [`session_destroy()`](./builtins/web/session_destroy.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_encode()`](./builtins/web/session_encode.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`session_gc()`](./builtins/web/session_gc.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`session_get_cookie_params()`](./builtins/web/session_get_cookie_params.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`session_id()`](./builtins/web/session_id.md) | `(string $id = null): mixed` | `mixed` | ✓ | — |
+| [`session_module_name()`](./builtins/web/session_module_name.md) | `(string $module = null): mixed` | `mixed` | ✓ | — |
+| [`session_name()`](./builtins/web/session_name.md) | `(string $name = null): mixed` | `mixed` | ✓ | — |
+| [`session_regenerate_id()`](./builtins/web/session_regenerate_id.md) | `(bool $delete_old = false): bool` | `bool` | ✓ | — |
+| [`session_register_shutdown()`](./builtins/web/session_register_shutdown.md) | `(): void` | `void` | ✓ | — |
+| [`session_reset()`](./builtins/web/session_reset.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_save_path()`](./builtins/web/session_save_path.md) | `(string $path = null): mixed` | `mixed` | ✓ | — |
+| [`session_set_cookie_params()`](./builtins/web/session_set_cookie_params.md) | `(...$args): bool` | `bool` | ✓ | — |
+| [`session_set_save_handler()`](./builtins/web/session_set_save_handler.md) | `(mixed $handler_or_open = null, mixed $register_or_close = true, mixed $read = null, mixed $write = null, mixed $destroy = null, mixed $gc = null, mixed $create_sid = null, mixed $validate_id = null, mixed $update_timestamp = null): bool` | `bool` | ✓ | — |
+| [`session_start()`](./builtins/web/session_start.md) | `(mixed $options = []): bool` | `bool` | ✓ | — |
+| [`session_status()`](./builtins/web/session_status.md) | `(): int` | `int` | ✓ | — |
+| [`session_unset()`](./builtins/web/session_unset.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_write_close()`](./builtins/web/session_write_close.md) | `(): bool` | `bool` | ✓ | — |
+
+Classes: `SessionHandler`, `SessionHandlerInterface`, `SessionIdInterface`, `SessionUpdateTimestampHandlerInterface`.
+
+Constants: `PHP_SESSION_ACTIVE`, `PHP_SESSION_DISABLED`, `PHP_SESSION_NONE`, `SID`.
+
+<!-- elephc:generated:symbols:end -->

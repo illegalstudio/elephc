@@ -153,9 +153,17 @@ python3 scripts/docs/extract_php_baseline.py --php /tmp/php
 The extractor keeps only extensions bundled with php-src (its `BUNDLED_EXTENSIONS` allowlist), so PECL/third-party modules on the local machine can never enter the snapshot, whatever they are named. Bundled extensions the local PHP does not load are recorded in the snapshot's `missing_bundled` field and disclosed on the generated page.
 
 ```bash
+python3 scripts/docs/gen_module_sections.py      # generated "Functions" blocks in docs/php module pages
 python3 scripts/docs/gen_php_comparison.py       # regenerate the page
 python3 -m unittest discover -s scripts/docs -p "test_*.py"   # generator unit tests
 ```
+
+`gen_module_sections.py` owns the block between the `elephc:generated:symbols`
+markers in each module page listed in `module_pages.py` (mysqli, sessions,
+calendar, PDO, DateTime, image, OPcache, curl, ...): every function the catalog
+attributes to that module with a link to its reference page, plus the module's
+classes and constants. The prose around the block stays hand-written, and the
+compatibility table links each module row to that section.
 
 Catalog entries with `status = "supported"` or `"partial"` must carry
 `evidence` — a repo path or a test function name found as `fn <name>` under

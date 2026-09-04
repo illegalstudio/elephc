@@ -8,7 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 47 non-registry contract routes remain coherent.
+6. Backend availability and all 390 non-registry contract routes remain coherent.
 7. User-facing pages contain no runs of multiple blank lines.
 8. No override table in ``registry.py`` declares the same builtin twice.
 
@@ -137,14 +137,21 @@ def _check_backend_contracts(
     expected_counts = {
         "language-construct": 5,
         "dedicated-syntax": 1,
-        # Four hash_* plus the 34 PHP-visible curl_*, all injected-prelude routes.
-        # The curl half exists only because the canonical documentation
-        # configuration is `--features curl` (see elephc_builtins/extract.py).
-        "prelude": 38,
+        # Four hash_*, the 34 PHP-visible curl_* (published only by the canonical
+        # `--features curl` documentation configuration, see elephc_builtins/extract.py),
+        # and the 289 functions the mysqli, PDO, web, image, OPcache, tz, var_export and
+        # version preludes declare — all injected-prelude routes.
+        "prelude": 327,
+        # The date/calendar procedural families the name resolver rewrites onto the
+        # DateTime and calendar classes.
+        "name-resolver-rewrite": 54,
         "none": 3,
     }
-    if len(non_registry) != 47:
-        errors.append(f"expected 47 non-registry contracts, found {len(non_registry)}")
+    expected_total = sum(expected_counts.values())
+    if len(non_registry) != expected_total:
+        errors.append(
+            f"expected {expected_total} non-registry contracts, found {len(non_registry)}"
+        )
     if dict(route_counts) != expected_counts:
         errors.append(
             f"non-registry AOT route counts differ: expected {expected_counts}, "

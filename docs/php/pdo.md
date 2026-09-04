@@ -1413,3 +1413,47 @@ runs this fixture after the ordinary native and libpq suites.
   build and use rustls with the ring provider. mysql 28's `rustls-tls-ring` feature removes
   the former aws-lc-rs/C-toolchain cost. Custom `--no-default-features` builds still reject
   a requested TLS connection loudly rather than silently downgrading it.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+### PDO
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`pdo_drivers()`](./builtins/database/pdo_drivers.md) | `(): mixed` | `mixed` | ✓ | — |
+
+Classes: `PDO`, `PDOException`, `PDORow`, `PDOStatement`.
+
+### pdo_dblib
+
+Classes: `Pdo\Dblib`.
+
+### pdo_firebird
+
+Classes: `Pdo\Firebird`.
+
+### pdo_ibm (PECL)
+
+Classes: `Pdo\Ibm`.
+
+### pdo_mysql
+
+Classes: `Pdo\Mysql`.
+
+### pdo_odbc
+
+Classes: `Pdo\Odbc`.
+
+### pdo_pgsql
+
+Classes: `Pdo\Pgsql`.
+
+### pdo_sqlite
+
+Classes: `Pdo\Sqlite`.
+
+<!-- elephc:generated:symbols:end -->

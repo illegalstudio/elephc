@@ -639,3 +639,31 @@ are reindexed from zero. Literal arrays with expressions are evaluated once
 before iteration starts. Dynamic arrays passed to by-reference callback
 parameters use temporary reference cells, so callback writes do not mutate the
 source argument array.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`class_implements()`](./builtins/class/class_implements.md) | `(mixed $object_or_class, bool $autoload = true): mixed` | `mixed` | ✓ | ✓ |
+| [`class_parents()`](./builtins/class/class_parents.md) | `(mixed $object_or_class, bool $autoload = true): mixed` | `mixed` | ✓ | ✓ |
+| [`class_uses()`](./builtins/class/class_uses.md) | `(mixed $object_or_class, bool $autoload = true): mixed` | `mixed` | ✓ | ✓ |
+| [`iterator_apply()`](./builtins/spl/iterator_apply.md) | `(traversable $iterator, callable $callback, array $args = null): int` | `int` | ✓ | ✓ |
+| [`iterator_count()`](./builtins/spl/iterator_count.md) | `(traversable $iterator): int` | `int` | ✓ | ✓ |
+| [`iterator_to_array()`](./builtins/spl/iterator_to_array.md) | `(traversable $iterator, bool $preserve_keys = true): array` | `array` | ✓ | ✓ |
+| [`spl_autoload()`](./builtins/spl/spl_autoload.md) | `(string $class, string $file_extensions = null): void` | `void` | ✓ | ✓ |
+| [`spl_autoload_call()`](./builtins/spl/spl_autoload_call.md) | `(string $class): void` | `void` | ✓ | ✓ |
+| [`spl_autoload_extensions()`](./builtins/spl/spl_autoload_extensions.md) | `(string $file_extensions = null): string` | `string` | ✓ | ✓ |
+| [`spl_autoload_functions()`](./builtins/spl/spl_autoload_functions.md) | `(): array` | `array` | ✓ | ✓ |
+| [`spl_autoload_register()`](./builtins/spl/spl_autoload_register.md) | `(callable $callback = null, bool $throw = true, bool $prepend = false): bool` | `bool` | ✓ | ✓ |
+| [`spl_autoload_unregister()`](./builtins/spl/spl_autoload_unregister.md) | `(callable $callback): bool` | `bool` | ✓ | ✓ |
+| [`spl_classes()`](./builtins/spl/spl_classes.md) | `(): array` | `array` | ✓ | ✓ |
+| [`spl_object_hash()`](./builtins/spl/spl_object_hash.md) | `(object $object): string` | `string` | ✓ | ✓ |
+| [`spl_object_id()`](./builtins/spl/spl_object_id.md) | `(object $object): int` | `int` | ✓ | ✓ |
+
+Classes: `AppendIterator`, `ArrayIterator`, `ArrayObject`, `BadFunctionCallException`, `BadMethodCallException`, `CachingIterator`, `CallbackFilterIterator`, `DirectoryIterator`, `DomainException`, `EmptyIterator`, `FilesystemIterator`, `FilterIterator`, `GlobIterator`, `InfiniteIterator`, `InvalidArgumentException`, `IteratorIterator`, `LengthException`, `LimitIterator`, `LogicException`, `MultipleIterator`, `NoRewindIterator`, `OuterIterator`, `OutOfBoundsException`, `OutOfRangeException`, `OverflowException`, `ParentIterator`, `RangeException`, `RecursiveArrayIterator`, `RecursiveCachingIterator`, `RecursiveCallbackFilterIterator`, `RecursiveDirectoryIterator`, `RecursiveFilterIterator`, `RecursiveIterator`, `RecursiveIteratorIterator`, `RecursiveRegexIterator`, `RegexIterator`, `RuntimeException`, `SeekableIterator`, `SplDoublyLinkedList`, `SplFileInfo`, `SplFileObject`, `SplFixedArray`, `SplHeap`, `SplMaxHeap`, `SplMinHeap`, `SplObjectStorage`, `SplObserver`, `SplPriorityQueue`, `SplQueue`, `SplStack`, `SplSubject`, `SplTempFileObject`, `UnderflowException`, `UnexpectedValueException`.
+
+<!-- elephc:generated:symbols:end -->

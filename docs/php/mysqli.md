@@ -349,3 +349,102 @@ Provided procedural surface beyond the earlier list now also includes
 `mysqli_field_tell`, `mysqli_get_charset`, and `mysqli_thread_safe`
 (`mysqli_thread_safe()` reports `false` — this build's client is not
 thread-safe).
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`mysqli_affected_rows()`](./builtins/database/mysqli_affected_rows.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+| [`mysqli_autocommit()`](./builtins/database/mysqli_autocommit.md) | `(mixed $mysql, bool $enable): bool` | `bool` | ✓ | — |
+| [`mysqli_begin_transaction()`](./builtins/database/mysqli_begin_transaction.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_character_set_name()`](./builtins/database/mysqli_character_set_name.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_close()`](./builtins/database/mysqli_close.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
+| [`mysqli_commit()`](./builtins/database/mysqli_commit.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_connect()`](./builtins/database/mysqli_connect.md) | `(string $hostname = null, string $username = null, string $password = null, string $database = null, int $port = null, string $socket = null): mixed` | `mixed` | ✓ | — |
+| [`mysqli_connect_errno()`](./builtins/database/mysqli_connect_errno.md) | `(): int` | `int` | ✓ | — |
+| [`mysqli_connect_error()`](./builtins/database/mysqli_connect_error.md) | `(): string` | `string` | ✓ | — |
+| [`mysqli_data_seek()`](./builtins/database/mysqli_data_seek.md) | `(mixed $result, int $offset): bool` | `bool` | ✓ | — |
+| [`mysqli_errno()`](./builtins/database/mysqli_errno.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+| [`mysqli_error()`](./builtins/database/mysqli_error.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_error_list()`](./builtins/database/mysqli_error_list.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | — |
+| [`mysqli_escape_string()`](./builtins/database/mysqli_escape_string.md) | `(mixed $mysql, string $string): string` | `string` | ✓ | — |
+| [`mysqli_execute()`](./builtins/database/mysqli_execute.md) | `(mixed $statement): bool` | `bool` | ✓ | — |
+| [`mysqli_execute_query()`](./builtins/database/mysqli_execute_query.md) | `(mixed $mysql, string $query, mixed $params = null): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_all()`](./builtins/database/mysqli_fetch_all.md) | `(mixed $result, int $mode = 2): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_column()`](./builtins/database/mysqli_fetch_column.md) | `(mixed $result, int $column = 0): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_field()`](./builtins/database/mysqli_fetch_field.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_field_direct()`](./builtins/database/mysqli_fetch_field_direct.md) | `(mixed $result, int $index): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_fields()`](./builtins/database/mysqli_fetch_fields.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_lengths()`](./builtins/database/mysqli_fetch_lengths.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_object()`](./builtins/database/mysqli_fetch_object.md) | `(mixed $result, string $class = 'stdClass', mixed $constructor_args = []): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_field_count()`](./builtins/database/mysqli_field_count.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+| [`mysqli_field_seek()`](./builtins/database/mysqli_field_seek.md) | `(mixed $result, int $index): bool` | `bool` | ✓ | — |
+| [`mysqli_field_tell()`](./builtins/database/mysqli_field_tell.md) | `(mixed $result): int` | `int` | ✓ | — |
+| [`mysqli_free_result()`](./builtins/database/mysqli_free_result.md) | `(mixed $result): void` | `void` | ✓ | — |
+| [`mysqli_get_charset()`](./builtins/database/mysqli_get_charset.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | — |
+| [`mysqli_get_client_info()`](./builtins/database/mysqli_get_client_info.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_get_client_version()`](./builtins/database/mysqli_get_client_version.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+| [`mysqli_get_host_info()`](./builtins/database/mysqli_get_host_info.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_get_proto_info()`](./builtins/database/mysqli_get_proto_info.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+| [`mysqli_get_server_info()`](./builtins/database/mysqli_get_server_info.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_get_server_version()`](./builtins/database/mysqli_get_server_version.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+| [`mysqli_info()`](./builtins/database/mysqli_info.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_init()`](./builtins/database/mysqli_init.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`mysqli_insert_id()`](./builtins/database/mysqli_insert_id.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+| [`mysqli_more_results()`](./builtins/database/mysqli_more_results.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
+| [`mysqli_multi_query()`](./builtins/database/mysqli_multi_query.md) | `(mixed $mysql, string $query): bool` | `bool` | ✓ | — |
+| [`mysqli_next_result()`](./builtins/database/mysqli_next_result.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
+| [`mysqli_num_fields()`](./builtins/database/mysqli_num_fields.md) | `(mixed $result): int` | `int` | ✓ | — |
+| [`mysqli_num_rows()`](./builtins/database/mysqli_num_rows.md) | `(mixed $result): int` | `int` | ✓ | — |
+| [`mysqli_options()`](./builtins/database/mysqli_options.md) | `(mixed $mysql, int $option, mixed $value): bool` | `bool` | ✓ | — |
+| [`mysqli_ping()`](./builtins/database/mysqli_ping.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
+| [`mysqli_prepare()`](./builtins/database/mysqli_prepare.md) | `(mixed $mysql, string $query): mixed` | `mixed` | ✓ | — |
+| [`mysqli_query()`](./builtins/database/mysqli_query.md) | `(mixed $mysql, string $query, int $result_mode = 0): mixed` | `mixed` | ✓ | — |
+| [`mysqli_real_connect()`](./builtins/database/mysqli_real_connect.md) | `(mixed $mysql, string $hostname = null, string $username = null, string $password = null, string $database = null, int $port = null, string $socket = null, int $flags = 0): bool` | `bool` | ✓ | — |
+| [`mysqli_real_escape_string()`](./builtins/database/mysqli_real_escape_string.md) | `(mixed $mysql, string $string): string` | `string` | ✓ | — |
+| [`mysqli_real_query()`](./builtins/database/mysqli_real_query.md) | `(mixed $mysql, string $query): bool` | `bool` | ✓ | — |
+| [`mysqli_release_savepoint()`](./builtins/database/mysqli_release_savepoint.md) | `(mixed $mysql, string $name): bool` | `bool` | ✓ | — |
+| [`mysqli_report()`](./builtins/database/mysqli_report.md) | `(int $flags): bool` | `bool` | ✓ | — |
+| [`mysqli_rollback()`](./builtins/database/mysqli_rollback.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_savepoint()`](./builtins/database/mysqli_savepoint.md) | `(mixed $mysql, string $name): bool` | `bool` | ✓ | — |
+| [`mysqli_select_db()`](./builtins/database/mysqli_select_db.md) | `(mixed $mysql, string $database): bool` | `bool` | ✓ | — |
+| [`mysqli_set_charset()`](./builtins/database/mysqli_set_charset.md) | `(mixed $mysql, string $charset): bool` | `bool` | ✓ | — |
+| [`mysqli_set_opt()`](./builtins/database/mysqli_set_opt.md) | `(mixed $mysql, int $option, mixed $value): bool` | `bool` | ✓ | — |
+| [`mysqli_sqlstate()`](./builtins/database/mysqli_sqlstate.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_stat()`](./builtins/database/mysqli_stat.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | — |
+| [`mysqli_stmt_affected_rows()`](./builtins/database/mysqli_stmt_affected_rows.md) | `(mixed $statement): int` | `int` | ✓ | — |
+| [`mysqli_stmt_bind_param()`](./builtins/database/mysqli_stmt_bind_param.md) | `(mixed $statement, string $types, ...$vars): bool` | `bool` | ✓ | — |
+| [`mysqli_stmt_close()`](./builtins/database/mysqli_stmt_close.md) | `(mixed $statement): bool` | `bool` | ✓ | — |
+| [`mysqli_stmt_errno()`](./builtins/database/mysqli_stmt_errno.md) | `(mixed $statement): int` | `int` | ✓ | — |
+| [`mysqli_stmt_error()`](./builtins/database/mysqli_stmt_error.md) | `(mixed $statement): string` | `string` | ✓ | — |
+| [`mysqli_stmt_error_list()`](./builtins/database/mysqli_stmt_error_list.md) | `(mixed $statement): mixed` | `mixed` | ✓ | — |
+| [`mysqli_stmt_execute()`](./builtins/database/mysqli_stmt_execute.md) | `(mixed $statement, mixed $params = null): bool` | `bool` | ✓ | — |
+| [`mysqli_stmt_field_count()`](./builtins/database/mysqli_stmt_field_count.md) | `(mixed $statement): int` | `int` | ✓ | — |
+| [`mysqli_stmt_free_result()`](./builtins/database/mysqli_stmt_free_result.md) | `(mixed $statement): void` | `void` | ✓ | — |
+| [`mysqli_stmt_get_result()`](./builtins/database/mysqli_stmt_get_result.md) | `(mixed $statement): mixed` | `mixed` | ✓ | — |
+| [`mysqli_stmt_init()`](./builtins/database/mysqli_stmt_init.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | — |
+| [`mysqli_stmt_insert_id()`](./builtins/database/mysqli_stmt_insert_id.md) | `(mixed $statement): int` | `int` | ✓ | — |
+| [`mysqli_stmt_num_rows()`](./builtins/database/mysqli_stmt_num_rows.md) | `(mixed $statement): int` | `int` | ✓ | — |
+| [`mysqli_stmt_param_count()`](./builtins/database/mysqli_stmt_param_count.md) | `(mixed $statement): int` | `int` | ✓ | — |
+| [`mysqli_stmt_prepare()`](./builtins/database/mysqli_stmt_prepare.md) | `(mixed $statement, string $query): bool` | `bool` | ✓ | — |
+| [`mysqli_stmt_reset()`](./builtins/database/mysqli_stmt_reset.md) | `(mixed $statement): bool` | `bool` | ✓ | — |
+| [`mysqli_stmt_sqlstate()`](./builtins/database/mysqli_stmt_sqlstate.md) | `(mixed $statement): string` | `string` | ✓ | — |
+| [`mysqli_stmt_store_result()`](./builtins/database/mysqli_stmt_store_result.md) | `(mixed $statement): bool` | `bool` | ✓ | — |
+| [`mysqli_store_result()`](./builtins/database/mysqli_store_result.md) | `(mixed $mysql, int $mode = 0): mixed` | `mixed` | ✓ | — |
+| [`mysqli_thread_id()`](./builtins/database/mysqli_thread_id.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+| [`mysqli_thread_safe()`](./builtins/database/mysqli_thread_safe.md) | `(): bool` | `bool` | ✓ | — |
+| [`mysqli_use_result()`](./builtins/database/mysqli_use_result.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | — |
+| [`mysqli_warning_count()`](./builtins/database/mysqli_warning_count.md) | `(mixed $mysql): int` | `int` | ✓ | — |
+
+Classes: `mysqli`, `mysqli_result`, `mysqli_sql_exception`, `mysqli_stmt`.
+
+Constants: `MYSQLI_ASSOC`, `MYSQLI_BOTH`, `MYSQLI_CLIENT_COMPRESS`, `MYSQLI_CLIENT_FOUND_ROWS`, `MYSQLI_CLIENT_IGNORE_SPACE`, `MYSQLI_CLIENT_INTERACTIVE`, `MYSQLI_CLIENT_SSL`, `MYSQLI_INIT_COMMAND`, `MYSQLI_NUM`, `MYSQLI_OPT_CONNECT_TIMEOUT`, `MYSQLI_REPORT_ALL`, `MYSQLI_REPORT_ERROR`, `MYSQLI_REPORT_INDEX`, `MYSQLI_REPORT_OFF`, `MYSQLI_REPORT_STRICT`, `MYSQLI_SET_CHARSET_NAME`, `MYSQLI_STORE_RESULT`, `MYSQLI_TRANS_COR_AND_CHAIN`, `MYSQLI_TRANS_COR_AND_NO_CHAIN`, `MYSQLI_TRANS_COR_NO_RELEASE`, `MYSQLI_TRANS_COR_RELEASE`, `MYSQLI_TRANS_START_READ_ONLY`, `MYSQLI_TRANS_START_READ_WRITE`, `MYSQLI_TRANS_START_WITH_CONSISTENT_SNAPSHOT`, `MYSQLI_TYPE_BIT`, `MYSQLI_TYPE_BLOB`, `MYSQLI_TYPE_DATE`, `MYSQLI_TYPE_DATETIME`, `MYSQLI_TYPE_DECIMAL`, `MYSQLI_TYPE_DOUBLE`, `MYSQLI_TYPE_ENUM`, `MYSQLI_TYPE_FLOAT`, `MYSQLI_TYPE_GEOMETRY`, `MYSQLI_TYPE_INT24`, `MYSQLI_TYPE_JSON`, `MYSQLI_TYPE_LONG`, `MYSQLI_TYPE_LONGLONG`, `MYSQLI_TYPE_LONG_BLOB`, `MYSQLI_TYPE_MEDIUM_BLOB`, `MYSQLI_TYPE_NEWDATE`, `MYSQLI_TYPE_NEWDECIMAL`, `MYSQLI_TYPE_NULL`, `MYSQLI_TYPE_SET`, `MYSQLI_TYPE_SHORT`, `MYSQLI_TYPE_STRING`, `MYSQLI_TYPE_TIME`, `MYSQLI_TYPE_TIMESTAMP`, `MYSQLI_TYPE_TINY`, `MYSQLI_TYPE_TINY_BLOB`, `MYSQLI_TYPE_VAR_STRING`, `MYSQLI_TYPE_YEAR`, `MYSQLI_USE_RESULT`.
+
+<!-- elephc:generated:symbols:end -->

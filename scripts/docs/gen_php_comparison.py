@@ -25,6 +25,8 @@ from collections import defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from module_pages import MODULE_PAGES, SECTION_ANCHOR  # noqa: E402
 
 VALID_STATUSES = ("supported", "partial", "planned", "unsupported")
 STATUS_LABELS = {
@@ -321,7 +323,18 @@ def _symbol_label(kind: str, symbol: dict) -> str:
     return f"`{symbol['name']}`"
 
 
-def render(baseline, functions, classes, constants, constructs, beyond, pecl, newer, dynamic, catalog) -> str:
+def _module_cell(module: str, repo_root: Path) -> str:
+    """Link a module to the generated symbol section of its docs page, when it has one."""
+    page = MODULE_PAGES.get(module)
+    if page and (repo_root / "docs" / "php" / page).exists():
+        return f"[`{module}`](./{page}#{SECTION_ANCHOR})"
+    return f"`{module}`"
+
+
+def render(
+    baseline, functions, classes, constants, constructs, beyond, pecl, newer, dynamic, catalog,
+    repo_root: Path = REPO_ROOT,
+) -> str:
     totals = {
         "functions": defaultdict(int),
         "classes": defaultdict(int),
@@ -373,7 +386,7 @@ def render(baseline, functions, classes, constants, constructs, beyond, pecl, ne
             _cell(coverages[kind].count(ext), totals[kind][ext])
             for kind in ("functions", "classes", "constants")
         ]
-        lines.append(f"| `{ext}` | {cells[0]} | {cells[1]} | {cells[2]} |")
+        lines.append(f"| {_module_cell(ext, repo_root)} | {cells[0]} | {cells[1]} | {cells[2]} |")
 
     divergences = []
     for ext in modules:
@@ -524,7 +537,8 @@ def run(repo_root: Path = REPO_ROOT) -> int:
         return _fail(errors)
 
     page = render(
-        baseline, functions, classes, constants, constructs, beyond, pecl, newer, dynamic, catalog
+        baseline, functions, classes, constants, constructs, beyond, pecl, newer, dynamic, catalog,
+        repo_root,
     )
     output = repo_root / "docs" / "php" / "compatibility.md"
     output.write_text(page, encoding="utf-8")

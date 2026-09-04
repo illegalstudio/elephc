@@ -196,3 +196,26 @@ $stream = fopen("php://memory", "r+");
 stream_filter_append($stream, "convert.iconv.UTF-8/ISO-8859-1", STREAM_FILTER_WRITE);
 fwrite($stream, "café");
 ```
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`iconv()`](./builtins/string/iconv.md) | `(string $from_encoding, string $to_encoding, string $string): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_get_encoding()`](./builtins/string/iconv_get_encoding.md) | `(string $type = 'all'): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_mime_decode()`](./builtins/string/iconv_mime_decode.md) | `(string $string, int $mode = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_mime_decode_headers()`](./builtins/string/iconv_mime_decode_headers.md) | `(string $headers, int $mode = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_mime_encode()`](./builtins/string/iconv_mime_encode.md) | `(string $field_name, string $field_value, mixed $options = []): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_set_encoding()`](./builtins/string/iconv_set_encoding.md) | `(string $type, string $encoding): bool` | `bool` | ✓ | ✓ |
+| [`iconv_strlen()`](./builtins/string/iconv_strlen.md) | `(string $string, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_strpos()`](./builtins/string/iconv_strpos.md) | `(string $haystack, string $needle, int $offset = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_strrpos()`](./builtins/string/iconv_strrpos.md) | `(string $haystack, string $needle, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_substr()`](./builtins/string/iconv_substr.md) | `(string $string, int $offset, int $length = null, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+
+Constants: `ICONV_IMPL`, `ICONV_MIME_DECODE_CONTINUE_ON_ERROR`, `ICONV_MIME_DECODE_STRICT`, `ICONV_VERSION`.
+
+<!-- elephc:generated:symbols:end -->

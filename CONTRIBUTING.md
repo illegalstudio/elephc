@@ -487,6 +487,21 @@ into `builtin!`. `buffer_new` is similar (its call form is dedicated syntax lowe
 `ExprKind::BufferNew`; only its name lives in the catalog), while `buffer_len` and
 `buffer_free` are ordinary registry builtins under `src/builtins/pointers/`.
 
+Functions an injected prelude declares (`mysqli_*`, `session_*`, `imagecreate*`,
+`opcache_*`, `pdo_drivers`, ...) and functions the name resolver rewrites onto a builtin
+class (`date_create`, `cal_days_in_month`, ...) are catalogued too, as
+`BuiltinKind::PreludeProvided` and `BuiltinKind::NameResolverRewrite` contracts with no
+`builtin!` binding. The prelude parity tests in `src/builtins/parity_tests.rs` read every
+prelude's built declarations and fail when a PHP-visible function lacks a contract or
+when a contract's parameters, defaults, by-reference markers, or variadic shape drift from
+the declaration. To draft the contracts for a new prelude, dump its declarations with
+`ELEPHC_CONTRACT_SEED_OUT=/tmp/seed.json cargo test --lib dump_prelude_contract_seed_on_request`
+and transcribe them into `catalog_data.rs`; the catalog is authoritative from then on.
+
+Every contract also names the PHP module that owns the symbol (`module: PhpModule::...`,
+`Elephc` for elephc-only surfaces) and the first PHP minor that ships it (`since`);
+`scripts/docs/gen_php_comparison.py` cross-checks both against the vendored PHP baseline.
+
 Builtins that are elephc extensions with no PHP equivalent must declare
 `extension: true` on their shared `BuiltinContract` so `--strict-php` hides them from
 both AOT and eval.
@@ -496,6 +511,43 @@ the `preludes_never_call_php_visible_extension_builtins` gate enforces this.
 
 Magician reads that same flag after joining its binding by `BuiltinId`; there is no
 second extension-name list.
+
+## Adding a builtin class or a global constant
+
+Classes, interfaces, enums, and global constants elephc provides are catalogued in the
+same crate as the functions, and the catalogs are mandatory: the compiler and Magician
+derive their class-name lists and constant tables from them, and join tests fail when
+either side drifts.
+
+**Classes.** Add a `class!(...)` entry to
+`crates/elephc-builtin-contract/src/catalog_classes.rs` with the PHP spelling, its
+canonical lowercase key, kind (`Class` / `Interface` / `Enum` / `Trait`), owning
+`PhpModule`, and the route the compiler provides it through: `CheckerInjected` for a
+synthetic declaration the checker registers (SPL, throwables, date/time, Reflection,
+builtin enums), `Prelude` for a class an injected prelude declares in PHP, or
+`LanguageIntrinsic` for an engine-level type. Add `since: Php8x` when PHP introduced it
+after 8.0, `internal: true` for `__Elephc*` helpers. Then implement it on the route you
+declared. `types::builtin_classes::tests::checker_injects_exactly_the_catalogued_checker_classes`
+proves the checker injects exactly the catalogued checker-provided set, the prelude
+parity tests prove prelude classes are declared, and
+`tests/codegen/symbol_catalog.rs` probes every class natively and inside `eval()`.
+
+**Constants.** Add a `constant!(...)` entry to
+`crates/elephc-builtin-contract/src/catalog_constants.rs` with the name, owning module,
+and value (`ConstValue::Int(...)`, `Float`, `Str`, `Bool`, `StreamResource(fd)`, or
+`TargetDependent(ConstType::...)` for a value the backend computes per target or PHP
+profile). `route: Prelude` marks a constant an injected prelude declares (`MYSQLI_*`,
+`IMG_*`); everything else is registered unconditionally by the checker, prescan and name
+resolver from the catalog, and resolved in eval from the same value. A target-dependent
+constant needs its arm in `codegen_support::prescan::collect_constants` and in Magician's
+`constant_eval::eval_target_dependent_constant`; the tests
+`every_target_dependent_constant_is_computed` and
+`every_catalogued_constant_has_its_declared_eval_route` fail until both exist. `ext/curl`
+constants are generated into `catalog_constants_curl.rs` from `scripts/docs/curl_surface.json`.
+
+In both cases regenerate the docs (see `scripts/docs/README.md`): the compatibility page
+counts classes and constants per PHP module and fails when a catalogued symbol's module,
+existence, or value disagrees with the PHP baseline.
 
 ## Adding functionality via a Rust crate (bridge crates)
 

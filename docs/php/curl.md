@@ -954,3 +954,52 @@ that is itself an array), and an object inside a nested array.
 - [Eval](eval.md) — the interpreter bridge that hosts curl inside `eval()`
 - [Builtin reference — Network](builtins/network.md) — the generated per-function pages for the 34 `curl_*` builtins, with their AOT and `eval()` availability
 - `examples/curl-get/main.php` — a documented GET with error handling
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`curl_close()`](./builtins/network/curl_close.md) | `(CurlHandle $handle): void` | `void` | ✓ | ✓ |
+| [`curl_copy_handle()`](./builtins/network/curl_copy_handle.md) | `(CurlHandle $handle): CurlHandle` | `CurlHandle` | ✓ | ✓ |
+| [`curl_errno()`](./builtins/network/curl_errno.md) | `(CurlHandle $handle): int` | `int` | ✓ | ✓ |
+| [`curl_error()`](./builtins/network/curl_error.md) | `(CurlHandle $handle): string` | `string` | ✓ | ✓ |
+| [`curl_escape()`](./builtins/network/curl_escape.md) | `(CurlHandle $handle, string $string): string` | `string` | ✓ | ✓ |
+| [`curl_exec()`](./builtins/network/curl_exec.md) | `(CurlHandle $handle): string|bool` | `string|bool` | ✓ | ✓ |
+| [`curl_getinfo()`](./builtins/network/curl_getinfo.md) | `(CurlHandle $handle, int $option = null): mixed` | `mixed` | ✓ | ✓ |
+| [`curl_init()`](./builtins/network/curl_init.md) | `(string $url = null): CurlHandle` | `CurlHandle` | ✓ | ✓ |
+| [`curl_multi_add_handle()`](./builtins/network/curl_multi_add_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
+| [`curl_multi_close()`](./builtins/network/curl_multi_close.md) | `(CurlMultiHandle $multi_handle): void` | `void` | ✓ | ✓ |
+| [`curl_multi_errno()`](./builtins/network/curl_multi_errno.md) | `(CurlMultiHandle $multi_handle): int` | `int` | ✓ | ✓ |
+| [`curl_multi_exec()`](./builtins/network/curl_multi_exec.md) | `(CurlMultiHandle $multi_handle, int $still_running): int` | `int` | ✓ | ✓ |
+| [`curl_multi_get_handles()`](./builtins/network/curl_multi_get_handles.md) | `(CurlMultiHandle $multi_handle): array` | `array` | ✓ | ✓ |
+| [`curl_multi_getcontent()`](./builtins/network/curl_multi_getcontent.md) | `(mixed $handle): ?string` | `?string` | ✓ | ✓ |
+| [`curl_multi_info_read()`](./builtins/network/curl_multi_info_read.md) | `(CurlMultiHandle $multi_handle, int $queued_messages = null): mixed` | `mixed` | ✓ | ✓ |
+| [`curl_multi_init()`](./builtins/network/curl_multi_init.md) | `(): CurlMultiHandle` | `CurlMultiHandle` | ✓ | ✓ |
+| [`curl_multi_remove_handle()`](./builtins/network/curl_multi_remove_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
+| [`curl_multi_select()`](./builtins/network/curl_multi_select.md) | `(CurlMultiHandle $multi_handle, float $timeout = 1.0): int` | `int` | ✓ | ✓ |
+| [`curl_multi_setopt()`](./builtins/network/curl_multi_setopt.md) | `(CurlMultiHandle $multi_handle, int $option, mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`curl_multi_strerror()`](./builtins/network/curl_multi_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
+| [`curl_pause()`](./builtins/network/curl_pause.md) | `(CurlHandle $handle, int $flags): int` | `int` | ✓ | ✓ |
+| [`curl_reset()`](./builtins/network/curl_reset.md) | `(CurlHandle $handle): void` | `void` | ✓ | ✓ |
+| [`curl_setopt()`](./builtins/network/curl_setopt.md) | `(CurlHandle $handle, int $option, mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`curl_setopt_array()`](./builtins/network/curl_setopt_array.md) | `(CurlHandle $handle, array $options): bool` | `bool` | ✓ | ✓ |
+| [`curl_share_close()`](./builtins/network/curl_share_close.md) | `(CurlShareHandle $share_handle): void` | `void` | ✓ | ✓ |
+| [`curl_share_errno()`](./builtins/network/curl_share_errno.md) | `(CurlShareHandle $share_handle): int` | `int` | ✓ | ✓ |
+| [`curl_share_init()`](./builtins/network/curl_share_init.md) | `(): CurlShareHandle` | `CurlShareHandle` | ✓ | ✓ |
+| [`curl_share_init_persistent()`](./builtins/network/curl_share_init_persistent.md) | `(array $share_options): CurlSharePersistentHandle` | `CurlSharePersistentHandle` | ✓ | ✓ |
+| [`curl_share_setopt()`](./builtins/network/curl_share_setopt.md) | `(CurlShareHandle $share_handle, int $option, mixed $value): bool` | `bool` | ✓ | ✓ |
+| [`curl_share_strerror()`](./builtins/network/curl_share_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
+| [`curl_strerror()`](./builtins/network/curl_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
+| [`curl_unescape()`](./builtins/network/curl_unescape.md) | `(CurlHandle $handle, string $string): string` | `string` | ✓ | ✓ |
+| [`curl_upkeep()`](./builtins/network/curl_upkeep.md) | `(CurlHandle $handle): bool` | `bool` | ✓ | ✓ |
+| [`curl_version()`](./builtins/network/curl_version.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+
+Classes: `CURLFile`, `CurlHandle`, `CurlMultiHandle`, `CurlShareHandle`, `CurlSharePersistentHandle`, `CURLStringFile`.
+
+Constants: 689 constants: `CURLOPT_*` (271), `CURL_*` (94), `CURLINFO_*` (80), `CURLE_*` (74), `CURLPX_*` (34), `CURLPROTO_*` (30), `CURLAUTH_*` (14), `CURLMOPT_*` (9), `CURLSSH_*` (9), `CURLFTPSSL_*` (7), `CURLM_*` (7), `CURLPROXY_*` (7), `CURLPAUSE_*` (6), `CURLSSLOPT_*` (6), `CURLALTSVC_*` (4), `CURLFTPMETHOD_*` (4), `CURLKHMATCH_*` (4), `CURLUSESSL_*` (4), `CURLFOLLOW_*` (3), `CURLFTPAUTH_*` (3), `CURLFTP_*` (3), `CURLPIPE_*` (3), `CURLSHOPT_*` (3), `CURLGSSAPI_*` (2), `CURLHEADER_*` (2), `CURLHSTS_*` (2), `CURLMIMEOPT_*` (1), `CURLMSG_*` (1), `CURLVERSION_*` (1), `CURLWS_*` (1).
+
+<!-- elephc:generated:symbols:end -->

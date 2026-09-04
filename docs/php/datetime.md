@@ -388,3 +388,66 @@ A few corners of PHP's date/time API are not implemented:
 - **Serialization hooks**: the `__serialize()`/`__unserialize()`/`__wakeup()`/`__set_state()` magic methods are not defined on the date classes, because elephc has no object `serialize()`/`unserialize()`/`var_export()` round-trip for any class.
 
 A complete runnable program is in [`examples/datetime/main.php`](https://github.com/illegalstudio/elephc/tree/main/examples/datetime).
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`checkdate()`](./builtins/date/checkdate.md) | `(int $month, int $day, int $year): bool` | `bool` | ✓ | ✓ |
+| [`date()`](./builtins/date/date.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
+| [`date_add()`](./builtins/date/date_add.md) | `(mixed $object, mixed $interval): mixed` | `mixed` | ✓ | ✓ |
+| [`date_create()`](./builtins/date/date_create.md) | `(string $datetime = 'now', mixed $timezone = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_create_from_format()`](./builtins/date/date_create_from_format.md) | `(string $format, string $datetime, mixed $timezone = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_create_immutable()`](./builtins/date/date_create_immutable.md) | `(string $datetime = 'now', mixed $timezone = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_create_immutable_from_format()`](./builtins/date/date_create_immutable_from_format.md) | `(string $format, string $datetime, mixed $timezone = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_date_set()`](./builtins/date/date_date_set.md) | `(mixed $object, int $year, int $month, int $day): mixed` | `mixed` | ✓ | ✓ |
+| [`date_default_timezone_get()`](./builtins/date/date_default_timezone_get.md) | `(): string` | `string` | ✓ | ✓ |
+| [`date_default_timezone_set()`](./builtins/date/date_default_timezone_set.md) | `(string $timezoneId): bool` | `bool` | ✓ | ✓ |
+| [`date_diff()`](./builtins/date/date_diff.md) | `(mixed $baseObject, mixed $targetObject, bool $absolute = false): mixed` | `mixed` | ✓ | ✓ |
+| [`date_format()`](./builtins/date/date_format.md) | `(mixed $object, string $format): string` | `string` | ✓ | ✓ |
+| [`date_get_last_errors()`](./builtins/date/date_get_last_errors.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`date_interval_create_from_date_string()`](./builtins/date/date_interval_create_from_date_string.md) | `(string $datetime): mixed` | `mixed` | ✓ | ✓ |
+| [`date_interval_format()`](./builtins/date/date_interval_format.md) | `(mixed $object, string $format): string` | `string` | ✓ | ✓ |
+| [`date_isodate_set()`](./builtins/date/date_isodate_set.md) | `(mixed $object, int $year, int $week, int $dayOfWeek = 1): mixed` | `mixed` | ✓ | ✓ |
+| [`date_modify()`](./builtins/date/date_modify.md) | `(mixed $object, string $modifier): mixed` | `mixed` | ✓ | ✓ |
+| [`date_offset_get()`](./builtins/date/date_offset_get.md) | `(mixed $object): int` | `int` | ✓ | ✓ |
+| [`date_parse()`](./builtins/date/date_parse.md) | `(string $datetime): mixed` | `mixed` | ✓ | ✓ |
+| [`date_parse_from_format()`](./builtins/date/date_parse_from_format.md) | `(string $format, string $datetime): mixed` | `mixed` | ✓ | ✓ |
+| [`date_sub()`](./builtins/date/date_sub.md) | `(mixed $object, mixed $interval): mixed` | `mixed` | ✓ | ✓ |
+| [`date_sun_info()`](./builtins/date/date_sun_info.md) | `(int $timestamp, float $latitude, float $longitude): mixed` | `mixed` | ✓ | ✓ |
+| [`date_sunrise()`](./builtins/date/date_sunrise.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, float $latitude = null, float $longitude = null, float $zenith = null, float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_sunset()`](./builtins/date/date_sunset.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, float $latitude = null, float $longitude = null, float $zenith = null, float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_time_set()`](./builtins/date/date_time_set.md) | `(mixed $object, int $hour, int $minute, int $second = 0, int $microsecond = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`date_timestamp_get()`](./builtins/date/date_timestamp_get.md) | `(mixed $object): int` | `int` | ✓ | ✓ |
+| [`date_timestamp_set()`](./builtins/date/date_timestamp_set.md) | `(mixed $object, int $timestamp): mixed` | `mixed` | ✓ | ✓ |
+| [`date_timezone_get()`](./builtins/date/date_timezone_get.md) | `(mixed $object): mixed` | `mixed` | ✓ | ✓ |
+| [`date_timezone_set()`](./builtins/date/date_timezone_set.md) | `(mixed $object, mixed $timezone): mixed` | `mixed` | ✓ | ✓ |
+| [`getdate()`](./builtins/date/getdate.md) | `(int $timestamp = null): array` | `array` | ✓ | ✓ |
+| [`gmdate()`](./builtins/date/gmdate.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
+| [`gmmktime()`](./builtins/date/gmmktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
+| [`gmstrftime()`](./builtins/date/gmstrftime.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`idate()`](./builtins/date/idate.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`localtime()`](./builtins/date/localtime.md) | `(int $timestamp = -1, bool $associative = false): array` | `array` | ✓ | ✓ |
+| [`mktime()`](./builtins/date/mktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
+| [`strftime()`](./builtins/date/strftime.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`strtotime()`](./builtins/date/strtotime.md) | `(string $datetime, int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`time()`](./builtins/date/time.md) | `(): int` | `int` | ✓ | ✓ |
+| [`timezone_abbreviations_list()`](./builtins/date/timezone_abbreviations_list.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`timezone_identifiers_list()`](./builtins/date/timezone_identifiers_list.md) | `(int $timezoneGroup = DateTimeZone::ALL, string $countryCode = null): mixed` | `mixed` | ✓ | ✓ |
+| [`timezone_location_get()`](./builtins/date/timezone_location_get.md) | `(mixed $object): mixed` | `mixed` | ✓ | ✓ |
+| [`timezone_name_from_abbr()`](./builtins/date/timezone_name_from_abbr.md) | `(string $abbr, int $utcOffset = -1, int $isDST = -1): mixed` | `mixed` | ✓ | ✓ |
+| [`timezone_name_get()`](./builtins/date/timezone_name_get.md) | `(mixed $object): string` | `string` | ✓ | ✓ |
+| [`timezone_offset_get()`](./builtins/date/timezone_offset_get.md) | `(mixed $object, mixed $datetime): int` | `int` | ✓ | ✓ |
+| [`timezone_open()`](./builtins/date/timezone_open.md) | `(string $timezone): mixed` | `mixed` | ✓ | ✓ |
+| [`timezone_transitions_get()`](./builtins/date/timezone_transitions_get.md) | `(mixed $object, int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): mixed` | `mixed` | ✓ | ✓ |
+| [`timezone_version_get()`](./builtins/date/timezone_version_get.md) | `(): string` | `string` | ✓ | ✓ |
+
+Classes: `DateError`, `DateException`, `DateInterval`, `DateInvalidOperationException`, `DateInvalidTimeZoneException`, `DateMalformedIntervalStringException`, `DateMalformedPeriodStringException`, `DateMalformedStringException`, `DateObjectError`, `DatePeriod`, `DateRangeError`, `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`.
+
+Constants: `SUNFUNCS_RET_DOUBLE`, `SUNFUNCS_RET_STRING`, `SUNFUNCS_RET_TIMESTAMP`.
+
+<!-- elephc:generated:symbols:end -->
