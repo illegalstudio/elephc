@@ -51,12 +51,12 @@ unsafe extern "C" {
         context: *const c_void,
         result_out: *mut *mut RuntimeCell,
     ) -> i32;
-    pub(super) fn __rt_gc_collect_cycles_explicit() -> i64;
-    pub(super) fn __rt_gc_disable() -> i64;
-    pub(super) fn __rt_gc_enable() -> i64;
-    pub(super) fn __rt_gc_enabled() -> i64;
-    pub(super) fn __rt_gc_mem_caches() -> i64;
-    pub(super) fn __rt_gc_status_metric(metric: u64) -> i64;
+    pub(super) fn __elephc_eval_gc_collect_cycles() -> i64;
+    pub(super) fn __elephc_eval_gc_disable() -> i64;
+    pub(super) fn __elephc_eval_gc_enable() -> i64;
+    pub(super) fn __elephc_eval_gc_enabled() -> i64;
+    pub(super) fn __elephc_eval_gc_mem_caches() -> i64;
+    pub(super) fn __elephc_eval_gc_status_metric(metric: u64) -> i64;
     pub(super) fn __elephc_eval_value_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_push(
