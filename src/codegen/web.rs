@@ -7,7 +7,7 @@
 //! properties (their initializers re-run in the handler body and restore the
 //! defaults), releases and zeroes ordinary globals plus request superglobals
 //! ($_SERVER/$_GET/$_POST) that survive between requests, and resets the
-//! concat-buffer write offset.
+//! concat-buffer write offset and request-local collector controls.
 //!
 //! Called from:
 //! - `crate::codegen::block_emit::emit_module()`, after every function and the
@@ -103,6 +103,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 
     emit_concat_offset_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
+    emit_gc_state_reset(emitter);
 
     // The heap arena reset MUST be the final reset step: the static/global releases
     // above may run destructors or decref shared values, which require the arena to
@@ -114,6 +115,26 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
+}
+
+/// Restores request-local cycle-collector controls and counters to process-start defaults.
+fn emit_gc_state_reset(emitter: &mut Emitter) {
+    emitter.comment("reset cycle collector controls and counters for the next request");
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
+    abi::emit_store_reg_to_symbol(
+        emitter,
+        abi::int_result_reg(emitter),
+        "_gc_enabled",
+        0,
+    );
+    for symbol in [
+        "_gc_collecting",
+        "_gc_release_suppressed",
+        "_gc_runs",
+        "_gc_collected",
+    ] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    }
 }
 
 /// Resets the PHP heap arena to a pristine bump-only state: `_heap_off = 0`, an empty

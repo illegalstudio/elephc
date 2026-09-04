@@ -1289,6 +1289,50 @@ fn web_gc_stats_are_emitted_per_request() {
     }
 }
 
+/// Verifies each request starts with default GC controls and no leaked stream lock.
+#[test]
+fn web_resets_gc_state_and_closes_unreachable_resources_between_requests() {
+    let dir = make_test_dir("web_gc_resource_reset");
+    let src = r#"<?php
+class WebGcResourceCycle {
+    public $self = null;
+    public $handle = null;
+}
+$lockPath = __DIR__ . "/request.lock";
+if (isset($_GET["first"])) {
+    gc_disable();
+    $cycle = new WebGcResourceCycle();
+    $cycle->self = $cycle;
+    unset($cycle);
+    gc_collect_cycles();
+
+    $resourceCycle = new WebGcResourceCycle();
+    $resourceCycle->self = $resourceCycle;
+    $resourceCycle->handle = fopen($lockPath, "w+");
+    flock($resourceCycle->handle, LOCK_EX);
+    unset($resourceCycle);
+    $status = gc_status();
+    echo !gc_enabled() && $status["runs"] > 0 ? "dirty" : "bad";
+    return;
+}
+$handle = fopen($lockPath, "r+");
+$locked = flock($handle, LOCK_EX | LOCK_NB);
+$status = gc_status();
+echo gc_enabled() && $status["runs"] === 0 && $status["collected"] === 0 ? "clean:" : "bad:";
+echo $locked ? "unlocked" : "leaked";
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?first=1", &[], "");
+    let second = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("dirty"), "first response: {first:?}");
+    assert!(second.ends_with("clean:unlocked"), "second response: {second:?}");
+}
+
 /// Verifies a request body over --max-body-size is rejected with 413, and a body
 /// under the limit is served normally.
 #[test]

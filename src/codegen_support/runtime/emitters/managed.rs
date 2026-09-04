@@ -212,7 +212,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
 
     // PHP resource-id registry (its own numbering space, unrelated to object handles)
     resource_ids::emit_resource_ids(emitter);
-    resource_inventory::emit_resource_inventory(emitter);
+    resource_inventory::emit_resource_inventory(emitter, features);
 
     // Object runtime functions
     objects::emit_object_handles(emitter);
