@@ -182,7 +182,13 @@ pub(super) fn eval_literal_call_can_use_scope_read_params(
     plan: &crate::eval_aot::EvalAotPlan,
 ) -> bool {
     plan.reads().iter().all(|name| {
-        eval_literal_call_scope_read_param_supported(module, function, inst_index, name)
+        eval_literal_call_scope_read_param_supported(
+            module,
+            function,
+            inst_index,
+            name,
+            plan.quiet_reads().contains(name),
+        )
     }) && plan.array_read_constraints().iter().all(|name| {
         eval_literal_call_scope_read_array_param_supported(module, function, inst_index, name)
     }) && plan.assoc_array_read_constraints().iter().all(|name| {
@@ -218,12 +224,13 @@ pub(super) fn eval_literal_call_scope_read_param_supported(
     function: &Function,
     inst_index: usize,
     name: &str,
+    quiet: bool,
 ) -> bool {
     if crate::superglobals::is_superglobal(name) {
         return false;
     }
     let Some(slot) = eval_scope_local_slot(function, name) else {
-        return false;
+        return quiet;
     };
     eval_scope_read_param_type_supported(&slot.php_type)
         && eval_scope_read_slot_initialized(function, slot.id, inst_index)

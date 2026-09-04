@@ -119,6 +119,7 @@ pub(super) fn lower_eval_literal_scope_eir_function(
             &param_types,
             &return_type,
             plan.reads(),
+            plan.quiet_reads(),
             plan.array_read_constraints(),
             plan.assoc_array_read_constraints(),
             plan.float_predicate_read_constraints(),
@@ -171,6 +172,7 @@ pub(super) fn lower_eval_literal_scope_read_param_eir_function(
     param_types: &[PhpType],
     return_type: &PhpType,
     read_names: &BTreeSet<String>,
+    quiet_read_names: &BTreeSet<String>,
     array_read_constraints: &BTreeSet<String>,
     assoc_array_read_constraints: &BTreeSet<String>,
     float_predicate_read_constraints: &BTreeSet<String>,
@@ -191,7 +193,7 @@ pub(super) fn lower_eval_literal_scope_read_param_eir_function(
     ) {
         return Ok(false);
     }
-    let Some(param_sources) = eval_scope_read_param_sources(ctx, read_names) else {
+    let Some(param_sources) = eval_scope_read_param_sources(ctx, read_names, quiet_read_names) else {
         return Ok(false);
     };
     ctx.emitter
@@ -217,6 +219,7 @@ pub(super) fn lower_eval_literal_scope_read_param_eir_function(
 pub(super) fn eval_scope_read_param_sources(
     ctx: &FunctionContext<'_>,
     read_names: &BTreeSet<String>,
+    quiet_read_names: &BTreeSet<String>,
 ) -> Option<Vec<EvalScopeReadParamSource>> {
     let sync_locals = eval_sync_locals(ctx);
     read_names
@@ -233,7 +236,9 @@ pub(super) fn eval_scope_read_param_sources(
             }) {
                 return Some(EvalScopeReadParamSource::Null);
             }
-            None
+            quiet_read_names
+                .contains(name)
+                .then_some(EvalScopeReadParamSource::Null)
         })
         .collect()
 }

@@ -72,6 +72,7 @@ pub(crate) struct EvalAotPlan {
     scope_function_name: Option<String>,
     scope_eir_program: Option<Program>,
     reads: BTreeSet<String>,
+    quiet_reads: BTreeSet<String>,
     array_read_constraints: BTreeSet<String>,
     assoc_array_read_constraints: BTreeSet<String>,
     float_predicate_read_constraints: BTreeSet<String>,
@@ -146,6 +147,11 @@ impl EvalAotPlan {
     /// Returns the statically known eval-scope reads for this fragment.
     pub(crate) fn reads(&self) -> &BTreeSet<String> {
         &self.reads
+    }
+
+    /// Returns caller reads that may become null without an undefined-variable warning.
+    pub(crate) fn quiet_reads(&self) -> &BTreeSet<String> {
+        &self.quiet_reads
     }
 
     /// Returns scope reads that must be caller-side arrays for direct-param AOT.

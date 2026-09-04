@@ -262,8 +262,15 @@ pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAcces
         | ExprKind::YieldFrom(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => collect_expr_scope_access(inner, access),
-        ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default }
+        ExprKind::NullCoalesce { value, default } => {
+            if let ExprKind::Variable(name) = &value.kind {
+                access.quiet_read(name);
+            } else {
+                collect_expr_scope_access(value, access);
+            }
+            collect_expr_scope_access(default, access);
+        }
+        ExprKind::ShortTernary { value, default }
         | ExprKind::Pipe {
             value,
             callable: default,
