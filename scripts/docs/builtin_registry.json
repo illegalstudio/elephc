@@ -30232,7 +30232,9 @@
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
@@ -87532,7 +87534,9 @@
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
@@ -89162,7 +89166,9 @@
           "may_throw",
           "may_fatal",
           "may_warn",
-          "may_deopt"
+          "may_deopt",
+          "blocking_io",
+          "network_io"
         ]
       },
       "lowering": {
