@@ -234,6 +234,7 @@ fn default_json(default: DefaultSpec) -> Value {
         DefaultSpec::Float(value) => json!(value),
         DefaultSpec::Str(value) => json!(value),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
+        DefaultSpec::ErrorAll => json!("E_ALL"),
         DefaultSpec::EmptyArray => json!([]),
     }
 }
