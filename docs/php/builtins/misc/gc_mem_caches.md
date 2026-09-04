@@ -1,6 +1,6 @@
 ---
 title: "gc_mem_caches()"
-description: "Reclaims memory used by the runtime allocator caches."
+description: "Drains runtime small-block allocator caches and returns the number of cached bytes released."
 sidebar:
   order: 333
 ---
@@ -11,7 +11,7 @@ sidebar:
 function gc_mem_caches(): int
 ```
 
-Reclaims memory used by the runtime allocator caches.
+Drains runtime small-block allocator caches and returns the number of cached bytes released.
 
 **Parameters**: none.
 

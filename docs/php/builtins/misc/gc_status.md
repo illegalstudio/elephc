@@ -1,6 +1,6 @@
 ---
 title: "gc_status()"
-description: "Returns the current cycle collector status and counters."
+description: "Returns live collector counters, candidate roots, and phase timings. The unbuffered collector reports threshold and buffer_size as 0 and full as false."
 sidebar:
   order: 334
 ---
@@ -11,7 +11,7 @@ sidebar:
 function gc_status(): mixed
 ```
 
-Returns the current cycle collector status and counters.
+Returns live collector counters, candidate roots, and phase timings. The unbuffered collector reports threshold and buffer_size as 0 and full as false.
 
 **Parameters**: none.
 
