@@ -91,7 +91,9 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     source_inputs.extend((repo / "crates" / "elephc-builtin-contract").rglob("*.rs"))
     source_inputs.extend((repo / "crates" / "elephc-magician" / "src").rglob("*.rs"))
     newest_source_mtime = max(path.stat().st_mtime for path in source_inputs if path.exists())
-    for profile in ("release", "debug"):
+    # CI builds the debug exporter immediately before this script runs. Prefer it over a
+    # release executable whose timestamp may have been refreshed by cache restoration.
+    for profile in ("debug", "release"):
         exe = repo / "target" / profile / "examples" / "gen_builtins"
         if exe.exists() and exe.stat().st_mtime >= newest_source_mtime:
             cmd = [str(exe), "--include-internal"]
