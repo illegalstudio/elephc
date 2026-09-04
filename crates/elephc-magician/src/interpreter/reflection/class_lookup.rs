@@ -435,12 +435,13 @@ pub(super) fn eval_reflection_builtin_class_is_iterable(class_name: &str) -> boo
 }
 
 /// Returns whether one reflected class-like name belongs to compiler-injected metadata.
+///
+/// Every class-like the shared catalog knows (SPL, Core interfaces and throwables, date/time,
+/// Reflection, prelude classes, ...) is a builtin; the match below covers the handful of
+/// compiler helper classes that are not catalogued.
 pub(super) fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
     let trimmed = class_name.trim_start_matches('\\');
-    if eval_spl_class_names()
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(trimmed))
-    {
+    if elephc_builtin_contract::lookup_class(trimmed).is_some() {
         return true;
     }
     matches!(
