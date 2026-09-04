@@ -13,45 +13,6 @@ use crate::parser::ast::{Stmt, StmtKind};
 
 use super::{canonical_builtin_function_name, namespace_name, Symbols};
 
-const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
-    "ArrayAccess",
-    "AppendIterator",
-    "ArrayIterator",
-    "ArrayObject",
-    "CachingIterator",
-    "CallbackFilterIterator",
-    "Countable",
-    "EmptyIterator",
-    "Throwable",
-    "Error",
-    "Exception",
-    "FilterIterator",
-    "InfiniteIterator",
-    "InternalIterator",
-    "Iterator",
-    "IteratorAggregate",
-    "IteratorIterator",
-    "LimitIterator",
-    "MultipleIterator",
-    "NoRewindIterator",
-    "OuterIterator",
-    "ParentIterator",
-    "RecursiveArrayIterator",
-    "RecursiveCallbackFilterIterator",
-    "RecursiveFilterIterator",
-    "RecursiveIterator",
-    "RecursiveIteratorIterator",
-    "SeekableIterator",
-    "SortDirection",
-    "SplDoublyLinkedList",
-    "SplFixedArray",
-    "SplObserver",
-    "SplQueue",
-    "SplStack",
-    "SplSubject",
-    "Stringable",
-    "Traversable",
-];
 
 impl Symbols {
     /// canonical_function
@@ -93,10 +54,7 @@ impl Symbols {
             .or_else(|| self.extern_classes.get(&key))
             .cloned()
             .or_else(|| {
-                BUILTIN_CLASS_LIKE_SYMBOLS
-                    .iter()
-                    .find(|builtin| php_symbol_key(builtin) == key)
-                    .map(|builtin| (*builtin).to_string())
+                elephc_builtin_contract::lookup_class(name).map(|builtin| builtin.name.to_string())
             })
     }
 

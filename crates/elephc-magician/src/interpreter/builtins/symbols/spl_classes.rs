@@ -55,5 +55,5 @@ pub(in crate::interpreter) fn eval_builtin_spl_classes(
 pub(in crate::interpreter) fn eval_spl_classes_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_static_string_array_result(EVAL_SPL_CLASS_NAMES, values)
+    eval_static_string_array_result(eval_spl_class_names(), values)
 }

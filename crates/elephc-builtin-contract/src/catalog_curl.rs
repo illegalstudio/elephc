@@ -33,7 +33,10 @@
 //!     `docs/php/builtins/network/`. The narrative contract (options, constants,
 //!     TLS/CA behaviour) stays hand-written in `docs/php/curl.md`.
 
-use crate::{Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec};
+use crate::{
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, PhpVersion,
+    TypeSpec,
+};
 
 /// Builds one by-value parameter, optionally with a PHP default.
 macro_rules! param {
@@ -77,11 +80,13 @@ macro_rules! by_ref_param {
 
 /// Builds one prelude-provided `ext/curl` contract.
 macro_rules! curl_surface {
-    ($name:literal, [$($param:expr),* $(,)?], $returns:ident, $summary:literal $(,)?) => {
+    ($name:literal, [$($param:expr),* $(,)?], $returns:ident, $summary:literal $(, since: $since:ident)? $(,)?) => {
         BuiltinContract {
             id: BuiltinId::from_canonical_name($name),
             name: $name,
             area: Area::Curl,
+            module: PhpModule::Curl,
+            since: curl_surface!(@since $($since)?),
             kind: BuiltinKind::PreludeProvided,
             params: &[$($param),*],
             variadic: None,
@@ -99,6 +104,8 @@ macro_rules! curl_surface {
             requirements: &[],
         }
     };
+    (@since $since:ident) => { Some(PhpVersion::$since) };
+    (@since) => { None };
 }
 
 pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
@@ -184,7 +191,8 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
         "curl_multi_get_handles",
         [param!("multi_handle", Mixed)],
         Mixed,
-        "Returns the cURL handles currently attached to a cURL multi handle."
+        "Returns the cURL handles currently attached to a cURL multi handle.",
+        since: Php85
     ),
     // `?string` in the prelude; the catalog spells nullable string returns `Mixed`,
     // as `fgets`, `file_get_contents`, `readline` and `realpath` already do.
@@ -280,7 +288,8 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
         "curl_share_init_persistent",
         [param!("share_options", Mixed)],
         Mixed,
-        "Initializes a persistent cURL share handle."
+        "Initializes a persistent cURL share handle.",
+        since: Php85
     ),
     curl_surface!(
         "curl_share_setopt",

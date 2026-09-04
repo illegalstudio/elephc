@@ -251,6 +251,8 @@ fn build_json(include_internal: bool) -> Value {
         out.push(json!({
             "name": spec.name,
             "area": area_str(spec.area),
+            "module": spec.module.php_name(),
+            "since": spec.since.map(|version| version.as_str()),
             "internal": spec.internal,
             "extension": spec.extension,
             "params": params,

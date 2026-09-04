@@ -17,7 +17,8 @@
 //! ## Why this whole tree sits behind the `curl` Cargo feature
 //!
 //! `crates/elephc-magician`'s Cargo.toml has never had a path dependency on `elephc-curl`
-//! (or on the root `elephc` crate at all — `crate::interpreter::curl_constants` hits the
+//! (or on the root `elephc` crate at all — which is why the curl constant table lives in the
+//! shared `elephc-builtin-contract` catalog and hits the
 //! identical constraint for the constant tables). `crate::curl_ffi` therefore reaches the bridge the SAME way
 //! `elephc-curl` itself reaches raw libcurl: bare `extern "C"` declarations that stay
 //! unresolved in `libelephc_magician.a`'s own archive and are resolved only when the
@@ -111,7 +112,7 @@
 //! ## Scope shipped vs. deferred
 //!
 //! SHIPPED: the complete easy interface above, the full 689-entry `CURLOPT_*`/
-//! `CURLINFO_*`/`CURLE_*`/`CURL_*` constant table (`crate::interpreter::curl_constants`,
+//! `CURLINFO_*`/`CURLE_*`/`CURL_*` constant table (`elephc_builtin_contract` `catalog_constants_curl`,
 //! unconditional — see that module's own doc for why constants need no feature gate), and
 //! `curl_setopt()`'s generic option-KIND dispatch (the same table-driven mechanism
 //! `crate::curl_prelude::curl_setopt` uses, not a per-option hardcode), so every LONG/

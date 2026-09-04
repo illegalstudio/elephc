@@ -9,6 +9,7 @@
 //! - Magic file and directory values come from the current eval call-site context.
 
 use super::*;
+use elephc_builtin_contract::ConstValue;
 
 /// Converts one EvalIR constant into a runtime-cell handle.
 pub(super) fn eval_const(
@@ -74,144 +75,59 @@ fn eval_predefined_constant(
 pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
-    match name.trim_start_matches('\\') {
-        "ICONV_MIME_DECODE_STRICT" => {
-            Some(EvalPredefinedConstant::Int(EVAL_ICONV_MIME_DECODE_STRICT))
-        }
-        "ICONV_MIME_DECODE_CONTINUE_ON_ERROR" => Some(EvalPredefinedConstant::Int(
-            EVAL_ICONV_MIME_DECODE_CONTINUE_ON_ERROR,
-        )),
-        // The runtime iconv provider is fixed by the platform: Apple ships GNU libiconv,
-        // and elephc's Linux support targets glibc.
-        "ICONV_IMPL" => Some(EvalPredefinedConstant::String(
-            elephc_iconv::implementation_name(cfg!(target_os = "macos")),
-        )),
-        "ICONV_VERSION" => Some(EvalPredefinedConstant::String(elephc_iconv::ICONV_VERSION)),
-        "PHP_URL_SCHEME" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_SCHEME)),
-        "PHP_URL_HOST" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_HOST)),
-        "PHP_URL_PORT" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PORT)),
-        "PHP_URL_USER" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_USER)),
-        "PHP_URL_PASS" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PASS)),
-        "PHP_URL_PATH" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PATH)),
-        "PHP_URL_QUERY" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_QUERY)),
-        "PHP_URL_FRAGMENT" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_FRAGMENT)),
-        "PATHINFO_DIRNAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_DIRNAME)),
-        "PATHINFO_BASENAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_BASENAME)),
-        "PATHINFO_EXTENSION" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_EXTENSION)),
-        "PATHINFO_FILENAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_FILENAME)),
-        "PATHINFO_ALL" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_ALL)),
-        "FNM_NOESCAPE" => Some(EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE)),
-        "FNM_PATHNAME" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME)),
-        "FNM_PERIOD" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PERIOD)),
-        "FNM_CASEFOLD" => Some(EvalPredefinedConstant::Int(EVAL_FNM_CASEFOLD)),
-        "LOCK_SH" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_SH)),
-        "LOCK_EX" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_EX)),
-        "LOCK_UN" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_UN)),
-        "LOCK_NB" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_NB)),
-        "OPENSSL_RAW_DATA" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_RAW_DATA)),
-        "OPENSSL_ZERO_PADDING" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_ZERO_PADDING)),
-        "OPENSSL_DONT_ZERO_PAD_KEY" => {
-            Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_DONT_ZERO_PAD_KEY))
-        }
-        "ARRAY_FILTER_USE_VALUE" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_VALUE)),
-        "ARRAY_FILTER_USE_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_BOTH)),
-        "ARRAY_FILTER_USE_KEY" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_KEY)),
-        "STR_PAD_LEFT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_LEFT)),
-        "STR_PAD_RIGHT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_RIGHT)),
-        "STR_PAD_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_BOTH)),
-        "COUNT_NORMAL" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_NORMAL)),
-        "COUNT_RECURSIVE" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_RECURSIVE)),
-        "PHP_ROUND_HALF_UP" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_UP)),
-        "PHP_ROUND_HALF_DOWN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_DOWN)),
-        "PHP_ROUND_HALF_EVEN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_EVEN)),
-        "PHP_ROUND_HALF_ODD" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_ODD)),
-        "PREG_SPLIT_NO_EMPTY" => Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_NO_EMPTY)),
-        "PREG_SPLIT_DELIM_CAPTURE" => {
-            Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_DELIM_CAPTURE))
-        }
-        "PREG_SPLIT_OFFSET_CAPTURE" => {
-            Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_OFFSET_CAPTURE))
-        }
-        "PREG_PATTERN_ORDER" => Some(EvalPredefinedConstant::Int(EVAL_PREG_PATTERN_ORDER)),
-        "PREG_SET_ORDER" => Some(EvalPredefinedConstant::Int(EVAL_PREG_SET_ORDER)),
-        "PREG_OFFSET_CAPTURE" => Some(EvalPredefinedConstant::Int(EVAL_PREG_OFFSET_CAPTURE)),
-        "PREG_UNMATCHED_AS_NULL" => Some(EvalPredefinedConstant::Int(EVAL_PREG_UNMATCHED_AS_NULL)),
-        "JSON_ERROR_NONE" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_NONE)),
-        "JSON_ERROR_DEPTH" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_DEPTH)),
-        "JSON_ERROR_STATE_MISMATCH" => {
-            Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_STATE_MISMATCH))
-        }
-        "JSON_ERROR_CTRL_CHAR" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_CTRL_CHAR)),
-        "JSON_ERROR_SYNTAX" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_SYNTAX)),
-        "JSON_ERROR_UTF8" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF8)),
-        "JSON_ERROR_RECURSION" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_RECURSION)),
-        "JSON_ERROR_INF_OR_NAN" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_INF_OR_NAN)),
-        "JSON_ERROR_UNSUPPORTED_TYPE" => Some(EvalPredefinedConstant::Int(
-            EVAL_JSON_ERROR_UNSUPPORTED_TYPE,
-        )),
-        "JSON_ERROR_INVALID_PROPERTY_NAME" => Some(EvalPredefinedConstant::Int(
-            EVAL_JSON_ERROR_INVALID_PROPERTY_NAME,
-        )),
-        "JSON_ERROR_UTF16" => Some(EvalPredefinedConstant::Int(EVAL_JSON_ERROR_UTF16)),
-        "JSON_HEX_TAG" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_TAG)),
-        "JSON_HEX_AMP" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_AMP)),
-        "JSON_HEX_APOS" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_APOS)),
-        "JSON_HEX_QUOT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_HEX_QUOT)),
-        "JSON_BIGINT_AS_STRING" => Some(EvalPredefinedConstant::Int(EVAL_JSON_BIGINT_AS_STRING)),
-        "JSON_FORCE_OBJECT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_FORCE_OBJECT)),
-        "JSON_NUMERIC_CHECK" => Some(EvalPredefinedConstant::Int(EVAL_JSON_NUMERIC_CHECK)),
-        "JSON_UNESCAPED_SLASHES" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_SLASHES)),
-        "JSON_UNESCAPED_UNICODE" => Some(EvalPredefinedConstant::Int(EVAL_JSON_UNESCAPED_UNICODE)),
-        "JSON_PARTIAL_OUTPUT_ON_ERROR" => Some(EvalPredefinedConstant::Int(
-            EVAL_JSON_PARTIAL_OUTPUT_ON_ERROR,
-        )),
-        "JSON_PRETTY_PRINT" => Some(EvalPredefinedConstant::Int(EVAL_JSON_PRETTY_PRINT)),
-        "JSON_PRESERVE_ZERO_FRACTION" => Some(EvalPredefinedConstant::Int(
-            EVAL_JSON_PRESERVE_ZERO_FRACTION,
-        )),
-        "JSON_INVALID_UTF8_IGNORE" => {
-            Some(EvalPredefinedConstant::Int(EVAL_JSON_INVALID_UTF8_IGNORE))
-        }
-        "JSON_INVALID_UTF8_SUBSTITUTE" => Some(EvalPredefinedConstant::Int(
-            EVAL_JSON_INVALID_UTF8_SUBSTITUTE,
-        )),
-        "JSON_THROW_ON_ERROR" => Some(EvalPredefinedConstant::Int(EVAL_JSON_THROW_ON_ERROR)),
-        "INF" => Some(EvalPredefinedConstant::Float(f64::INFINITY)),
-        "NAN" => Some(EvalPredefinedConstant::Float(f64::NAN)),
-        "PHP_INT_MAX" => Some(EvalPredefinedConstant::Int(i64::MAX)),
-        "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
-        "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
-        // The PHP version surface. The compiler bakes these per compilation from
-        // `--php-version` / `--web` (`codegen_support::prescan::collect_constants`) and forwards
-        // the profile to this interpreter through `__elephc_eval_set_php_version_id`, so the
-        // three profile-dependent entries answer whatever the binary was compiled for.
-        "PHP_VERSION" => Some(EvalPredefinedConstant::String(
-            crate::eval_php_profile::eval_php_version_string(),
-        )),
-        "PHP_VERSION_ID" => Some(EvalPredefinedConstant::Int(i64::from(
-            crate::eval_php_profile::eval_php_version_id(),
-        ))),
-        "PHP_MAJOR_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_MAJOR_VERSION)),
-        "PHP_MINOR_VERSION" => Some(EvalPredefinedConstant::Int(
-            crate::eval_php_profile::eval_php_minor_version(),
-        )),
-        "PHP_RELEASE_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION)),
-        "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION)),
-        "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),
-        "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
-        // Every `CURLOPT_*`/`CURLINFO_*`/`CURLE_*`/`CURL_*` name falls through to the
-        // 689-entry generated table rather than growing this hand-written match by 689
-        // arms. Table-driven, not gated behind the `curl` Cargo feature: see
-        // `super::curl_constants`'s header for why a bare numeric constant carries no
-        // ABI-linkage cost.
-        other => super::curl_constants::EVAL_CURL_INT_CONSTANTS
-            .iter()
-            .find(|(name, _)| *name == other)
-            .map(|(_, value)| EvalPredefinedConstant::Int(*value)),
+    let name = name.trim_start_matches('\\');
+    if let Some(value) = eval_target_dependent_constant(name) {
+        return Some(value);
+    }
+    let constant = elephc_builtin_contract::lookup_constant(name)?;
+    if !matches!(
+        elephc_builtin_contract::eval_constant_support(constant),
+        elephc_builtin_contract::BackendSupport::Implemented(_)
+    ) {
+        return None;
+    }
+    match constant.value {
+        ConstValue::Int(value) => Some(EvalPredefinedConstant::Int(value)),
+        ConstValue::Float(value) => Some(EvalPredefinedConstant::Float(value)),
+        ConstValue::Str(value) => Some(EvalPredefinedConstant::String(value)),
+        // Booleans, null, and stream resources have no predefined-constant representation
+        // here; the catalog's eval route already reports them unsupported.
+        ConstValue::Bool(_) | ConstValue::Null | ConstValue::StreamResource(_) => None,
+        // A target-dependent name without an arm above is a catalog/interpreter mismatch,
+        // which `every_catalogued_constant_has_its_declared_eval_route` reports.
+        ConstValue::TargetDependent(_) => None,
     }
 }
 
-/// Returns the PHP OS constant for the host platform running the eval bridge.
+/// Values the catalog marks `TargetDependent`: Magician computes them for the target it is
+/// linked into and the PHP profile it emulates, under the catalogued name.
+fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> {
+    let is_macos = cfg!(target_os = "macos");
+    Some(match name {
+        "ICONV_IMPL" => EvalPredefinedConstant::String(elephc_iconv::implementation_name(is_macos)),
+        "ICONV_VERSION" => EvalPredefinedConstant::String(elephc_iconv::ICONV_VERSION),
+        "PHP_OS" => EvalPredefinedConstant::String(eval_php_os_name()),
+        "PHP_VERSION" => EvalPredefinedConstant::String(
+            crate::eval_php_profile::eval_php_version_string(),
+        ),
+        "PHP_VERSION_ID" => EvalPredefinedConstant::Int(i64::from(
+            crate::eval_php_profile::eval_php_version_id(),
+        )),
+        "PHP_MAJOR_VERSION" => EvalPredefinedConstant::Int(EVAL_PHP_MAJOR_VERSION),
+        "PHP_MINOR_VERSION" => EvalPredefinedConstant::Int(
+            crate::eval_php_profile::eval_php_minor_version(),
+        ),
+        "PHP_RELEASE_VERSION" => EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION),
+        "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
+        "PHP_SAPI" => EvalPredefinedConstant::String(EVAL_PHP_SAPI),
+        "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String("/"),
+        // Platform `fnmatch(3)` flag values, matching the compiler's per-target table.
+        "FNM_NOESCAPE" => EvalPredefinedConstant::Int(if is_macos { 1 } else { 2 }),
+        "FNM_PATHNAME" => EvalPredefinedConstant::Int(if is_macos { 2 } else { 1 }),
+        _ => return None,
+    })
+}
+
 fn eval_php_os_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "Darwin"
@@ -253,11 +169,10 @@ mod curl_constant_fallback_tests {
     use super::*;
 
     /// `CURLOPT_URL`/`CURLOPT_RETURNTRANSFER` resolve through the same predefined-constant
-    /// path `JSON_PRETTY_PRINT` etc. use, table-driven through
-    /// `crate::interpreter::curl_constants::EVAL_CURL_INT_CONSTANTS` rather than a
-    /// 689-arm hand-written match — this is a pure-data lookup, so it needs no bridge, no
-    /// feature flag, and no linked libcurl to verify (`crate::interpreter::curl_constants`'s
-    /// own header explains why the table is unconditional).
+    /// path `JSON_PRETTY_PRINT` etc. use, table-driven through the shared constant catalog
+    /// (`elephc_builtin_contract` `catalog_constants_curl`) rather than a 689-arm hand-written
+    /// match — this is a pure-data lookup, so it needs no bridge, no feature flag, and no
+    /// linked libcurl to verify (the catalog publishes curl constants unconditionally).
     #[test]
     fn curl_constants_resolve_through_the_predefined_constant_fallback() {
         assert!(matches!(
@@ -280,6 +195,28 @@ mod curl_constant_fallback_tests {
     #[test]
     fn a_curl_shaped_unknown_name_does_not_resolve() {
         assert!(eval_predefined_constant_value("CURLOPT_NOT_A_REAL_OPTION").is_none());
+    }
+
+    /// Verifies Magician resolves exactly the constants whose catalog eval route says it
+    /// does: every `Implemented` one has a value, every `Unsupported` one has none.
+    #[test]
+    fn every_catalogued_constant_has_its_declared_eval_route() {
+        use elephc_builtin_contract::{constants, eval_constant_support, BackendSupport};
+        for constant in constants() {
+            let resolved = eval_predefined_constant_value(constant.name).is_some();
+            match eval_constant_support(constant) {
+                BackendSupport::Implemented(_) => assert!(
+                    resolved,
+                    "{} is eval-supported per the catalog but does not resolve",
+                    constant.name
+                ),
+                BackendSupport::Unsupported(reason) => assert!(
+                    !resolved,
+                    "{} resolves in eval but the catalog says {reason:?}",
+                    constant.name
+                ),
+            }
+        }
     }
 
     /// The existing (pre-curl) predefined constants must still resolve unchanged: the new

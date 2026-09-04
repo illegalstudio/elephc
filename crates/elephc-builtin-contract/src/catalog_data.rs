@@ -9,13 +9,17 @@
 //! - Entries are sorted by canonical lowercase PHP name.
 //! - Backend execution hooks do not belong in this catalog.
 
-use crate::{Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec};
+use crate::{
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, TypeSpec,
+};
 
 pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_callable_ptr"),
         name: "__elephc_callable_ptr",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -44,6 +48,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_class_has_constructor"),
         name: "__elephc_class_has_constructor",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -72,6 +78,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_adapter_addr"),
         name: "__elephc_curl_adapter_addr",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[],
         variadic: None,
@@ -93,6 +101,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_body"),
         name: "__elephc_curl_easy_body",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -121,6 +131,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_copy"),
         name: "__elephc_curl_easy_copy",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -149,6 +161,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_errno"),
         name: "__elephc_curl_easy_errno",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -177,6 +191,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_error"),
         name: "__elephc_curl_easy_error",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -205,6 +221,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_getinfo_double"),
         name: "__elephc_curl_easy_getinfo_double",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -239,6 +257,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_getinfo_long"),
         name: "__elephc_curl_easy_getinfo_long",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -273,6 +293,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_id"),
         name: "__elephc_curl_easy_id",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -301,6 +323,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_init"),
         name: "__elephc_curl_easy_init",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[],
         variadic: None,
@@ -322,6 +346,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_pause"),
         name: "__elephc_curl_easy_pause",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -356,6 +382,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_perform"),
         name: "__elephc_curl_easy_perform",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -384,6 +412,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_reset"),
         name: "__elephc_curl_easy_reset",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -412,6 +442,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_set_callback"),
         name: "__elephc_curl_easy_set_callback",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -464,6 +496,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_set_share"),
         name: "__elephc_curl_easy_set_share",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -498,6 +532,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_setopt_long"),
         name: "__elephc_curl_easy_setopt_long",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -538,6 +574,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_setopt_slist"),
         name: "__elephc_curl_easy_setopt_slist",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -578,6 +616,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_setopt_str"),
         name: "__elephc_curl_easy_setopt_str",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -618,6 +658,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_str_op"),
         name: "__elephc_curl_easy_str_op",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -664,6 +706,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_easy_upkeep"),
         name: "__elephc_curl_easy_upkeep",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -692,6 +736,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_mime_abort"),
         name: "__elephc_curl_mime_abort",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -720,6 +766,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_mime_add_part"),
         name: "__elephc_curl_mime_add_part",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -748,6 +796,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_mime_new"),
         name: "__elephc_curl_mime_new",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -776,6 +826,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_mime_part_field"),
         name: "__elephc_curl_mime_part_field",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -816,6 +868,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_mime_post"),
         name: "__elephc_curl_mime_post",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -844,6 +898,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_add"),
         name: "__elephc_curl_multi_add",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -878,6 +934,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_errno"),
         name: "__elephc_curl_multi_errno",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -906,6 +964,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_exec"),
         name: "__elephc_curl_multi_exec",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -934,6 +994,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_info_read"),
         name: "__elephc_curl_multi_info_read",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -968,6 +1030,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_init"),
         name: "__elephc_curl_multi_init",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[],
         variadic: None,
@@ -989,6 +1053,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_remove"),
         name: "__elephc_curl_multi_remove",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1023,6 +1089,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_select"),
         name: "__elephc_curl_multi_select",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1057,6 +1125,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_setopt"),
         name: "__elephc_curl_multi_setopt",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1097,6 +1167,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_setopt_unsupported_warning"),
         name: "__elephc_curl_multi_setopt_unsupported_warning",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1125,6 +1197,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_multi_strerror"),
         name: "__elephc_curl_multi_strerror",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1153,6 +1227,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_option_kind"),
         name: "__elephc_curl_option_kind",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1181,6 +1257,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_setopt_unsupported_warning"),
         name: "__elephc_curl_setopt_unsupported_warning",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1209,6 +1287,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_share_errno"),
         name: "__elephc_curl_share_errno",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1237,6 +1317,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_share_init"),
         name: "__elephc_curl_share_init",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[],
         variadic: None,
@@ -1258,6 +1340,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_share_init_persistent"),
         name: "__elephc_curl_share_init_persistent",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1286,6 +1370,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_share_setopt"),
         name: "__elephc_curl_share_setopt",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1326,6 +1412,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_share_strerror"),
         name: "__elephc_curl_share_strerror",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1354,6 +1442,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_strerror"),
         name: "__elephc_curl_strerror",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1382,6 +1472,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_curl_version"),
         name: "__elephc_curl_version",
         area: Area::Curl,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[],
         variadic: None,
@@ -1403,6 +1495,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_gmmktime_raw"),
         name: "__elephc_gmmktime_raw",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1461,6 +1555,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_hash_ctx_copy"),
         name: "__elephc_hash_ctx_copy",
         area: Area::String,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1489,6 +1585,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_hash_ctx_final"),
         name: "__elephc_hash_ctx_final",
         area: Area::String,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1523,6 +1621,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_hash_ctx_init"),
         name: "__elephc_hash_ctx_init",
         area: Area::String,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1551,6 +1651,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_hash_ctx_update"),
         name: "__elephc_hash_ctx_update",
         area: Area::String,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1585,6 +1687,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_initialize_pdo_statement"),
         name: "__elephc_initialize_pdo_statement",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1637,6 +1741,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_invoke_pdo_statement_constructor"),
         name: "__elephc_invoke_pdo_statement_constructor",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1677,6 +1783,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_mktime_raw"),
         name: "__elephc_mktime_raw",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1735,6 +1843,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_new_without_constructor"),
         name: "__elephc_new_without_constructor",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1763,6 +1873,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_normalize_callable"),
         name: "__elephc_normalize_callable",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1791,6 +1903,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_object_is_enum"),
         name: "__elephc_object_is_enum",
         area: Area::Callables,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1819,6 +1933,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_object_prop_count"),
         name: "__elephc_object_prop_count",
         area: Area::Callables,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1847,6 +1963,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_object_prop_name"),
         name: "__elephc_object_prop_name",
         area: Area::Callables,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1881,6 +1999,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_object_prop_value"),
         name: "__elephc_object_prop_value",
         area: Area::Callables,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1915,6 +2035,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_pdo_adapter_addr"),
         name: "__elephc_pdo_adapter_addr",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1943,6 +2065,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_pdo_called_class_status"),
         name: "__elephc_pdo_called_class_status",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1971,6 +2095,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_pdo_statement_class_status"),
         name: "__elephc_pdo_statement_class_status",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -1999,6 +2125,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_bzip2_archive"),
         name: "__elephc_phar_bzip2_archive",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2027,6 +2155,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_decompress_archive"),
         name: "__elephc_phar_decompress_archive",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2055,6 +2185,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_get_file_metadata"),
         name: "__elephc_phar_get_file_metadata",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2083,6 +2215,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_get_metadata"),
         name: "__elephc_phar_get_metadata",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2111,6 +2245,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_get_signature_hash"),
         name: "__elephc_phar_get_signature_hash",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2139,6 +2275,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_get_signature_type"),
         name: "__elephc_phar_get_signature_type",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2167,6 +2305,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_get_stub"),
         name: "__elephc_phar_get_stub",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2195,6 +2335,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_gzip_archive"),
         name: "__elephc_phar_gzip_archive",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2223,6 +2365,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_list_entries"),
         name: "__elephc_phar_list_entries",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2251,6 +2395,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_set_compression"),
         name: "__elephc_phar_set_compression",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2285,6 +2431,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_set_file_metadata"),
         name: "__elephc_phar_set_file_metadata",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2319,6 +2467,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_set_metadata"),
         name: "__elephc_phar_set_metadata",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2353,6 +2503,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_set_stub"),
         name: "__elephc_phar_set_stub",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2387,6 +2539,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_set_zip_password"),
         name: "__elephc_phar_set_zip_password",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2415,6 +2569,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_sign_hash"),
         name: "__elephc_phar_sign_hash",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2449,6 +2605,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_phar_sign_openssl"),
         name: "__elephc_phar_sign_openssl",
         area: Area::Io,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2483,6 +2641,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_ptr_is_null"),
         name: "__elephc_ptr_is_null",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2511,6 +2671,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_ptr_read_string"),
         name: "__elephc_ptr_read_string",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2545,6 +2707,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_ptr_write_string"),
         name: "__elephc_ptr_write_string",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2579,6 +2743,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("__elephc_strtotime_raw"),
         name: "__elephc_strtotime_raw",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2613,6 +2779,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("abs"),
         name: "abs",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2641,6 +2809,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("acos"),
         name: "acos",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2669,6 +2839,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("addslashes"),
         name: "addslashes",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2697,6 +2869,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_all"),
         name: "array_all",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2731,6 +2905,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_any"),
         name: "array_any",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2765,6 +2941,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_chunk"),
         name: "array_chunk",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2805,6 +2983,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_column"),
         name: "array_column",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2839,6 +3019,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_combine"),
         name: "array_combine",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2873,6 +3055,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_count_values"),
         name: "array_count_values",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2901,6 +3085,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_diff"),
         name: "array_diff",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2929,6 +3115,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_diff_assoc"),
         name: "array_diff_assoc",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2957,6 +3145,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_diff_key"),
         name: "array_diff_key",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -2985,6 +3175,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_fill"),
         name: "array_fill",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3025,6 +3217,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_fill_keys"),
         name: "array_fill_keys",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3059,6 +3253,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_filter"),
         name: "array_filter",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3099,6 +3295,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_find"),
         name: "array_find",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3133,6 +3331,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_flip"),
         name: "array_flip",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3161,6 +3361,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_intersect"),
         name: "array_intersect",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3189,6 +3391,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_intersect_assoc"),
         name: "array_intersect_assoc",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3217,6 +3421,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_intersect_key"),
         name: "array_intersect_key",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3245,6 +3451,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_is_list"),
         name: "array_is_list",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3273,6 +3481,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_key_exists"),
         name: "array_key_exists",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3307,6 +3517,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_key_first"),
         name: "array_key_first",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3335,6 +3547,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_key_last"),
         name: "array_key_last",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3363,6 +3577,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_keys"),
         name: "array_keys",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3391,6 +3607,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_map"),
         name: "array_map",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3425,6 +3643,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_merge"),
         name: "array_merge",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -3447,6 +3667,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_merge_recursive"),
         name: "array_merge_recursive",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -3469,6 +3691,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_multisort"),
         name: "array_multisort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3503,6 +3727,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_pad"),
         name: "array_pad",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3543,6 +3769,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_pop"),
         name: "array_pop",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3571,6 +3799,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_product"),
         name: "array_product",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3599,6 +3829,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_push"),
         name: "array_push",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3627,6 +3859,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_rand"),
         name: "array_rand",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3655,6 +3889,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_reduce"),
         name: "array_reduce",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3695,6 +3931,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_replace"),
         name: "array_replace",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3729,6 +3967,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_replace_recursive"),
         name: "array_replace_recursive",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3763,6 +4003,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_reverse"),
         name: "array_reverse",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3797,6 +4039,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_search"),
         name: "array_search",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3837,6 +4081,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_shift"),
         name: "array_shift",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3865,6 +4111,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_slice"),
         name: "array_slice",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3911,6 +4159,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_splice"),
         name: "array_splice",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3957,6 +4207,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_sum"),
         name: "array_sum",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -3985,6 +4237,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_udiff"),
         name: "array_udiff",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4025,6 +4279,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_uintersect"),
         name: "array_uintersect",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4065,6 +4321,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_unique"),
         name: "array_unique",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4093,6 +4351,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_unshift"),
         name: "array_unshift",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4121,6 +4381,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_values"),
         name: "array_values",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4149,6 +4411,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_walk"),
         name: "array_walk",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4183,6 +4447,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("array_walk_recursive"),
         name: "array_walk_recursive",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4217,6 +4483,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("arsort"),
         name: "arsort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4245,6 +4513,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("asin"),
         name: "asin",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4273,6 +4543,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("asort"),
         name: "asort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4301,6 +4573,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("atan"),
         name: "atan",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4329,6 +4603,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("atan2"),
         name: "atan2",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4363,6 +4639,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("base64_decode"),
         name: "base64_decode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4397,6 +4675,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("base64_encode"),
         name: "base64_encode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4425,6 +4705,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("base_convert"),
         name: "base_convert",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4465,6 +4747,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("basename"),
         name: "basename",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4499,6 +4783,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcadd"),
         name: "bcadd",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4539,6 +4825,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcceil"),
         name: "bcceil",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4567,6 +4855,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bccomp"),
         name: "bccomp",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4607,6 +4897,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcdiv"),
         name: "bcdiv",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4647,6 +4939,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcdivmod"),
         name: "bcdivmod",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4687,6 +4981,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcfloor"),
         name: "bcfloor",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4715,6 +5011,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcmod"),
         name: "bcmod",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4755,6 +5053,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcmul"),
         name: "bcmul",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4795,6 +5095,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcpow"),
         name: "bcpow",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4835,6 +5137,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcpowmod"),
         name: "bcpowmod",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4881,6 +5185,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcround"),
         name: "bcround",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4921,6 +5227,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcscale"),
         name: "bcscale",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4949,6 +5257,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcsqrt"),
         name: "bcsqrt",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -4983,6 +5293,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bcsub"),
         name: "bcsub",
         area: Area::Math,
+        module: PhpModule::Bcmath,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5023,6 +5335,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bin2hex"),
         name: "bin2hex",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5051,6 +5365,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("bindec"),
         name: "bindec",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5079,6 +5395,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("boolval"),
         name: "boolval",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5107,6 +5425,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("buffer_free"),
         name: "buffer_free",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5135,6 +5455,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("buffer_len"),
         name: "buffer_len",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5163,6 +5485,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("call_user_func"),
         name: "call_user_func",
         area: Area::Callables,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5191,6 +5515,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("call_user_func_array"),
         name: "call_user_func_array",
         area: Area::Callables,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5225,6 +5551,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ceil"),
         name: "ceil",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5253,6 +5581,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("chdir"),
         name: "chdir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5281,6 +5611,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("checkdate"),
         name: "checkdate",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5321,6 +5653,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("chgrp"),
         name: "chgrp",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5355,6 +5689,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("chmod"),
         name: "chmod",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5389,6 +5725,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("chop"),
         name: "chop",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5423,6 +5761,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("chown"),
         name: "chown",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5457,6 +5797,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("chr"),
         name: "chr",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5485,6 +5827,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("chunk_split"),
         name: "chunk_split",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5525,6 +5869,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("clamp"),
         name: "clamp",
         area: Area::Math,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5565,6 +5911,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("class_alias"),
         name: "class_alias",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5605,6 +5953,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("class_attribute_args"),
         name: "class_attribute_args",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5639,6 +5989,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("class_attribute_names"),
         name: "class_attribute_names",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5667,6 +6019,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("class_exists"),
         name: "class_exists",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5701,6 +6055,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("class_get_attributes"),
         name: "class_get_attributes",
         area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5729,6 +6085,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("class_implements"),
         name: "class_implements",
         area: Area::Callables,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5763,6 +6121,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("class_parents"),
         name: "class_parents",
         area: Area::Callables,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5797,6 +6157,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("class_uses"),
         name: "class_uses",
         area: Area::Callables,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5831,6 +6193,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("clearstatcache"),
         name: "clearstatcache",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5865,6 +6229,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("closedir"),
         name: "closedir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5893,6 +6259,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("constant"),
         name: "constant",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5921,6 +6289,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("copy"),
         name: "copy",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5955,6 +6325,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("cos"),
         name: "cos",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -5983,6 +6355,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("cosh"),
         name: "cosh",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6011,6 +6385,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("count"),
         name: "count",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6045,6 +6421,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("count_chars"),
         name: "count_chars",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6079,6 +6457,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("crc32"),
         name: "crc32",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6107,6 +6487,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ctype_alnum"),
         name: "ctype_alnum",
         area: Area::String,
+        module: PhpModule::Ctype,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6135,6 +6517,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ctype_alpha"),
         name: "ctype_alpha",
         area: Area::String,
+        module: PhpModule::Ctype,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6163,6 +6547,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ctype_digit"),
         name: "ctype_digit",
         area: Area::String,
+        module: PhpModule::Ctype,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6191,6 +6577,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ctype_space"),
         name: "ctype_space",
         area: Area::String,
+        module: PhpModule::Ctype,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6219,6 +6607,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("current"),
         name: "current",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6247,6 +6637,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("date"),
         name: "date",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6281,6 +6673,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("date_default_timezone_get"),
         name: "date_default_timezone_get",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -6303,6 +6697,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("date_default_timezone_set"),
         name: "date_default_timezone_set",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6331,6 +6727,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("decbin"),
         name: "decbin",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6359,6 +6757,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("dechex"),
         name: "dechex",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6387,6 +6787,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("decoct"),
         name: "decoct",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6415,6 +6817,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("define"),
         name: "define",
         area: Area::System,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6449,6 +6853,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("defined"),
         name: "defined",
         area: Area::System,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6477,6 +6883,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("deg2rad"),
         name: "deg2rad",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6505,6 +6913,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("dirname"),
         name: "dirname",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6539,6 +6949,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("disk_free_space"),
         name: "disk_free_space",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6567,6 +6979,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("disk_total_space"),
         name: "disk_total_space",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6595,6 +7009,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("end"),
         name: "end",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6623,6 +7039,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("enum_exists"),
         name: "enum_exists",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6657,6 +7075,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("exec"),
         name: "exec",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6685,6 +7105,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("exp"),
         name: "exp",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6713,6 +7135,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("explode"),
         name: "explode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6753,6 +7177,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("extension_loaded"),
         name: "extension_loaded",
         area: Area::System,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6781,6 +7207,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fclose"),
         name: "fclose",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6809,6 +7237,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fdatasync"),
         name: "fdatasync",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6837,6 +7267,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fdiv"),
         name: "fdiv",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6871,6 +7303,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("feof"),
         name: "feof",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6899,6 +7333,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fflush"),
         name: "fflush",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6927,6 +7363,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fgetc"),
         name: "fgetc",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6955,6 +7393,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fgetcsv"),
         name: "fgetcsv",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -6995,6 +7435,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fgets"),
         name: "fgets",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7023,6 +7465,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("file"),
         name: "file",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7057,6 +7501,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("file_exists"),
         name: "file_exists",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7085,6 +7531,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("file_get_contents"),
         name: "file_get_contents",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7137,6 +7585,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("file_put_contents"),
         name: "file_put_contents",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7171,6 +7621,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fileatime"),
         name: "fileatime",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7199,6 +7651,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("filectime"),
         name: "filectime",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7227,6 +7681,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("filegroup"),
         name: "filegroup",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7255,6 +7711,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fileinode"),
         name: "fileinode",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7283,6 +7741,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("filemtime"),
         name: "filemtime",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7311,6 +7771,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fileowner"),
         name: "fileowner",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7339,6 +7801,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fileperms"),
         name: "fileperms",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7367,6 +7831,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("filesize"),
         name: "filesize",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7395,6 +7861,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("filetype"),
         name: "filetype",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7423,6 +7891,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("floatval"),
         name: "floatval",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7451,6 +7921,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("flock"),
         name: "flock",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7491,6 +7963,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("floor"),
         name: "floor",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7519,6 +7993,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fmod"),
         name: "fmod",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7553,6 +8029,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fnmatch"),
         name: "fnmatch",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7593,6 +8071,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fopen"),
         name: "fopen",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7639,6 +8119,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fpassthru"),
         name: "fpassthru",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7667,6 +8149,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fprintf"),
         name: "fprintf",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7701,6 +8185,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fputcsv"),
         name: "fputcsv",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7747,6 +8233,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fread"),
         name: "fread",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7781,6 +8269,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fscanf"),
         name: "fscanf",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7815,6 +8305,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fseek"),
         name: "fseek",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7855,6 +8347,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fsockopen"),
         name: "fsockopen",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7907,6 +8401,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fstat"),
         name: "fstat",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7935,6 +8431,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fsync"),
         name: "fsync",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7963,6 +8461,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ftell"),
         name: "ftell",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -7991,6 +8491,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ftruncate"),
         name: "ftruncate",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8025,6 +8527,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("function_exists"),
         name: "function_exists",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8053,6 +8557,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("fwrite"),
         name: "fwrite",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8087,6 +8593,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_class"),
         name: "get_class",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8115,6 +8623,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_declared_classes"),
         name: "get_declared_classes",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -8137,6 +8647,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_declared_interfaces"),
         name: "get_declared_interfaces",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -8159,6 +8671,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_declared_traits"),
         name: "get_declared_traits",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -8181,6 +8695,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_loaded_extensions"),
         name: "get_loaded_extensions",
         area: Area::System,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8209,6 +8725,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_object_vars"),
         name: "get_object_vars",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8238,6 +8756,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_parent_class"),
         name: "get_parent_class",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8266,6 +8786,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_resource_id"),
         name: "get_resource_id",
         area: Area::Types,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8294,6 +8816,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("get_resource_type"),
         name: "get_resource_type",
         area: Area::Types,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8322,6 +8846,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("getcwd"),
         name: "getcwd",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -8344,6 +8870,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("getdate"),
         name: "getdate",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8372,6 +8900,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("getenv"),
         name: "getenv",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8400,6 +8930,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gethostbyaddr"),
         name: "gethostbyaddr",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8428,6 +8960,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gethostbyname"),
         name: "gethostbyname",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8456,6 +8990,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gethostname"),
         name: "gethostname",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -8478,6 +9014,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("getprotobyname"),
         name: "getprotobyname",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8506,6 +9044,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("getprotobynumber"),
         name: "getprotobynumber",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8534,6 +9074,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("getservbyname"),
         name: "getservbyname",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8568,6 +9110,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("getservbyport"),
         name: "getservbyport",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8602,6 +9146,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gettype"),
         name: "gettype",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8630,6 +9176,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("glob"),
         name: "glob",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8658,6 +9206,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gmdate"),
         name: "gmdate",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8692,6 +9242,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gmmktime"),
         name: "gmmktime",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8750,6 +9302,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("grapheme_strrev"),
         name: "grapheme_strrev",
         area: Area::String,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8778,6 +9332,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gzcompress"),
         name: "gzcompress",
         area: Area::String,
+        module: PhpModule::Zlib,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8812,6 +9368,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gzdeflate"),
         name: "gzdeflate",
         area: Area::String,
+        module: PhpModule::Zlib,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8846,6 +9404,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gzinflate"),
         name: "gzinflate",
         area: Area::String,
+        module: PhpModule::Zlib,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8880,6 +9440,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("gzuncompress"),
         name: "gzuncompress",
         area: Area::String,
+        module: PhpModule::Zlib,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8914,6 +9476,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hash"),
         name: "hash",
         area: Area::String,
+        module: PhpModule::Hash,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -8954,6 +9518,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hash_algos"),
         name: "hash_algos",
         area: Area::String,
+        module: PhpModule::Hash,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -8976,6 +9542,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hash_equals"),
         name: "hash_equals",
         area: Area::String,
+        module: PhpModule::Hash,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9010,6 +9578,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hash_file"),
         name: "hash_file",
         area: Area::Io,
+        module: PhpModule::Hash,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9050,6 +9620,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hash_hmac"),
         name: "hash_hmac",
         area: Area::String,
+        module: PhpModule::Hash,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9096,6 +9668,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("header"),
         name: "header",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9136,6 +9710,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hex2bin"),
         name: "hex2bin",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9164,6 +9740,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hexdec"),
         name: "hexdec",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9192,6 +9770,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hrtime"),
         name: "hrtime",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9220,6 +9800,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("html_entity_decode"),
         name: "html_entity_decode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9248,6 +9830,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("htmlentities"),
         name: "htmlentities",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9288,6 +9872,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("htmlspecialchars"),
         name: "htmlspecialchars",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9328,6 +9914,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("http_response_code"),
         name: "http_response_code",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9356,6 +9944,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("hypot"),
         name: "hypot",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9390,6 +9980,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv"),
         name: "iconv",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9430,6 +10022,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_get_encoding"),
         name: "iconv_get_encoding",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9458,6 +10052,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_mime_decode"),
         name: "iconv_mime_decode",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9498,6 +10094,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_mime_decode_headers"),
         name: "iconv_mime_decode_headers",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9538,6 +10136,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_mime_encode"),
         name: "iconv_mime_encode",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9578,6 +10178,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_set_encoding"),
         name: "iconv_set_encoding",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9612,6 +10214,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_strlen"),
         name: "iconv_strlen",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9646,6 +10250,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_strpos"),
         name: "iconv_strpos",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9692,6 +10298,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_strrpos"),
         name: "iconv_strrpos",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9732,6 +10340,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iconv_substr"),
         name: "iconv_substr",
         area: Area::String,
+        module: PhpModule::Iconv,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9778,6 +10388,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("implode"),
         name: "implode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9812,6 +10424,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("in_array"),
         name: "in_array",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9852,6 +10466,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("inet_ntop"),
         name: "inet_ntop",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9880,6 +10496,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("inet_pton"),
         name: "inet_pton",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9908,6 +10526,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("intdiv"),
         name: "intdiv",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9942,6 +10562,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("interface_exists"),
         name: "interface_exists",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -9976,6 +10598,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("intval"),
         name: "intval",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10010,6 +10634,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ip2long"),
         name: "ip2long",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10038,6 +10664,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_a"),
         name: "is_a",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10078,6 +10706,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_array"),
         name: "is_array",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10106,6 +10736,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_bool"),
         name: "is_bool",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10134,6 +10766,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_callable"),
         name: "is_callable",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10162,6 +10796,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_dir"),
         name: "is_dir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10190,6 +10826,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_double"),
         name: "is_double",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10218,6 +10856,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_executable"),
         name: "is_executable",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10246,6 +10886,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_file"),
         name: "is_file",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10274,6 +10916,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_finite"),
         name: "is_finite",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10302,6 +10946,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_float"),
         name: "is_float",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10330,6 +10976,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_infinite"),
         name: "is_infinite",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10358,6 +11006,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_int"),
         name: "is_int",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10386,6 +11036,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_integer"),
         name: "is_integer",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10414,6 +11066,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_iterable"),
         name: "is_iterable",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10442,6 +11096,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_link"),
         name: "is_link",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10470,6 +11126,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_long"),
         name: "is_long",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10498,6 +11156,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_nan"),
         name: "is_nan",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10526,6 +11186,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_null"),
         name: "is_null",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10554,6 +11216,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_numeric"),
         name: "is_numeric",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10582,6 +11246,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_object"),
         name: "is_object",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10610,6 +11276,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_readable"),
         name: "is_readable",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10638,6 +11306,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_real"),
         name: "is_real",
         area: Area::Types,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10666,6 +11336,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_resource"),
         name: "is_resource",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10694,6 +11366,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_scalar"),
         name: "is_scalar",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10722,6 +11396,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_string"),
         name: "is_string",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10750,6 +11426,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_subclass_of"),
         name: "is_subclass_of",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10790,6 +11468,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_writable"),
         name: "is_writable",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10818,6 +11498,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("is_writeable"),
         name: "is_writeable",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10846,6 +11528,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iterator_apply"),
         name: "iterator_apply",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10886,6 +11570,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iterator_count"),
         name: "iterator_count",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10914,6 +11600,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("iterator_to_array"),
         name: "iterator_to_array",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10948,6 +11636,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("join"),
         name: "join",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -10982,6 +11672,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("json_decode"),
         name: "json_decode",
         area: Area::System,
+        module: PhpModule::Json,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11028,6 +11720,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("json_encode"),
         name: "json_encode",
         area: Area::System,
+        module: PhpModule::Json,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11068,6 +11762,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("json_last_error"),
         name: "json_last_error",
         area: Area::System,
+        module: PhpModule::Json,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -11090,6 +11786,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("json_last_error_msg"),
         name: "json_last_error_msg",
         area: Area::System,
+        module: PhpModule::Json,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -11112,6 +11810,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("json_validate"),
         name: "json_validate",
         area: Area::System,
+        module: PhpModule::Json,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11152,6 +11852,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("key"),
         name: "key",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11180,6 +11882,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("krsort"),
         name: "krsort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11208,6 +11912,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ksort"),
         name: "ksort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11236,6 +11942,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("lcfirst"),
         name: "lcfirst",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11264,6 +11972,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("lchgrp"),
         name: "lchgrp",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11298,6 +12008,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("lchown"),
         name: "lchown",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11332,6 +12044,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("link"),
         name: "link",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11366,6 +12080,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("linkinfo"),
         name: "linkinfo",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11394,6 +12110,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("localtime"),
         name: "localtime",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11428,6 +12146,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("log"),
         name: "log",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11462,6 +12182,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("log10"),
         name: "log10",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11490,6 +12212,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("log2"),
         name: "log2",
         area: Area::Math,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11518,6 +12242,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("long2ip"),
         name: "long2ip",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11546,6 +12272,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("lstat"),
         name: "lstat",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11574,6 +12302,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ltrim"),
         name: "ltrim",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11608,6 +12338,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("max"),
         name: "max",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11636,6 +12368,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("mb_ereg_match"),
         name: "mb_ereg_match",
         area: Area::String,
+        module: PhpModule::Mbstring,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11676,6 +12410,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("mb_strlen"),
         name: "mb_strlen",
         area: Area::String,
+        module: PhpModule::Mbstring,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11710,6 +12446,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("md5"),
         name: "md5",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11744,6 +12482,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("method_exists"),
         name: "method_exists",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11778,6 +12518,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("microtime"),
         name: "microtime",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11806,6 +12548,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("min"),
         name: "min",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11834,6 +12578,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("mkdir"),
         name: "mkdir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11862,6 +12608,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("mktime"),
         name: "mktime",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11920,6 +12668,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("mt_rand"),
         name: "mt_rand",
         area: Area::Math,
+        module: PhpModule::Random,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11954,6 +12704,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("natcasesort"),
         name: "natcasesort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -11982,6 +12734,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("natsort"),
         name: "natsort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12010,6 +12764,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("next"),
         name: "next",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12038,6 +12794,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("nl2br"),
         name: "nl2br",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12066,6 +12824,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("number_format"),
         name: "number_format",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12112,6 +12872,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_clean"),
         name: "ob_clean",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12134,6 +12896,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_end_clean"),
         name: "ob_end_clean",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12156,6 +12920,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_end_flush"),
         name: "ob_end_flush",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12178,6 +12944,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_flush"),
         name: "ob_flush",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12200,6 +12968,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_get_clean"),
         name: "ob_get_clean",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12222,6 +12992,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_get_contents"),
         name: "ob_get_contents",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12244,6 +13016,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_get_flush"),
         name: "ob_get_flush",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12266,6 +13040,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_get_length"),
         name: "ob_get_length",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12288,6 +13064,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_get_level"),
         name: "ob_get_level",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12310,6 +13088,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_get_status"),
         name: "ob_get_status",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12338,6 +13118,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_implicit_flush"),
         name: "ob_implicit_flush",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12366,6 +13148,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_list_handlers"),
         name: "ob_list_handlers",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12388,6 +13172,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ob_start"),
         name: "ob_start",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12428,6 +13214,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("octdec"),
         name: "octdec",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12456,6 +13244,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("opendir"),
         name: "opendir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12484,6 +13274,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("openssl_cipher_iv_length"),
         name: "openssl_cipher_iv_length",
         area: Area::String,
+        module: PhpModule::Openssl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12512,6 +13304,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("openssl_decrypt"),
         name: "openssl_decrypt",
         area: Area::String,
+        module: PhpModule::Openssl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12576,6 +13370,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("openssl_encrypt"),
         name: "openssl_encrypt",
         area: Area::String,
+        module: PhpModule::Openssl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12646,6 +13442,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("openssl_get_cipher_methods"),
         name: "openssl_get_cipher_methods",
         area: Area::String,
+        module: PhpModule::Openssl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12674,6 +13472,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ord"),
         name: "ord",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12702,6 +13502,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("parse_url"),
         name: "parse_url",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12736,6 +13538,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("passthru"),
         name: "passthru",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12764,6 +13568,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("pathinfo"),
         name: "pathinfo",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12798,6 +13604,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("pclose"),
         name: "pclose",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12826,6 +13634,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("pfsockopen"),
         name: "pfsockopen",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12878,6 +13688,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("php_uname"),
         name: "php_uname",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12906,6 +13718,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("phpversion"),
         name: "phpversion",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12934,6 +13748,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("pi"),
         name: "pi",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -12956,6 +13772,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("popen"),
         name: "popen",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -12990,6 +13808,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("pow"),
         name: "pow",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13024,6 +13844,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("preg_match"),
         name: "preg_match",
         area: Area::System,
+        module: PhpModule::Pcre,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13064,6 +13886,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("preg_match_all"),
         name: "preg_match_all",
         area: Area::System,
+        module: PhpModule::Pcre,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13098,6 +13922,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("preg_replace"),
         name: "preg_replace",
         area: Area::System,
+        module: PhpModule::Pcre,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13138,6 +13964,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("preg_replace_callback"),
         name: "preg_replace_callback",
         area: Area::Callables,
+        module: PhpModule::Pcre,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13178,6 +14006,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("preg_split"),
         name: "preg_split",
         area: Area::System,
+        module: PhpModule::Pcre,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13224,6 +14054,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("prev"),
         name: "prev",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13252,6 +14084,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("print_r"),
         name: "print_r",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13286,6 +14120,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("printf"),
         name: "printf",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13314,6 +14150,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("property_exists"),
         name: "property_exists",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13348,6 +14186,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr"),
         name: "ptr",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13376,6 +14216,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_get"),
         name: "ptr_get",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13404,6 +14246,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_is_null"),
         name: "ptr_is_null",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13432,6 +14276,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_null"),
         name: "ptr_null",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -13454,6 +14300,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_offset"),
         name: "ptr_offset",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13488,6 +14336,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_read16"),
         name: "ptr_read16",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13516,6 +14366,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_read32"),
         name: "ptr_read32",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13544,6 +14396,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_read8"),
         name: "ptr_read8",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13572,6 +14426,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_read_string"),
         name: "ptr_read_string",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13606,6 +14462,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_set"),
         name: "ptr_set",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13640,6 +14498,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_sizeof"),
         name: "ptr_sizeof",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13668,6 +14528,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_write16"),
         name: "ptr_write16",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13702,6 +14564,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_write32"),
         name: "ptr_write32",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13736,6 +14600,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_write8"),
         name: "ptr_write8",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13770,6 +14636,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ptr_write_string"),
         name: "ptr_write_string",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13804,6 +14672,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("putenv"),
         name: "putenv",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13832,6 +14702,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("quoted_printable_encode"),
         name: "quoted_printable_encode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13860,6 +14732,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("quotemeta"),
         name: "quotemeta",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13888,6 +14762,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rad2deg"),
         name: "rad2deg",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13916,6 +14792,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rand"),
         name: "rand",
         area: Area::Math,
+        module: PhpModule::Random,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13950,6 +14828,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("random_int"),
         name: "random_int",
         area: Area::Math,
+        module: PhpModule::Random,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -13984,6 +14864,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("range"),
         name: "range",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14024,6 +14906,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rawurldecode"),
         name: "rawurldecode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14052,6 +14936,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rawurlencode"),
         name: "rawurlencode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14080,6 +14966,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("readdir"),
         name: "readdir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14108,6 +14996,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("readfile"),
         name: "readfile",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14136,6 +15026,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("readline"),
         name: "readline",
         area: Area::Io,
+        module: PhpModule::Readline,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14164,6 +15056,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("readlink"),
         name: "readlink",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14192,6 +15086,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("realpath"),
         name: "realpath",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14220,6 +15116,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("realpath_cache_get"),
         name: "realpath_cache_get",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -14242,6 +15140,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("realpath_cache_size"),
         name: "realpath_cache_size",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -14264,6 +15164,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rename"),
         name: "rename",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14298,6 +15200,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("reset"),
         name: "reset",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14326,6 +15230,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rewind"),
         name: "rewind",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14354,6 +15260,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rewinddir"),
         name: "rewinddir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14382,6 +15290,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rmdir"),
         name: "rmdir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14410,6 +15320,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("round"),
         name: "round",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14450,6 +15362,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rsort"),
         name: "rsort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14478,6 +15392,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("rtrim"),
         name: "rtrim",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14512,6 +15428,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("scandir"),
         name: "scandir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14540,6 +15458,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("serialize"),
         name: "serialize",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14568,6 +15488,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("settype"),
         name: "settype",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14602,6 +15524,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sha1"),
         name: "sha1",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14636,6 +15560,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("shell_exec"),
         name: "shell_exec",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14664,6 +15590,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("shuffle"),
         name: "shuffle",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14692,6 +15620,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sin"),
         name: "sin",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14720,6 +15650,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sinh"),
         name: "sinh",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14748,6 +15680,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sleep"),
         name: "sleep",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14776,6 +15710,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sort"),
         name: "sort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14804,6 +15740,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_autoload"),
         name: "spl_autoload",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14838,6 +15776,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_autoload_call"),
         name: "spl_autoload_call",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14866,6 +15806,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_autoload_extensions"),
         name: "spl_autoload_extensions",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14894,6 +15836,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_autoload_functions"),
         name: "spl_autoload_functions",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -14916,6 +15860,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_autoload_register"),
         name: "spl_autoload_register",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14956,6 +15902,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_autoload_unregister"),
         name: "spl_autoload_unregister",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -14984,6 +15932,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_classes"),
         name: "spl_classes",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -15006,6 +15956,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_object_hash"),
         name: "spl_object_hash",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15034,6 +15986,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("spl_object_id"),
         name: "spl_object_id",
         area: Area::Spl,
+        module: PhpModule::Spl,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15062,6 +16016,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sprintf"),
         name: "sprintf",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15090,6 +16046,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sqrt"),
         name: "sqrt",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15118,6 +16076,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sscanf"),
         name: "sscanf",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15152,6 +16112,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stat"),
         name: "stat",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15180,6 +16142,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_contains"),
         name: "str_contains",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15214,6 +16178,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_ends_with"),
         name: "str_ends_with",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15248,6 +16214,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_ireplace"),
         name: "str_ireplace",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15294,6 +16262,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_pad"),
         name: "str_pad",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15340,6 +16310,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_repeat"),
         name: "str_repeat",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15374,6 +16346,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_replace"),
         name: "str_replace",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15420,6 +16394,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_split"),
         name: "str_split",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15454,6 +16430,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_starts_with"),
         name: "str_starts_with",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15488,6 +16466,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("str_word_count"),
         name: "str_word_count",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15528,6 +16508,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strcasecmp"),
         name: "strcasecmp",
         area: Area::String,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15562,6 +16544,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strcmp"),
         name: "strcmp",
         area: Area::String,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15596,6 +16580,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_bucket_append"),
         name: "stream_bucket_append",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15630,6 +16616,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_bucket_make_writeable"),
         name: "stream_bucket_make_writeable",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15658,6 +16646,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_bucket_new"),
         name: "stream_bucket_new",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15692,6 +16682,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_bucket_prepend"),
         name: "stream_bucket_prepend",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15726,6 +16718,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_context_create"),
         name: "stream_context_create",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15760,6 +16754,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_context_get_default"),
         name: "stream_context_get_default",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15788,6 +16784,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_context_get_options"),
         name: "stream_context_get_options",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15816,6 +16814,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_context_get_params"),
         name: "stream_context_get_params",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15844,6 +16844,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_context_set_default"),
         name: "stream_context_set_default",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15872,6 +16874,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_context_set_option"),
         name: "stream_context_set_option",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15918,6 +16922,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_context_set_params"),
         name: "stream_context_set_params",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15952,6 +16958,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_copy_to_stream"),
         name: "stream_copy_to_stream",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -15998,6 +17006,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_filter_append"),
         name: "stream_filter_append",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16044,6 +17054,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_filter_prepend"),
         name: "stream_filter_prepend",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16090,6 +17102,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_filter_register"),
         name: "stream_filter_register",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16124,6 +17138,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_filter_remove"),
         name: "stream_filter_remove",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16152,6 +17168,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_get_contents"),
         name: "stream_get_contents",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16192,6 +17210,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_get_filters"),
         name: "stream_get_filters",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -16214,6 +17234,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_get_line"),
         name: "stream_get_line",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16254,6 +17276,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_get_meta_data"),
         name: "stream_get_meta_data",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16282,6 +17306,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_get_transports"),
         name: "stream_get_transports",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -16304,6 +17330,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_get_wrappers"),
         name: "stream_get_wrappers",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -16326,6 +17354,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_is_local"),
         name: "stream_is_local",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16354,6 +17384,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_isatty"),
         name: "stream_isatty",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16382,6 +17414,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_resolve_include_path"),
         name: "stream_resolve_include_path",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16410,6 +17444,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_select"),
         name: "stream_select",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16462,6 +17498,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_set_blocking"),
         name: "stream_set_blocking",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16496,6 +17534,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_set_chunk_size"),
         name: "stream_set_chunk_size",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16530,6 +17570,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_set_read_buffer"),
         name: "stream_set_read_buffer",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16564,6 +17606,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_set_timeout"),
         name: "stream_set_timeout",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16604,6 +17648,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_set_write_buffer"),
         name: "stream_set_write_buffer",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16638,6 +17684,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_accept"),
         name: "stream_socket_accept",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16678,6 +17726,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_client"),
         name: "stream_socket_client",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16706,6 +17756,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_enable_crypto"),
         name: "stream_socket_enable_crypto",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16752,6 +17804,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_get_name"),
         name: "stream_socket_get_name",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16786,6 +17840,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_pair"),
         name: "stream_socket_pair",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16826,6 +17882,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_recvfrom"),
         name: "stream_socket_recvfrom",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16872,6 +17930,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_sendto"),
         name: "stream_socket_sendto",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16918,6 +17978,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_server"),
         name: "stream_socket_server",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16946,6 +18008,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_socket_shutdown"),
         name: "stream_socket_shutdown",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -16980,6 +18044,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_supports_lock"),
         name: "stream_supports_lock",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17008,6 +18074,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_wrapper_register"),
         name: "stream_wrapper_register",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17048,6 +18116,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_wrapper_restore"),
         name: "stream_wrapper_restore",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17076,6 +18146,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stream_wrapper_unregister"),
         name: "stream_wrapper_unregister",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17104,6 +18176,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stripos"),
         name: "stripos",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17144,6 +18218,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("stripslashes"),
         name: "stripslashes",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17172,6 +18248,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strlen"),
         name: "strlen",
         area: Area::String,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17200,6 +18278,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strncasecmp"),
         name: "strncasecmp",
         area: Area::String,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17240,6 +18320,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strncmp"),
         name: "strncmp",
         area: Area::String,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17280,6 +18362,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strpos"),
         name: "strpos",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17320,6 +18404,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strrev"),
         name: "strrev",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17348,6 +18434,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strripos"),
         name: "strripos",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17388,6 +18476,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strrpos"),
         name: "strrpos",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17428,6 +18518,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strstr"),
         name: "strstr",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17468,6 +18560,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strtolower"),
         name: "strtolower",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17496,6 +18590,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strtotime"),
         name: "strtotime",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17530,6 +18626,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strtoupper"),
         name: "strtoupper",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17558,6 +18656,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strtr"),
         name: "strtr",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17598,6 +18698,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("strval"),
         name: "strval",
         area: Area::Types,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17626,6 +18728,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("substr"),
         name: "substr",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17666,6 +18770,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("substr_count"),
         name: "substr_count",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17712,6 +18818,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("substr_replace"),
         name: "substr_replace",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17758,6 +18866,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("symlink"),
         name: "symlink",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17792,6 +18902,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("sys_get_temp_dir"),
         name: "sys_get_temp_dir",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -17814,6 +18926,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("system"),
         name: "system",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17842,6 +18956,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("tan"),
         name: "tan",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17870,6 +18986,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("tanh"),
         name: "tanh",
         area: Area::Math,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17898,6 +19016,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("tempnam"),
         name: "tempnam",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -17932,6 +19052,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("time"),
         name: "time",
         area: Area::System,
+        module: PhpModule::Date,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -17954,6 +19076,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("tmpfile"),
         name: "tmpfile",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
         ],
@@ -17976,6 +19100,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("touch"),
         name: "touch",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18016,6 +19142,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("trait_exists"),
         name: "trait_exists",
         area: Area::Callables,
+        module: PhpModule::Core,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18050,6 +19178,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("trim"),
         name: "trim",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18084,6 +19214,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("uasort"),
         name: "uasort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18118,6 +19250,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ucfirst"),
         name: "ucfirst",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18146,6 +19280,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("ucwords"),
         name: "ucwords",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18180,6 +19316,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("uksort"),
         name: "uksort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18214,6 +19352,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("umask"),
         name: "umask",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18242,6 +19382,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("unlink"),
         name: "unlink",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18270,6 +19412,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("unserialize"),
         name: "unserialize",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18304,6 +19448,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("urldecode"),
         name: "urldecode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18332,6 +19478,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("urlencode"),
         name: "urlencode",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18360,6 +19508,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("usleep"),
         name: "usleep",
         area: Area::System,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18388,6 +19538,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("usort"),
         name: "usort",
         area: Area::Array,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18422,6 +19574,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("var_dump"),
         name: "var_dump",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18450,6 +19604,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("vfprintf"),
         name: "vfprintf",
         area: Area::Io,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18490,6 +19646,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("vprintf"),
         name: "vprintf",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18524,6 +19682,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("vsprintf"),
         name: "vsprintf",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18558,6 +19718,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("wordwrap"),
         name: "wordwrap",
         area: Area::String,
+        module: PhpModule::Standard,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18604,6 +19766,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("zval_free"),
         name: "zval_free",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18632,6 +19796,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("zval_pack"),
         name: "zval_pack",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18660,6 +19826,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("zval_type"),
         name: "zval_type",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {
@@ -18688,6 +19856,8 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         id: BuiltinId::from_canonical_name("zval_unpack"),
         name: "zval_unpack",
         area: Area::Pointers,
+        module: PhpModule::Elephc,
+        since: None,
         kind: BuiltinKind::Function,
         params: &[
             ParamSpec {

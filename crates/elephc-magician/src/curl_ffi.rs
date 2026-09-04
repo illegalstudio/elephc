@@ -27,7 +27,7 @@
 // `elephc_curl_option_kind()` answers, copied verbatim from
 // `crates/elephc-curl/src/options.rs`'s `KIND_*` constants (that module is `pub(crate)`
 // inside `elephc-curl` and this crate has no path dependency on it — see this module's
-// header — so the codes are forked data, exactly like `EVAL_CURL_INT_CONSTANTS`).
+// header — so the codes are forked data, exactly like the shared curl constant catalog).
 pub(crate) const KIND_INVALID: i32 = 0;
 pub(crate) const KIND_LONG: i32 = 1;
 pub(crate) const KIND_STRING: i32 = 2;

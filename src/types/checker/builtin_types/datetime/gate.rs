@@ -11,30 +11,6 @@
 use crate::names::php_symbol_key;
 use crate::parser::ast::Stmt;
 
-/// Every class name the date/time injection registers, and the names this gate looks for.
-///
-/// Kept in injection order so the two can be read side by side. `DateTimeInterface` is an
-/// INTERFACE and lives in the interface id space, not this one, but naming it still has to
-/// register the family: `function f(DateTimeInterface $d)` is a program that reaches DateTime
-/// without ever writing the class name.
-pub(crate) const DATETIME_CLASS_NAMES: &[&str] = &[
-    "DateTimeInterface",
-    "DateInterval",
-    "DateTimeZone",
-    "DateTimeImmutable",
-    "DateTime",
-    "DatePeriod",
-    "DateError",
-    "DateObjectError",
-    "DateRangeError",
-    "DateException",
-    "DateInvalidTimeZoneException",
-    "DateInvalidOperationException",
-    "DateMalformedStringException",
-    "DateMalformedIntervalStringException",
-    "DateMalformedPeriodStringException",
-    "DateUnknownException",
-];
 
 /// Returns whether `program` can reach any builtin date/time class.
 ///
@@ -81,10 +57,15 @@ pub(crate) fn program_may_reference_datetime(program: &[Stmt]) -> bool {
     {
         return true;
     }
-    DATETIME_CLASS_NAMES.iter().any(|name| {
-        let key = php_symbol_key(name);
-        usage.classes.contains(&key) || usage.literals.contains(&key)
-    })
+    // Every class-like the shared catalog attributes to `ext/date` (the injection registers
+    // exactly that set, `DateTimeInterface` included: `function f(DateTimeInterface $d)` is a
+    // program that reaches DateTime without ever writing the class name).
+    crate::types::builtin_classes::class_names_in_module(elephc_builtin_contract::PhpModule::Date)
+        .iter()
+        .any(|name| {
+            let key = php_symbol_key(name);
+            usage.classes.contains(&key) || usage.literals.contains(&key)
+        })
 }
 
 /// Builtins that reach a date/time class without the program naming one.

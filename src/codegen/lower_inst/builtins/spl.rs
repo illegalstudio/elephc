@@ -32,70 +32,6 @@ const APPLY_DYNAMIC_CALLBACK_PTR_OFFSET: usize = 32;
 const APPLY_DYNAMIC_CALLBACK_LEN_OFFSET: usize = 40;
 const APPLY_DESCRIPTOR_OFFSET: usize = 32;
 
-const SPL_CLASS_NAMES: &[&str] = &[
-    "AppendIterator",
-    "ArrayAccess",
-    "ArrayIterator",
-    "ArrayObject",
-    "BadFunctionCallException",
-    "BadMethodCallException",
-    "CachingIterator",
-    "CallbackFilterIterator",
-    "Countable",
-    "DomainException",
-    "DirectoryIterator",
-    "EmptyIterator",
-    "Error",
-    "Exception",
-    "FilterIterator",
-    "FilesystemIterator",
-    "GlobIterator",
-    "InfiniteIterator",
-    "InvalidArgumentException",
-    "Iterator",
-    "IteratorAggregate",
-    "IteratorIterator",
-    "JsonSerializable",
-    "LengthException",
-    "LimitIterator",
-    "LogicException",
-    "MultipleIterator",
-    "NoRewindIterator",
-    "OuterIterator",
-    "OutOfBoundsException",
-    "OutOfRangeException",
-    "OverflowException",
-    "ParentIterator",
-    "RangeException",
-    "RecursiveArrayIterator",
-    "RecursiveCachingIterator",
-    "RecursiveCallbackFilterIterator",
-    "RecursiveDirectoryIterator",
-    "RecursiveFilterIterator",
-    "RecursiveIterator",
-    "RecursiveIteratorIterator",
-    "RecursiveRegexIterator",
-    "RegexIterator",
-    "RuntimeException",
-    "SeekableIterator",
-    "SplDoublyLinkedList",
-    "SplFixedArray",
-    "SplFileInfo",
-    "SplFileObject",
-    "SplObserver",
-    "SplQueue",
-    "SplStack",
-    "SplSubject",
-    "SplTempFileObject",
-    "Stringable",
-    "Throwable",
-    "Traversable",
-    "TypeError",
-    "UnderflowException",
-    "UnexpectedValueException",
-    "ValueError",
-    "ArithmeticError",
-];
 
 /// Callback strategy supported by the current EIR `iterator_apply()` lowering.
 enum IteratorApplyCallback {
@@ -208,7 +144,11 @@ pub(crate) fn lower_spl_classes(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "spl_classes", 0)?;
-    emit_string_array(ctx, SPL_CLASS_NAMES)?;
+    // `spl_classes()` lists exactly the class-likes the shared catalog attributes to `ext/spl`.
+    emit_string_array(
+        ctx,
+        crate::types::builtin_classes::class_names_in_module(elephc_builtin_contract::PhpModule::Spl),
+    )?;
     store_if_result(ctx, inst)
 }
 

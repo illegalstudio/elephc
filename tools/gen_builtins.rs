@@ -88,6 +88,8 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
     json!({
         "name": contract.name,
         "area": area_name(contract.area),
+        "module": contract.module.php_name(),
+        "since": contract.since.map(|version| version.as_str()),
         "surface_kind": kind_name(contract.kind),
         "internal": contract.internal,
         "extension": contract.extension,

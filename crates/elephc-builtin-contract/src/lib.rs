@@ -14,17 +14,25 @@
 
 mod aot_profile;
 mod callback_parameters;
+mod class_spec;
+mod constant_spec;
+mod catalog_classes;
+mod catalog_constants;
+mod catalog_constants_curl;
 mod catalog_data;
 #[cfg(feature = "curl")]
 mod catalog_curl;
 mod catalog_surfaces;
 mod eval_profile;
 mod id;
+mod module;
+mod php_version;
 mod registry;
 mod requirements;
 mod runtime_id;
 mod spec;
 mod support;
+mod symbol_registry;
 
 pub use aot_profile::{
     aot_signature, aot_signature_profile, AotSignatureOverrideReason, AotSignatureProfile,
@@ -32,14 +40,20 @@ pub use aot_profile::{
 pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
+pub use class_spec::{ClassContract, ClassKind, ClassRoute};
+pub use constant_spec::{ConstType, ConstValue, ConstantContract, ConstantRoute};
 pub use id::BuiltinId;
+pub use module::PhpModule;
+pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
+pub use symbol_registry::{classes, constants, lookup_class, lookup_constant};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{
     Area, BuiltinContract, BuiltinKind, BuiltinRequirement, BuiltinSignature, DefaultSpec,
     ParamSpec, PassingMode, TypeSpec,
 };
 pub use support::{
-    aot_support, backend_support, eval_execution, eval_support, BackendImplementation,
+    aot_class_support, aot_constant_support, aot_support, backend_support, eval_class_support,
+    eval_constant_support, eval_execution, eval_support, BackendImplementation,
     BackendSupport, BuiltinBackend, EvalAdapterReason, EvalExecution, UnsupportedReason,
 };

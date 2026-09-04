@@ -1199,24 +1199,25 @@ echo (spl_object_hash($a) !== spl_object_hash($b)) ? "unique" : "same";
 /// Verifies SPL classes returns known set.
 #[test]
 fn test_spl_classes_returns_known_set() {
-    // spl_classes() includes Exception, Error, and LogicException in the returned array.
+    // spl_classes() lists exactly the `ext/spl` class-likes, as PHP does: LogicException and
+    // SplStack are SPL, while Exception and Error belong to Core and must NOT appear.
     let out = compile_and_run(
         r#"<?php
 $names = spl_classes();
 $found_exception = false;
-$found_error = false;
+$found_stack = false;
 $found_logic = false;
 foreach ($names as $n) {
     if ($n === "Exception") $found_exception = true;
-    if ($n === "Error") $found_error = true;
+    if ($n === "SplStack") $found_stack = true;
     if ($n === "LogicException") $found_logic = true;
 }
 echo $found_exception ? "e" : "-";
-echo $found_error ? "r" : "-";
+echo $found_stack ? "s" : "-";
 echo $found_logic ? "l" : "-";
 "#,
     );
-    assert_eq!(out, "erl");
+    assert_eq!(out, "-sl");
 }
 
 /// Verifies get class returns static type.

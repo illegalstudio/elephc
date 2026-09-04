@@ -437,7 +437,7 @@ pub(super) fn eval_reflection_builtin_class_is_iterable(class_name: &str) -> boo
 /// Returns whether one reflected class-like name belongs to compiler-injected metadata.
 pub(super) fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
     let trimmed = class_name.trim_start_matches('\\');
-    if EVAL_SPL_CLASS_NAMES
+    if eval_spl_class_names()
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(trimmed))
     {

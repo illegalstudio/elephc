@@ -808,6 +808,12 @@ class Builtin:
     aot_support: Optional[dict] = None
     # True when only the eval interpreter exposes this builtin (no AOT support).
     eval_only: bool = False
+    # PHP module (php-src extension) owning the name per the shared contract, e.g.
+    # "standard", "curl", or "elephc" for elephc-only surfaces.
+    module: str = "elephc"
+    # First PHP minor that ships the name ("8.5"), or None when every supported
+    # profile has it.
+    since: Optional[str] = None
     # True for elephc extensions with no PHP equivalent (ptr_*, buffer_*,
     # class_attribute_*); `--strict-php` hides them from user programs.
     is_extension: bool = False

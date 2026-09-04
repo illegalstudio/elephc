@@ -31,47 +31,6 @@ use crate::parser::ast::{
     TypeExpr,
 };
 
-/// Image OOP class names across GD, Imagick, Gmagick, and Cairo. Forward-declared
-/// in full so detection covers every image class; a referenced class the prelude
-/// does not provide produces a normal "class not found" error if referenced.
-const IMAGE_CLASSES: &[&str] = &[
-    "GdImage",
-    "ImageException",
-    "Imagick",
-    "ImagickDraw",
-    "ImagickPixel",
-    "ImagickPixelIterator",
-    "ImagickKernel",
-    "ImagickException",
-    "ImagickDrawException",
-    "ImagickPixelException",
-    "ImagickPixelIteratorException",
-    "Gmagick",
-    "GmagickDraw",
-    "GmagickPixel",
-    "GmagickException",
-    "GmagickDrawException",
-    "GmagickPixelException",
-    "CairoContext",
-    "CairoSurface",
-    "CairoImageSurface",
-    "CairoPdfSurface",
-    "CairoPsSurface",
-    "CairoSvgSurface",
-    "CairoMatrix",
-    "CairoPattern",
-    "CairoSolidPattern",
-    "CairoSurfacePattern",
-    "CairoGradientPattern",
-    "CairoLinearGradient",
-    "CairoRadialGradient",
-    "CairoFontFace",
-    "CairoToyFontFace",
-    "CairoFontOptions",
-    "CairoScaledFont",
-    "CairoPath",
-    "CairoException",
-];
 
 /// Returns whether `s` begins with `prefix`, compared ASCII-case-insensitively.
 fn starts_with_ci(s: &str, prefix: &str) -> bool {
@@ -106,8 +65,19 @@ fn name_is_image_function(name: &Name) -> bool {
 /// compared case-insensitively and tolerant of any namespace/leading-backslash
 /// form (`Imagick`, `\Imagick`, `\Foo\Imagick`).
 fn name_is_image_class(name: &Name) -> bool {
-    name.last_segment()
-        .is_some_and(|s| IMAGE_CLASSES.iter().any(|class| s.eq_ignore_ascii_case(class)))
+    // Every image class-like the catalog attributes to GD, Imagick, Gmagick, or Cairo, so
+    // detection covers the whole OOP surface the prelude forward-declares.
+    name.last_segment().is_some_and(|s| {
+        crate::types::builtin_classes::is_class_like_in_modules(
+            s,
+            &[
+                elephc_builtin_contract::PhpModule::Gd,
+                elephc_builtin_contract::PhpModule::Imagick,
+                elephc_builtin_contract::PhpModule::Gmagick,
+                elephc_builtin_contract::PhpModule::Cairo,
+            ],
+        )
+    })
 }
 
 /// Returns whether a static receiver names an image class (`Imagick::...`).

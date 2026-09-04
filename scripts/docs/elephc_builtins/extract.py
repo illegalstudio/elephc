@@ -734,6 +734,8 @@ def build_registry(repo: Path) -> list[Builtin]:
                 eval_only=not bool(aot_support.get("supported")),
                 is_extension=bool(entry.get("extension")),
                 semantics=entry.get("semantics"),
+                module=entry["module"],
+                since=entry.get("since"),
             )
         )
 
@@ -776,6 +778,8 @@ def _builtin_to_dict(b: Builtin) -> dict:
         "in_catalog": b.in_catalog,
         "is_internal": b.is_internal,
         "is_extension": b.is_extension,
+        "module": b.module,
+        "since": b.since,
         "description": b.description,
         "examples": b.examples,
         "sig": {

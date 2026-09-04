@@ -10,7 +10,7 @@
 //!   inventory submissions and generated runtime metadata.
 //! - Compiler/EvalIR hooks and concrete runtime symbols do not belong here.
 
-use crate::BuiltinId;
+use crate::{BuiltinId, PhpModule, PhpVersion};
 
 /// Functional area used for catalog organization and documentation routing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -186,6 +186,11 @@ pub struct BuiltinContract {
     pub name: &'static str,
     /// Functional catalog area.
     pub area: Area,
+    /// PHP module (php-src extension) that owns this name, or `Elephc` for elephc-only surfaces.
+    pub module: PhpModule,
+    /// First PHP minor release that ships this name, when newer than the oldest supported
+    /// profile (PHP 8.0); `None` means every supported profile has it.
+    pub since: Option<PhpVersion>,
     /// Function, construct, dedicated syntax, or prelude surface classification.
     pub kind: BuiltinKind,
     /// Fixed parameters in PHP source order.
