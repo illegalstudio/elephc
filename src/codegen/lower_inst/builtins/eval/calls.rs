@@ -225,6 +225,14 @@ pub(super) fn eval_scope_read_param_sources(
             if let Some(local) = sync_locals.iter().find(|local| local.name == *name) {
                 return Some(EvalScopeReadParamSource::Local(local.clone()));
             }
+            if ctx.function.locals.iter().any(|local| {
+                local.name.as_deref() == Some(name.as_str())
+                    && local.kind == LocalKind::PhpLocal
+                    && !local_uses_eval_global_sync(ctx, local.name.as_deref())
+                    && local.php_type.codegen_repr() == PhpType::Void
+            }) {
+                return Some(EvalScopeReadParamSource::Null);
+            }
             None
         })
         .collect()
@@ -286,8 +294,27 @@ pub(super) fn emit_eval_scope_read_param_source(
                 emit_box_current_value_as_mixed(ctx.emitter, &ty);
             }
         }
+        EvalScopeReadParamSource::Null => emit_core_mixed_null_cell(ctx),
     }
     Ok(())
+}
+
+/// Boxes PHP null with the core Mixed runtime helper.
+pub(super) fn emit_core_mixed_null_cell(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #8");                              // materialize the core Mixed null runtime tag
+            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, 8");                              // materialize the core Mixed null runtime tag
+            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
+            ctx.emitter.instruction("xor esi, esi");                            // null has no high payload word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        }
+    }
 }
 
 /// Returns true when a static function call matches the EIR eval AOT codegen subset.
