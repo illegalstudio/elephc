@@ -1,11 +1,11 @@
 ---
-title: "array_keys() — internals"
+title: "array_keys() - internals"
 description: "Compiler internals for array_keys(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 22
 ---
 
-## `array_keys()` — internals
+## `array_keys()` - internals
 
 ## Where it lives
 

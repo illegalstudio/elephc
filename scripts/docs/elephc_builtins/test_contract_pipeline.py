@@ -37,7 +37,7 @@ class ContractPipelineTests(unittest.TestCase):
         cls.render_by_name = {record["name"]: record for record in registry}
 
     def test_all_non_registry_contract_routes_are_exported(self) -> None:
-        """Keep the constructs, prelude, rewrite, and eval-only routes explicit."""
+        """Keep constructs, preludes, compiler transforms, and rewrites explicit."""
         routes = Counter(
             (record.get("aot") or {}).get("kind")
             for record in self.records
@@ -55,9 +55,10 @@ class ContractPipelineTests(unittest.TestCase):
                     # functions of the xml prelude, and the 289 functions the other
                     # injected preludes declare.
                     "prelude": 381,
+                    # Calls rewritten from their enclosing lexical function frame.
+                    "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.
                     "name-resolver-rewrite": 54,
-                    "none": 3,
                 }
             ),
         )
@@ -99,11 +100,13 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertIn("`eval()` (magician interpreter)**: supported", rendered)
 
     def test_prelude_availability_names_the_declaring_prelude(self) -> None:
-        """Two preludes declare PHP-visible builtins; each page must name its own."""
+        """Each PHP-visible prelude route names its actual declaring prelude."""
         rendered = render._availability_section(self.render_by_name["curl_init"])
         self.assertIn("compiler-injected curl prelude", rendered)
         self.assertNotIn("hash prelude", rendered)
         self.assertNotIn("Compiled (AOT)**: not available", rendered)
+        rendered = render._availability_section(self.render_by_name["zend_version"])
+        self.assertIn("compiler-injected version prelude", rendered)
 
     def test_user_renderer_owns_section_spacing_once(self) -> None:
         """Join empty optional sections without accumulating blank-line runs."""

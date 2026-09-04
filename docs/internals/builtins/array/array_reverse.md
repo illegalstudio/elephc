@@ -1,11 +1,11 @@
 ---
-title: "array_reverse() — internals"
+title: "array_reverse() - internals"
 description: "Compiler internals for array_reverse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 35
 ---
 
-## `array_reverse()` — internals
+## `array_reverse()` - internals
 
 ## Where it lives
 

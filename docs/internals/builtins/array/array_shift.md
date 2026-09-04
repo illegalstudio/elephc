@@ -1,11 +1,11 @@
 ---
-title: "array_shift() — internals"
+title: "array_shift() - internals"
 description: "Compiler internals for array_shift(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 37
 ---
 
-## `array_shift()` — internals
+## `array_shift()` - internals
 
 ## Where it lives
 

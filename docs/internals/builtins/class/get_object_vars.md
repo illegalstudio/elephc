@@ -1,11 +1,11 @@
 ---
-title: "get_object_vars() — internals"
+title: "get_object_vars() - internals"
 description: "Compiler internals for get_object_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 90
 ---
 
-## `get_object_vars()` — internals
+## `get_object_vars()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "class_alias() — internals"
+title: "class_alias() - internals"
 description: "Compiler internals for class_alias(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 73
 ---
 
-## `class_alias()` — internals
+## `class_alias()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "end() — internals"
+title: "end() - internals"
 description: "Compiler internals for end(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 54
 ---
 
-## `end()` — internals
+## `end()` - internals
 
 ## Where it lives
 

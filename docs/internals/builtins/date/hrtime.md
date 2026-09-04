@@ -1,11 +1,11 @@
 ---
-title: "hrtime() — internals"
+title: "hrtime() - internals"
 description: "Compiler internals for hrtime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 225
 ---
 
-## `hrtime()` — internals
+## `hrtime()` - internals
 
 ## Where it lives
 

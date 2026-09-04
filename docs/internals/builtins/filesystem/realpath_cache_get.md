@@ -1,11 +1,11 @@
 ---
-title: "realpath_cache_get() — internals"
+title: "realpath_cache_get() - internals"
 description: "Compiler internals for realpath_cache_get(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 295
 ---
 
-## `realpath_cache_get()` — internals
+## `realpath_cache_get()` - internals
 
 ## Where it lives
 

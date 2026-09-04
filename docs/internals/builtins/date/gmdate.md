@@ -1,11 +1,11 @@
 ---
-title: "gmdate() — internals"
+title: "gmdate() - internals"
 description: "Compiler internals for gmdate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 221
 ---
 
-## `gmdate()` — internals
+## `gmdate()` - internals
 
 ## Where it lives
 

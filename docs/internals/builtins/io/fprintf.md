@@ -1,11 +1,11 @@
 ---
-title: "fprintf() — internals"
+title: "fprintf() - internals"
 description: "Compiler internals for fprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 322
 ---
 
-## `fprintf()` — internals
+## `fprintf()` - internals
 
 ## Where it lives
 

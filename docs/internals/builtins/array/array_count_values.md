@@ -1,11 +1,11 @@
 ---
-title: "array_count_values() — internals"
+title: "array_count_values() - internals"
 description: "Compiler internals for array_count_values(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 6
 ---
 
-## `array_count_values()` — internals
+## `array_count_values()` - internals
 
 ## Where it lives
 

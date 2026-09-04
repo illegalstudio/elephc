@@ -1,11 +1,11 @@
 ---
-title: "class_attribute_args() — internals"
+title: "class_attribute_args() - internals"
 description: "Compiler internals for class_attribute_args(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 74
 ---
 
-## `class_attribute_args()` — internals
+## `class_attribute_args()` - internals
 
 ## Where it lives
 

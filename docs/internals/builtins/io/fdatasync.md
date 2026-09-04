@@ -1,11 +1,11 @@
 ---
-title: "fdatasync() — internals"
+title: "fdatasync() - internals"
 description: "Compiler internals for fdatasync(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 310
 ---
 
-## `fdatasync()` — internals
+## `fdatasync()` - internals
 
 ## Where it lives
 

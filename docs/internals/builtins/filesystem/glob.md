@@ -1,11 +1,11 @@
 ---
-title: "glob() — internals"
+title: "glob() - internals"
 description: "Compiler internals for glob(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 276
 ---
 
-## `glob()` — internals
+## `glob()` - internals
 
 ## Where it lives
 

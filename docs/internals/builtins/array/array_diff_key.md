@@ -1,11 +1,11 @@
 ---
-title: "array_diff_key() — internals"
+title: "array_diff_key() - internals"
 description: "Compiler internals for array_diff_key(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 9
 ---
 
-## `array_diff_key()` — internals
+## `array_diff_key()` - internals
 
 ## Where it lives
 

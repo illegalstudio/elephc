@@ -1,11 +1,11 @@
 ---
-title: "fdiv() — internals"
+title: "fdiv() - internals"
 description: "Compiler internals for fdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 575
 ---
 
-## `fdiv()` — internals
+## `fdiv()` - internals
 
 ## Where it lives
 

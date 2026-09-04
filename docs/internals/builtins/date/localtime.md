@@ -1,11 +1,11 @@
 ---
-title: "localtime() — internals"
+title: "localtime() - internals"
 description: "Compiler internals for localtime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 236
 ---
 
-## `localtime()` — internals
+## `localtime()` - internals
 
 ## Where it lives
 

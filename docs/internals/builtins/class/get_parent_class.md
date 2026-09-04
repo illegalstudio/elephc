@@ -1,11 +1,11 @@
 ---
-title: "get_parent_class() — internals"
+title: "get_parent_class() - internals"
 description: "Compiler internals for get_parent_class(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 91
 ---
 
-## `get_parent_class()` — internals
+## `get_parent_class()` - internals
 
 ## Where it lives
 

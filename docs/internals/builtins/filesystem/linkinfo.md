@@ -1,11 +1,11 @@
 ---
-title: "linkinfo() — internals"
+title: "linkinfo() - internals"
 description: "Compiler internals for linkinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 287
 ---
 
-## `linkinfo()` — internals
+## `linkinfo()` - internals
 
 ## Where it lives
 

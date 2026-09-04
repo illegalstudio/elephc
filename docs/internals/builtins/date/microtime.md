@@ -1,11 +1,11 @@
 ---
-title: "microtime() — internals"
+title: "microtime() - internals"
 description: "Compiler internals for microtime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 237
 ---
 
-## `microtime()` — internals
+## `microtime()` - internals
 
 ## Where it lives
 

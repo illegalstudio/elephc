@@ -177,6 +177,7 @@ _NON_HOME_FILES = {
 }
 
 _CONTRACT_RE = re.compile(r'contract:\s*"([^"]+)"')
+_CORE_HOME_RE = re.compile(r'core_builtin_home!\(\s*"([^"]+)"')
 
 
 def build_home_file_map(repo: Path) -> dict[str, str]:
@@ -193,9 +194,9 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         if path.name in _NON_HOME_FILES:
             continue
         text = path.read_text(encoding="utf-8")
-        if "builtin!" not in text:
-            continue
         contract_match = _CONTRACT_RE.search(text)
+        if contract_match is None:
+            contract_match = _CORE_HOME_RE.search(text)
         if not contract_match:
             continue
         canonical = contract_match.group(1).lower()

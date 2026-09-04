@@ -1,11 +1,11 @@
 ---
-title: "array_multisort() — internals"
+title: "array_multisort() - internals"
 description: "Compiler internals for array_multisort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 26
 ---
 
-## `array_multisort()` — internals
+## `array_multisort()` - internals
 
 ## Where it lives
 

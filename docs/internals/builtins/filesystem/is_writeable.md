@@ -1,11 +1,11 @@
 ---
-title: "is_writeable() — internals"
+title: "is_writeable() - internals"
 description: "Compiler internals for is_writeable(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 283
 ---
 
-## `is_writeable()` — internals
+## `is_writeable()` - internals
 
 ## Where it lives
 

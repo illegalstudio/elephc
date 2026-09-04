@@ -1,11 +1,11 @@
 ---
-title: "checkdate() — internals"
+title: "checkdate() - internals"
 description: "Compiler internals for checkdate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 187
 ---
 
-## `checkdate()` — internals
+## `checkdate()` - internals
 
 ## Where it lives
 

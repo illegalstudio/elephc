@@ -1,11 +1,11 @@
 ---
-title: "stream_socket_sendto() — internals"
+title: "stream_socket_sendto() - internals"
 description: "Compiler internals for stream_socket_sendto(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 390
 ---
 
-## `stream_socket_sendto()` — internals
+## `stream_socket_sendto()` - internals
 
 ## Where it lives
 

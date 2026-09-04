@@ -1,11 +1,11 @@
 ---
-title: "log2() — internals"
+title: "log2() - internals"
 description: "Compiler internals for log2(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 586
 ---
 
-## `log2()` — internals
+## `log2()` - internals
 
 ## Where it lives
 

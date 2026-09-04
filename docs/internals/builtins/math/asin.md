@@ -1,11 +1,11 @@
 ---
-title: "asin() — internals"
+title: "asin() - internals"
 description: "Compiler internals for asin(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 547
 ---
 
-## `asin()` — internals
+## `asin()` - internals
 
 ## Where it lives
 

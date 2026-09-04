@@ -1,11 +1,11 @@
 ---
-title: "base_convert() — internals"
+title: "base_convert() - internals"
 description: "Compiler internals for base_convert(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 550
 ---
 
-## `base_convert()` — internals
+## `base_convert()` - internals
 
 ## Where it lives
 

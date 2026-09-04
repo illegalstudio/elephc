@@ -1,11 +1,11 @@
 ---
-title: "lchown() — internals"
+title: "lchown() - internals"
 description: "Compiler internals for lchown(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 285
 ---
 
-## `lchown()` — internals
+## `lchown()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "scandir() — internals"
+title: "scandir() - internals"
 description: "Compiler internals for scandir(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 299
 ---
 
-## `scandir()` — internals
+## `scandir()` - internals
 
 ## Where it lives
 

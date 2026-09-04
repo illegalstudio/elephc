@@ -1,11 +1,11 @@
 ---
-title: "bcpow() — internals"
+title: "bcpow() - internals"
 description: "Compiler internals for bcpow(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 559
 ---
 
-## `bcpow()` — internals
+## `bcpow()` - internals
 
 ## Where it lives
 

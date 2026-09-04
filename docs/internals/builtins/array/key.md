@@ -1,11 +1,11 @@
 ---
-title: "key() — internals"
+title: "key() - internals"
 description: "Compiler internals for key(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 56
 ---
 
-## `key()` — internals
+## `key()` - internals
 
 ## Where it lives
 

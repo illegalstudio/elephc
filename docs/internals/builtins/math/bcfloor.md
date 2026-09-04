@@ -1,11 +1,11 @@
 ---
-title: "bcfloor() — internals"
+title: "bcfloor() - internals"
 description: "Compiler internals for bcfloor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 556
 ---
 
-## `bcfloor()` — internals
+## `bcfloor()` - internals
 
 ## Where it lives
 

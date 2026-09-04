@@ -1,11 +1,11 @@
 ---
-title: "array_filter() — internals"
+title: "array_filter() - internals"
 description: "Compiler internals for array_filter(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 12
 ---
 
-## `array_filter()` — internals
+## `array_filter()` - internals
 
 ## Where it lives
 

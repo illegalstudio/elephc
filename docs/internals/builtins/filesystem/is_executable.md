@@ -1,11 +1,11 @@
 ---
-title: "is_executable() — internals"
+title: "is_executable() - internals"
 description: "Compiler internals for is_executable(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 278
 ---
 
-## `is_executable()` — internals
+## `is_executable()` - internals
 
 ## Where it lives
 

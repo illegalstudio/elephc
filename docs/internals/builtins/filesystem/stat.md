@@ -1,11 +1,11 @@
 ---
-title: "stat() — internals"
+title: "stat() - internals"
 description: "Compiler internals for stat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 300
 ---
 
-## `stat()` — internals
+## `stat()` - internals
 
 ## Where it lives
 

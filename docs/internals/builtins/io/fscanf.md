@@ -1,11 +1,11 @@
 ---
-title: "fscanf() — internals"
+title: "fscanf() - internals"
 description: "Compiler internals for fscanf(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 325
 ---
 
-## `fscanf()` — internals
+## `fscanf()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "ob_end_clean() — internals"
+title: "ob_end_clean() - internals"
 description: "Compiler internals for ob_end_clean(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 341
 ---
 
-## `ob_end_clean()` — internals
+## `ob_end_clean()` - internals
 
 ## Where it lives
 

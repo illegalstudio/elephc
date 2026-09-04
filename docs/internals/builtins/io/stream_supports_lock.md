@@ -1,11 +1,11 @@
 ---
-title: "stream_supports_lock() — internals"
+title: "stream_supports_lock() - internals"
 description: "Compiler internals for stream_supports_lock(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 393
 ---
 
-## `stream_supports_lock()` — internals
+## `stream_supports_lock()` - internals
 
 ## Where it lives
 

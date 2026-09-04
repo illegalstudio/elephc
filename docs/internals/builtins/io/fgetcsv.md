@@ -1,11 +1,11 @@
 ---
-title: "fgetcsv() — internals"
+title: "fgetcsv() - internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 314
 ---
 
-## `fgetcsv()` — internals
+## `fgetcsv()` - internals
 
 ## Where it lives
 

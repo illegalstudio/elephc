@@ -1,11 +1,11 @@
 ---
-title: "bcdivmod() — internals"
+title: "bcdivmod() - internals"
 description: "Compiler internals for bcdivmod(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 555
 ---
 
-## `bcdivmod()` — internals
+## `bcdivmod()` - internals
 
 ## Where it lives
 

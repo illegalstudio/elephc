@@ -1,11 +1,11 @@
 ---
-title: "getenv() — internals"
+title: "getenv() - internals"
 description: "Compiler internals for getenv(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 275
 ---
 
-## `getenv()` — internals
+## `getenv()` - internals
 
 ## Where it lives
 

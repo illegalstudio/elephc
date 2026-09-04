@@ -1,11 +1,11 @@
 ---
-title: "stream_resolve_include_path() — internals"
+title: "stream_resolve_include_path() - internals"
 description: "Compiler internals for stream_resolve_include_path(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 377
 ---
 
-## `stream_resolve_include_path()` — internals
+## `stream_resolve_include_path()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "stream_wrapper_unregister() — internals"
+title: "stream_wrapper_unregister() - internals"
 description: "Compiler internals for stream_wrapper_unregister(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 396
 ---
 
-## `stream_wrapper_unregister()` — internals
+## `stream_wrapper_unregister()` - internals
 
 ## Where it lives
 

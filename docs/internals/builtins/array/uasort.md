@@ -1,11 +1,11 @@
 ---
-title: "uasort() — internals"
+title: "uasort() - internals"
 description: "Compiler internals for uasort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 68
 ---
 
-## `uasort()` — internals
+## `uasort()` - internals
 
 ## Where it lives
 

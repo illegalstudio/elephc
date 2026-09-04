@@ -1,11 +1,11 @@
 ---
-title: "tempnam() — internals"
+title: "tempnam() - internals"
 description: "Compiler internals for tempnam(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 303
 ---
 
-## `tempnam()` — internals
+## `tempnam()` - internals
 
 ## Where it lives
 

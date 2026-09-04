@@ -1,11 +1,11 @@
 ---
-title: "clamp() — internals"
+title: "clamp() - internals"
 description: "Compiler internals for clamp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 567
 ---
 
-## `clamp()` — internals
+## `clamp()` - internals
 
 ## Where it lives
 

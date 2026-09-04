@@ -1,11 +1,11 @@
 ---
-title: "shuffle() — internals"
+title: "shuffle() - internals"
 description: "Compiler internals for shuffle(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 66
 ---
 
-## `shuffle()` — internals
+## `shuffle()` - internals
 
 ## Where it lives
 

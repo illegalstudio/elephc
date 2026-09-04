@@ -1,11 +1,11 @@
 ---
-title: "file_exists() — internals"
+title: "file_exists() - internals"
 description: "Compiler internals for file_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 263
 ---
 
-## `file_exists()` — internals
+## `file_exists()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "bcround() — internals"
+title: "bcround() - internals"
 description: "Compiler internals for bcround(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 561
 ---
 
-## `bcround()` — internals
+## `bcround()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "array_reduce() — internals"
+title: "array_reduce() - internals"
 description: "Compiler internals for array_reduce(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 32
 ---
 
-## `array_reduce()` — internals
+## `array_reduce()` - internals
 
 ## Where it lives
 

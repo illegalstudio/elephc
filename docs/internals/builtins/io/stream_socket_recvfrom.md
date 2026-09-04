@@ -1,11 +1,11 @@
 ---
-title: "stream_socket_recvfrom() — internals"
+title: "stream_socket_recvfrom() - internals"
 description: "Compiler internals for stream_socket_recvfrom(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 389
 ---
 
-## `stream_socket_recvfrom()` — internals
+## `stream_socket_recvfrom()` - internals
 
 ## Where it lives
 

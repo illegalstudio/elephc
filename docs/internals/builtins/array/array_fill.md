@@ -1,11 +1,11 @@
 ---
-title: "array_fill() — internals"
+title: "array_fill() - internals"
 description: "Compiler internals for array_fill(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 10
 ---
 
-## `array_fill()` — internals
+## `array_fill()` - internals
 
 ## Where it lives
 

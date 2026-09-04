@@ -1,11 +1,11 @@
 ---
-title: "natcasesort() — internals"
+title: "natcasesort() - internals"
 description: "Compiler internals for natcasesort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 59
 ---
 
-## `natcasesort()` — internals
+## `natcasesort()` - internals
 
 ## Where it lives
 

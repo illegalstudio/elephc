@@ -1,11 +1,11 @@
 ---
-title: "getdate() — internals"
+title: "getdate() - internals"
 description: "Compiler internals for getdate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 219
 ---
 
-## `getdate()` — internals
+## `getdate()` - internals
 
 ## Where it lives
 

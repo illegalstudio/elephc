@@ -1,11 +1,11 @@
 ---
-title: "tmpfile() — internals"
+title: "tmpfile() - internals"
 description: "Compiler internals for tmpfile(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 304
 ---
 
-## `tmpfile()` — internals
+## `tmpfile()` - internals
 
 ## Where it lives
 

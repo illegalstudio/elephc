@@ -1,11 +1,11 @@
 ---
-title: "trait_exists() — internals"
+title: "trait_exists() - internals"
 description: "Compiler internals for trait_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 97
 ---
 
-## `trait_exists()` — internals
+## `trait_exists()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "rename() — internals"
+title: "rename() - internals"
 description: "Compiler internals for rename(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 297
 ---
 
-## `rename()` — internals
+## `rename()` - internals
 
 ## Where it lives
 

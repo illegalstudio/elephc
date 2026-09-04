@@ -1,11 +1,11 @@
 ---
-title: "floor() — internals"
+title: "floor() - internals"
 description: "Compiler internals for floor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 576
 ---
 
-## `floor()` — internals
+## `floor()` - internals
 
 ## Where it lives
 

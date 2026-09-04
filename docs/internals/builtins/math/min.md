@@ -1,11 +1,11 @@
 ---
-title: "min() — internals"
+title: "min() - internals"
 description: "Compiler internals for min(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 588
 ---
 
-## `min()` — internals
+## `min()` - internals
 
 ## Where it lives
 

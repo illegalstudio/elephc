@@ -1,11 +1,11 @@
 ---
-title: "prev() — internals"
+title: "prev() - internals"
 description: "Compiler internals for prev(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 62
 ---
 
-## `prev()` — internals
+## `prev()` - internals
 
 ## Where it lives
 

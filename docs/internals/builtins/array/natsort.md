@@ -1,11 +1,11 @@
 ---
-title: "natsort() — internals"
+title: "natsort() - internals"
 description: "Compiler internals for natsort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 60
 ---
 
-## `natsort()` — internals
+## `natsort()` - internals
 
 ## Where it lives
 

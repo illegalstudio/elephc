@@ -1,11 +1,11 @@
 ---
-title: "random_int() — internals"
+title: "random_int() - internals"
 description: "Compiler internals for random_int(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 595
 ---
 
-## `random_int()` — internals
+## `random_int()` - internals
 
 ## Where it lives
 

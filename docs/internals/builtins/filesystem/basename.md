@@ -1,11 +1,11 @@
 ---
-title: "basename() — internals"
+title: "basename() - internals"
 description: "Compiler internals for basename(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 253
 ---
 
-## `basename()` — internals
+## `basename()` - internals
 
 ## Where it lives
 

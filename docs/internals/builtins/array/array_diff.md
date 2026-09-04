@@ -1,11 +1,11 @@
 ---
-title: "array_diff() — internals"
+title: "array_diff() - internals"
 description: "Compiler internals for array_diff(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 7
 ---
 
-## `array_diff()` — internals
+## `array_diff()` - internals
 
 ## Where it lives
 

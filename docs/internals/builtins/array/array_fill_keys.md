@@ -1,11 +1,11 @@
 ---
-title: "array_fill_keys() — internals"
+title: "array_fill_keys() - internals"
 description: "Compiler internals for array_fill_keys(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 11
 ---
 
-## `array_fill_keys()` — internals
+## `array_fill_keys()` - internals
 
 ## Where it lives
 

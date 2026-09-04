@@ -1,11 +1,11 @@
 ---
-title: "array_walk() — internals"
+title: "array_walk() - internals"
 description: "Compiler internals for array_walk(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 46
 ---
 
-## `array_walk()` — internals
+## `array_walk()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "property_exists() — internals"
+title: "property_exists() - internals"
 description: "Compiler internals for property_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 96
 ---
 
-## `property_exists()` — internals
+## `property_exists()` - internals
 
 ## Where it lives
 

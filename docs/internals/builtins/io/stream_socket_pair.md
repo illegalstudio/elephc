@@ -1,11 +1,11 @@
 ---
-title: "stream_socket_pair() — internals"
+title: "stream_socket_pair() - internals"
 description: "Compiler internals for stream_socket_pair(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 388
 ---
 
-## `stream_socket_pair()` — internals
+## `stream_socket_pair()` - internals
 
 ## Where it lives
 

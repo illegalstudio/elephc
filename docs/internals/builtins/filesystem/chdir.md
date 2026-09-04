@@ -1,11 +1,11 @@
 ---
-title: "chdir() — internals"
+title: "chdir() - internals"
 description: "Compiler internals for chdir(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 254
 ---
 
-## `chdir()` — internals
+## `chdir()` - internals
 
 ## Where it lives
 

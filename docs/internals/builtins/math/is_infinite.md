@@ -1,11 +1,11 @@
 ---
-title: "is_infinite() — internals"
+title: "is_infinite() - internals"
 description: "Compiler internals for is_infinite(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 582
 ---
 
-## `is_infinite()` — internals
+## `is_infinite()` - internals
 
 ## Where it lives
 

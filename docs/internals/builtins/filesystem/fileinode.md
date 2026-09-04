@@ -1,11 +1,11 @@
 ---
-title: "fileinode() — internals"
+title: "fileinode() - internals"
 description: "Compiler internals for fileinode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 267
 ---
 
-## `fileinode()` — internals
+## `fileinode()` - internals
 
 ## Where it lives
 

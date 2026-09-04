@@ -1,11 +1,11 @@
 ---
-title: "uksort() — internals"
+title: "uksort() - internals"
 description: "Compiler internals for uksort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 69
 ---
 
-## `uksort()` — internals
+## `uksort()` - internals
 
 ## Where it lives
 

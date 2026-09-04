@@ -1,11 +1,11 @@
 ---
-title: "fmod() — internals"
+title: "fmod() - internals"
 description: "Compiler internals for fmod(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 577
 ---
 
-## `fmod()` — internals
+## `fmod()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "cos() — internals"
+title: "cos() - internals"
 description: "Compiler internals for cos(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 568
 ---
 
-## `cos()` — internals
+## `cos()` - internals
 
 ## Where it lives
 

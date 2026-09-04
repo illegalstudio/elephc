@@ -1,11 +1,11 @@
 ---
-title: "usort() — internals"
+title: "usort() - internals"
 description: "Compiler internals for usort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 70
 ---
 
-## `usort()` — internals
+## `usort()` - internals
 
 ## Where it lives
 

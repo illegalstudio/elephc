@@ -1,11 +1,11 @@
 ---
-title: "closedir() — internals"
+title: "closedir() - internals"
 description: "Compiler internals for closedir(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 308
 ---
 
-## `closedir()` — internals
+## `closedir()` - internals
 
 ## Where it lives
 

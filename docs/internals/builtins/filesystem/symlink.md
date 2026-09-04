@@ -1,11 +1,11 @@
 ---
-title: "symlink() — internals"
+title: "symlink() - internals"
 description: "Compiler internals for symlink(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 301
 ---
 
-## `symlink()` — internals
+## `symlink()` - internals
 
 ## Where it lives
 

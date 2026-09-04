@@ -1,11 +1,11 @@
 ---
-title: "stream_socket_enable_crypto() — internals"
+title: "stream_socket_enable_crypto() - internals"
 description: "Compiler internals for stream_socket_enable_crypto(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 386
 ---
 
-## `stream_socket_enable_crypto()` — internals
+## `stream_socket_enable_crypto()` - internals
 
 ## Where it lives
 

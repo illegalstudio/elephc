@@ -1,11 +1,11 @@
 ---
-title: "range() — internals"
+title: "range() - internals"
 description: "Compiler internals for range(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 63
 ---
 
-## `range()` — internals
+## `range()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "vfprintf() — internals"
+title: "vfprintf() - internals"
 description: "Compiler internals for vfprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 397
 ---
 
-## `vfprintf()` — internals
+## `vfprintf()` - internals
 
 ## Where it lives
 

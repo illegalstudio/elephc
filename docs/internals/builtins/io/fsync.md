@@ -1,11 +1,11 @@
 ---
-title: "fsync() — internals"
+title: "fsync() - internals"
 description: "Compiler internals for fsync(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 328
 ---
 
-## `fsync()` — internals
+## `fsync()` - internals
 
 ## Where it lives
 

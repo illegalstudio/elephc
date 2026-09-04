@@ -1,11 +1,11 @@
 ---
-title: "is_file() — internals"
+title: "is_file() - internals"
 description: "Compiler internals for is_file(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 279
 ---
 
-## `is_file()` — internals
+## `is_file()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "chown() — internals"
+title: "chown() - internals"
 description: "Compiler internals for chown(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 257
 ---
 
-## `chown()` — internals
+## `chown()` - internals
 
 ## Where it lives
 

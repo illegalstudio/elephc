@@ -1,11 +1,11 @@
 ---
-title: "lchgrp() — internals"
+title: "lchgrp() - internals"
 description: "Compiler internals for lchgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 284
 ---
 
-## `lchgrp()` — internals
+## `lchgrp()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "file_put_contents() — internals"
+title: "file_put_contents() - internals"
 description: "Compiler internals for file_put_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 318
 ---
 
-## `file_put_contents()` — internals
+## `file_put_contents()` - internals
 
 ## Where it lives
 

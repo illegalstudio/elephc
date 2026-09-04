@@ -1,11 +1,11 @@
 ---
-title: "ob_get_clean() — internals"
+title: "ob_get_clean() - internals"
 description: "Compiler internals for ob_get_clean(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 344
 ---
 
-## `ob_get_clean()` — internals
+## `ob_get_clean()` - internals
 
 ## Where it lives
 

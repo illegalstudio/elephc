@@ -1,11 +1,11 @@
 ---
-title: "stream_is_local() — internals"
+title: "stream_is_local() - internals"
 description: "Compiler internals for stream_is_local(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 375
 ---
 
-## `stream_is_local()` — internals
+## `stream_is_local()` - internals
 
 ## Where it lives
 

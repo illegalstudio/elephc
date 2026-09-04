@@ -1,11 +1,11 @@
 ---
-title: "readfile() — internals"
+title: "readfile() - internals"
 description: "Compiler internals for readfile(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 292
 ---
 
-## `readfile()` — internals
+## `readfile()` - internals
 
 ## Where it lives
 

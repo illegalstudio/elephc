@@ -1,11 +1,11 @@
 ---
-title: "get_declared_traits() — internals"
+title: "get_declared_traits() - internals"
 description: "Compiler internals for get_declared_traits(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 89
 ---
 
-## `get_declared_traits()` — internals
+## `get_declared_traits()` - internals
 
 ## Where it lives
 

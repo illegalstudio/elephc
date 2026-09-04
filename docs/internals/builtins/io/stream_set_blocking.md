@@ -1,11 +1,11 @@
 ---
-title: "stream_set_blocking() — internals"
+title: "stream_set_blocking() - internals"
 description: "Compiler internals for stream_set_blocking(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 379
 ---
 
-## `stream_set_blocking()` — internals
+## `stream_set_blocking()` - internals
 
 ## Where it lives
 

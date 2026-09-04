@@ -1,11 +1,11 @@
 ---
-title: "fclose() — internals"
+title: "fclose() - internals"
 description: "Compiler internals for fclose(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 309
 ---
 
-## `fclose()` — internals
+## `fclose()` - internals
 
 ## Where it lives
 

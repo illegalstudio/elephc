@@ -1,11 +1,11 @@
 ---
-title: "fseek() — internals"
+title: "fseek() - internals"
 description: "Compiler internals for fseek(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 326
 ---
 
-## `fseek()` — internals
+## `fseek()` - internals
 
 ## Where it lives
 

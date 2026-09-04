@@ -1,11 +1,11 @@
 ---
-title: "round() — internals"
+title: "round() - internals"
 description: "Compiler internals for round(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 596
 ---
 
-## `round()` — internals
+## `round()` - internals
 
 ## Where it lives
 

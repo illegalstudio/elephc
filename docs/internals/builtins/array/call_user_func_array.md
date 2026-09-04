@@ -1,11 +1,11 @@
 ---
-title: "call_user_func_array() — internals"
+title: "call_user_func_array() - internals"
 description: "Compiler internals for call_user_func_array(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 51
 ---
 
-## `call_user_func_array()` — internals
+## `call_user_func_array()` - internals
 
 ## Where it lives
 

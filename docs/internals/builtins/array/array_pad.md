@@ -1,11 +1,11 @@
 ---
-title: "array_pad() — internals"
+title: "array_pad() - internals"
 description: "Compiler internals for array_pad(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 27
 ---
 
-## `array_pad()` — internals
+## `array_pad()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "in_array() — internals"
+title: "in_array() - internals"
 description: "Compiler internals for in_array(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 55
 ---
 
-## `in_array()` — internals
+## `in_array()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "ob_flush() — internals"
+title: "ob_flush() - internals"
 description: "Compiler internals for ob_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 343
 ---
 
-## `ob_flush()` — internals
+## `ob_flush()` - internals
 
 ## Where it lives
 

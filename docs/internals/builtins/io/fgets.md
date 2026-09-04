@@ -1,11 +1,11 @@
 ---
-title: "fgets() — internals"
+title: "fgets() - internals"
 description: "Compiler internals for fgets(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 315
 ---
 
-## `fgets()` — internals
+## `fgets()` - internals
 
 ## Where it lives
 

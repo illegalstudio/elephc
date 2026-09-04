@@ -1,11 +1,11 @@
 ---
-title: "stream_socket_get_name() — internals"
+title: "stream_socket_get_name() - internals"
 description: "Compiler internals for stream_socket_get_name(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 387
 ---
 
-## `stream_socket_get_name()` — internals
+## `stream_socket_get_name()` - internals
 
 ## Where it lives
 

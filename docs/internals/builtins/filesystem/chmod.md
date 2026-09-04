@@ -1,11 +1,11 @@
 ---
-title: "chmod() — internals"
+title: "chmod() - internals"
 description: "Compiler internals for chmod(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 256
 ---
 
-## `chmod()` — internals
+## `chmod()` - internals
 
 ## Where it lives
 

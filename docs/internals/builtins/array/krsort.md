@@ -1,11 +1,11 @@
 ---
-title: "krsort() — internals"
+title: "krsort() - internals"
 description: "Compiler internals for krsort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 57
 ---
 
-## `krsort()` — internals
+## `krsort()` - internals
 
 ## Where it lives
 

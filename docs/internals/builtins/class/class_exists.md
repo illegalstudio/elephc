@@ -1,11 +1,11 @@
 ---
-title: "class_exists() — internals"
+title: "class_exists() - internals"
 description: "Compiler internals for class_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 76
 ---
 
-## `class_exists()` — internals
+## `class_exists()` - internals
 
 ## Where it lives
 

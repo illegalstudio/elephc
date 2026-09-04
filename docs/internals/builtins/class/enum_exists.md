@@ -1,11 +1,11 @@
 ---
-title: "enum_exists() — internals"
+title: "enum_exists() - internals"
 description: "Compiler internals for enum_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 81
 ---
 
-## `enum_exists()` — internals
+## `enum_exists()` - internals
 
 ## Where it lives
 

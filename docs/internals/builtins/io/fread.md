@@ -1,11 +1,11 @@
 ---
-title: "fread() — internals"
+title: "fread() - internals"
 description: "Compiler internals for fread(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 324
 ---
 
-## `fread()` — internals
+## `fread()` - internals
 
 ## Where it lives
 

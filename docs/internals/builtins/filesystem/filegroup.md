@@ -1,11 +1,11 @@
 ---
-title: "filegroup() — internals"
+title: "filegroup() - internals"
 description: "Compiler internals for filegroup(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 266
 ---
 
-## `filegroup()` — internals
+## `filegroup()` - internals
 
 ## Where it lives
 

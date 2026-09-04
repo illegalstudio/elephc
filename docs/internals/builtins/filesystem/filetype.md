@@ -1,11 +1,11 @@
 ---
-title: "filetype() — internals"
+title: "filetype() - internals"
 description: "Compiler internals for filetype(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 272
 ---
 
-## `filetype()` — internals
+## `filetype()` - internals
 
 ## Where it lives
 

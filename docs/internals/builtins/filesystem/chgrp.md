@@ -1,11 +1,11 @@
 ---
-title: "chgrp() — internals"
+title: "chgrp() - internals"
 description: "Compiler internals for chgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 255
 ---
 
-## `chgrp()` — internals
+## `chgrp()` - internals
 
 ## Where it lives
 

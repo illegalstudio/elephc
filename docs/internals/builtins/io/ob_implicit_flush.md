@@ -1,11 +1,11 @@
 ---
-title: "ob_implicit_flush() — internals"
+title: "ob_implicit_flush() - internals"
 description: "Compiler internals for ob_implicit_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 350
 ---
 
-## `ob_implicit_flush()` — internals
+## `ob_implicit_flush()` - internals
 
 ## Where it lives
 

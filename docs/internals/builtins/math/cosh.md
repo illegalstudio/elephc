@@ -1,11 +1,11 @@
 ---
-title: "cosh() — internals"
+title: "cosh() - internals"
 description: "Compiler internals for cosh(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 569
 ---
 
-## `cosh()` — internals
+## `cosh()` - internals
 
 ## Where it lives
 

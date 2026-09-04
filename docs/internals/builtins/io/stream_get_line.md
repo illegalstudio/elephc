@@ -1,11 +1,11 @@
 ---
-title: "stream_get_line() — internals"
+title: "stream_get_line() - internals"
 description: "Compiler internals for stream_get_line(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 371
 ---
 
-## `stream_get_line()` — internals
+## `stream_get_line()` - internals
 
 ## Where it lives
 

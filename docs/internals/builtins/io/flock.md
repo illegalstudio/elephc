@@ -1,11 +1,11 @@
 ---
-title: "flock() — internals"
+title: "flock() - internals"
 description: "Compiler internals for flock(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 319
 ---
 
-## `flock()` — internals
+## `flock()` - internals
 
 ## Where it lives
 

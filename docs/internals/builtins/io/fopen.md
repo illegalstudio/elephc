@@ -1,11 +1,11 @@
 ---
-title: "fopen() — internals"
+title: "fopen() - internals"
 description: "Compiler internals for fopen(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 320
 ---
 
-## `fopen()` — internals
+## `fopen()` - internals
 
 ## Where it lives
 

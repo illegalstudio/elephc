@@ -1,11 +1,11 @@
 ---
-title: "array_key_exists() — internals"
+title: "array_key_exists() - internals"
 description: "Compiler internals for array_key_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 19
 ---
 
-## `array_key_exists()` — internals
+## `array_key_exists()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "is_subclass_of() — internals"
+title: "is_subclass_of() - internals"
 description: "Compiler internals for is_subclass_of(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 94
 ---
 
-## `is_subclass_of()` — internals
+## `is_subclass_of()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "interface_exists() — internals"
+title: "interface_exists() - internals"
 description: "Compiler internals for interface_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 92
 ---
 
-## `interface_exists()` — internals
+## `interface_exists()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "disk_free_space() — internals"
+title: "disk_free_space() - internals"
 description: "Compiler internals for disk_free_space(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 261
 ---
 
-## `disk_free_space()` — internals
+## `disk_free_space()` - internals
 
 ## Where it lives
 

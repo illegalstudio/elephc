@@ -1,11 +1,11 @@
 ---
-title: "get_class() — internals"
+title: "get_class() - internals"
 description: "Compiler internals for get_class(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 84
 ---
 
-## `get_class()` — internals
+## `get_class()` - internals
 
 ## Where it lives
 

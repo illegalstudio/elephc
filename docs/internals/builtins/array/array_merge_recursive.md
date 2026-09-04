@@ -1,11 +1,11 @@
 ---
-title: "array_merge_recursive() — internals"
+title: "array_merge_recursive() - internals"
 description: "Compiler internals for array_merge_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 25
 ---
 
-## `array_merge_recursive()` — internals
+## `array_merge_recursive()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "mkdir() — internals"
+title: "mkdir() - internals"
 description: "Compiler internals for mkdir(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 289
 ---
 
-## `mkdir()` — internals
+## `mkdir()` - internals
 
 ## Where it lives
 

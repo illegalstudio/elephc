@@ -1,11 +1,11 @@
 ---
-title: "is_finite() — internals"
+title: "is_finite() - internals"
 description: "Compiler internals for is_finite(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 581
 ---
 
-## `is_finite()` — internals
+## `is_finite()` - internals
 
 ## Where it lives
 

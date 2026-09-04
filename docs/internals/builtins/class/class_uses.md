@@ -1,11 +1,11 @@
 ---
-title: "class_uses() — internals"
+title: "class_uses() - internals"
 description: "Compiler internals for class_uses(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 80
 ---
 
-## `class_uses()` — internals
+## `class_uses()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "is_dir() — internals"
+title: "is_dir() - internals"
 description: "Compiler internals for is_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 277
 ---
 
-## `is_dir()` — internals
+## `is_dir()` - internals
 
 ## Where it lives
 

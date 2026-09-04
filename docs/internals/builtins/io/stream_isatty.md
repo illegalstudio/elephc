@@ -1,11 +1,11 @@
 ---
-title: "stream_isatty() — internals"
+title: "stream_isatty() - internals"
 description: "Compiler internals for stream_isatty(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 376
 ---
 
-## `stream_isatty()` — internals
+## `stream_isatty()` - internals
 
 ## Where it lives
 

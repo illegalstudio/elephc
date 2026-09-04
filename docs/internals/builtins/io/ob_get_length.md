@@ -1,11 +1,11 @@
 ---
-title: "ob_get_length() — internals"
+title: "ob_get_length() - internals"
 description: "Compiler internals for ob_get_length(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 347
 ---
 
-## `ob_get_length()` — internals
+## `ob_get_length()` - internals
 
 ## Where it lives
 

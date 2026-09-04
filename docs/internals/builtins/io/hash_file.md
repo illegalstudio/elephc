@@ -1,11 +1,11 @@
 ---
-title: "hash_file() — internals"
+title: "hash_file() - internals"
 description: "Compiler internals for hash_file(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 339
 ---
 
-## `hash_file()` — internals
+## `hash_file()` - internals
 
 ## Where it lives
 

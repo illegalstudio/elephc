@@ -1,11 +1,11 @@
 ---
-title: "fflush() — internals"
+title: "fflush() - internals"
 description: "Compiler internals for fflush(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 312
 ---
 
-## `fflush()` — internals
+## `fflush()` - internals
 
 ## Where it lives
 

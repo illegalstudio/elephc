@@ -1,11 +1,11 @@
 ---
-title: "atan2() — internals"
+title: "atan2() - internals"
 description: "Compiler internals for atan2(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 549
 ---
 
-## `atan2()` — internals
+## `atan2()` - internals
 
 ## Where it lives
 

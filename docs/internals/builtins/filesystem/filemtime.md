@@ -1,11 +1,11 @@
 ---
-title: "filemtime() — internals"
+title: "filemtime() - internals"
 description: "Compiler internals for filemtime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 268
 ---
 
-## `filemtime()` — internals
+## `filemtime()` - internals
 
 ## Where it lives
 

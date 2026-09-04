@@ -1,11 +1,11 @@
 ---
-title: "next() — internals"
+title: "next() - internals"
 description: "Compiler internals for next(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 61
 ---
 
-## `next()` — internals
+## `next()` - internals
 
 ## Where it lives
 

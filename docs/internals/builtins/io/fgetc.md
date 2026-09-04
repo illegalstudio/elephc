@@ -1,11 +1,11 @@
 ---
-title: "fgetc() — internals"
+title: "fgetc() - internals"
 description: "Compiler internals for fgetc(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 313
 ---
 
-## `fgetc()` — internals
+## `fgetc()` - internals
 
 ## Where it lives
 

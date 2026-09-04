@@ -1,11 +1,11 @@
 ---
-title: "array_sum() — internals"
+title: "array_sum() - internals"
 description: "Compiler internals for array_sum(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 40
 ---
 
-## `array_sum()` — internals
+## `array_sum()` - internals
 
 ## Where it lives
 

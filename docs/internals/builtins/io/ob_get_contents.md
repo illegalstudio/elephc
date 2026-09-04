@@ -1,11 +1,11 @@
 ---
-title: "ob_get_contents() — internals"
+title: "ob_get_contents() - internals"
 description: "Compiler internals for ob_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 345
 ---
 
-## `ob_get_contents()` — internals
+## `ob_get_contents()` - internals
 
 ## Where it lives
 

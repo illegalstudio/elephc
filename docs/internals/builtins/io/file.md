@@ -1,11 +1,11 @@
 ---
-title: "file() — internals"
+title: "file() - internals"
 description: "Compiler internals for file(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 316
 ---
 
-## `file()` — internals
+## `file()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "filesize() — internals"
+title: "filesize() - internals"
 description: "Compiler internals for filesize(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 271
 ---
 
-## `filesize()` — internals
+## `filesize()` - internals
 
 ## Where it lives
 

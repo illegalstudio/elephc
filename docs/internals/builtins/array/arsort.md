@@ -1,11 +1,11 @@
 ---
-title: "arsort() — internals"
+title: "arsort() - internals"
 description: "Compiler internals for arsort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 48
 ---
 
-## `arsort()` — internals
+## `arsort()` - internals
 
 ## Where it lives
 

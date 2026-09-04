@@ -1,11 +1,11 @@
 ---
-title: "fileatime() — internals"
+title: "fileatime() - internals"
 description: "Compiler internals for fileatime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 264
 ---
 
-## `fileatime()` — internals
+## `fileatime()` - internals
 
 ## Where it lives
 

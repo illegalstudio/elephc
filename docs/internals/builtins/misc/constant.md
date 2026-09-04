@@ -1,11 +1,11 @@
 ---
-title: "constant() — internals"
+title: "constant() - internals"
 description: "Compiler internals for constant(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 602
 ---
 
-## `constant()` — internals
+## `constant()` - internals
 
 ## Where it lives
 

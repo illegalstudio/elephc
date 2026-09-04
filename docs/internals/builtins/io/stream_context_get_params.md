@@ -1,11 +1,11 @@
 ---
-title: "stream_context_get_params() — internals"
+title: "stream_context_get_params() - internals"
 description: "Compiler internals for stream_context_get_params(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 362
 ---
 
-## `stream_context_get_params()` — internals
+## `stream_context_get_params()` - internals
 
 ## Where it lives
 

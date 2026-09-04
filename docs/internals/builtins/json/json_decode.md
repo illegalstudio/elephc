@@ -1,11 +1,11 @@
 ---
-title: "json_decode() — internals"
+title: "json_decode() - internals"
 description: "Compiler internals for json_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 540
 ---
 
-## `json_decode()` — internals
+## `json_decode()` - internals
 
 ## Where it lives
 

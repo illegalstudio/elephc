@@ -1,11 +1,11 @@
 ---
-title: "gethostname() — internals"
+title: "gethostname() - internals"
 description: "Compiler internals for gethostname(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 334
 ---
 
-## `gethostname()` — internals
+## `gethostname()` - internals
 
 ## Where it lives
 

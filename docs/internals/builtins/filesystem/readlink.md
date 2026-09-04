@@ -1,11 +1,11 @@
 ---
-title: "readlink() — internals"
+title: "readlink() - internals"
 description: "Compiler internals for readlink(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 293
 ---
 
-## `readlink()` — internals
+## `readlink()` - internals
 
 ## Where it lives
 

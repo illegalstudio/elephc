@@ -1,11 +1,11 @@
 ---
-title: "class_implements() — internals"
+title: "class_implements() - internals"
 description: "Compiler internals for class_implements(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 78
 ---
 
-## `class_implements()` — internals
+## `class_implements()` - internals
 
 ## Where it lives
 

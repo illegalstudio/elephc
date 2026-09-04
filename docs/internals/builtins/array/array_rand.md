@@ -1,11 +1,11 @@
 ---
-title: "array_rand() — internals"
+title: "array_rand() - internals"
 description: "Compiler internals for array_rand(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 31
 ---
 
-## `array_rand()` — internals
+## `array_rand()` - internals
 
 ## Where it lives
 

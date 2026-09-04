@@ -1,11 +1,11 @@
 ---
-title: "count() — internals"
+title: "count() - internals"
 description: "Compiler internals for count(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 52
 ---
 
-## `count()` — internals
+## `count()` - internals
 
 ## Where it lives
 

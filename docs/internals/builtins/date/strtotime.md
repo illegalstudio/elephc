@@ -1,11 +1,11 @@
 ---
-title: "strtotime() — internals"
+title: "strtotime() - internals"
 description: "Compiler internals for strtotime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 241
 ---
 
-## `strtotime()` — internals
+## `strtotime()` - internals
 
 ## Where it lives
 

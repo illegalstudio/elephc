@@ -1,11 +1,11 @@
 ---
-title: "bccomp() — internals"
+title: "bccomp() - internals"
 description: "Compiler internals for bccomp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 553
 ---
 
-## `bccomp()` — internals
+## `bccomp()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "class_get_attributes() — internals"
+title: "class_get_attributes() - internals"
 description: "Compiler internals for class_get_attributes(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 77
 ---
 
-## `class_get_attributes()` — internals
+## `class_get_attributes()` - internals
 
 ## Where it lives
 

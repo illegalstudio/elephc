@@ -1,11 +1,11 @@
 ---
-title: "array_any() — internals"
+title: "array_any() - internals"
 description: "Compiler internals for array_any(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 2
 ---
 
-## `array_any()` — internals
+## `array_any()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "stream_select() — internals"
+title: "stream_select() - internals"
 description: "Compiler internals for stream_select(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 378
 ---
 
-## `stream_select()` — internals
+## `stream_select()` - internals
 
 ## Where it lives
 

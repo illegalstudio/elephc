@@ -1,11 +1,11 @@
 ---
-title: "file_get_contents() — internals"
+title: "file_get_contents() - internals"
 description: "Compiler internals for file_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 317
 ---
 
-## `file_get_contents()` — internals
+## `file_get_contents()` - internals
 
 ## Where it lives
 

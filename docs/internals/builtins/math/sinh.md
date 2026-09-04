@@ -1,11 +1,11 @@
 ---
-title: "sinh() — internals"
+title: "sinh() - internals"
 description: "Compiler internals for sinh(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 598
 ---
 
-## `sinh()` — internals
+## `sinh()` - internals
 
 ## Where it lives
 

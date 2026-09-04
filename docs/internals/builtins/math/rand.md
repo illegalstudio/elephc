@@ -1,11 +1,11 @@
 ---
-title: "rand() — internals"
+title: "rand() - internals"
 description: "Compiler internals for rand(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 594
 ---
 
-## `rand()` — internals
+## `rand()` - internals
 
 ## Where it lives
 

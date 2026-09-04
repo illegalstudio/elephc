@@ -1,11 +1,11 @@
 ---
-title: "array_chunk() — internals"
+title: "array_chunk() - internals"
 description: "Compiler internals for array_chunk(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 3
 ---
 
-## `array_chunk()` — internals
+## `array_chunk()` - internals
 
 ## Where it lives
 

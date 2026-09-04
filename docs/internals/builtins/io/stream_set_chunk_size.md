@@ -1,11 +1,11 @@
 ---
-title: "stream_set_chunk_size() — internals"
+title: "stream_set_chunk_size() - internals"
 description: "Compiler internals for stream_set_chunk_size(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 380
 ---
 
-## `stream_set_chunk_size()` — internals
+## `stream_set_chunk_size()` - internals
 
 ## Where it lives
 

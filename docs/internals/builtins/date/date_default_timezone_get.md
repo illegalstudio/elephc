@@ -1,11 +1,11 @@
 ---
-title: "date_default_timezone_get() — internals"
+title: "date_default_timezone_get() - internals"
 description: "Compiler internals for date_default_timezone_get(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 195
 ---
 
-## `date_default_timezone_get()` — internals
+## `date_default_timezone_get()` - internals
 
 ## Where it lives
 

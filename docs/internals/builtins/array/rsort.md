@@ -1,11 +1,11 @@
 ---
-title: "rsort() — internals"
+title: "rsort() - internals"
 description: "Compiler internals for rsort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 65
 ---
 
-## `rsort()` — internals
+## `rsort()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "clearstatcache() — internals"
+title: "clearstatcache() - internals"
 description: "Compiler internals for clearstatcache(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 258
 ---
 
-## `clearstatcache()` — internals
+## `clearstatcache()` - internals
 
 ## Where it lives
 

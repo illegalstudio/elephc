@@ -1,11 +1,11 @@
 ---
-title: "bcscale() — internals"
+title: "bcscale() - internals"
 description: "Compiler internals for bcscale(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 562
 ---
 
-## `bcscale()` — internals
+## `bcscale()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "lstat() — internals"
+title: "lstat() - internals"
 description: "Compiler internals for lstat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 288
 ---
 
-## `lstat()` — internals
+## `lstat()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "array_values() — internals"
+title: "array_values() - internals"
 description: "Compiler internals for array_values(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 45
 ---
 
-## `array_values()` — internals
+## `array_values()` - internals
 
 ## Where it lives
 

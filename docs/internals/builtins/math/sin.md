@@ -1,11 +1,11 @@
 ---
-title: "sin() — internals"
+title: "sin() - internals"
 description: "Compiler internals for sin(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 597
 ---
 
-## `sin()` — internals
+## `sin()` - internals
 
 ## Where it lives
 

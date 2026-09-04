@@ -1,11 +1,11 @@
 ---
-title: "umask() — internals"
+title: "umask() - internals"
 description: "Compiler internals for umask(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 306
 ---
 
-## `umask()` — internals
+## `umask()` - internals
 
 ## Where it lives
 

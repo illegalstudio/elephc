@@ -1,11 +1,11 @@
 ---
-title: "array_unique() — internals"
+title: "array_unique() - internals"
 description: "Compiler internals for array_unique(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 43
 ---
 
-## `array_unique()` — internals
+## `array_unique()` - internals
 
 ## Where it lives
 

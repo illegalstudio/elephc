@@ -1,11 +1,11 @@
 ---
-title: "current() — internals"
+title: "current() - internals"
 description: "Compiler internals for current(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 53
 ---
 
-## `current()` — internals
+## `current()` - internals
 
 ## Where it lives
 

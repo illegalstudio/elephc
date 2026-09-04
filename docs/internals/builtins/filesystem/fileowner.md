@@ -1,11 +1,11 @@
 ---
-title: "fileowner() — internals"
+title: "fileowner() - internals"
 description: "Compiler internals for fileowner(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 269
 ---
 
-## `fileowner()` — internals
+## `fileowner()` - internals
 
 ## Where it lives
 

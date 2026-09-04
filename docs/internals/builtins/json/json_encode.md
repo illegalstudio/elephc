@@ -1,11 +1,11 @@
 ---
-title: "json_encode() — internals"
+title: "json_encode() - internals"
 description: "Compiler internals for json_encode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 541
 ---
 
-## `json_encode()` — internals
+## `json_encode()` - internals
 
 ## Where it lives
 

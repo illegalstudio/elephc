@@ -1,11 +1,11 @@
 ---
-title: "buffer_free() — internals"
+title: "buffer_free() - internals"
 description: "Compiler internals for buffer_free(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 71
 ---
 
-## `buffer_free()` — internals
+## `buffer_free()` - internals
 
 ## Where it lives
 

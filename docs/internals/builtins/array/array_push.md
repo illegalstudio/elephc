@@ -1,11 +1,11 @@
 ---
-title: "array_push() — internals"
+title: "array_push() - internals"
 description: "Compiler internals for array_push(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 30
 ---
 
-## `array_push()` — internals
+## `array_push()` - internals
 
 ## Where it lives
 

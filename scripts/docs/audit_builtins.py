@@ -141,12 +141,13 @@ def _check_backend_contracts(
         # `--features curl` documentation configuration, see elephc_builtins/extract.py),
         # the 54 xml_* / xmlwriter_* functions the xml prelude declares, and the 289
         # functions the mysqli, PDO, web, image, OPcache, tz, var_export and version
-        # preludes declare — all injected-prelude routes.
+        # preludes declare , all injected-prelude routes.
         "prelude": 381,
+        # Calls rewritten from their enclosing lexical function frame.
+        "compiler-transform": 3,
         # The date/calendar procedural families the name resolver rewrites onto the
         # DateTime and calendar classes.
         "name-resolver-rewrite": 54,
-        "none": 3,
     }
     expected_total = sum(expected_counts.values())
     if len(non_registry) != expected_total:

@@ -1,11 +1,11 @@
 ---
-title: "mt_rand() — internals"
+title: "mt_rand() - internals"
 description: "Compiler internals for mt_rand(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 589
 ---
 
-## `mt_rand()` — internals
+## `mt_rand()` - internals
 
 ## Where it lives
 

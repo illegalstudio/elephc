@@ -1,11 +1,11 @@
 ---
-title: "json_validate() — internals"
+title: "json_validate() - internals"
 description: "Compiler internals for json_validate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 544
 ---
 
-## `json_validate()` — internals
+## `json_validate()` - internals
 
 ## Where it lives
 

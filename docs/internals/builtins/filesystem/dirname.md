@@ -1,11 +1,11 @@
 ---
-title: "dirname() — internals"
+title: "dirname() - internals"
 description: "Compiler internals for dirname(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 260
 ---
 
-## `dirname()` — internals
+## `dirname()` - internals
 
 ## Where it lives
 

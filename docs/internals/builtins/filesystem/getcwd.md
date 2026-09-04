@@ -1,11 +1,11 @@
 ---
-title: "getcwd() — internals"
+title: "getcwd() - internals"
 description: "Compiler internals for getcwd(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 274
 ---
 
-## `getcwd()` — internals
+## `getcwd()` - internals
 
 ## Where it lives
 

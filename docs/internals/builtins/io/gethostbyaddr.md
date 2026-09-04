@@ -1,11 +1,11 @@
 ---
-title: "gethostbyaddr() — internals"
+title: "gethostbyaddr() - internals"
 description: "Compiler internals for gethostbyaddr(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 332
 ---
 
-## `gethostbyaddr()` — internals
+## `gethostbyaddr()` - internals
 
 ## Where it lives
 

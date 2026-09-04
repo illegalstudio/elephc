@@ -1,11 +1,11 @@
 ---
-title: "array_unshift() — internals"
+title: "array_unshift() - internals"
 description: "Compiler internals for array_unshift(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 44
 ---
 
-## `array_unshift()` — internals
+## `array_unshift()` - internals
 
 ## Where it lives
 

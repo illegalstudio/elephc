@@ -1,11 +1,11 @@
 ---
-title: "array_slice() — internals"
+title: "array_slice() - internals"
 description: "Compiler internals for array_slice(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 38
 ---
 
-## `array_slice()` — internals
+## `array_slice()` - internals
 
 ## Where it lives
 

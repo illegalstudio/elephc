@@ -1,11 +1,11 @@
 ---
-title: "pi() — internals"
+title: "pi() - internals"
 description: "Compiler internals for pi(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 591
 ---
 
-## `pi()` — internals
+## `pi()` - internals
 
 ## Where it lives
 

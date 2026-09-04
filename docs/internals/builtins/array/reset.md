@@ -1,11 +1,11 @@
 ---
-title: "reset() — internals"
+title: "reset() - internals"
 description: "Compiler internals for reset(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 64
 ---
 
-## `reset()` — internals
+## `reset()` - internals
 
 ## Where it lives
 

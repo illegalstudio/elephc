@@ -1,11 +1,11 @@
 ---
-title: "sort() — internals"
+title: "sort() - internals"
 description: "Compiler internals for sort(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 67
 ---
 
-## `sort()` — internals
+## `sort()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "fileperms() — internals"
+title: "fileperms() - internals"
 description: "Compiler internals for fileperms(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 270
 ---
 
-## `fileperms()` — internals
+## `fileperms()` - internals
 
 ## Where it lives
 

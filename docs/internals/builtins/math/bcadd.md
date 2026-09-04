@@ -1,11 +1,11 @@
 ---
-title: "bcadd() — internals"
+title: "bcadd() - internals"
 description: "Compiler internals for bcadd(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 551
 ---
 
-## `bcadd()` — internals
+## `bcadd()` - internals
 
 ## Where it lives
 

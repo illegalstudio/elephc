@@ -1,11 +1,11 @@
 ---
-title: "date() — internals"
+title: "date() - internals"
 description: "Compiler internals for date(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 188
 ---
 
-## `date()` — internals
+## `date()` - internals
 
 ## Where it lives
 

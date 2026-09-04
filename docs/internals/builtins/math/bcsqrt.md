@@ -1,11 +1,11 @@
 ---
-title: "bcsqrt() — internals"
+title: "bcsqrt() - internals"
 description: "Compiler internals for bcsqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 563
 ---
 
-## `bcsqrt()` — internals
+## `bcsqrt()` - internals
 
 ## Where it lives
 

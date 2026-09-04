@@ -1,11 +1,11 @@
 ---
-title: "realpath() — internals"
+title: "realpath() - internals"
 description: "Compiler internals for realpath(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 294
 ---
 
-## `realpath()` — internals
+## `realpath()` - internals
 
 ## Where it lives
 

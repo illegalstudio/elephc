@@ -1,11 +1,11 @@
 ---
-title: "is_link() — internals"
+title: "is_link() - internals"
 description: "Compiler internals for is_link(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 280
 ---
 
-## `is_link()` — internals
+## `is_link()` - internals
 
 ## Where it lives
 
