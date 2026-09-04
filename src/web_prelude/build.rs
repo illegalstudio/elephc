@@ -1823,7 +1823,7 @@ fn decl_fn_error_log() -> Stmt {
         .build()
 }
 
-/// Formats internal Web diagnostics before delegating to the shared Core builtin.
+/// Formats internal Web diagnostics without exposing non-user levels to `trigger_error`.
 fn decl_fn_elephc_web_trigger_error() -> Stmt {
     function("__elephc_web_trigger_error")
         .param("message", TypeExpr::Str)
@@ -1870,9 +1870,10 @@ fn decl_fn_elephc_web_trigger_error() -> Stmt {
                 ],
                 None,
             ),
-            s_return(e_call(
-                "trigger_error",
+            s_expr(e_call(
+                "fwrite",
                 vec![
+                    e_const("STDERR"),
                     e_binop(
                         e_binop(
                             e_binop(
@@ -1886,9 +1887,9 @@ fn decl_fn_elephc_web_trigger_error() -> Stmt {
                         BinOp::Concat,
                         e_str("\n"),
                     ),
-                    e_var("error_level"),
                 ],
             )),
+            s_return(e_bool(true)),
         ])
         .build()
 }

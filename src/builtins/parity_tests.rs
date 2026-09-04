@@ -586,6 +586,7 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         }
         // A built prelude carries the folded literal; PHP text spells the constant.
         DefaultSpec::IntMax => declared == "PHP_INT_MAX" || declared.parse::<i64>() == Ok(i64::MAX),
+        DefaultSpec::ErrorAll => declared == "E_ALL",
         DefaultSpec::EmptyArray => declared == "[]" || declared.replace(' ', "") == "array()",
         DefaultSpec::Constant(name) => declared == *name,
         DefaultSpec::Expr(source) => {
@@ -612,6 +613,7 @@ fn default_text(default: &DefaultSpec) -> String {
         DefaultSpec::Float(value) => format!("{value:?}"),
         DefaultSpec::Str(value) => format!("\"{value}\""),
         DefaultSpec::IntMax => "PHP_INT_MAX".to_string(),
+        DefaultSpec::ErrorAll => "E_ALL".to_string(),
         DefaultSpec::EmptyArray => "[]".to_string(),
         DefaultSpec::Constant(name) => (*name).to_string(),
         DefaultSpec::Expr(source) => (*source).to_string(),
@@ -766,6 +768,7 @@ fn prelude_parameters_parse_every_php_passing_form() {
     assert!(!default_matches(&DefaultSpec::Float(1.0), "5.0"));
     assert!(default_matches(&DefaultSpec::Null, "NULL"));
     assert!(!default_matches(&DefaultSpec::Bool(false), "true"));
+    assert!(default_matches(&DefaultSpec::ErrorAll, "E_ALL"));
 }
 
 /// Returns the PHP-visible function names one prelude source declares at top level.

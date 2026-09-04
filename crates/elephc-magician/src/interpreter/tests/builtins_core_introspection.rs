@@ -51,6 +51,72 @@ return error_reporting(null);"#,
     assert!(values.warnings.is_empty());
 }
 
+/// Verifies an unhandled eval `E_USER_ERROR` emits PHP's diagnostic and reports a fatal status.
+#[test]
+fn execute_program_reports_unhandled_user_error_as_fatal() {
+    let program = parse_fragment(br#"trigger_error("boom", E_USER_ERROR); return true;"#)
+        .expect("parse eval fragment");
+    let mut context = ElephcEvalContext::new();
+    context.set_call_site("/tmp/eval-fatal.php", "/tmp", 17);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+
+    assert_eq!(result, Err(EvalStatus::UserFatal));
+    assert_eq!(
+        values.warnings,
+        ["Fatal error: boom in /tmp/eval-fatal.php on line 17\n"]
+    );
+}
+
+/// Verifies a suppressing eval handler may recover from `E_USER_ERROR` like PHP.
+#[test]
+fn execute_program_allows_handler_to_suppress_user_error() {
+    let program = parse_fragment(
+        br#"function suppress_fatal($level, $message) {
+    echo $level . ":" . $message . "|";
+    return true;
+}
+set_error_handler("suppress_fatal", E_USER_ERROR);
+echo trigger_error("handled", E_USER_ERROR) ? "alive" : "bad";
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "256:handled|alive");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert!(values.warnings.is_empty());
+}
+
+/// Verifies eval rejects engine error levels with a catchable PHP `ValueError`.
+#[test]
+fn execute_program_rejects_non_user_trigger_error_level() {
+    let program = parse_fragment(
+        br#"try {
+    trigger_error("invalid", E_WARNING);
+} catch (ValueError $error) {
+    echo $error->getMessage();
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies pure eval exception-handler registration preserves PHP callback stack results.
 #[test]
 fn execute_program_stacks_and_restores_exception_handlers() {

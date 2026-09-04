@@ -283,7 +283,8 @@ fn lower_handler_operands(
     };
     let mut operands = vec![original.value, descriptor.value];
     if with_mask {
-        operands.push(operand_or_const_int(ctx, call, 1, 32_767));
+        let default_mask = ctx.error_reporting_mask();
+        operands.push(operand_or_const_int(ctx, call, 1, default_mask));
     }
     Ok(operands)
 }

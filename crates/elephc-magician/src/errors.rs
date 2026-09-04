@@ -18,6 +18,7 @@ pub enum EvalStatus {
     UnsupportedConstruct,
     AbiMismatch,
     EscapingPcntlCallable,
+    UserFatal,
 }
 
 impl EvalStatus {
@@ -31,6 +32,7 @@ impl EvalStatus {
             Self::UnsupportedConstruct => 4,
             Self::AbiMismatch => 5,
             Self::EscapingPcntlCallable => 6,
+            Self::UserFatal => 7,
         }
     }
 }

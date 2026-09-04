@@ -37,6 +37,7 @@ const EVAL_STATUS_PARSE_ERROR: i64 = 1;
 const EVAL_STATUS_UNCAUGHT_THROWABLE: i64 = 3;
 const EVAL_STATUS_UNSUPPORTED: i64 = 4;
 const EVAL_STATUS_ESCAPING_PCNTL_CALLABLE: i64 = 6;
+const EVAL_STATUS_USER_FATAL: i64 = 7;
 const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\n";
 const EVAL_UNSUPPORTED_MESSAGE: &str =
     "Fatal error: eval() fragment uses an unsupported construct\n";

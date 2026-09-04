@@ -22,6 +22,11 @@ use crate::codegen::Result;
 const ERROR_HANDLER_NODE_BYTES: i64 = 48;
 const EXCEPTION_HANDLER_NODE_BYTES: i64 = 40;
 const E_USER_ERROR: i64 = 256;
+const E_USER_WARNING: i64 = 512;
+const E_USER_NOTICE: i64 = 1_024;
+const E_USER_DEPRECATED: i64 = 16_384;
+const INVALID_TRIGGER_LEVEL_MESSAGE: &str =
+    "trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED";
 
 /// Gets or replaces the process-local PHP error reporting mask.
 pub(super) fn lower_error_reporting(
@@ -168,6 +173,7 @@ pub(super) fn lower_trigger_error(
     let default_label = ctx.next_label("trigger_error_default");
     let done_label = ctx.next_label("trigger_error_done");
     let descriptor_reg = abi::nested_call_reg(ctx.emitter);
+    emit_validate_trigger_error_level(ctx, level)?;
     abi::emit_load_symbol_to_reg(
         ctx.emitter,
         descriptor_reg,
@@ -195,8 +201,47 @@ pub(super) fn lower_trigger_error(
     emit_bool_result(ctx, true);
     ctx.emitter.instruction(&branch_instruction(ctx, &done_label));             // skip PHP's default diagnostic after handler suppression
     ctx.emitter.label(&default_label);
-    emit_default_user_error(ctx, message, level)?;
+    emit_default_user_error(ctx, message, level, file, line)?;
     ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Rejects every error level outside PHP's four user-generated categories.
+fn emit_validate_trigger_error_level(
+    ctx: &mut FunctionContext<'_>,
+    level: ValueId,
+) -> Result<()> {
+    load_integer_operand(ctx, level)?;
+    let level_reg = abi::int_result_reg(ctx.emitter);
+    let valid = ctx.next_label("trigger_error_level_valid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            for accepted in [
+                E_USER_ERROR,
+                E_USER_WARNING,
+                E_USER_NOTICE,
+                E_USER_DEPRECATED,
+            ] {
+                ctx.emitter
+                    .instruction(&format!("cmp {level_reg}, #{accepted}"));     // compare against one PHP user-error category
+                ctx.emitter.instruction(&format!("b.eq {valid}"));             // any recognized user category is valid
+            }
+        }
+        Arch::X86_64 => {
+            for accepted in [
+                E_USER_ERROR,
+                E_USER_WARNING,
+                E_USER_NOTICE,
+                E_USER_DEPRECATED,
+            ] {
+                ctx.emitter
+                    .instruction(&format!("cmp {level_reg}, {accepted}"));      // compare against one PHP user-error category
+                ctx.emitter.instruction(&format!("je {valid}"));               // any recognized user category is valid
+            }
+        }
+    }
+    super::super::exceptions::emit_value_error(ctx, INVALID_TRIGGER_LEVEL_MESSAGE);
+    ctx.emitter.label(&valid);
     Ok(())
 }
 
@@ -464,6 +509,8 @@ fn emit_default_user_error(
     ctx: &mut FunctionContext<'_>,
     message: ValueId,
     level: ValueId,
+    file: ValueId,
+    line: ValueId,
 ) -> Result<()> {
     let skip_output = ctx.next_label("trigger_error_skip_output");
     load_integer_operand(ctx, level)?;
@@ -472,23 +519,107 @@ fn emit_default_user_error(
     let mask_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, mask_reg, "_php_error_reporting", 0);
     emit_branch_if_no_mask_overlap(ctx, mask_reg, level_reg, &skip_output);
+    emit_user_error_category(ctx, level_reg);
     match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_string_value_to_regs(message, "x1", "x2")?;
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr for the user diagnostic
-            ctx.emitter.syscall(4);
-        }
+        Arch::AArch64 => ctx.load_string_value_to_regs(message, "x1", "x2")?,
+        Arch::X86_64 => ctx.load_string_value_to_regs(message, "rdi", "rsi")?,
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    emit_user_error_fragment(ctx, b" in ");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.load_string_value_to_regs(file, "x1", "x2")?,
+        Arch::X86_64 => ctx.load_string_value_to_regs(file, "rdi", "rsi")?,
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    emit_user_error_fragment(ctx, b" on line ");
+    load_integer_operand(ctx, line)?;
+    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {}
         Arch::X86_64 => {
-            ctx.load_string_value_to_regs(message, "rsi", "rdx")?;
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr for the user diagnostic
-            ctx.emitter.instruction("mov eax, 1");                              // Linux syscall 1 writes the diagnostic bytes
-            ctx.emitter.instruction("syscall");                                 // emit the user diagnostic bytes
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the formatted line-number pointer to the diagnostic helper
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the formatted line-number length to the diagnostic helper
         }
     }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    emit_user_error_fragment(ctx, b"\n");
     ctx.emitter.label(&skip_output);
+    load_integer_operand(ctx, level)?;
+    let level_reg = abi::int_result_reg(ctx.emitter);
     emit_exit_if_user_error(ctx, level_reg);
     emit_bool_result(ctx, true);
     Ok(())
+}
+
+/// Writes the PHP diagnostic category selected by one validated user-error level.
+fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
+    let warning = ctx.next_label("trigger_error_category_warning");
+    let deprecated = ctx.next_label("trigger_error_category_deprecated");
+    let notice = ctx.next_label("trigger_error_category_notice");
+    let done = ctx.next_label("trigger_error_category_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {level_reg}, #{E_USER_ERROR}"));     // select Fatal error for E_USER_ERROR
+            ctx.emitter.instruction(&format!("b.ne {warning}"));               // inspect the remaining nonfatal categories
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {level_reg}, {E_USER_ERROR}"));      // select Fatal error for E_USER_ERROR
+            ctx.emitter.instruction(&format!("jne {warning}"));                // inspect the remaining nonfatal categories
+        }
+    }
+    emit_user_error_fragment(ctx, b"Fatal error: ");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&warning);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {level_reg}, #{E_USER_WARNING}"));   // select Warning for E_USER_WARNING
+            ctx.emitter.instruction(&format!("b.ne {deprecated}"));            // inspect deprecation and notice categories next
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {level_reg}, {E_USER_WARNING}"));    // select Warning for E_USER_WARNING
+            ctx.emitter.instruction(&format!("jne {deprecated}"));             // inspect deprecation and notice categories next
+        }
+    }
+    emit_user_error_fragment(ctx, b"Warning: ");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&deprecated);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {level_reg}, #{E_USER_DEPRECATED}")); // select Deprecated for E_USER_DEPRECATED
+            ctx.emitter.instruction(&format!("b.ne {notice}"));                // the only remaining validated level is E_USER_NOTICE
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {level_reg}, {E_USER_DEPRECATED}")); // select Deprecated for E_USER_DEPRECATED
+            ctx.emitter.instruction(&format!("jne {notice}"));                 // the only remaining validated level is E_USER_NOTICE
+        }
+    }
+    emit_user_error_fragment(ctx, b"Deprecated: ");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&notice);
+    emit_user_error_fragment(ctx, b"Notice: ");
+    ctx.emitter.label(&done);
+}
+
+/// Writes one static fragment through the suppressible PHP diagnostic channel.
+fn emit_user_error_fragment(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
+    let (label, len) = ctx.data.add_string(bytes);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }
 
 /// Exits with PHP's fatal status when the unhandled level is E_USER_ERROR.

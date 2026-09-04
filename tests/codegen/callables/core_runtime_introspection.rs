@@ -272,6 +272,75 @@ fn test_core_error_handler_aot_exact_false_fallback() {
     assert_eq!(out, "H|T|N|T");
 }
 
+/// Verifies AOT rejects engine error levels through PHP's catchable `ValueError` path.
+#[test]
+fn test_core_trigger_error_aot_rejects_non_user_level() {
+    let out = compile_and_run(
+        r#"<?php
+        try {
+            trigger_error("invalid", E_WARNING);
+        } catch (ValueError $error) {
+            echo $error->getMessage();
+        }
+        "#,
+    );
+    assert_eq!(
+        out,
+        "trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED"
+    );
+}
+
+/// Verifies a suppressing AOT handler may recover from `E_USER_ERROR` like PHP.
+#[test]
+fn test_core_trigger_error_aot_handler_suppresses_user_fatal() {
+    let out = compile_and_run(
+        r#"<?php
+        function suppress_core_fatal(int $level, string $message): bool {
+            echo $level, ":", $message, "|";
+            return true;
+        }
+        set_error_handler("suppress_core_fatal", E_USER_ERROR);
+        echo trigger_error("handled", E_USER_ERROR) ? "alive" : "bad";
+        "#,
+    );
+    assert_eq!(out, "256:handled|alive");
+}
+
+/// Verifies an unhandled AOT `E_USER_ERROR` emits a located diagnostic and terminates.
+#[test]
+fn test_core_trigger_error_aot_unhandled_user_error_is_fatal() {
+    let out = compile_and_run_capture("<?php\ntrigger_error(\"boom\", E_USER_ERROR);\necho 'unreachable';");
+    assert!(!out.success, "E_USER_ERROR must terminate the process");
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("Fatal error: boom in ")
+            && out.stderr.contains(" on line 2\n"),
+        "unexpected stderr: {:?}",
+        out.stderr
+    );
+}
+
+/// Verifies an unhandled eval `E_USER_ERROR` uses the same fatal path as AOT code.
+#[test]
+fn test_core_trigger_error_eval_unhandled_user_error_is_fatal() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        $source = 'trigger_error("boom", E_USER_ERROR); $runtime = ' . $argc . ';';
+        eval($source);
+        echo "unreachable";
+        "#,
+    );
+    assert!(!out.success, "eval E_USER_ERROR must terminate the process");
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("Fatal error: boom in ")
+            && out.stderr.contains(" on line ")
+            && !out.stderr.contains("eval() runtime failed"),
+        "unexpected stderr: {:?}",
+        out.stderr
+    );
+}
+
 /// Verifies exception-handler registration returns and restores the prior PHP callback value.
 #[test]
 fn test_core_exception_handler_aot_registration_stack() {

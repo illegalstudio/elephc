@@ -1478,13 +1478,13 @@ fn error_log_type3_open_failure_returns_false() {
     );
 }
 
-/// Verifies `trigger_error("x", E_WARNING)` returns true and does not corrupt the
+/// Verifies `trigger_error("x", E_USER_WARNING)` returns true and does not corrupt the
 /// HTTP response body: text echoed after the call still lands in the body. Also
-/// proves the global `E_WARNING` constant resolves in compiled `--web` code.
+/// proves the public builtin accepts a PHP user-generated warning under `--web`.
 #[test]
 fn trigger_error_returns_true_and_preserves_body() {
     let dir = make_test_dir("trigerr");
-    let src = "<?php $r = trigger_error(\"custom warning\", E_WARNING); echo $r ? 'RET_TRUE' : 'RET_FALSE'; echo '|body-after';";
+    let src = "<?php $r = trigger_error(\"custom warning\", E_USER_WARNING); echo $r ? 'RET_TRUE' : 'RET_FALSE'; echo '|body-after';";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
