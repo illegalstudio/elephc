@@ -353,8 +353,37 @@ fn emit_gc_roots_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the current candidate count
 }
 
-/// Emits AArch64 request and collector phase timing helpers.
+/// Emits AArch64 status reads plus request and collector phase timing helpers.
 fn emit_gc_timing_aarch64(emitter: &mut Emitter) {
+    emitter.label("__rt_gc_status_application_time");
+    emitter.instruction("sub sp, sp, #32");                                     // reserve a standard helper frame around the clock read
+    emitter.instruction("stp x29, x30, [sp, #16]");                            // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #16");                                   // establish the helper frame pointer
+    emitter.instruction("bl __rt_microtime");                                  // read the current wall-clock timestamp
+    abi::emit_symbol_address(emitter, "x9", "_gc_application_started");
+    emitter.instruction("ldr d1, [x9]");                                       // load the request start timestamp
+    emitter.instruction("fsub d0, d0, d1");                                    // calculate elapsed request time
+    abi::emit_symbol_address(emitter, "x9", "_gc_collector_time");
+    emitter.instruction("ldr d1, [x9]");                                       // load cumulative collector time
+    emitter.instruction("fsub d0, d0, d1");                                    // report time spent outside the collector
+    emitter.instruction("fcmp d0, #0.0");                                      // guard against clock granularity and rounding
+    emitter.instruction("b.ge __rt_gc_status_application_nonnegative");         // keep a valid nonnegative duration
+    emitter.instruction("fmov d0, xzr");                                       // clamp a negative duration to zero
+    emitter.label("__rt_gc_status_application_nonnegative");
+    emitter.instruction("fmov x0, d0");                                        // return the IEEE-754 bits through the scalar metric ABI
+    emitter.instruction("ldp x29, x30, [sp, #16]");                            // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #32");                                    // release the helper frame
+    emitter.instruction("ret");                                                 // return the live application-time metric
+    emitter.label("__rt_gc_status_collector_time");
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_gc_collector_time", 0);
+    emitter.instruction("ret");                                                 // return cumulative collector-time bits
+    emitter.label("__rt_gc_status_destructor_time");
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_gc_destructor_time", 0);
+    emitter.instruction("ret");                                                 // return cumulative destructor-time bits
+    emitter.label("__rt_gc_status_free_time");
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_gc_free_time", 0);
+    emitter.instruction("ret");                                                 // return cumulative graph-free-time bits
+
     emitter.label_global("__rt_gc_request_start");
     emitter.instruction("sub sp, sp, #32");                                     // reserve a standard helper frame
     emitter.instruction("stp x29, x30, [sp, #16]");                            // preserve the caller frame and return address
@@ -466,38 +495,36 @@ fn emit_gc_timing_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #32");                                    // release the helper frame
     emitter.instruction("ret");                                                 // return to object cleanup
 
-    emitter.label("__rt_gc_status_application_time");
-    emitter.instruction("sub sp, sp, #32");                                     // reserve a standard helper frame around the clock read
-    emitter.instruction("stp x29, x30, [sp, #16]");                            // preserve the caller frame and return address
-    emitter.instruction("add x29, sp, #16");                                   // establish the helper frame pointer
-    emitter.instruction("bl __rt_microtime");                                  // read the current wall-clock timestamp
-    abi::emit_symbol_address(emitter, "x9", "_gc_application_started");
-    emitter.instruction("ldr d1, [x9]");                                       // load the request start timestamp
-    emitter.instruction("fsub d0, d0, d1");                                    // calculate elapsed request time
-    abi::emit_symbol_address(emitter, "x9", "_gc_collector_time");
-    emitter.instruction("ldr d1, [x9]");                                       // load cumulative collector time
-    emitter.instruction("fsub d0, d0, d1");                                    // report time spent outside the collector
-    emitter.instruction("fcmp d0, #0.0");                                      // guard against clock granularity and rounding
-    emitter.instruction("b.ge __rt_gc_status_application_nonnegative");         // keep a valid nonnegative duration
-    emitter.instruction("fmov d0, xzr");                                       // clamp a negative duration to zero
-    emitter.label("__rt_gc_status_application_nonnegative");
-    emitter.instruction("fmov x0, d0");                                        // return the IEEE-754 bits through the scalar metric ABI
-    emitter.instruction("ldp x29, x30, [sp, #16]");                            // restore the caller frame and return address
-    emitter.instruction("add sp, sp, #32");                                    // release the helper frame
-    emitter.instruction("ret");                                                 // return the live application-time metric
-    emitter.label("__rt_gc_status_collector_time");
-    abi::emit_load_symbol_to_reg(emitter, "x0", "_gc_collector_time", 0);
-    emitter.instruction("ret");                                                 // return cumulative collector-time bits
-    emitter.label("__rt_gc_status_destructor_time");
-    abi::emit_load_symbol_to_reg(emitter, "x0", "_gc_destructor_time", 0);
-    emitter.instruction("ret");                                                 // return cumulative destructor-time bits
-    emitter.label("__rt_gc_status_free_time");
-    abi::emit_load_symbol_to_reg(emitter, "x0", "_gc_free_time", 0);
-    emitter.instruction("ret");                                                 // return cumulative graph-free-time bits
 }
 
-/// Emits x86_64 request and collector phase timing helpers.
+/// Emits x86_64 status reads plus request and collector phase timing helpers.
 fn emit_gc_timing_x86_64(emitter: &mut Emitter) {
+    emitter.label("__rt_gc_status_application_time");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a standard helper frame
+    emitter.instruction("call __rt_microtime");                                // read the current wall-clock timestamp
+    abi::emit_symbol_address(emitter, "r8", "_gc_application_started");
+    emitter.instruction("subsd xmm0, QWORD PTR [r8]");                         // calculate elapsed request time
+    abi::emit_symbol_address(emitter, "r8", "_gc_collector_time");
+    emitter.instruction("subsd xmm0, QWORD PTR [r8]");                         // report time spent outside the collector
+    emitter.instruction("xorpd xmm1, xmm1");                                   // materialize zero for the nonnegative clamp
+    emitter.instruction("comisd xmm0, xmm1");                                  // guard against clock granularity and rounding
+    emitter.instruction("jae __rt_gc_status_application_nonnegative");          // keep a valid nonnegative duration
+    emitter.instruction("xorpd xmm0, xmm0");                                   // clamp a negative duration to zero
+    emitter.label("__rt_gc_status_application_nonnegative");
+    emitter.instruction("movq rax, xmm0");                                     // return the IEEE-754 bits through the scalar metric ABI
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the live application-time metric
+    emitter.label("__rt_gc_status_collector_time");
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_gc_collector_time", 0);
+    emitter.instruction("ret");                                                 // return cumulative collector-time bits
+    emitter.label("__rt_gc_status_destructor_time");
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_gc_destructor_time", 0);
+    emitter.instruction("ret");                                                 // return cumulative destructor-time bits
+    emitter.label("__rt_gc_status_free_time");
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_gc_free_time", 0);
+    emitter.instruction("ret");                                                 // return cumulative graph-free-time bits
+
     emitter.label_global("__rt_gc_request_start");
     emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a standard helper frame
@@ -601,31 +628,6 @@ fn emit_gc_timing_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to object cleanup
 
-    emitter.label("__rt_gc_status_application_time");
-    emitter.instruction("push rbp");                                            // align the stack and preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish a standard helper frame
-    emitter.instruction("call __rt_microtime");                                // read the current wall-clock timestamp
-    abi::emit_symbol_address(emitter, "r8", "_gc_application_started");
-    emitter.instruction("subsd xmm0, QWORD PTR [r8]");                         // calculate elapsed request time
-    abi::emit_symbol_address(emitter, "r8", "_gc_collector_time");
-    emitter.instruction("subsd xmm0, QWORD PTR [r8]");                         // report time spent outside the collector
-    emitter.instruction("xorpd xmm1, xmm1");                                   // materialize zero for the nonnegative clamp
-    emitter.instruction("comisd xmm0, xmm1");                                  // guard against clock granularity and rounding
-    emitter.instruction("jae __rt_gc_status_application_nonnegative");          // keep a valid nonnegative duration
-    emitter.instruction("xorpd xmm0, xmm0");                                   // clamp a negative duration to zero
-    emitter.label("__rt_gc_status_application_nonnegative");
-    emitter.instruction("movq rax, xmm0");                                     // return the IEEE-754 bits through the scalar metric ABI
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the live application-time metric
-    emitter.label("__rt_gc_status_collector_time");
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_gc_collector_time", 0);
-    emitter.instruction("ret");                                                 // return cumulative collector-time bits
-    emitter.label("__rt_gc_status_destructor_time");
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_gc_destructor_time", 0);
-    emitter.instruction("ret");                                                 // return cumulative destructor-time bits
-    emitter.label("__rt_gc_status_free_time");
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_gc_free_time", 0);
-    emitter.instruction("ret");                                                 // return cumulative graph-free-time bits
 }
 
 #[cfg(test)]
@@ -633,7 +635,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{AppleVariant, Platform, Target};
 
-    /// Verifies every supported target emits cache, root, and timing runtime paths.
+    /// Verifies every target emits live GC paths with status branches before helper atoms.
     #[test]
     fn gc_control_emits_live_metrics_for_all_supported_targets() {
         for target in [
@@ -659,6 +661,16 @@ mod tests {
             ] {
                 assert!(asm.contains(symbol), "missing {symbol} on {target:?}\n{asm}");
             }
+            let status_time = asm
+                .find("__rt_gc_status_application_time:")
+                .expect("application-time status label");
+            let request_start = asm
+                .find("__rt_gc_request_start:")
+                .expect("request timing helper");
+            assert!(
+                status_time < request_start,
+                "status branches must stay in the dispatcher atom on {target:?}\n{asm}"
+            );
             match target.arch {
                 Arch::AArch64 => {
                     assert!(asm.contains("bl __rt_heap_free_insert"));
