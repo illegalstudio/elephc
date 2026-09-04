@@ -188,8 +188,11 @@ pub(super) const EVAL_PATHINFO_BASENAME: i64 = 2;
 pub(super) const EVAL_PATHINFO_EXTENSION: i64 = 4;
 pub(super) const EVAL_PATHINFO_FILENAME: i64 = 8;
 pub(super) const EVAL_PATHINFO_ALL: i64 = 15;
-pub(super) const EVAL_FNM_NOESCAPE: i64 = 1;
-pub(super) const EVAL_FNM_PATHNAME: i64 = 2;
+// `fnmatch(3)` flag values follow the platform Magician is linked into, exactly like the
+// compiler's per-target table in `codegen_support::prescan`: Apple libc spells NOESCAPE 1 /
+// PATHNAME 2, glibc the other way round. The catalog marks both `TargetDependent`.
+pub(super) const EVAL_FNM_NOESCAPE: i64 = if cfg!(target_os = "macos") { 1 } else { 2 };
+pub(super) const EVAL_FNM_PATHNAME: i64 = if cfg!(target_os = "macos") { 2 } else { 1 };
 pub(super) const EVAL_FNM_PERIOD: i64 = 4;
 pub(super) const EVAL_FNM_CASEFOLD: i64 = 16;
 pub(super) const EVAL_ARRAY_FILTER_USE_VALUE: i64 = 0;

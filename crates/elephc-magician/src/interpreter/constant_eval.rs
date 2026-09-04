@@ -121,9 +121,9 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
         "PHP_SAPI" => EvalPredefinedConstant::String(EVAL_PHP_SAPI),
         "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String("/"),
-        // Platform `fnmatch(3)` flag values, matching the compiler's per-target table.
-        "FNM_NOESCAPE" => EvalPredefinedConstant::Int(if is_macos { 1 } else { 2 }),
-        "FNM_PATHNAME" => EvalPredefinedConstant::Int(if is_macos { 2 } else { 1 }),
+        // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
+        "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
+        "FNM_PATHNAME" => EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME),
         _ => return None,
     })
 }
