@@ -15,6 +15,7 @@ use super::{
     bcmath, callables, curl, diagnostics, exceptions, generators, numeric, round_mode, strings,
     system,
 };
+use super::{arrays, io, resources};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
 
@@ -36,8 +37,54 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_itoa(emitter);
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
+    // Opaque generational stream/context/filter resource registry and stream-state
+    // accessors. Must precede the io helpers below, which resolve handles through it.
+    resources::emit_resource_runtime(emitter);
+    arrays::emit_array_set_resource(emitter);
+    arrays::emit_count_reject_index(emitter);
+    arrays::emit_count_type_message(emitter);
+    io::emit_builtin_filter_id(emitter);
+    io::emit_iconv_spec_split(emitter);
+    io::emit_builtin_wrapper_index(emitter);
+    io::emit_stream_wrapper_restore_diag(emitter);
+    io::emit_user_wrappers_reserve(emitter);
+    io::emit_user_wrapper_handles_reserve(emitter);
+    io::emit_stream_get_filters(emitter);
+    io::emit_stream_get_wrappers(emitter);
+    io::emit_get_http_response_headers(emitter);
+    io::emit_http_get_last_response_headers(emitter);
+    io::emit_http_clear_last_response_headers(emitter);
+    io::emit_stream_record_meta(emitter);
+    io::emit_stream_record_mode(emitter);
+    io::emit_stream_record_transport(emitter);
+    io::emit_stream_transport(emitter);
+    io::emit_stream_is_local_path(emitter);
+    io::emit_stream_supports_lock(emitter);
+    io::emit_filter_missing_warning(emitter);
+    io::emit_open_failed_warning(emitter);
+    io::emit_wrapper_disabled_open_warning(emitter);
+    io::emit_unknown_wrapper_warning(emitter);
+    io::emit_errno_warning(emitter);
+    io::emit_stream_append_skip(emitter);
+    io::emit_stream_clear_append_skip(emitter);
+    io::emit_stream_wrapper_pos(emitter);
+    io::emit_stream_wrapper_pos_advance(emitter);
+    io::emit_user_wrapper_seek_reconcile(emitter);
+    io::emit_user_wrapper_lacks_seek(emitter);
+    io::emit_stream_own_its_file(emitter);
+    io::emit_stream_unlink_if_owned(emitter);
+    io::emit_stream_wrapper_pos_set(emitter);
+    io::emit_stream_filtered_pos(emitter);
+    io::emit_stream_filtered_pos_set(emitter);
+    io::emit_dynamic_context_deprecation(emitter);
+    io::emit_stream_type_name(emitter);
+    io::emit_socket_connect_warning(emitter);
+    io::emit_gai_publish(emitter);
+    io::emit_stream_context_merge_options(emitter);
+    io::emit_http_open_url(emitter);
     strings::emit_resource_write_stdout(emitter);
     strings::emit_php_num_scan(emitter);
+    strings::emit_nan_string_coercion_warning(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_ftoa_repr(emitter);
     strings::emit_concat(emitter);
@@ -73,10 +120,14 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_starts_with(emitter);
     strings::emit_str_ends_with(emitter);
     strings::emit_str_replace(emitter);
+    strings::emit_str_replace_search_array(emitter);
+    strings::emit_str_replace_subject_array(emitter);
     strings::emit_explode(emitter);
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
     strings::emit_implode_bool(emitter);
+    strings::emit_implode_float(emitter);
+    strings::emit_implode_dyn(emitter);
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
@@ -135,7 +186,6 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_sprintf_pack_mixed(emitter);
     strings::emit_sprintf_mixed_casts(emitter, features.eval_bridge);
     strings::emit_vsprintf(emitter);
-    strings::emit_sscanf(emitter);
     strings::emit_rtrim_mask(emitter);
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);
@@ -207,6 +257,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_exception_matches(emitter);
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
+    exceptions::emit_trace_buffer(emitter);
+    exceptions::emit_trace_as_string(emitter);
     exceptions::emit_rethrow_current(emitter);
 
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
@@ -216,5 +268,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     platform::emit_platform_runtime(emitter, features);
 }
 
+#[cfg(test)]
+mod frame_balance_tests;
 #[cfg(test)]
 mod tests;

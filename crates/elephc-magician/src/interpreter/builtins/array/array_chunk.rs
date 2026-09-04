@@ -55,12 +55,24 @@ pub(in crate::interpreter) fn eval_builtin_array_chunk(
         [array, length] => {
             let array = eval_expr(array, context, scope, values)?;
             let length = eval_expr(length, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args(
+                "array_chunk",
+                &[array],
+                context,
+                values,
+            )?;
             eval_array_chunk_result(array, length, false, values)
         }
         [array, length, preserve_keys] => {
             let array = eval_expr(array, context, scope, values)?;
             let length = eval_expr(length, context, scope, values)?;
             let preserve_keys = eval_expr(preserve_keys, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args(
+                "array_chunk",
+                &[array],
+                context,
+                values,
+            )?;
             let preserve_keys = values.truthy(preserve_keys)?;
             eval_array_chunk_result(array, length, preserve_keys, values)
         }

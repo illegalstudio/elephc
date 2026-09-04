@@ -23,6 +23,37 @@ use serde_json::{json, Value};
 /// Prints the complete dual-backend builtin catalog as formatted JSON.
 fn main() {
     let include_internal = std::env::args().any(|argument| argument == "--include-internal");
+    if std::env::args().any(|argument| argument == "--streams-compliance") {
+        let Some(target_name) = std::env::args()
+            .find_map(|argument| argument.strip_prefix("--target=").map(str::to_string))
+        else {
+            eprintln!("--streams-compliance requires --target=<supported-target>");
+            std::process::exit(2);
+        };
+        let target = match target_name.as_str() {
+            "macos-aarch64" => elephc::codegen::platform::Target::new(
+                elephc::codegen::platform::Platform::MacOS,
+                elephc::codegen::platform::Arch::AArch64,
+            ),
+            "linux-aarch64" => elephc::codegen::platform::Target::new(
+                elephc::codegen::platform::Platform::Linux,
+                elephc::codegen::platform::Arch::AArch64,
+            ),
+            "linux-x86_64" => elephc::codegen::platform::Target::new(
+                elephc::codegen::platform::Platform::Linux,
+                elephc::codegen::platform::Arch::X86_64,
+            ),
+            _ => {
+                eprintln!("unsupported compliance target: {target_name}");
+                std::process::exit(2);
+            }
+        };
+        let value = elephc::stream_compliance::export_json(target);
+        let json = serde_json::to_string_pretty(&value)
+            .expect("serialize stream compliance JSON");
+        println!("{}", json);
+        return;
+    }
     let value = if include_internal {
         elephc::builtins::docs::export_builtins_json_all()
     } else {
@@ -239,7 +270,7 @@ fn default_json(default: DefaultSpec) -> Value {
 }
 
 /// Returns the documentation spelling for a neutral PHP type.
-fn type_name(ty: TypeSpec) -> &'static str {
+fn type_name(ty: TypeSpec) -> String {
     match ty {
         TypeSpec::Int => "int",
         TypeSpec::Float => "float",
@@ -252,7 +283,19 @@ fn type_name(ty: TypeSpec) -> &'static str {
         // used to give, moved one step downstream into the docs.
         TypeSpec::Ptr => "pointer",
         TypeSpec::Callable => "callable",
+        // php spells an explicit null in a union, and the distinction is load-bearing: a scalar
+        // parameter declared `?int $x = null` accepts an omitted argument AND a written null,
+        // where a plain `int` accepts only the first.
+        TypeSpec::Nullable(inner) => return format!("?{}", type_name(*inner)),
+        TypeSpec::Union(members) => {
+            return members
+                .iter()
+                .map(|member| type_name(*member))
+                .collect::<Vec<_>>()
+                .join("|")
+        }
     }
+    .to_string()
 }
 
 /// Returns the lowercase documentation spelling for a contract area.

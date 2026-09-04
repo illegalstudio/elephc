@@ -18,6 +18,8 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
 
+use super::socket_errno;
+
 /// stream_socket_server_v6: open a bound IPv6 socket on
 /// `[scheme://]?[ipv6_literal]:port`. The socket type is passed in by the
 /// dispatcher so this one helper covers both `tcp://` (SOCK_STREAM, with
@@ -157,6 +159,7 @@ pub fn emit_stream_socket_server_v6(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_sssv6_sock_ok")); // continue when socket succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why socket() failed
     emitter.instruction("b __rt_sssv6_fail");                                   // socket() failed
     emitter.label("__rt_sssv6_sock_ok");
     emitter.instruction("str x0, [sp, #32]");                                   // save the socket descriptor
@@ -188,6 +191,7 @@ pub fn emit_stream_socket_server_v6(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_sssv6_bind_ok")); // continue when bind succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why bind() failed, before close() overwrites x0
     emitter.instruction("b __rt_sssv6_fail_close");                             // bind() failed
 
     emitter.label("__rt_sssv6_bind_ok");
@@ -203,6 +207,7 @@ pub fn emit_stream_socket_server_v6(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_sssv6_listen_ok")); // continue when listen succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why listen() failed, before close() overwrites x0
     emitter.instruction("b __rt_sssv6_fail_close");                             // listen() failed
 
     emitter.label("__rt_sssv6_listen_ok");
@@ -352,7 +357,7 @@ fn emit_stream_socket_server_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 41");                                         // Linux x86_64 syscall 41 = socket
     emitter.instruction("syscall");                                             // create the IPv6 socket
     emitter.instruction("test rax, rax");                                       // did socket() fail?
-    emitter.instruction("js __rt_sssv6_fail_x86");                              // negative descriptor → failure
+    emitter.instruction("js __rt_sssv6_fail_socket_x86");                       // negative descriptor → failure
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the socket descriptor
 
     // -- setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &1, 4) --
@@ -392,7 +397,12 @@ fn emit_stream_socket_server_v6_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the bound socket
 
+    emitter.label("__rt_sssv6_fail_socket_x86");
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why socket() failed
+    emitter.instruction("jmp __rt_sssv6_fail_x86");                             // no descriptor to close
+
     emitter.label("__rt_sssv6_fail_close_x86");
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why bind() or listen() failed, before close() overwrites rax
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the socket descriptor
     emitter.instruction("mov eax, 3");                                          // Linux x86_64 syscall 3 = close
     emitter.instruction("syscall");                                             // close the failed socket

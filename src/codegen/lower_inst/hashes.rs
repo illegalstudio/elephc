@@ -308,8 +308,12 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let value = expect_operand(inst, 2)?;
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
-    let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
-    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    let storage_value_ty = assoc_resource_storage_value_type(&hash_ty)
+        .map_or_else(|| assoc_value_type(&hash_ty, inst), Ok)?;
+    // RAW, not `value_php_type`: that one erases a resource to an int before the guard can see it,
+    // and the guard is what decides the entry's runtime TAG.
+    let value_ty =
+        require_supported_hash_value(ctx.raw_value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
@@ -367,8 +371,12 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let value = expect_operand(inst, 1)?;
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
-    let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
-    let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
+    let storage_value_ty = assoc_resource_storage_value_type(&hash_ty)
+        .map_or_else(|| assoc_value_type(&hash_ty, inst), Ok)?;
+    // RAW, not `value_php_type`: that one erases a resource to an int before the guard can see it,
+    // and the guard is what decides the entry's runtime TAG.
+    let value_ty =
+        require_supported_hash_value(ctx.raw_value_php_type(value)?, &storage_value_ty, inst)?;
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
@@ -1209,6 +1217,11 @@ fn hash_set_value_tag(value_ty: &PhpType, storage_value_ty: &PhpType) -> i64 {
         if value_ty.codegen_repr() == PhpType::TaggedScalar {
             return crate::codegen::runtime_value_tag(&PhpType::Mixed) as i64;
         }
+        if matches!(value_ty, PhpType::Resource(_)) {
+            // Asked through `codegen_repr()` this answers 0 (int) and the entry stops being a
+            // resource: `gettype()`, `is_resource()` and `var_dump()` all read this byte.
+            return crate::codegen::runtime_value_tag(value_ty) as i64;
+        }
         crate::codegen::runtime_value_tag(&value_ty.codegen_repr()) as i64
     } else {
         crate::codegen::runtime_value_tag(storage_value_ty) as i64
@@ -1226,7 +1239,7 @@ fn materialize_hash_concrete_value_aarch64(
             ctx.emitter.instruction("mov x3, xzr");                             // null associative-array payloads use a zero low word
             ctx.emitter.instruction("mov x4, xzr");                             // null associative-array payloads use a zero high word
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Resource(_) => {
             ctx.load_value_to_reg(value, "x3")?;
             ctx.emitter.instruction("mov x4, xzr");                             // scalar associative-array payloads leave the high value word empty
         }
@@ -1263,7 +1276,7 @@ fn materialize_hash_concrete_value_x86_64(
             ctx.emitter.instruction("xor rcx, rcx");                            // null associative-array payloads use a zero low word
             ctx.emitter.instruction("xor r8, r8");                              // null associative-array payloads use a zero high word
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float => {
+        PhpType::Int | PhpType::Bool | PhpType::Callable | PhpType::Float | PhpType::Resource(_) => {
             ctx.load_value_to_reg(value, "rcx")?;
             ctx.emitter.instruction("xor r8, r8");                              // scalar associative-array payloads leave the high value word empty
         }
@@ -1551,6 +1564,9 @@ fn emit_hash_get_miss(ctx: &mut FunctionContext<'_>, value_ty: &PhpType, miss_re
 
 /// Returns the runtime value tag for a hash allocation result type.
 fn hash_value_type_tag(hash_ty: &PhpType) -> Result<i64> {
+    if let Some(resource) = assoc_resource_storage_value_type(hash_ty) {
+        return Ok(crate::codegen::runtime_value_tag(&resource) as i64);
+    }
     match hash_ty.codegen_repr() {
         PhpType::AssocArray { value, .. } => {
             Ok(crate::codegen::runtime_value_tag(&value.codegen_repr()) as i64)
@@ -1559,6 +1575,24 @@ fn hash_value_type_tag(hash_ty: &PhpType) -> Result<i64> {
             "hash_new result PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Returns the value type whose runtime TAG a hash carries, WITHOUT collapsing a resource.
+///
+/// `codegen_repr()` maps `Resource` to `Int`: the two share one machine word, so every question
+/// about REPRESENTATION is answered the same way for both. The runtime TAG is not such a
+/// question — `runtime_value_tag` answers 9 for a resource and 0 for an int — and it is what
+/// `gettype()`, `is_resource()`, `var_dump()` and foreach all read back out of the table. Asking
+/// through the collapsed type made `["a" => STDOUT]` a hash of INTEGERS.
+///
+/// Returns `None` for every other value type, whose tag the collapsed type answers correctly.
+fn assoc_resource_storage_value_type(hash_ty: &PhpType) -> Option<PhpType> {
+    match hash_ty {
+        PhpType::AssocArray { value, .. } if matches!(**value, PhpType::Resource(_)) => {
+            Some((**value).clone())
+        }
+        _ => None,
     }
 }
 
@@ -1672,11 +1706,20 @@ fn require_supported_hash_value(
     storage_value_ty: &PhpType,
     inst: &Instruction,
 ) -> Result<PhpType> {
-    let value_ty = value_ty.codegen_repr();
+    // A resource survives the collapse: `codegen_repr()` maps it to `Int`, and the per-entry TAG
+    // is chosen from what this returns. Their representation is the same one machine word, so
+    // everything downstream treats it as an int and only the tag differs — which is the point.
+    let value_ty = match value_ty {
+        PhpType::Resource(_) if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable) => {
+            value_ty
+        }
+        other => other.codegen_repr(),
+    };
     if matches!(storage_value_ty, PhpType::Mixed | PhpType::Iterable)
         && (matches!(
             value_ty,
-            PhpType::Int
+            PhpType::Resource(_)
+                | PhpType::Int
                 | PhpType::Bool
                 | PhpType::Callable
                 | PhpType::Float

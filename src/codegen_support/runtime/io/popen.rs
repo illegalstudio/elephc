@@ -1,6 +1,6 @@
 //! Purpose:
 //! Emits the `__rt_popen` runtime helper, which opens a process pipe through
-//! the libc `popen` call and exposes its underlying descriptor.
+//! the libc `popen` call and returns both its descriptor and owning `FILE*`.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
@@ -8,15 +8,15 @@
 //! Key details:
 //! - libc `popen` yields a `FILE*`; `fileno` recovers the raw descriptor so
 //!   elephc's fd-based `fread`/`fwrite` work on the pipe.
-//! - The `FILE*` is recorded in the `_popen_files` table keyed by descriptor
-//!   so `pclose()` can hand it back to libc `pclose`.
+//! - The caller adopts the returned `FILE*` into `StreamState.backend_aux`;
+//!   process ownership is never indexed by the reusable OS descriptor.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// popen: open a process pipe and return its descriptor.
 /// Input:  AArch64 x1/x2 = command string, x3/x4 = mode string
 ///         x86_64  rdi/rsi = command string, rdx/rcx = mode string
-/// Output: the pipe descriptor, or -1 on failure
+/// Output: descriptor in x0/rax and owning FILE* in x1/rdx, or -1/null on failure.
 pub fn emit_popen(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_popen_linux_x86_64(emitter);
@@ -67,10 +67,7 @@ pub fn emit_popen(emitter: &mut Emitter) {
     emitter.bl_c("fileno");
     emitter.instruction("mov w9, w0");                                          // x9 = the pipe descriptor
 
-    // -- record the FILE* in the fd->FILE* table for pclose() --
-    abi::emit_symbol_address(emitter, "x10", "_popen_files");
-    emitter.instruction("ldr x11, [sp, #24]");                                  // reload the FILE*
-    emitter.instruction("str x11, [x10, x9, lsl #3]");                          // _popen_files[fd] = FILE*
+    emitter.instruction("ldr x1, [sp, #24]");                                   // return the owning FILE* as backend auxiliary state
     emitter.instruction("mov x0, x9");                                          // return the pipe descriptor
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the frame
@@ -78,6 +75,7 @@ pub fn emit_popen(emitter: &mut Emitter) {
 
     emitter.label("__rt_popen_fail");
     emitter.instruction("mov x0, #-1");                                         // -1 reports a popen failure
+    emitter.instruction("mov x1, #0");                                          // failed opens have no backend auxiliary owner
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the frame
     emitter.instruction("ret");                                                 // return the failure result
@@ -133,10 +131,7 @@ fn emit_popen_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("fileno");
     emitter.instruction("mov r9d, eax");                                        // r9 = the pipe descriptor
 
-    // -- record the FILE* in the fd->FILE* table for pclose() --
-    abi::emit_symbol_address(emitter, "r10", "_popen_files");                   // base of the fd->FILE* table
-    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the FILE*
-    emitter.instruction("mov QWORD PTR [r10 + r9 * 8], r11");                   // _popen_files[fd] = FILE*
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // return the owning FILE* as backend auxiliary state
     emitter.instruction("mov rax, r9");                                         // return the pipe descriptor
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -144,6 +139,7 @@ fn emit_popen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_popen_fail_x86");
     emitter.instruction("mov rax, -1");                                         // -1 reports a popen failure
+    emitter.instruction("xor edx, edx");                                        // failed opens have no backend auxiliary owner
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the failure result

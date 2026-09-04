@@ -41,6 +41,15 @@ pub(crate) struct GraphNode {
     pub io_inclusive: u64,
     #[serde(default)]
     pub io_exclusive: u64,
+    /// Exact inclusive/exclusive STREAM operation counts — `fopen`, `fread`,
+    /// `fwrite`, `fgets`, `fclose`, `file_get_contents`, `file_put_contents`
+    /// (`--instrument`). Separate from the query counts on purpose: a function
+    /// that reads a file a thousand times and one that runs a thousand
+    /// statements are different problems with the same shape.
+    #[serde(default)]
+    pub stream_inclusive: u64,
+    #[serde(default)]
+    pub stream_exclusive: u64,
     /// Exact retained objects — allocated minus freed (`--instrument`). Signed:
     /// a function that releases more than it takes reports negative.
     #[serde(default)]
@@ -126,6 +135,13 @@ pub(crate) struct CallGraph {
     /// runs only), hottest first — the SQL panel / N+1 view. Empty otherwise.
     #[serde(default)]
     pub queries: Vec<(String, u64)>,
+    /// Distinct STREAM operations and how many times each ran, most-run first.
+    ///
+    /// The count alone says a function performed 1,200 stream operations; this
+    /// says whether that is one `fopen` and 1,199 `fgets` — a read loop — or
+    /// 1,200 `fopen` calls, which is a different bug with the same total.
+    #[serde(default)]
+    pub stream_ops: Vec<(String, u64)>,
     /// Per-line self cost over the PHP source, when a dSYM made it recoverable.
     #[serde(default)]
     pub lines: Option<SourceLines>,
@@ -447,6 +463,8 @@ pub(crate) fn render_html_frames(
                         "allocExclN": node.alloc_exclusive,
                         "ioInclN": node.io_inclusive,
                         "ioExclN": node.io_exclusive,
+                        "streamInclN": node.stream_inclusive,
+                        "streamExclN": node.stream_exclusive,
                         "retInclN": node.retained_inclusive,
                         "retExclN": node.retained_exclusive,
                         "waitInclN": node.wait_inclusive,
@@ -476,6 +494,11 @@ pub(crate) fn render_html_frames(
                 .iter()
                 .map(|(sql, count)| serde_json::json!({"sql": sql, "count": count}))
                 .collect();
+            let stream_ops: Vec<serde_json::Value> = g
+                .stream_ops
+                .iter()
+                .map(|(op, count)| serde_json::json!({"op": op, "count": count}))
+                .collect();
             serde_json::json!({
                 "ts": (*ts as u64),
                 "total": g.total,
@@ -483,6 +506,7 @@ pub(crate) fn render_html_frames(
                 "nodes": nodes,
                 "edges": edges,
                 "queries": queries,
+                "streamOps": stream_ops,
             })
         })
         .collect();
@@ -1137,6 +1161,12 @@ const DATA = __DATA_JSON__;
   const LINES = DATA.lines || null;
   const ASSERTS = DATA.asserts || [];
   const hasQueries = FRAMES.some(f => (f.queries || []).length > 0);
+  const hasStreamOps = FRAMES.some(f => (f.streamOps || []).length > 0);
+  // One panel for the work a program sends OUTSIDE itself. Queries and stream
+  // operations are the same question asked of two subsystems, and splitting them
+  // into two views would ask the reader to know which one to open before knowing
+  // what the program does.
+  const hasOutside = hasQueries || hasStreamOps;
   const hasGroups = FRAMES.some(f => f.nodes.some(n => n.name.indexOf('::') > 0 || n.name.indexOf('\\') > 0));
   let scale = 1, tx = 20, ty = 20, panning = false, psx = 0, psy = 0;
   // Whether the pointer travelled far enough between press and release for it
@@ -1147,6 +1177,7 @@ const DATA = __DATA_JSON__;
   let metric = 'time';
   const hasMem = !!DATA.exact && FRAMES.some(f => f.totalAllocs > 0);
   const hasIo = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.ioInclN || 0) > 0));
+  const hasStream = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.streamInclN || 0) > 0));
   const hasRet = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.retInclN || 0) !== 0));
   const hasWait = !!DATA.exact && FRAMES.some(f => f.nodes.some(n => (n.waitInclN || 0) > 0));
   // Selectable cost dimensions (Blackfire-style). Availability depends on data.
@@ -1156,18 +1187,21 @@ const DATA = __DATA_JSON__;
     { key: 'ret',   label: 'Retained', icon: '💧', on: hasRet },
     { key: 'wait',  label: 'Wait',     icon: '⏳', on: hasWait },
     { key: 'io',    label: 'SQL',      icon: '🗄', on: hasIo },
+    { key: 'strm',  label: 'Streams',  icon: '🌊', on: hasStream },
     { key: 'calls', label: 'Calls',    icon: '#',  on: !!DATA.exact },
   ];
   // Per-frame scales used to color the io / calls / retained dimensions.
-  let frameIoTotal = 0, frameCallMax = 1, frameRetMax = 1;
+  let frameIoTotal = 0, frameCallMax = 1, frameRetMax = 1, frameStreamTotal = 0;
   function computeScales(fN) {
-    frameIoTotal = 0; frameCallMax = 1; frameRetMax = 1;
-    fN.forEach(n => { frameIoTotal += (n.ioExclN || 0); if ((n.calls || 0) > frameCallMax) frameCallMax = n.calls;
+    frameIoTotal = 0; frameCallMax = 1; frameRetMax = 1; frameStreamTotal = 0;
+    fN.forEach(n => { frameIoTotal += (n.ioExclN || 0); frameStreamTotal += (n.streamExclN || 0);
+      if ((n.calls || 0) > frameCallMax) frameCallMax = n.calls;
       const r = Math.abs(n.retInclN || 0); if (r > frameRetMax) frameRetMax = r; });
   }
   function nodeShare(n) {
     if (metric === 'mem') return n.allocExcl || 0;
     if (metric === 'io') return frameIoTotal ? 100 * (n.ioExclN || 0) / frameIoTotal : 0;
+    if (metric === 'strm') return frameStreamTotal ? 100 * (n.streamExclN || 0) / frameStreamTotal : 0;
     if (metric === 'calls') return frameCallMax ? 100 * (n.calls || 0) / frameCallMax : 0;
     // Retained is signed; only net GROWTH is "hot" (a net release is cold).
     if (metric === 'ret') return frameRetMax ? 100 * Math.max(0, n.retExclN || 0) / frameRetMax : 0;
@@ -1201,6 +1235,7 @@ const DATA = __DATA_JSON__;
   function metricValue(n) {
     if (metric === 'mem') return fmtK(n.allocExclN || 0);
     if (metric === 'io') return (n.ioExclN || 0) + ' q';
+    if (metric === 'strm') return (n.streamExclN || 0) + ' io';
     if (metric === 'calls') return fmtK(n.calls || 0);
     if (metric === 'ret') return fmtSigned(n.retExclN || 0);
     if (metric === 'wait') return fmtNs(n.waitExclN || 0);
@@ -1209,6 +1244,7 @@ const DATA = __DATA_JSON__;
   function metricSub(n) {
     if (metric === 'mem') return 'incl ' + fmtK(n.allocInclN || 0) + ' allocs';
     if (metric === 'io') return 'incl ' + (n.ioInclN || 0) + ' q';
+    if (metric === 'strm') return 'incl ' + (n.streamInclN || 0) + ' stream ops';
     if (metric === 'calls') return 'self ' + n.excl.toFixed(1) + '% time';
     if (metric === 'ret') return 'incl ' + fmtSigned(n.retInclN || 0) + ' retained';
     if (metric === 'wait') return 'non-DB ' + fmtNs(nonDbNs(n)) + ' · incl wait ' + fmtNs(n.waitInclN || 0);
@@ -1217,6 +1253,7 @@ const DATA = __DATA_JSON__;
   function nodeSub(n) {
     if (metric === 'mem') return fmtK(n.allocExclN || 0) + ' allocs · incl ' + n.allocIncl.toFixed(0) + '%';
     if (metric === 'io') return (n.ioExclN || 0) + ' queries';
+    if (metric === 'strm') return (n.streamExclN || 0) + ' stream ops';
     if (metric === 'calls') return (n.calls || 0) + ' calls';
     if (metric === 'ret') return fmtSigned(n.retExclN || 0) + ' retained · incl ' + fmtSigned(n.retInclN || 0);
     if (metric === 'wait') return 'wait ' + fmtNs(n.waitExclN || 0) + ' · non-DB ' + fmtNs(nonDbNs(n));
@@ -1379,6 +1416,10 @@ const DATA = __DATA_JSON__;
         html += '<div class="row"><span>queries incl</span><b>' + (n.ioInclN || 0) + '</b></div>';
         html += '<div class="row"><span>queries self</span><b>' + (n.ioExclN || 0) + '</b></div>';
       }
+      if (hasStream) {
+        html += '<div class="row"><span>streams incl</span><b>' + (n.streamInclN || 0) + '</b></div>';
+        html += '<div class="row"><span>streams self</span><b>' + (n.streamExclN || 0) + '</b></div>';
+      }
       n.causes.forEach(c => { html += '<div class="cause">' + esc(c.name) + ' — ' + c.pct.toFixed(1) + '%<div class="bar" style="width:' + Math.min(100, c.pct*2) + '%"></div></div>'; });
     }
     tip.innerHTML = html; tip.style.display = 'block';
@@ -1487,9 +1528,10 @@ const DATA = __DATA_JSON__;
       let sub = metricSub(n);
       if (n.calls != null && metric !== 'calls') sub += ' · ' + n.calls + (n.calls === 1 ? ' call' : ' calls');
       const qb = (n.ioExclN > 0 && metric !== 'io') ? '<span class="qbadge">' + n.ioExclN + ' q</span>' : '';
+      const sb = (n.streamExclN > 0 && metric !== 'strm') ? '<span class="qbadge">' + n.streamExclN + ' io</span>' : '';
       li.innerHTML =
         '<span class="sw" style="background:' + heat(share) + '"></span>' +
-        '<span class="nm"><span class="n">' + esc(r.name) + qb + '</span><span class="m2">' + sub + '</span></span>' +
+        '<span class="nm"><span class="n">' + esc(r.name) + qb + sb + '</span><span class="m2">' + sub + '</span></span>' +
         '<span class="val"><span class="pv">' + val + '</span><span class="mini"><i style="width:' + Math.min(100, share * 3) + '%"></i></span></span>';
       li.addEventListener('click', () => selectNode(r.v, true));
       return li;
@@ -1640,20 +1682,61 @@ const DATA = __DATA_JSON__;
     const qs = (FRAMES[cur].queries || []).slice().sort((a, b) => b.count - a.count);
     const total = qs.reduce((s, q) => s + q.count, 0);
     const max = qs.length ? qs[0].count : 1;
-    let html = '<div class="qhead"><b>' + qs.length + '</b> distinct ' +
-      (qs.length === 1 ? 'statement' : 'statements') + ' · <b>' + total + '</b> executions</div>';
-    if (!qs.length) { sqlpanel.innerHTML = html + '<div class="qhead">no DB queries recorded</div>'; return; }
-    html += '<table><thead><tr><th>Runs</th><th></th><th>Statement</th></tr></thead><tbody>';
-    qs.forEach(q => {
-      const share = q.count / max;
-      // Flag a likely N+1: the same statement executed many times.
-      const warn = q.count >= 20 ? ' class="warn"' : '';
-      const badge = q.count >= 20 ? '<span class="qn1">N+1?</span>' : '';
-      html += '<tr' + warn + '><td class="qc">×' + q.count + '</td>' +
+    // A section is written only when its subsystem was used. A program that
+    // never touched a database should not be told it ran no queries — the empty
+    // half reads as a finding, and there is nothing to find.
+    let html = '';
+    if (qs.length) {
+      html += '<div class="qhead"><b>' + qs.length + '</b> distinct ' +
+        (qs.length === 1 ? 'statement' : 'statements') + ' · <b>' + total + '</b> executions</div>';
+      html += '<table><thead><tr><th>Runs</th><th></th><th>Statement</th></tr></thead><tbody>';
+      qs.forEach(q => {
+        const share = q.count / max;
+        // Flag a likely N+1: the same statement executed many times.
+        const warn = q.count >= 20 ? ' class="warn"' : '';
+        const badge = q.count >= 20 ? '<span class="qn1">N+1?</span>' : '';
+        html += '<tr' + warn + '><td class="qc">×' + q.count + '</td>' +
+          '<td class="qbar"><i style="width:' + Math.max(4, share * 100) + '%;background:' + heat(share * 33) + '"></i></td>' +
+          '<td class="qsql"><code>' + esc(q.sql) + '</code>' + badge + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    html += buildStreamSection(html !== '');
+    if (!html) html = '<div class="qhead">no DB queries or stream operations recorded</div>';
+    sqlpanel.innerHTML = html;
+  }
+  // --- the stream half of the I/O panel: which stream calls ran, and how often.
+  //
+  // The counts in the graph say a function performed N stream operations; this
+  // says WHICH, and the two answer different questions about one total. Sixty
+  // operations is a read loop as one `fopen` and fifty-nine `fgets`, and a REOPEN
+  // loop as twenty of each — the same number, a different bug — so the opens are
+  // flagged rather than the total.
+  function buildStreamSection(spaced) {
+    const ops = (FRAMES[cur].streamOps || []).slice().sort((a, b) => b.count - a.count);
+    if (!ops.length) return '';
+    const total = ops.reduce((s, o) => s + o.count, 0);
+    const max = ops[0].count;
+    const opens = ops.filter(o => o.op === 'fopen').reduce((s, o) => s + o.count, 0);
+    let html = '<div class="qhead"' + (spaced ? ' style="padding-top:1.1rem"' : '') + '><b>' + ops.length + '</b> distinct stream ' +
+      (ops.length === 1 ? 'operation' : 'operations') + ' · <b>' + total + '</b> performed</div>';
+    html += '<table><thead><tr><th>Runs</th><th></th><th>Operation</th></tr></thead><tbody>';
+    ops.forEach(o => {
+      const share = o.count / max;
+      // A handle reopened many times is the stream N+1, and it is the `fopen`
+      // count that says so — not the total, which a plain read loop also raises.
+      const warn = (o.op === 'fopen' && o.count >= 20) ? ' class="warn"' : '';
+      const badge = (o.op === 'fopen' && o.count >= 20) ? '<span class="qn1">reopened?</span>' : '';
+      html += '<tr' + warn + '><td class="qc">×' + o.count + '</td>' +
         '<td class="qbar"><i style="width:' + Math.max(4, share * 100) + '%;background:' + heat(share * 33) + '"></i></td>' +
-        '<td class="qsql"><code>' + esc(q.sql) + '</code>' + badge + '</td></tr>';
+        '<td class="qsql"><code>' + esc(o.op) + '</code>' + badge + '</td></tr>';
     });
-    sqlpanel.innerHTML = html + '</tbody></table>';
+    html += '</tbody></table>';
+    if (opens >= 20) {
+      html += '<div class="qhead">' + opens + ' opens for ' + total +
+        ' operations — a handle kept open would turn most of these into reads.</div>';
+    }
+    return html;
   }
   function setSql(on) {
     sqlOn = on;
@@ -1845,7 +1928,7 @@ const DATA = __DATA_JSON__;
   groupbtn.addEventListener('click', () => { grouped = !grouped; groupbtn.classList.toggle('on', grouped); buildList(); save(); });
   // The graph-only tools are meaningless without exact per-edge weights.
   if (!DATA.exact) { critbtn.classList.add('off'); document.getElementById('prunerow').classList.add('off'); }
-  if (hasQueries) sqlbtn.style.display = '';
+  if (hasOutside) sqlbtn.style.display = '';
   if (LINES && LINES.source && LINES.source.length) srcbtn.style.display = '';
   // Offer grouping only when names actually carry a class or namespace.
   // (Explicit value: the default `display:none` lives in a CSS rule, so ''
@@ -1941,8 +2024,8 @@ const DATA = __DATA_JSON__;
       hint: 'Who calls whom, one box per function' },
     { key: 'flame', label: 'Flame',   icon: '🔥', on: () => !!DATA.exact,
       hint: 'The same tree as nested bars, width = time. Click to zoom (f)' },
-    { key: 'sql',   label: 'Queries', icon: '🗄', on: () => hasQueries,
-      hint: 'Every distinct DB statement and how many times it ran (q)' },
+    { key: 'sql',   label: 'I/O',     icon: '🗄', on: () => hasOutside,
+      hint: 'Every distinct DB statement and stream operation, and how often each ran (q)' },
     { key: 'src',   label: 'Source',  icon: '📄', on: () => !!LINES,
       hint: 'Your PHP file with the cost of each line (s)' },
     { key: 'chk',   label: 'Checks',  icon: '✅', on: () => ASSERTS.length > 0,
@@ -2093,7 +2176,7 @@ const DATA = __DATA_JSON__;
     if (FRAMES.length > 1) rows.push(['d', 'diff against the previous capture']);
     if (availMetrics.length > 1) rows.push(['m', 'cycle the cost dimension']);
     if (DATA.exact) rows.push(['f', 'flame graph'], ['p', 'critical path']);
-    if (hasQueries) rows.push(['q', 'DB queries']);
+    if (hasOutside) rows.push(['q', 'DB queries and stream operations']);
     if (LINES) rows.push(['s', 'source, per line']);
     if (ASSERTS.length) rows.push(['c', 'the performance budget']);
     rows.push(['0', 'fit the graph in view']);
@@ -2123,7 +2206,7 @@ const DATA = __DATA_JSON__;
     else if (ev.key === 'd' || ev.key === 'D') { diffOn = !diffOn; diffBox.checked = diffOn; paint(cur); }
     else if (ev.key === 'p' || ev.key === 'P') critbtn.click();
     else if ((ev.key === 'f' || ev.key === 'F') && DATA.exact) flamebtn.click();
-    else if ((ev.key === 'q' || ev.key === 'Q') && hasQueries) sqlbtn.click();
+    else if ((ev.key === 'q' || ev.key === 'Q') && hasOutside) sqlbtn.click();
     else if ((ev.key === 's' || ev.key === 'S') && LINES) setSrc(!srcOn);
     else if ((ev.key === 'c' || ev.key === 'C') && ASSERTS.length) setChk(!chkOn);
     else if (ev.key === '0' || ev.key === 'Home') fitView(false);
@@ -2332,7 +2415,7 @@ const DATA = __DATA_JSON__;
   else { let idx = FRAMES.findIndex(f => f.ts === saved.selTs); if (idx < 0) idx = FRAMES.length - 1; follow = false; paint(idx); }
   // View + selection from the shared link, once the layout/names exist.
   if (hash.v === 'flame' && DATA.exact) { if (hash.fr && nameId.has(hash.fr)) flameRoot = nameId.get(hash.fr); setFlame(true); }
-  else if (hash.v === 'sql' && hasQueries) setSql(true);
+  else if (hash.v === 'sql' && hasOutside) setSql(true);
   else if (hash.v === 'src' && LINES) setSrc(true);
   else if (hash.v === 'chk' && ASSERTS.length) setChk(true);
   // First visit: frame the graph rather than open at a fixed corner, which on a
@@ -2368,6 +2451,8 @@ mod tests {
                     alloc_exclusive: 1,
                     io_inclusive: 0,
                     io_exclusive: 0,
+                    stream_inclusive: 0,
+                    stream_exclusive: 0,
                     retained_inclusive: 0,
                     retained_exclusive: 0,
                     wait_inclusive: 0,
@@ -2383,6 +2468,8 @@ mod tests {
                     alloc_exclusive: 40,
                     io_inclusive: 0,
                     io_exclusive: 0,
+                    stream_inclusive: 0,
+                    stream_exclusive: 0,
                     retained_inclusive: 0,
                     retained_exclusive: 0,
                     wait_inclusive: 0,
@@ -2393,6 +2480,7 @@ mod tests {
             edges: vec![GraphEdge { from: 0, to: 1, weight: 80, count: None }],
             total: 100,
             queries: Vec::new(),
+            stream_ops: Vec::new(),
             lines: None,
             trace: None,
         }
@@ -2408,6 +2496,44 @@ mod tests {
         assert!(dot.contains("calls 40"), "{dot}");
         assert!(dot.contains("heap allocation: 30%"), "{dot}");
         assert!(dot.contains("n0 -> n1 [label=\"80%\"]"), "{dot}");
+    }
+
+    #[test]
+    /// Every colour dimension the viewer offers is a key the viewer's own code
+    /// still tests for, in BOTH directions.
+    ///
+    /// A metric key is written in the `METRICS` array and then compared against
+    /// in a dozen places, some `===` and some `!==`. Renaming one and missing the
+    /// other leaves a live viewer with no error and a wrong answer: the badge
+    /// guarded by `metric !== 'old'` can never turn off, so a node shows its
+    /// count twice while the dimension that is actually colouring the graph says
+    /// nothing. Nothing throws, so only a reader comparing the two numbers would
+    /// ever notice. This pins the shape instead: the two sets must be equal.
+    fn every_metric_key_is_declared_and_every_comparison_names_a_declared_key() {
+        let html = render_html_exact(&sample_graph(), "t", &[]);
+        let declared: std::collections::BTreeSet<String> = html
+            .match_indices("{ key: '")
+            .map(|(at, _)| {
+                let rest = &html[at + "{ key: '".len()..];
+                rest[..rest.find('\'').expect("closing quote")].to_string()
+            })
+            .collect();
+        let mut compared = std::collections::BTreeSet::new();
+        for op in ["metric === '", "metric !== '"] {
+            for (at, _) in html.match_indices(op) {
+                let rest = &html[at + op.len()..];
+                compared.insert(rest[..rest.find('\'').expect("closing quote")].to_string());
+            }
+        }
+        // `declared` also holds the view and theme keys, which are switched on
+        // elsewhere; every key a `metric` comparison names must be among them.
+        let undeclared: Vec<_> = compared.difference(&declared).collect();
+        assert!(
+            undeclared.is_empty(),
+            "viewer compares `metric` against keys no METRICS entry declares: {undeclared:?}"
+        );
+        // And the dimension this branch added is really wired, not merely listed.
+        assert!(compared.contains("strm"), "compared: {compared:?}");
     }
 
     #[test]
@@ -2587,6 +2713,8 @@ mod tests {
                 alloc_exclusive: 0,
                 io_inclusive: 0,
                 io_exclusive: 0,
+                stream_inclusive: 0,
+                stream_exclusive: 0,
                 retained_inclusive: 0,
                 retained_exclusive: 0,
                 wait_inclusive: 0,
@@ -2596,6 +2724,7 @@ mod tests {
             edges: vec![],
             total: 1,
             queries: Vec::new(),
+            stream_ops: Vec::new(),
             lines: None,
             trace: None,
         };

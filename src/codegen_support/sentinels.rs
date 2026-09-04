@@ -278,6 +278,18 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
 /// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
 pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
 
+/// Byte offset of the "this Throwable's recorded trace is COMPLETE" proof.
+///
+/// A trace that is SHORT is not an approximation — `#0 {main}` where php names a frame asserts the
+/// stack was empty — so the report says nothing unless the chain is known whole. The proof travels
+/// ON THE VALUE rather than in a global because it is a property of the site that CONSTRUCTED this
+/// exception, and by report time that site is long gone: a global would still be holding whatever
+/// the last construction left, and would answer for an exception it knows nothing about.
+///
+/// The payload is 56 bytes — class_id@0, message@8/16, code@24, line@32, previous@40 — so this is
+/// the last slot, and it was unused.
+pub(crate) const THROWABLE_TRACE_EXACT_OFFSET: u64 = 48;
+
 /// Clears the creation-line slot of a freshly allocated Throwable payload in `payload_reg`.
 ///
 /// For the emitters that synthesize a Throwable with no user `new` behind it — an
@@ -286,15 +298,33 @@ pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
 /// than anything these emitters know. Writing zero says "unknown" explicitly; leaving the slot
 /// untouched would let recycled heap bytes read back as a plausible-looking line number.
 pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payload_reg: &str) {
+    // No user `new` behind this Throwable — it was built by a runtime helper, which is exactly
+    // the position php-src's own internal throws are in. php names the CALL the program made
+    // into the builtin, and that line is published at every call into a class the program did
+    // not declare. Zero, the previous answer, is not a line php ever prints.
+    let line_reg = match emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    assert_ne!(
+        line_reg, payload_reg,
+        "the published line needs a register the payload does not already hold"
+    );
+    crate::codegen_support::abi::emit_load_symbol_to_reg(
+        emitter,
+        line_reg,
+        "_rt_internal_call_line",
+        0,
+    );
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!(
-            "str xzr, [{}, #{}]",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+            "str {}, [{}, #{}]",
+            line_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        )), // the line of the call into the builtin, or zero when there was none
         Arch::X86_64 => emitter.instruction(&format!(
-            "mov QWORD PTR [{} + {}], 0",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )), // no user `new` behind this Throwable: the creation line is unknown
+            "mov QWORD PTR [{} + {}], {}",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET, line_reg
+        )), // the line of the call into the builtin, or zero when there was none
     }
 }
 

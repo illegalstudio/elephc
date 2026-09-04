@@ -8,6 +8,8 @@
 //! Key details:
 //! - `Acquire` turns PHP strings into heap-owned storage so local slots do not
 //!   alias transient concat buffers or immutable data-section literals.
+//! - Resources retain and release their opaque handles through the authoritative
+//!   runtime resource registry rather than heap-block reference counts.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -21,7 +23,12 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers an ownership acquire by making the operand safe to store as a new owner.
 pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    let raw_ty = ctx.raw_value_php_type(value)?;
     let ty = ctx.load_value_to_result(value)?;
+    if matches!(raw_ty, PhpType::Resource(_)) {
+        retain_loaded_resource(ctx);
+        return store_if_result(ctx, inst);
+    }
     match ty {
         PhpType::Str => {
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
@@ -122,7 +129,12 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         return Ok(());
     }
 
+    let raw_ty = ctx.raw_value_php_type(value)?;
     let ty = ctx.load_value_to_result(value)?;
+    if matches!(raw_ty, PhpType::Resource(_)) {
+        release_loaded_resource(ctx);
+        return Ok(());
+    }
     match ty {
         PhpType::Str => {
             release_loaded_string(ctx);
@@ -234,4 +246,23 @@ fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
     }
+}
+
+/// Retains the loaded opaque resource handle and leaves it as the acquire result.
+///
+/// The runtime helper accepts the normal target integer argument and returns the
+/// same handle, allowing `store_if_result` to forward the acquired value.
+fn retain_loaded_resource(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the loaded opaque resource handle to the registry retain helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_retain");
+}
+
+/// Releases the loaded opaque resource handle through the runtime registry.
+fn release_loaded_resource(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the loaded opaque resource handle to the registry release helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_release");
 }

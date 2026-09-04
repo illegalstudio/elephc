@@ -314,6 +314,11 @@ impl Parser {
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Clone(Box::new(expr)));
         }
+        if self.consume(TokenKind::At) {
+            // php's `@` binds like the other prefix operators and may stack (`@@expr`).
+            let expr = self.parse_unary()?;
+            return Ok(EvalExpr::ErrorSuppress(Box::new(expr)));
+        }
         if self.consume(TokenKind::Plus) {
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Unary {

@@ -19,6 +19,8 @@ mod catalog_data;
 mod catalog_curl;
 mod catalog_surfaces;
 mod eval_profile;
+pub mod glob_flags;
+pub mod php_constants;
 mod id;
 mod registry;
 mod requirements;

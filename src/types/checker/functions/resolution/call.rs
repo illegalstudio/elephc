@@ -330,7 +330,7 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !self.is_by_ref_argument_lvalue(arg, caller_env, true)? {
                         let param_name = decl
                             .params
                             .get(arg_idx)

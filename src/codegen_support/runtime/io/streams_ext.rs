@@ -37,7 +37,7 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
 
     // ================================================================
     // __rt_fgetc: read one byte from an fd.
-    // Input:  x0 = fd
+    // Input:  x0 = opaque stream handle
     // Output: x1/x2 = result string (length 0 on EOF, length 1 otherwise)
     // ================================================================
     emitter.blank();
@@ -60,7 +60,11 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     //   sp+32  : 1024-byte read buffer
     // ================================================================
     let buf_size = 1024usize;
-    let buf_off = 32usize;
+    // The saved slot keeps the opaque handle for __rt_stream_eof_set; read(2)
+    // needs the resolved descriptor, so it gets its own slot rather than
+    // overloading one value as both.
+    let stream_fd_off = 32usize;
+    let buf_off = 40usize;
     let frame_size = ((buf_off + buf_size) + 15) & !15;
     let save_off = 0usize;
 
@@ -71,13 +75,15 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
     emitter.comment("--- runtime: readfile ---");
     emitter.label_global("__rt_readfile");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(-2));
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate frame + read buffer
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_off));         // save frame pointer and return address (low offset for imm range)
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
     emitter.instruction(&format!("str xzr, [sp, #{}]", total_off));             // total bytes copied = 0
 
     // -- open(path, O_RDONLY) --
-    emitter.instruction("bl __rt_cstr");                                        // path → null-terminated C string in x0
+    emitter.instruction("bl __rt_path_cstr");                                   // path → null-terminated C string in x0
     emitter.instruction("mov x1, #0");                                          // O_RDONLY
     emitter.instruction("mov x2, #0");                                          // mode (unused for O_RDONLY)
     emitter.syscall(5);                                                         // open(path, flags, mode)
@@ -87,11 +93,12 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_readfile_open_ok")); // platform-aware success branch (Darwin: b.cc / Linux: b.ge)
     emitter.instruction("b __rt_readfile_fail");                                // open failed → return failure sentinel
     emitter.label("__rt_readfile_open_ok");
-    emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save fd
+    emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save the opaque stream handle
 
     // -- loop: read(fd, buf, N); if 0 done; write(1, buf, n); accumulate --
     emitter.label("__rt_readfile_loop");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", fd_off));                 // reload fd
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", fd_off));                 // reload the opaque stream handle
+    emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
     emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // buffer pointer
     emitter.instruction(&format!("mov x2, #{}", buf_size));                     // requested chunk size
     emitter.syscall(3);                                                         // read(fd, buf, count)
@@ -147,11 +154,34 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate frame + read buffer
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_off));         // save frame pointer and return address (low offset for imm range)
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
-    emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save fd
+    emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save the opaque stream handle
     emitter.instruction(&format!("str xzr, [sp, #{}]", total_off));             // total bytes = 0
+    emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor once
+    emitter.instruction(&format!("str x0, [sp, #{}]", stream_fd_off));          // save the descriptor for the read loop
+
+    // -- what the stream already HOLDS goes out before the descriptor is touched --
+    //
+    // A read that pulled a whole chunk ahead leaves the surplus in the stream's holding area, and
+    // the descriptor has already moved past it. Reading straight from the descriptor here SKIPPED
+    // those bytes: `fread($h, 4); fpassthru($h);` lost the rest of the first chunk. The loop
+    // repeats because the holding area can outsize this buffer.
+    emitter.label("__rt_fpassthru_drain");
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", fd_off));                 // the opaque stream handle
+    emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // the same scratch the read loop uses
+    emitter.instruction(&format!("mov x2, #{}", buf_size));                     // at most one bufferful per pass
+    emitter.instruction("bl __rt_stream_pending_take");                         // x0 = how many came back
+    emitter.instruction("cbz x0, __rt_fpassthru_loop");                         // nothing held: read the descriptor
+    emitter.instruction("mov x9, x0");                                          // preserve the byte count
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", total_off));             // current total
+    emitter.instruction("add x10, x10, x9");                                    // accumulate total
+    emitter.instruction(&format!("str x10, [sp, #{}]", total_off));             // persist total
+    emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // buffer pointer
+    emitter.instruction("mov x2, x9");                                          // length
+    emitter.instruction("bl __rt_vd_write");                                    // through the ob/web-aware stdout sink
+    emitter.instruction("b __rt_fpassthru_drain");                              // the holding area may have more
 
     emitter.label("__rt_fpassthru_loop");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", fd_off));                 // reload fd
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", stream_fd_off));          // reload the backend descriptor
     emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // buffer pointer
     emitter.instruction(&format!("mov x2, #{}", buf_size));                     // chunk size
     emitter.syscall(3);                                                         // read(fd, buf, count)
@@ -173,20 +203,18 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fpassthru_loop");                               // continue
 
     emitter.label("__rt_fpassthru_done");
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", fd_off));                 // reload fd so feof() observes that passthru reached EOF
-    abi::emit_symbol_address(emitter, "x10", "_eof_flags");
-    emitter.instruction("mov w11, #1");                                         // eof marker value for fpassthru completion
-    emitter.instruction("strb w11, [x10, x9]");                                 // set _eof_flags[fd] after consuming the stream
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", fd_off));                 // reload the opaque stream handle
+    emitter.instruction("mov x1, #1");                                          // publish the EOF state after consuming the stream
+    emitter.instruction("bl __rt_stream_eof_set");                              // update only this stream's stable state
     emitter.instruction(&format!("ldr x0, [sp, #{}]", total_off));              // total bytes copied
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame
     emitter.instruction("ret");                                                 // return total bytes
 
     emitter.label("__rt_fpassthru_read_error");
-    emitter.instruction(&format!("ldr x9, [sp, #{}]", fd_off));                 // reload fd so feof() observes the exhausted error state
-    abi::emit_symbol_address(emitter, "x10", "_eof_flags");
-    emitter.instruction("mov w11, #1");                                         // eof marker value after fpassthru read failure
-    emitter.instruction("strb w11, [x10, x9]");                                 // set _eof_flags[fd] after a failed read
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", fd_off));                 // reload the opaque stream handle
+    emitter.instruction("mov x1, #1");                                          // publish the EOF state after read failure
+    emitter.instruction("bl __rt_stream_eof_set");                              // update only this stream's stable state
     emitter.instruction("mov x0, #-1");                                         // read failure sentinel, matching PHP's -1 byte count
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address (read-error path)
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate frame (read-error path)
@@ -272,11 +300,21 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_tmpfile_fail");                              // mkstemp failed
     emitter.instruction("sxtw x0, w0");                                         // normalize the C int fd into the runtime's 64-bit descriptor value
     emitter.instruction("str x0, [sp, #24]");                                   // preserve fd on the stack across the unlink call (x9–x15 are caller-saved)
+    // Publish the resolved name before the unlink: PHP reports it as the stream URI, and this
+    // buffer is the only place it survives the helper's frame.
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_last_path");
+    emitter.instruction("ldp x10, x11, [sp, #0]");                              // the first 16 bytes of the resolved name
+    emitter.instruction("stp x10, x11, [x9]");
+    emitter.instruction("ldr x10, [sp, #16]");                                  // and its remaining bytes
+    emitter.instruction("str x10, [x9, #16]");
+    // `tmpfile()` has its own copy of this below, without the unlink: php keeps its temp file
+    // linked until the stream closes, and the URI published just above is the path it names.
+    // Everything else that wants scratch storage — `data:`, the https reader — calls this one and
+    // gets the anonymous file it always did. The two share no code, because a branch INTO another
+    // global's body does not survive a linker that strips by symbol.
     emitter.instruction("add x0, sp, #0");                                      // unlink path argument (the now-resolved template)
     emitter.bl_c("unlink");                                                     // libc unlink — file auto-deletes when fd closes
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload fd as the return value
-    abi::emit_symbol_address(emitter, "x9", "_eof_flags");
-    emitter.instruction("strb wzr, [x9, x0]");                                  // clear stale EOF state for the temporary descriptor
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", tmpl_frame));               // deallocate frame
     emitter.instruction("ret");                                                 // return fd
@@ -286,6 +324,39 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address (failure path)
     emitter.instruction(&format!("add sp, sp, #{}", tmpl_frame));               // deallocate frame (failure path)
     emitter.instruction("ret");                                                 // return -1
+    // The named entry point: the same helper with the unlink skipped.
+    emitter.blank();
+    emitter.raw("    .p2align 2");
+    emitter.comment("--- runtime: tmpfile, keeping the file its URI names ---");
+    emitter.label_global("__rt_tmpfile_named");
+    emitter.instruction(&format!("sub sp, sp, #{}", tmpl_frame));               // allocate frame + template buffer
+    emitter.instruction(&format!("stp x29, x30, [sp, #{}]", tmpl_save));        // save frame pointer and return address
+    emitter.instruction(&format!("add x29, sp, #{}", tmpl_save));               // establish new frame pointer
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_template");
+    emitter.instruction("ldp x10, x11, [x9]");
+    emitter.instruction("stp x10, x11, [sp]");
+    emitter.instruction("ldr x10, [x9, #16]");
+    emitter.instruction("str x10, [sp, #16]");
+    emitter.instruction("add x0, sp, #0");                                      // mkstemp template argument
+    emitter.bl_c("mkstemp");
+    emitter.instruction("cmp w0, #0");
+    emitter.instruction("b.lt __rt_tmpfile_named_fail");                        // its OWN failure path: see the note above
+    emitter.instruction("sxtw x0, w0");                                         // normalize the C int fd
+    emitter.instruction("str x0, [sp, #24]");
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_last_path");
+    emitter.instruction("ldp x10, x11, [sp, #0]");                              // the resolved name php will publish
+    emitter.instruction("stp x10, x11, [x9]");
+    emitter.instruction("ldr x10, [sp, #16]");
+    emitter.instruction("str x10, [x9, #16]");
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", tmpl_frame));               // deallocate frame
+    emitter.instruction("ret");                                                 // the file stays where mkstemp put it
+    emitter.label("__rt_tmpfile_named_fail");
+    emitter.instruction("mov x0, #-1");                                         // tmpfile failure sentinel
+    emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", tmpl_save));        // restore frame pointer and return address
+    emitter.instruction(&format!("add sp, sp, #{}", tmpl_frame));               // deallocate frame
+    emitter.instruction("ret");                                                 // return -1
+
 }
 
 /// Emits x86_64 Linux stream-extension runtime helpers (`__rt_fgetc`, `__rt_readfile`,
@@ -306,21 +377,25 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: readfile ---");
     emitter.label_global("__rt_readfile");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(-2));
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base
     emitter.instruction(&format!("sub rsp, {}", buf_size + 16));                // reserve frame for buffer + counters
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc open arg
     emitter.instruction("xor esi, esi");                                        // O_RDONLY
     emitter.instruction("call open");                                           // libc open(path, O_RDONLY)
     emitter.instruction("cmp eax, 0");                                          // did libc open() return a negative C int?
     emitter.instruction("jl __rt_readfile_fail_x86");                           // failure → PHP false sentinel
     emitter.instruction("cdqe");                                                // normalize the successful C int fd into a 64-bit runtime descriptor
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save fd
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // total bytes copied = 0
 
     emitter.label("__rt_readfile_loop_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
+    emitter.instruction("mov rdi, rax");                                        // pass the resolved descriptor to libc read
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // buffer
     emitter.instruction(&format!("mov rdx, {}", buf_size));                     // count
     emitter.instruction("call read");                                           // libc read()
@@ -361,12 +436,33 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_fpassthru");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base
-    emitter.instruction(&format!("sub rsp, {}", buf_size + 16));                // reserve frame for buffer + counter
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save fd
+    emitter.instruction(&format!("sub rsp, {}", buf_size + 32));                // reserve frame for buffer, counter, and descriptor
+    // [rbp - 8] keeps the opaque handle for __rt_stream_eof_set; read(2) needs the
+    // resolved descriptor, so it gets its own slot rather than overloading one
+    // value as both.
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // total bytes copied = 0
+    emitter.instruction("mov rdi, rax");                                        // resolve the backend descriptor once
+    emitter.instruction("call __rt_stream_fd");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the descriptor for the read loop
+
+    // See the AArch64 counterpart: what the stream already HOLDS goes out before the descriptor
+    // is touched, or a chunked read ahead of `fpassthru()` is skipped.
+    emitter.label("__rt_fpassthru_drain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // the same scratch the read loop uses
+    emitter.instruction(&format!("mov rdx, {}", buf_size));                     // at most one bufferful per pass
+    emitter.instruction("call __rt_stream_pending_take");                       // rax = how many came back
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fpassthru_loop_x86");                          // nothing held: read the descriptor
+    emitter.instruction("add QWORD PTR [rbp - 16], rax");                       // accumulate total bytes copied
+    emitter.instruction("mov rdx, rax");                                        // count to write
+    emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // buffer
+    emitter.instruction("call __rt_vd_write");                                  // through the ob/web-aware stdout sink
+    emitter.instruction("jmp __rt_fpassthru_drain_x86");                        // the holding area may have more
 
     emitter.label("__rt_fpassthru_loop_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // backend descriptor
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // buffer
     emitter.instruction(&format!("mov rdx, {}", buf_size));                     // count
     emitter.instruction("call read");                                           // libc read
@@ -380,20 +476,20 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fpassthru_loop_x86");                         // continue
 
     emitter.label("__rt_fpassthru_done_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd so feof() observes that passthru reached EOF
-    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table for fpassthru completion
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set _eof_flags[fd] after consuming the stream
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("mov esi, 1");                                          // publish the EOF state after consuming the stream
+    emitter.instruction("call __rt_stream_eof_set");                            // update only this stream's stable state
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return total
-    emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return total
 
     emitter.label("__rt_fpassthru_read_error_x86");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload fd so feof() observes the exhausted error state
-    abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table after fpassthru read failure
-    emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // set _eof_flags[fd] after a failed read
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("mov esi, 1");                                          // publish the EOF state after read failure
+    emitter.instruction("call __rt_stream_eof_set");                            // update only this stream's stable state
     emitter.instruction("mov rax, -1");                                         // read failure sentinel, matching PHP's -1 byte count
-    emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return read failure sentinel
 
@@ -450,11 +546,18 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_tmpfile_fail_x86");                            // mkstemp failed
     emitter.instruction("cdqe");                                                // normalize the C int fd into the runtime's 64-bit descriptor value
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve fd across unlink
+    // See the AArch64 counterpart: the resolved name is published before the unlink.
+    abi::emit_symbol_address(emitter, "r9", "_tmpfile_last_path");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the first 8 bytes of the resolved name
+    emitter.instruction("mov QWORD PTR [r9], r10");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // the next 8
+    emitter.instruction("mov QWORD PTR [r9 + 8], r10");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // and the remainder
+    emitter.instruction("mov QWORD PTR [r9 + 16], r10");
+    // See the AArch64 counterpart: `tmpfile()` has its own copy of this below, without the unlink.
     emitter.instruction("lea rdi, [rbp - 32]");                                 // unlink path
     emitter.instruction("call unlink");                                         // libc unlink — file auto-deletes on close
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return fd
-    abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the temporary descriptor
-    emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
     emitter.instruction("add rsp, 48");                                         // release frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return fd
@@ -464,4 +567,39 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release frame (failure path)
     emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
     emitter.instruction("ret");                                                 // return -1
+    emitter.blank();
+    emitter.comment("--- runtime: tmpfile, keeping the file its URI names ---");
+    emitter.label_global("__rt_tmpfile_named");
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 48");                                         // template buffer plus fd spill slot
+    abi::emit_symbol_address(emitter, "rsi", "_tmpfile_template");
+    emitter.instruction("mov rax, QWORD PTR [rsi]");
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");
+    emitter.instruction("mov rax, QWORD PTR [rsi + 8]");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");
+    emitter.instruction("mov rax, QWORD PTR [rsi + 16]");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");
+    emitter.instruction("lea rdi, [rbp - 32]");                                 // mkstemp template arg
+    emitter.instruction("call mkstemp");
+    emitter.instruction("cmp eax, 0");
+    emitter.instruction("jl __rt_tmpfile_named_fail_x86");                      // its OWN failure path: see the note above
+    emitter.instruction("cdqe");                                                // normalize the C int fd
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");
+    abi::emit_symbol_address(emitter, "r9", "_tmpfile_last_path");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the resolved name php will publish
+    emitter.instruction("mov QWORD PTR [r9], r10");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");
+    emitter.instruction("mov QWORD PTR [r9 + 8], r10");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov QWORD PTR [r9 + 16], r10");
+    emitter.instruction("add rsp, 48");                                         // release frame
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // the file stays where mkstemp put it
+    emitter.label("__rt_tmpfile_named_fail_x86");
+    emitter.instruction("mov rax, -1");                                         // failure sentinel
+    emitter.instruction("add rsp, 48");                                         // release frame (failure path)
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer (failure path)
+    emitter.instruction("ret");                                                 // return -1
+
 }

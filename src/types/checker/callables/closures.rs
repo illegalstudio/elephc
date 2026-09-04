@@ -49,16 +49,18 @@ impl Checker {
         env: &TypeEnv,
         contextual_param_types: &[PhpType],
     ) -> Result<ClosureSignatureContext, CompileError> {
+        let mut closure_env = env.clone();
+        // Capturing a name that was never assigned is not an error in PHP. `$f = function ()
+        // use ($x) { ... };` raises `Warning: Undefined variable $x` where the closure is
+        // CREATED — MEASURED on `php -n` 8.5.6, which then captures null and runs the body
+        // normally, even when the closure is never called. Binding the capture as null here is
+        // what lets the body type-check against it; EIR lowering raises the warning, because
+        // only it knows whether a store definitely reached the outer slot.
         for cap in captures {
-            if !env.contains_key(cap) {
-                return Err(CompileError::new(
-                    span,
-                    &format!("Undefined variable in use(): ${}", cap),
-                ));
+            if !closure_env.contains_key(cap) {
+                closure_env.insert(cap.clone(), PhpType::Void);
             }
         }
-
-        let mut closure_env = env.clone();
         let mut param_types = Vec::new();
         let mut param_type_exprs = Vec::new();
         let mut defaults = Vec::new();

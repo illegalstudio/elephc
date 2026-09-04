@@ -113,7 +113,21 @@ pub(super) fn lower(
             crate::codegen::lower_inst::builtins::io::lower_stream_context_set_default(ctx, inst)
         }),
         RuntimeFnId::StreamContextSetOption => Some({
-            crate::codegen::lower_inst::builtins::io::lower_stream_context_set_option(ctx, inst)
+            crate::codegen::lower_inst::builtins::io::lower_stream_context_set_option(
+                ctx,
+                inst,
+                crate::codegen::lower_inst::builtins::io::StreamContextSetOptionSpelling::Singular,
+            )
+        }),
+        // The plural spelling does the same work, so it shares the lowering — but it is php's
+        // RECOMMENDED name and carries none of the singular's deprecation, which the arity alone
+        // cannot express: both are two-argument calls. The name is passed instead.
+        RuntimeFnId::StreamContextSetOptions => Some({
+            crate::codegen::lower_inst::builtins::io::lower_stream_context_set_option(
+                ctx,
+                inst,
+                crate::codegen::lower_inst::builtins::io::StreamContextSetOptionSpelling::Plural,
+            )
         }),
         RuntimeFnId::StreamContextSetParams => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_context_set_params(ctx, inst)

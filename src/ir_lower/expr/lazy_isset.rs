@@ -36,7 +36,9 @@ pub(super) fn lower_lazy_isset(
             let value = if let ExprKind::ArrayAccess { array, index } = &arg.kind {
                 lower_array_access_with_missing_warning(ctx, array, index, arg, false)
             } else {
-                lower_expr(ctx, arg)
+                // Nor an undefined-variable warning: `isset($x)` is the construct for asking
+                // whether `$x` was ever assigned, and PHP answers `false` in silence.
+                lower_null_probe_chain(ctx, arg)
             };
             emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span, None)
         });
@@ -145,6 +147,45 @@ pub(super) fn lower_lazy_empty(
             None,
         ));
     }
+    // FIRST, because the arm below claims every property access and would answer this one with
+    // the eager builtin — the read that raises. An uninitialized typed slot is EMPTY in php, and
+    // `property_isset_action` already decides whether the slot is a declared one worth probing:
+    // the same decision `isset()` makes, reused rather than re-derived so the two constructs
+    // cannot drift on which properties they consider declared.
+    if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
+        if matches!(
+            property_isset_action(ctx, object, property),
+            Some(IssetPropertyAction::Initialized)
+        ) {
+            let object = lower_null_probe_chain(ctx, object);
+            return Some(lower_initialized_property_empty(
+                ctx, object, property, name, &args[0],
+            ));
+        }
+    }
+    // A plain variable — or a property chain rooted in one — has no magic-property semantics to
+    // lower lazily, so it used to fall through to the eager builtin, which reads its operand
+    // like any other expression and so warned about a name `empty()` exists to ask about. PHP
+    // answers `true` in silence for both.
+    // …but not a property whose class answers `__isset`: php asks THAT before it asks `__get`,
+    // and the eager builtin below would call `__get` and believe its 7. The magic arm at the tail
+    // of this function is what handles those, and it can only be reached by leaving them here.
+    // The probe builds expression trees and emits nothing, so asking it twice costs nothing.
+    if matches!(
+        &args[0].kind,
+        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. }
+    ) && lazy_empty_magic_property_calls(ctx, &args[0]).is_none()
+    {
+        let value = lower_null_probe_chain(ctx, &args[0]);
+        return Some(emit_builtin_call_value(
+            ctx,
+            name,
+            vec![value.value],
+            PhpType::Bool,
+            expr.span,
+            None,
+        ));
+    }
     // A typed static property that is still uninitialized is EMPTY in PHP, and reading it the
     // ordinary way to find that out is fatal — the same reason `isset()` and `??` need the
     // slot probe. Uninitialized answers true without the read.
@@ -152,21 +193,6 @@ pub(super) fn lower_lazy_empty(
         if static_property_can_be_uninitialized(ctx, receiver, property) {
             return Some(lower_initialized_static_property_empty(
                 ctx, receiver, property, name, &args[0],
-            ));
-        }
-    }
-    // The instance twin of the static arm above: an uninitialized typed slot is EMPTY, and the
-    // ordinary read that would say so raises. `property_isset_action` already decides whether the
-    // slot is a declared one worth probing — the same decision `isset()` makes, reused rather than
-    // re-derived so the two constructs cannot drift on which properties they consider declared.
-    if let ExprKind::PropertyAccess { object, property } = &args[0].kind {
-        if matches!(
-            property_isset_action(ctx, object, property),
-            Some(IssetPropertyAction::Initialized)
-        ) {
-            let object = lower_expr(ctx, object);
-            return Some(lower_initialized_property_empty(
-                ctx, object, property, name, &args[0],
             ));
         }
     }

@@ -80,31 +80,21 @@ pub(super) fn object_class_has_tostring(ctx: &FunctionContext<'_>, class_name: &
         .is_some_and(|class_info| class_info.methods.contains_key("__tostring"))
 }
 
-/// Emits PHP's fatal diagnostic for object-to-string conversion without `__toString()`.
+/// Emits php's `Error` for an object-to-string conversion on a class without `__toString()`.
+///
+/// php raises a CATCHABLE `Error`, so `try { echo $o; } catch (Error $e)` runs its catch and the
+/// program continues with exit 0. This used to write `Fatal error: …` straight to stderr and
+/// `exit(1)`: the catch never ran, the message went to the wrong stream — php CLI prints
+/// diagnostics on stdout, through the output buffer — and the status was 1 where php's uncaught
+/// path uses 255.
 pub(super) fn emit_missing_tostring_fatal(ctx: &mut FunctionContext<'_>, class_name: &str) {
-    let message = format!(
-        "Fatal error: Object of class {} could not be converted to string\n",
-        class_name
+    super::exceptions::emit_error(
+        ctx,
+        &format!(
+            "Object of class {} could not be converted to string",
+            class_name
+        ),
     );
-    let (label, len) = ctx.data.add_string(message.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the object string-cast fatal to stderr
-            ctx.emitter.adrp("x1", &label);
-            ctx.emitter.add_lo12("x1", "x1", &label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.syscall(4);
-            abi::emit_exit(ctx.emitter, 1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov edi, 2");                              // write the object string-cast fatal to Linux stderr
-            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the object string-cast fatal byte length
-            ctx.emitter.instruction("mov eax, 1");                              // Linux x86_64 syscall 1 = write
-            ctx.emitter.instruction("syscall");                                 // emit the object string-cast fatal before exiting
-            abi::emit_exit(ctx.emitter, 1);
-        }
-    }
 }
 
 /// Emits stdout output for the value currently loaded into result register(s).
@@ -166,6 +156,16 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             conversions::emit_array_like_string_result(ctx);
             abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+            Ok(())
+        }
+        // Echoing a first-class callable is the same php event as concatenating one: a Closure
+        // has no `__toString`, so php raises a CATCHABLE `Error` at run time. Refusing here made
+        // `try { echo $f; } catch (Error $e)` impossible to compile.
+        PhpType::Callable => {
+            super::exceptions::emit_error(
+                ctx,
+                "Object of class Closure could not be converted to string",
+            );
             Ok(())
         }
         _ => Err(CodegenIrError::unsupported(format!(

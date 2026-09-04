@@ -258,6 +258,7 @@ pub fn emit_phar_write(emitter: &mut Emitter) {
     emitter.instruction("mov x3, x3");                                          // archive data pointer (file_put_contents data ptr)
     abi::emit_symbol_address(emitter, "x4", "_phar_write_len");
     emitter.instruction("ldr x4, [x4]");                                        // archive byte count (file_put_contents data len)
+    emitter.instruction("mov x5, xzr");                                         // the writer reads $flags for FILE_APPEND: this caller has none
     emitter.instruction("bl __rt_file_put_contents");                           // write the assembled phar archive to disk
     // -- return true and restore the frame --
     emitter.instruction("mov x0, #1");                                          // fclose() returns true after a successful finalize
@@ -515,6 +516,7 @@ fn emit_phar_write_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rdi", "_phar_write_out");                // archive data pointer (file_put_contents data ptr)
     abi::emit_symbol_address(emitter, "r8", "_phar_write_len");                 // buffer length slot
     emitter.instruction("mov rsi, QWORD PTR [r8]");                             // archive byte count (file_put_contents data len)
+    emitter.instruction("xor ecx, ecx");                                        // the writer reads $flags for FILE_APPEND: this caller has none
     emitter.instruction("call __rt_file_put_contents");                         // write the assembled phar archive to disk
     // -- return true and restore the frame --
     emitter.instruction("mov eax, 1");                                          // fclose() returns true after a successful finalize

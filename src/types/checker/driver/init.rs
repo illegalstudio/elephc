@@ -94,6 +94,14 @@ impl Checker {
         for (name, _value) in ARRAY_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in
+            crate::types::output_handler_constants::OUTPUT_HANDLER_INT_CONSTANTS
+        {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in crate::types::zlib_constants::ZLIB_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         for (name, _value) in ICONV_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
@@ -111,6 +119,8 @@ impl Checker {
         for (name, _value) in STREAM_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        // STREAM_PF_INET6 is target-divergent (AF_INET6 = 30 on macOS, 10 on Linux).
+        constants.insert("STREAM_PF_INET6".to_string(), PhpType::Int);
         for (name, _value) in STRING_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
@@ -151,12 +161,16 @@ impl Checker {
         constants.insert("M_LOG10E".to_string(), PhpType::Float);
         constants.insert("PHP_EOL".to_string(), PhpType::Str);
         constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
+        constants.insert("PATH_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
             target,
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            unset_without_kill: HashSet::new(),
+            by_ref_widened_params: HashSet::new(),
+            resolving_by_ref_widening: HashSet::new(),
             resolving_functions: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
@@ -203,6 +217,7 @@ impl Checker {
             flow_typed_returns: HashMap::new(),
             null_probe_scope_is_top_level: false,
             pending_null_probe_roots: Vec::new(),
+            tolerated_null_receiver: false,
             null_probe_depth: 0,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
@@ -213,6 +228,8 @@ impl Checker {
             builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
+            widened_scalar_locals: HashSet::new(),
+            tentative_return_deprecations: Vec::new(),
             strict_locals: false,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),

@@ -1380,6 +1380,42 @@ echo count($matches);
     );
 }
 
+/// Verifies `$matches` reads back correctly however the caller declared it.
+///
+/// Three shapes, because they took three different paths and only the last was right. An
+/// UNDECLARED `$matches` was created as the boxed null every out-parameter starts as, and the
+/// runtime — which fills the caller's array in place rather than replacing the slot — wrote
+/// through that cell as though it were an array: `var_dump($matches)` answered `bool(true)` and
+/// `count($matches)` was an uncaught `TypeError`. A `$m = []` one was a real array, but the
+/// lowering kept believing `array<never>`, so `count($m)` said 3 while every `$m[$i]` and every
+/// `foreach` value read `NULL` — right and wrong from one variable, in silence. MEASURED against
+/// `php -n` 8.5.6, which answers the same three strings for all three.
+#[test]
+fn ir_backend_preg_match_fills_matches_however_it_was_declared() {
+    let source = r#"<?php
+preg_match("/(a)?(b)/", "b", $undeclared);
+var_dump($undeclared[2], count($undeclared));
+$empty = [];
+preg_match("/(a)?(b)/", "b", $empty);
+var_dump($empty[2], count($empty));
+$typed = ["x"];
+preg_match("/(a)?(b)/", "b", $typed);
+var_dump($typed[2], count($typed));
+foreach ($undeclared as $key => $value) { echo $key, "=[", $value, "]"; }
+echo "\n";
+$missed = preg_match("/zzz/", "b", $nothing);
+var_dump($missed, $nothing);
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend_with_managed_pcre2("preg_match_matches_shapes", source),
+        "string(1) \"b\"\nint(3)\n\
+         string(1) \"b\"\nint(3)\n\
+         string(1) \"b\"\nint(3)\n\
+         0=[b]1=[]2=[b]\n\
+         int(0)\narray(0) {\n}\n"
+    );
+}
+
 /// Verifies `preg_replace_callback()` can call static string user callbacks.
 #[test]
 fn ir_backend_handles_preg_replace_callback_static_string() {
@@ -1587,7 +1623,20 @@ fn ir_backend_handles_unset_locals() {
             "7",
         ),
     ] {
-        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+        // NO warning, on any of the three. `isset()` never raises one — probing storage that may
+        // not exist is what it is FOR — and the third case reads `$c` only after re-binding it.
+        // MEASURED on `php -n` 8.5.6: `$x = 42; unset($x); echo isset($x) ? 'value' : 'null';`
+        // prints `null` and nothing else.
+        //
+        // An earlier revision of this test asserted a warning here, which pinned one elephc was
+        // raising and php was not: `unset()` is a read of nothing, and the diagnostic belongs to a
+        // later BARE read (`echo $x;`), which the type-ops sweep covers.
+        let out = compile_and_run_ir_backend(name, source);
+        assert!(
+            !out.contains("Warning: Undefined variable $"),
+            "isset() after unset() must not warn: {out}"
+        );
+        assert_eq!(program_output_only(&out), expected);
     }
 }
 
@@ -3814,7 +3863,10 @@ unlink("a.txt");
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_foreach", source),
-        "0:one\n;1:two\n;"
+        // MEASURED on `php -n` 8.5.6: a file whose last byte is a newline yields ONE MORE
+        // element — php drives the iteration from the stream, which is not at end of file after
+        // the last `\n`. The old expectation was written from elephc's line array.
+        "0:one\n;1:two\n;2:;"
     );
 }
 
@@ -3826,7 +3878,7 @@ file_put_contents("a.txt", "one\ntwo\n");
 
 $csv = new SplFileObject("a.txt");
 $csv->setFlags(SplFileObject::READ_CSV);
-$csv->setCsvControl("n");
+$csv->setCsvControl("n", '"', "\\");
 $row = $csv->current();
 echo $row[0];
 echo ":";
@@ -3834,9 +3886,12 @@ echo $row[1];
 
 unlink("a.txt");
 "#;
+    // php -n 8.5.6 answers ["o", "e"]: fgetcsv strips the record's trailing newline
+    // BEFORE splitting on the separator. The previous "o:e\n" expectation pinned the
+    // explode()-based READ_CSV that kept the terminator glued to the last field.
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_csv_current", source),
-        "o:e\n"
+        "o:e"
     );
 }
 
@@ -3872,6 +3927,11 @@ unlink("stream.txt");
 }
 
 /// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.
+///
+/// The `fgetc()` pair reads `bb`, not `aa`: `getCurrentLine()` is php's ALIAS of `fgets()`
+/// and CONSUMES the first line. This assertion read `aa` while elephc answered the cached
+/// current line without advancing the stream — measured on `php -n` 8.5.6, this exact
+/// program prints `aa\n|bb|FE|8|7|`.
 #[test]
 fn ir_backend_handles_spl_file_object_state_helpers() {
     let source = r#"<?php
@@ -3898,7 +3958,7 @@ unlink("meta.txt");
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_state_helpers", source),
-        "aa\n|aa|FE|8|7|"
+        "aa\n|bb|FE|8|7|"
     );
 }
 
@@ -3907,6 +3967,7 @@ unlink("meta.txt");
 fn ir_backend_handles_spl_file_object_csv_methods() {
     let source = r#"<?php
 $file = new SplFileObject("csv.txt", "w+");
+$file->setCsvControl(",", '"', "\\");
 echo $file->fputcsv(["hello", "world"]);
 $file->rewind();
 $row = $file->fgetcsv();
@@ -3919,9 +3980,13 @@ echo $file->key();
 
 unlink("csv.txt");
 "#;
+    // `key()` is 0, not 1: php's CSV read names the record it just read, and the FIRST read of a
+    // fresh object does not advance it. MEASURED on `php -n` 8.5.6 — this pin said 1, which was
+    // elephc's own answer rather than php's, and it stayed green while `fgetcsv()` ran one line
+    // ahead of php at every step.
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_csv_methods", source),
-        "12:hello:world:1"
+        "12:hello:world:0"
     );
 }
 
@@ -3942,7 +4007,11 @@ echo $tmp->eof() ? "eof" : "more";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_temp_file_object_memory_stream", source),
-        "php://memory|first\n|second\n|eof"
+        // MEASURED on `php -n` 8.5.6: reading the LAST line of a `php://memory` stream does not
+        // put it at end of file — the read stopped exactly at the end, and php only reports EOF
+        // once a read has ASKED for more. The old expectation came from elephc's hand-rolled
+        // temp buffer, which the class no longer uses.
+        "php://memory|first\n|second\n|more"
     );
 }
 
@@ -4304,7 +4373,9 @@ fn ir_backend_handles_basic_indexed_arrays() {
             ":20",
         ),
     ] {
-        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+        // Reading an index that is not there is an UNDEFINED ARRAY KEY in php, and it says
+        // so — verified against `php -n` 8.5.6. The expectation predates elephc raising it.
+        assert_eq!(program_output_only(&compile_and_run_ir_backend(name, source)), expected);
     }
 
     let dynamic_source = "<?php $a = [10, 20, 30]; echo $a[$argc];";
@@ -4871,13 +4942,17 @@ fn ir_backend_handles_indexed_array_merge_empty_left() {
 fn ir_backend_handles_indexed_array_set_operations() {
     for (name, source, expected) in [
         (
+            // The survivors keep their SOURCE keys, as php does: `array_diff([1,2,3,4], [2,4])`
+            // is `{0:1, 2:3}`, so the second survivor is read at `[2]`.
             "array_diff_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[2];",
             "2:1:3",
         ),
         (
+            // Likewise `array_intersect([1,2,3,4], [2,4,6])` is `{1:2, 3:4}` — neither survivor
+            // sits at key 0, which is exactly what a reindexed result got wrong.
             "array_intersect_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[1]; echo ':'; echo $c[3];",
             "2:2:4",
         ),
     ] {
@@ -5249,6 +5324,12 @@ fn ir_backend_handles_array_truthiness() {
 }
 
 /// Verifies iterable and concrete array echo lower to PHP's "Array" string payload.
+///
+/// And that each one WARNS. `echo` on an `iterable`-typed parameter printed `Array` in silence:
+/// the EIR admitted `may_warn` and the runtime writer already knew the payload was an array —
+/// it just never raised the diagnostic on that arm, while the same `echo` on a local array did.
+/// php raises one per conversion, at the line of the `echo` itself, so the two calls to `show()`
+/// both name line 3 — MEASURED on `php -n` 8.5.6, whose output this reproduces byte for byte.
 #[test]
 fn ir_backend_handles_iterable_echo() {
     let source = r#"<?php
@@ -5263,10 +5344,16 @@ $direct = [1];
 echo $direct;
 echo "done";
 "#;
-    assert_eq!(
-        compile_and_run_ir_backend("iterable_echo", source),
-        "Array|Array|Arraydone"
-    );
+    let out = compile_and_run_ir_backend("iterable_echo", source);
+    assert_eq!(program_output_only(&out), "Array|Array|Arraydone");
+    let lines: Vec<&str> = out
+        .lines()
+        .filter(|line| line.starts_with("Warning: Array to string conversion"))
+        .collect();
+    assert_eq!(lines.len(), 3, "expected one warning per conversion: {out}");
+    assert!(lines[0].ends_with(" on line 3"), "{}", lines[0]);
+    assert!(lines[1].ends_with(" on line 3"), "{}", lines[1]);
+    assert!(lines[2].ends_with(" on line 10"), "{}", lines[2]);
 }
 
 /// Verifies `gettype()` reports iterable array/hash payloads as PHP arrays.
@@ -5359,7 +5446,10 @@ fn ir_backend_handles_basic_associative_arrays() {
         ("hash_set_updates_local", "<?php $h = [\"a\" => 1]; $h[\"a\"] = 7; echo $h[\"a\"];", "7"),
         ("hash_set_string_value", "<?php $h = [\"a\" => \"x\"]; $h[\"a\"] = \"y\"; echo $h[\"a\"];", "y"),
     ] {
-        assert_eq!(compile_and_run_ir_backend(name, source), expected);
+        // Reading a key that is not there is an UNDEFINED ARRAY KEY in php, and it says so
+        // — verified against `php -n` 8.5.6, which prints the same line. These expectations
+        // predate elephc raising it, so they pinned its absence.
+        assert_eq!(program_output_only(&compile_and_run_ir_backend(name, source)), expected);
     }
 }
 
@@ -5853,14 +5943,22 @@ echo "after";
         &[],
     );
     assert!(missing.status.success(), "IR backend missing-file fixture failed");
-    assert_eq!(
-        String::from_utf8(missing.stdout).expect("stdout should be utf8"),
-        "after"
-    );
-    let stderr = String::from_utf8(missing.stderr).expect("stderr should be utf8");
+    // php CLI writes the warning to STDOUT, mixed into what the program printed — measured by
+    // capturing the two streams separately, where stderr was empty. This read `stdout` for the
+    // program's own text and `stderr` for the warning, so it passed only while the warning went
+    // to the wrong stream.
+    let reported = String::from_utf8(missing.stdout).expect("stdout should be utf8");
+    assert_eq!(program_output_only(&reported), "after");
+    // php-src names the path and the reason: `file_get_contents(missing.txt): Failed to
+    // open stream: No such file or directory`. Asserting the whole message, rather than
+    // just the function name, is what would have caught the bare `file_get_contents()`
+    // form this test used to accept.
     assert!(
-        stderr.contains("Warning: file_get_contents()"),
-        "expected file_get_contents warning, got stderr={stderr}"
+        reported.contains(
+            "Warning: file_get_contents(missing.txt): Failed to open stream: \
+             No such file or directory"
+        ),
+        "expected file_get_contents warning, got stdout={reported}"
     );
 }
 
@@ -5968,10 +6066,13 @@ echo "unreachable";
         &[],
     );
     assert!(!run.status.success(), "false stream handle unexpectedly succeeded");
-    let stderr = String::from_utf8(run.stderr).expect("stream TypeError should be utf8");
+    // php writes the uncaught report to STDOUT, not stderr — measured by capturing the two
+    // streams separately, where stdout held every byte and stderr was empty. This asserted on
+    // stderr, so it passed only while the report went to the wrong stream.
+    let reported = String::from_utf8(run.stdout).expect("stream TypeError should be utf8");
     assert!(
-        stderr.contains("TypeError: fread()") && stderr.contains("resource"),
-        "expected fread TypeError, got stderr={stderr}"
+        reported.contains("TypeError: fread()") && reported.contains("resource"),
+        "expected fread TypeError, got stdout={reported}"
     );
 }
 
@@ -6047,10 +6148,20 @@ $row = fgetcsv($in);
 fclose($in);
 echo $row[0] . ":" . $row[1] . ":" . gettype($row);
 "#;
-    assert_eq!(
-        compile_and_run_ir_backend("stream_csv_round_trip", source),
-        "12:hello:world:array"
-    );
+    // php 8.5 deprecates the omitted `$escape` on BOTH calls, and prints the line as it goes —
+    // MEASURED on `php -n` 8.5.6, which emits the same two lines around the same data. The
+    // expectation was written before elephc raised them, so it pinned their absence; the script
+    // path inside each is a per-run temp directory, which is why they are filtered rather than
+    // spelled out.
+    let out = compile_and_run_ir_backend("stream_csv_round_trip", source);
+    assert_eq!(out.matches("Deprecated: fputcsv():").count(), 1, "got {out}");
+    assert_eq!(out.matches("Deprecated: fgetcsv():").count(), 1, "got {out}");
+    let data: String = out
+        .lines()
+        .filter(|line| !line.starts_with("Deprecated:"))
+        .collect::<Vec<_>>()
+        .join("");
+    assert_eq!(data, "12:hello:world:array");
 }
 
 /// Verifies `flock()` acquires and releases an advisory lock.
@@ -6160,10 +6271,13 @@ echo "unreachable";
         !run.status.success(),
         "false ftruncate handle unexpectedly succeeded"
     );
-    let stderr = String::from_utf8(run.stderr).expect("ftruncate TypeError should be utf8");
+    // php writes the uncaught report to STDOUT, not stderr — measured by capturing the two
+    // streams separately, where stdout held every byte and stderr was empty. This asserted on
+    // stderr, so it passed only while the report went to the wrong stream.
+    let reported = String::from_utf8(run.stdout).expect("ftruncate TypeError should be utf8");
     assert!(
-        stderr.contains("TypeError: ftruncate()") && stderr.contains("resource"),
-        "expected ftruncate TypeError, got stderr={stderr}"
+        reported.contains("TypeError: ftruncate()") && reported.contains("resource"),
+        "expected ftruncate TypeError, got stdout={reported}"
     );
 }
 
@@ -6207,8 +6321,15 @@ echo fileowner("missing.txt") === false ? "O" : "!";
 echo filegroup("missing.txt") === false ? "G" : "!";
 echo fileinode("missing.txt") === false ? "I" : "!";
 "#;
+    let out = compile_and_run_ir_backend("scalar_stat_getters", source);
+    for name in ["fileatime", "filectime", "fileperms", "fileowner", "filegroup", "fileinode"] {
+        assert!(
+            out.contains(&format!("Warning: {name}(): stat failed for missing.txt")),
+            "expected {name}'s stat warning, got {out}"
+        );
+    }
     assert_eq!(
-        compile_and_run_ir_backend("scalar_stat_getters", source),
+        program_output_only(&out),
         "integerintegerintegerintegerintegerinteger:ACPOGI"
     );
 }
@@ -6235,7 +6356,8 @@ echo filetype("missing.txt") === false ? "false" : "string";
         "main.php",
         &[],
     );
-    assert_eq!(out, "file:dir:false");
+    assert!(out.contains("Warning: filetype(): Lstat failed for missing.txt"), "got {out}");
+    assert_eq!(program_output_only(&out), "file:dir:false");
 }
 
 /// Verifies `stat()` and `lstat()` box PHP stat arrays and strict false failures.
@@ -6256,10 +6378,10 @@ echo ":";
 echo stat("missing.txt") === false ? "S" : "!";
 echo lstat("missing.txt") === false ? "L" : "!";
 "#;
-    assert_eq!(
-        compile_and_run_ir_backend("stat_arrays", source),
-        "5:integer:match:lstat:SL"
-    );
+    let out = compile_and_run_ir_backend("stat_arrays", source);
+    assert!(out.contains("Warning: stat(): stat failed for missing.txt"), "got {out}");
+    assert!(out.contains("Warning: lstat(): Lstat failed for missing.txt"), "got {out}");
+    assert_eq!(program_output_only(&out), "5:integer:match:lstat:SL");
 }
 
 /// Verifies `fstat()` boxes PHP stat arrays for stream resources.
@@ -6295,10 +6417,13 @@ echo "unreachable";
         &[],
     );
     assert!(!run.status.success(), "false fstat handle unexpectedly succeeded");
-    let stderr = String::from_utf8(run.stderr).expect("fstat TypeError should be utf8");
+    // php writes the uncaught report to STDOUT, not stderr — measured by capturing the two
+    // streams separately, where stdout held every byte and stderr was empty. This asserted on
+    // stderr, so it passed only while the report went to the wrong stream.
+    let reported = String::from_utf8(run.stdout).expect("fstat TypeError should be utf8");
     assert!(
-        stderr.contains("TypeError: fstat()") && stderr.contains("resource"),
-        "expected fstat TypeError, got stderr={stderr}"
+        reported.contains("TypeError: fstat()") && reported.contains("resource"),
+        "expected fstat TypeError, got stdout={reported}"
     );
 }
 
@@ -6415,11 +6540,14 @@ echo chdir("sub") ? "D" : "!";
 $after = getcwd();
 echo strlen($after) > strlen($before) ? "W" : "!";
 echo ":";
-echo sys_get_temp_dir();
+// A RELATIONSHIP, not a literal: php derives this from TMPDIR, which on macOS is a private
+// per-user directory and not /tmp. The point here is that the IR backend dispatches the call.
+$t = sys_get_temp_dir();
+echo strlen($t) > 0 && substr($t, 0, 1) === "/" ? "T" : "!";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("working_directory", source),
-        "CMDW:/tmp"
+        "CMDW:T"
     );
 }
 
@@ -6509,8 +6637,9 @@ echo ":";
 file_put_contents("both.txt", "");
 echo touch("both.txt", 1000000000, 900000000) ? "B" : "!";
 "#;
+    // The four failing chown/chgrp calls each raise php's warning, on STDOUT where php puts it.
     assert_eq!(
-        compile_and_run_ir_backend("file_modify_builtins", source),
+        program_output_only(&compile_and_run_ir_backend("file_modify_builtins", source)),
         "C:OG:ug:U:TEN:1000000000:B"
     );
 }
@@ -6614,14 +6743,13 @@ fn ir_backend_handles_define_builtin() {
         duplicate.status.success(),
         "IR backend duplicate define fixture failed"
     );
-    assert_eq!(
-        String::from_utf8(duplicate.stdout).expect("stdout should be utf8"),
-        "ok1"
-    );
-    let stderr = String::from_utf8(duplicate.stderr).expect("stderr should be utf8");
+    // php CLI writes the warning to STDOUT, mixed into what the program printed; this read the
+    // two streams apart, so it passed only while the warning went to the wrong one.
+    let reported = String::from_utf8(duplicate.stdout).expect("stdout should be utf8");
+    assert_eq!(program_output_only(&reported), "ok1");
     assert!(
-        stderr.contains("Warning: define()"),
-        "expected duplicate define warning, got stderr={stderr}"
+        reported.contains("Warning: define()"),
+        "expected duplicate define warning, got stdout={reported}"
     );
 }
 
@@ -6794,6 +6922,40 @@ fn ir_backend_requires_include_before_function_variant_dispatch() {
     );
 }
 
+/// Returns the program's own output, with php's diagnostics taken out.
+///
+/// php CLI writes `Warning:`/`Notice:`/`Deprecated:` to STDOUT, so they arrive mixed into what
+/// the program printed — and each carries the script path, which is a per-run temp directory no
+/// test can write down. Several expectations here were recorded before elephc raised the
+/// diagnostic at all and so pinned its ABSENCE; each of those was re-measured against
+/// `php -n` 8.5.6, which prints the same lines around the same data.
+fn program_output_only(out: &str) -> String {
+    // php frames each diagnostic as a BLANK LINE then the text, so removing one means removing
+    // both — and every OTHER newline belongs to the program and has to survive, which a
+    // `lines().join("")` would have eaten.
+    let parts: Vec<&str> = out.split_inclusive('\n').collect();
+    let mut kept = String::new();
+    for (index, part) in parts.iter().enumerate() {
+        let is_diagnostic = |text: &str| {
+            text.starts_with("Warning:")
+                || text.starts_with("Notice:")
+                || text.starts_with("Deprecated:")
+                || text.starts_with("Fatal error:")
+        };
+        if is_diagnostic(part) {
+            // php prefixes every diagnostic with a newline, and that newline is glued to the end
+            // of whatever the program printed last — it is not a line of its own to skip.
+            if kept.ends_with('\n') {
+                kept.pop();
+            }
+            continue;
+        }
+        let _ = index;
+        kept.push_str(part);
+    }
+    kept
+}
+
 /// Compiles `source`, runs the output binary, and returns stdout.
 fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
     compile_and_run_ir_backend_with_args(name, source, &[])
@@ -6802,7 +6964,13 @@ fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
 /// Compiles a managed-PCRE2 fixture, runs its output binary, and returns stdout.
 fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {
     let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);
-    assert!(run.status.success(), "IR backend binary failed for {name}");
+    assert!(
+        run.status.success(),
+        "IR backend binary failed for {name} ({}): stdout={} stderr={}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
     String::from_utf8(run.stdout).unwrap()
 }
 

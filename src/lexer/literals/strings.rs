@@ -124,8 +124,17 @@ fn interpolate(
     let mut tokens: Vec<SpannedToken> = Vec::new();
     let mut current = String::new();
     let mut has_interpolation = false;
+    // A heredoc body spans many lines and every interpolation in it used to carry the span of
+    // the OPENING `<<<LABEL`, so a diagnostic raised by one — `Array to string conversion`, a
+    // NaN coercion, an undefined variable — named the wrong line. php names the line the
+    // interpolation is written on, which is what this counter tracks. Only a literal newline
+    // consumed from the source advances it; a `\n` ESCAPE is two source characters on one line.
+    let mut line = span.line;
+    let mut span = span;
 
     loop {
+        span.line = line;
+        span.end_line = line;
         match input.peek_escape() {
             None => {
                 if terminator.is_some() {
@@ -191,6 +200,9 @@ fn interpolate(
                 }
             }
             Some(c) => {
+                if c == '\n' {
+                    line = line.saturating_add(1);
+                }
                 push_literal_char(c, &mut current);
                 input.advance_escape();
             }
@@ -516,7 +528,13 @@ pub(in crate::lexer) fn scan_heredoc(
 
                     let mut chars = content.chars().peekable();
                     let mut input = CharsEscapeInput { chars: &mut chars };
-                    return interpolate(&mut input, span, None, MissingEscape::Literal);
+                    // The body starts on the line AFTER `<<<LABEL`: the newline that ends the
+                    // label line is consumed above and is not part of `content`, so the line
+                    // counter inside `interpolate` would otherwise start one line too low.
+                    let mut body_span = span;
+                    body_span.line = span.line.saturating_add(1);
+                    body_span.end_line = body_span.line;
+                    return interpolate(&mut input, body_span, None, MissingEscape::Literal);
                 }
             }
         }

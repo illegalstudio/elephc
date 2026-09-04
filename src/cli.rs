@@ -152,8 +152,8 @@ Codegen:
                           counts to stderr at exit
   --with-monitoring       Embed the profiling capability, dormant until `elephc monitor`
                           asks. Local/--exact captures report exact wall time,
-                          allocations, retained objects, DB queries/wait and calls,
-                          rooted at {main}; file I/O is not measured. A service's
+                          allocations, retained objects, DB queries/wait, stream
+                          operations and calls, rooted at {main}. A service's
                           default answer is sampled CPU time. Inlined functions
                           fold into their caller (as with --counters).
   --with-monitoring=NAMES Embed it for the named functions only (comma list; trailing

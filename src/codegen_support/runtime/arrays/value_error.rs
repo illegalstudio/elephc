@@ -54,7 +54,14 @@ pub(in crate::codegen_support::runtime) fn emit_throw_value_error_x86_64(
 ) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
     emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
-    emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
+    // 24, not 16: `push rbp` + 24 is a 16-byte multiple, so this body PRESERVES the stack
+    // alignment it was entered with instead of flipping it. This is shared, inlined text
+    // reached by a `jmp` from eight different frames — with a 16-byte reserve the total move
+    // is 24, an odd multiple of 8, so whether `call __rt_heap_alloc` below lands on a legal
+    // boundary depended on which caller fell into it. Compensating for a caller's own
+    // misalignment here is the coupling that hid the defect; each caller now owns its frame
+    // and `runtime::sysv_call_alignment` audits it.
+    emitter.instruction("sub rsp, 24");                                         // reserve an alignment-preserving frame for the nested calls
     emitter.instruction("mov rax, 56");                                         // request Throwable payload storage (message/code/previous)
     emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object payload
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)

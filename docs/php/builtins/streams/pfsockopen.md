@@ -2,20 +2,20 @@
 title: "pfsockopen()"
 description: "Open persistent Internet or Unix domain socket connection."
 sidebar:
-  order: 418
+  order: 444
 ---
 
 ## pfsockopen()
 
 ```php
-function pfsockopen(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed
+function pfsockopen(string $hostname, int $port = -1, int $error_code = null, string $error_message = null, float $timeout = null): mixed
 ```
 
 Open persistent Internet or Unix domain socket connection.
 
 **Parameters**:
 - `$hostname` (`string`)
-- `$port` (`int`)
+- `$port` (`int`), default `-1`, optional
 - `$error_code` (`int`), passed by reference, default `null`, optional
 - `$error_message` (`string`), passed by reference, default `null`, optional
 - `$timeout` (`float`), default `null`, optional

@@ -307,4 +307,48 @@ _main:
         assert_eq!(Platform::MacOS.glob_pathv_offset(), 32);
         assert_eq!(Platform::Linux.glob_pathv_offset(), 8);
     }
+
+    #[test]
+    /// The libc glob bits are the ones the target's own headers define.
+    ///
+    /// The table cannot be verified by reading it, and getting one bit wrong does not fail — it
+    /// silently selects a different flag, which is what makes php's `GLOB_NOESCAPE` dangerous: its
+    /// value is `GLOB_LIMIT` in macOS's glob.h. `libc::GLOB_*` is the target's own header, so this
+    /// checks the macOS column on a mac and the glibc column wherever CI builds for Linux.
+    fn test_glob_libc_flags_match_the_target_headers() {
+        let host = if cfg!(target_os = "macos") {
+            Platform::MacOS
+        } else {
+            Platform::Linux
+        };
+        let bits = host.glob_libc_flags();
+        assert_eq!(bits.err, i64::from(libc::GLOB_ERR), "GLOB_ERR");
+        assert_eq!(bits.mark, i64::from(libc::GLOB_MARK), "GLOB_MARK");
+        assert_eq!(bits.nocheck, i64::from(libc::GLOB_NOCHECK), "GLOB_NOCHECK");
+        assert_eq!(bits.nosort, i64::from(libc::GLOB_NOSORT), "GLOB_NOSORT");
+        assert_eq!(bits.noescape, i64::from(libc::GLOB_NOESCAPE), "GLOB_NOESCAPE");
+        #[cfg(target_os = "linux")]
+        assert_eq!(bits.brace, i64::from(libc::GLOB_BRACE), "GLOB_BRACE");
+        #[cfg(target_os = "macos")]
+        // The `libc` crate does not export GLOB_BRACE for Apple targets; this is the SDK's own
+        // /usr/include/glob.h value, read there rather than recalled.
+        assert_eq!(bits.brace, 0x0080, "GLOB_BRACE");
+    }
+
+    #[test]
+    /// php's glob flags are php's, and they are NOT the bits either libc gives those names.
+    ///
+    /// This is the property the whole translation exists for. If a future edit ever made the two
+    /// agree, the translation would be dead code and this test says so out loud.
+    fn test_php_glob_flags_are_not_the_libc_bits() {
+        let php_noescape = crate::types::stream_constants::STREAM_INT_CONSTANTS
+            .iter()
+            .find(|(name, _)| *name == "GLOB_NOESCAPE")
+            .expect("GLOB_NOESCAPE is a declared php constant")
+            .1;
+        // 4096 is GLOB_LIMIT on macOS and unassigned on glibc — never GLOB_NOESCAPE.
+        assert_eq!(php_noescape, 4096);
+        assert_ne!(php_noescape, Platform::MacOS.glob_libc_flags().noescape);
+        assert_ne!(php_noescape, Platform::Linux.glob_libc_flags().noescape);
+    }
 }

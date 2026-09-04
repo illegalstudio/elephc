@@ -161,15 +161,65 @@ pub(super) fn lower_stream_bucket_insert(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_is_local(stream)` as a true predicate after evaluating its argument.
+/// The prefixes php-src resolves to a non-local wrapper. `data:` carries no slashes
+/// because the RFC 2397 wrapper is registered for the bare scheme too.
+const NON_LOCAL_PATH_PREFIXES: [&str; 5] = ["http://", "https://", "ftp://", "ftps://", "data:"];
+
+/// Answers `stream_is_local()` for a path whose bytes are known at compile time.
+///
+/// Kept beside the runtime classifier in `stream_is_local.rs`, which applies the same
+/// rule to a path that only exists at run time; the two must agree.
+fn const_path_is_local(path: &str) -> bool {
+    !NON_LOCAL_PATH_PREFIXES
+        .iter()
+        .any(|prefix| path.len() >= prefix.len() && path[..prefix.len()].eq_ignore_ascii_case(prefix))
+}
+
+/// Lowers `stream_is_local(stream_or_path)`, which accepts a stream resource or a path.
 pub(crate) fn lower_stream_is_local(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "stream_is_local", 1)?;
     let stream = expect_operand(inst, 0)?;
-    ctx.load_value_to_result(stream)?;
-    emit_bool_result(ctx, true);
+    // If the arg is a string literal, check the scheme prefix at compile time.
+    if let Some(path) = optional_const_string_operand(ctx, stream)? {
+        emit_bool_result(ctx, const_path_is_local(&path));
+        return store_if_result(ctx, inst);
+    }
+    // A path that only exists at run time — an array element, a loop variable — goes to the
+    // runtime classifier, which applies the same rule to the bytes.
+    if matches!(ctx.value_php_type(stream)?, PhpType::Str) {
+        load_string_to_result(ctx, stream, "stream_is_local path")?;
+        abi::emit_call_label(ctx.emitter, "__rt_stream_is_local_path");
+        return store_if_result(ctx, inst);
+    }
+    // For a resource argument, consume the URL identity frozen into its StreamState.
+    load_open_stream_handle_to_result(ctx, stream, "stream_is_local")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            ctx.emitter.instruction(&format!(
+                "ldr x9, [x0, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+            ));                                                                 // load instance-local stream flags
+            ctx.emitter.instruction(&format!(
+                "tst x9, #{}", STREAM_STATE_FLAG_IS_URL
+            ));                                                                 // does this stream instance use a URL wrapper?
+            ctx.emitter.instruction("cset x0, eq");                             // URL streams are non-local; all other streams are local
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the opaque stream handle to the state resolver
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            ctx.emitter.instruction(&format!(
+                "mov rax, QWORD PTR [rax + {}]", STREAM_OWNERSHIP_FLAGS_OFFSET
+            ));                                                                 // load instance-local stream flags
+            ctx.emitter.instruction(&format!(
+                "test rax, {}", STREAM_STATE_FLAG_IS_URL
+            ));                                                                 // does this stream instance use a URL wrapper?
+            ctx.emitter.instruction("sete al");                                 // URL streams are non-local; all other streams are local
+            ctx.emitter.instruction("movzx eax, al");                           // normalize the predicate to the PHP boolean ABI
+        }
+    }
     store_if_result(ctx, inst)
 }
 
@@ -180,8 +230,14 @@ pub(crate) fn lower_stream_supports_lock(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "stream_supports_lock", 1)?;
     let stream = expect_operand(inst, 0)?;
-    load_stream_fd_to_result(ctx, stream, "stream_supports_lock")?;
-    emit_bool_result(ctx, true);
+    // Not every stream locks: php-src answers from the stream's ops, and the memory and
+    // output wrappers carry no lock option. Answering a blanket true told a caller that
+    // `flock()` on `php://memory` would serialise anything.
+    load_open_stream_handle_to_result(ctx, stream, "stream_supports_lock")?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque stream handle
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_supports_lock");
     store_if_result(ctx, inst)
 }
 

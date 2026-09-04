@@ -2,19 +2,19 @@
 title: "readdir()"
 description: "Read entry from directory handle."
 sidebar:
-  order: 212
+  order: 230
 ---
 
 ## readdir()
 
 ```php
-function readdir(resource $dir_handle): mixed
+function readdir(resource $dir_handle = null): mixed
 ```
 
 Read entry from directory handle.
 
 **Parameters**:
-- `$dir_handle` (`resource`)
+- `$dir_handle` (`resource`), default `null`, optional
 
 **Returns**: `mixed`
 

@@ -110,16 +110,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "multi-push frame off by 8: calls __rt_concat_reserve / __rt_wordwrap_cpy_x86_64, \
          integer-only assembly",
     ),
-    (
-        "__rt_array_filter",
-        "multi-push frame off by 8: calls __rt_heap_alloc / __rt_object_handle_acquire, \
-         integer-only assembly",
-    ),
-    (
-        "__rt_array_filter_refcounted",
-        "multi-push frame off by 8: calls __rt_heap_alloc / __rt_object_handle_acquire, \
-         integer-only assembly",
-    ),
     // -- The three that reach code this runtime did not write. FIX THESE FIRST.
     (
         "__rt_usort",
@@ -171,6 +161,31 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "shares a tail between the framed body and a frameless early-out",
     ),
 ];
+
+/// Entry points reached by `jmp`, not by `call`, with the rsp offset that models their real
+/// entry alignment.
+///
+/// The walk seeds every entry at offset 0, which encodes `rsp % 16 == 8` — the shape a `call`
+/// leaves. A shared continuation is different: the helper that jumps to it has already built
+/// its own 16-byte-aligned frame, so it arrives at `rsp % 16 == 0`, one boundary away, and
+/// every call site inside it reads as misaligned when it is not.
+///
+/// A GLOBAL LABEL IS WHAT MAKES THIS VISIBLE. `label_global` opens its own
+/// `.section .text.<name>`, so the continuation is analysed as a helper in its own right
+/// instead of being reached by the walk that jumps into it. The label is global on purpose:
+/// macOS dead-strips at atom boundaries, and a branch into another symbol's atom dies with
+/// it, so a shared tail has to be a symbol rather than a local label.
+///
+/// EACH ENTRY RECORDS THE FRAME THAT WAS CHECKED, not an assumption. Every helper that jumps
+/// here must arrive at the SAME alignment; a second caller with a different frame makes the
+/// entry wrong, and the `walk` conflict check is what catches that.
+const JMP_ENTERED_CONTINUATIONS: &[(&str, i64, &str)] = &[(
+    "__rt_csv_parse_buffer",
+    8,
+    "the shared CSV state machine. `__rt_fgetcsv` and `__rt_str_getcsv` both reach it with \
+     `push rbp` + `sub rsp, 120` + five callee-saved pushes = 168 bytes, an even multiple of \
+     16 counting the return address, so rsp is 0 mod 16 at the `jmp`, not 8.",
+)];
 
 /// The release chain a curl handle travels into the C bridge. These may NEVER appear in
 /// either allowlist above: allowlisting one of them would re-open exactly the bug this
@@ -284,10 +299,11 @@ fn walk(
     body: &[(usize, String)],
     labels: &HashMap<&str, usize>,
     start: usize,
+    seed: i64,
     seen: &mut HashMap<usize, i64>,
     misaligned: &mut Vec<(usize, String, i64)>,
 ) -> Option<String> {
-    let mut work = vec![(start, 0i64)];
+    let mut work = vec![(start, seed)];
     while let Some((index, offset)) = work.pop() {
         let Some((line, text)) = body.get(index) else {
             continue;
@@ -448,14 +464,24 @@ fn analyze(function: &Function) -> Analysis {
     let mut visited: HashMap<usize, i64> = HashMap::new();
     let mut misaligned: Vec<(usize, String, i64)> = Vec::new();
     let mut entry = labels.get(function.name.as_str()).copied();
+    // Only the section's OWN entry can be a jmp-entered continuation; the private subroutines
+    // behind it are entered by `call` like anywhere else, so later walks seed at 0.
+    let mut seed = JMP_ENTERED_CONTINUATIONS
+        .iter()
+        .find(|(name, _, _)| *name == function.name)
+        .map(|(_, offset, _)| *offset)
+        .unwrap_or(0);
 
     loop {
         let Some(start) = entry else { break };
         let mut seen: HashMap<usize, i64> = HashMap::new();
-        if let Some(reason) = walk(&function.body, &labels, start, &mut seen, &mut misaligned) {
+        if let Some(reason) =
+            walk(&function.body, &labels, start, seed, &mut seen, &mut misaligned)
+        {
             return Analysis { unanalyzable: Some(reason), misaligned: Vec::new() };
         }
         visited.extend(seen);
+        seed = 0;
         entry = function
             .body
             .iter()
@@ -607,3 +633,4 @@ fn the_curl_release_chain_is_never_allowlisted() {
         );
     }
 }
+

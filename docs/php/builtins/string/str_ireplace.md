@@ -2,7 +2,7 @@
 title: "str_ireplace()"
 description: "Case-insensitive version of str_replace()."
 sidebar:
-  order: 489
+  order: 519
 ---
 
 ## str_ireplace()
@@ -17,7 +17,7 @@ Case-insensitive version of str_replace().
 - `$search` (`string`)
 - `$replace` (`string`)
 - `$subject` (`string`)
-- `$count` (`int`), default `null`, optional
+- `$count` (`int`), passed by reference, default `null`, optional
 
 **Returns**: `string`
 

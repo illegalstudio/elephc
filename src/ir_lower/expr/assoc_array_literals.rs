@@ -117,6 +117,13 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
             }
+            // A BUILTIN is neither of those, and the syntactic fallback cannot know one: it
+            // answered `Str` for `json_decode()`, so the whole literal became `array<_, string>`
+            // and every value read back as a declared string. The checker already decided this
+            // call's type and keyed it by span — the indexed walk asks the same question.
+            if let Some(ty) = ctx.builtin_call_types.get(&value.span) {
+                return ir_array_storage_type(ty.clone());
+            }
             ir_array_storage_type(infer_expr_type_syntactic(value))
         }
         ExprKind::MethodCall { object, method, .. } => {
@@ -186,6 +193,11 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         }
         ExprKind::ArrayLiteral(items) => Some(array_literal_type_for_ir(ctx, items, array)),
         ExprKind::ArrayLiteralAssoc(pairs) => Some(assoc_array_literal_type_for_ir(ctx, pairs, array)),
+        // A call result is subscripted directly often enough to matter — `meta()["mode"]`. Without
+        // this arm the caller fell back to `infer_expr_type_syntactic`, whose last resort for an
+        // unknown call is `int`, so a ternary merging that read with `false` typed its temp `int`
+        // and CAST the string element to one: `$c ? false : meta()["mode"]` printed `0`.
+        ExprKind::FunctionCall { name, .. } => Some(call_return_type(ctx, name, &[])),
         _ => None,
     }?
     .codegen_repr();

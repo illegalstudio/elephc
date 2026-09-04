@@ -69,7 +69,7 @@ pub(in crate::interpreter) fn eval_filesize_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(filename, values)?;
-    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, 0, context, values)? {
+    if let Some(stat) = eval_user_wrapper_url_stat_result(&path, eval_url_stat_flags("filesize"), context, values)? {
         // A matched wrapper that reports no readable `size` field has failed to stat, which is
         // not the same as reporting a size of zero.
         return match eval_user_wrapper_stat_int_field(stat, "size", values)? {

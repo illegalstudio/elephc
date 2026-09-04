@@ -246,6 +246,26 @@ impl Checker {
         {
             return Some(existing.clone());
         }
+        // Two indexed arrays whose ELEMENTS disagree widen to `array<mixed>`, for the same
+        // reason the heterogeneous scalar pair below does: keeping either side lies.
+        //
+        // Reached only where the slot cannot be re-bound — a by-reference parameter, whose
+        // storage belongs to the caller. `function refill(array &$x) { $x = ["new"]; }` called
+        // with `[1, 2]` was refused outright, though php just writes the new array through the
+        // reference. A plain local never gets here: `$x = [1,2]; $x = ["a"];` abandons the slot
+        // and binds a fresh one, which is why only the by-ref shape diverged.
+        //
+        // `array<mixed>` is a shape the BACKEND really has, not a word the checker invented to
+        // get past a refusal: `[1, "s", 2.5, true, null]`, `$b = [1]; $b[] = "s";` and a by-ref
+        // callee appending a string to an int array all already run identical to php. The
+        // element merge is asked first so a mergeable pair (`Never`, `Mixed`, a common object
+        // base) keeps the sharper answer.
+        if let (PhpType::Array(left), PhpType::Array(right)) = (existing, new_ty) {
+            return Some(PhpType::Array(Box::new(
+                self.merge_array_element_type(left, right)
+                    .unwrap_or(PhpType::Mixed),
+            )));
+        }
         if *new_ty == PhpType::Void {
             return Some(existing.clone());
         }

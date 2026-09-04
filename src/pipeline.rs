@@ -142,7 +142,7 @@ pub(crate) fn compile(config: CliConfig) {
     // delete every one of those declarations again (measured: 40 functions in, 1 out,
     // `curl_init` and `CurlHandle` both gone). See
     // `curl_prelude::reachability_tests::forcing_the_curl_group_keeps_the_whole_surface`.
-    let forced_groups: HashSet<String> = [
+    let mut forced_groups: HashSet<String> = [
         (with_crates.contains("pdo"), "pdo"),
         (with_crates.contains("mysqli"), "mysqli"),
         (with_crates.contains("tz"), "tz"),
@@ -335,6 +335,54 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     timings.record_since("hash-prelude", phase_started);
 
+    // The `Directory` class and the `dir()` that mints one, injected only when the program
+    // references either. Runs beside the other class preludes, after include resolution so a
+    // reference inside an include is detected, and before name resolution so a namespaced caller
+    // resolves to it.
+    crate::progress::phase("dir-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::dir_prelude::inject_if_used(ast);
+    timings.record_since("dir-prelude", phase_started);
+
+    // php's `gz*` stream surface, spelled as the `compress.zlib://` wrapper the stream builtins
+    // already serve, injected only when the program references one of those functions. Runs beside
+    // the other preludes, after include resolution so a reference inside an include is detected,
+    // and before name resolution so a namespaced caller resolves to it.
+    crate::progress::phase("gz-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::gz_prelude::inject_if_used(ast);
+    timings.record_since("gz-prelude", phase_started);
+
+    // php's scanf engine, injected only when the program references `sscanf()`/`fscanf()`, whose
+    // registry lowerings call into it. Runs after include resolution so a scan inside an include
+    // is detected, and before name resolution so the emitted call resolves to a declared function.
+    crate::progress::phase("scanf-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::scanf_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // The engine is named only by the lowerings of `sscanf()`/`fscanf()`, never by PHP source, so
+    // reachability has no edge to follow to it. The group exists only when the prelude was
+    // injected, which happens only when the program references one of those two names.
+    if prelude_inventory
+        .groups
+        .contains_key(crate::scanf_prelude::PRELUDE_GROUP_ID)
+    {
+        forced_groups.insert(crate::scanf_prelude::PRELUDE_GROUP_ID.to_string());
+    }
+    timings.record_since("scanf-prelude", phase_started);
+
+    // php's `similar_text()` engine, injected only when the program references it. Same shape as
+    // the scanf prelude: the declarations are named by the builtin's lowering and never by PHP
+    // source, so the group has to be forced or reachability prunes what the backend then calls.
+    crate::progress::phase("similar-text-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::similar_text_prelude::inject_if_used(ast, &mut prelude_inventory);
+    if prelude_inventory
+        .groups
+        .contains_key(crate::similar_text_prelude::PRELUDE_GROUP_ID)
+    {
+        forced_groups.insert(crate::similar_text_prelude::PRELUDE_GROUP_ID.to_string());
+    }
+    timings.record_since("similar-text-prelude", phase_started);
     // Inject the `ext/curl` prelude (the `CurlHandle` class and the `curl_*` wrappers over
     // the internal `__elephc_curl_*` builtins) only when the program references that
     // surface, so non-curl binaries never declare `CurlHandle`, never link

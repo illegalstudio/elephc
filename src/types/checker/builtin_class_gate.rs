@@ -48,10 +48,14 @@ pub(crate) const ALWAYS_REGISTERED_THROWABLES: &[&str] = &[
 ///
 /// Each has NO `_*_class_id` symbol, and `seed_runtime_throwable_class_names` records why:
 /// elephc rejects a bad builtin arity at COMPILE time where reference PHP raises
-/// `ArgumentCountError` at runtime; `assert()` is not implemented, so `AssertionError` has no
-/// producer; and an unmatched `match` ends in `Terminator::Fatal` rather than throwing
-/// `UnhandledMatchError` — a real gap against reference PHP, and closing it will give the class
-/// the EIR reference that makes it survive this gate on its own.
+/// `ArgumentCountError` at runtime, and `assert()` is not implemented, so `AssertionError` has no
+/// producer.
+///
+/// `UnhandledMatchError` is still listed, because a program that NAMES it must get the class the
+/// same way. What changed is that it is no longer only reachable by name: a `match` with no default
+/// arm throws one, and nothing on that line spells the class — which is why
+/// `throwables_to_register` asks the walk for the construct as well, exactly as it does for
+/// `yield` and `Generator`.
 const UNRAISED_THROWABLES: &[&str] = &[
     "ArgumentCountError",
     "AssertionError",
@@ -151,6 +155,12 @@ pub(crate) fn throwables_to_register(
         if program_names(&usage, name) {
             insert_with_ancestors(name, &mut wanted);
         }
+    }
+    // A default-less `match` raises `UnhandledMatchError` from a line that names no class, so the
+    // name scan above cannot see it. Without this the throw reached codegen and was refused with
+    // `unsupported EIR backend feature: unknown class UnhandledMatchError`.
+    if usage.matches_without_default {
+        insert_with_ancestors("UnhandledMatchError", &mut wanted);
     }
     if spl_pulls_in_every_exception(spl_surface_registered) {
         for (name, _) in SPL_EXCEPTION_PARENTS {

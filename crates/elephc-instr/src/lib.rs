@@ -108,6 +108,16 @@ struct FnAcc {
     /// Self time minus this wait is an unclassified non-DB remainder.
     incl_wait: u64,
     excl_wait: u64,
+    /// STREAM operations attributed to this function: every `fopen`, `fread`,
+    /// `fwrite`, `fgets`, … the program performed while it was on the stack.
+    ///
+    /// Counted apart from `io`, which is DB queries. A function that reads a file
+    /// a thousand times and one that runs a thousand statements are different
+    /// problems with the same shape, and a single dimension cannot tell them
+    /// apart — the whole reason the query counter exists rather than a generic
+    /// "I/O" one.
+    incl_stream: u64,
+    excl_stream: u64,
     /// Live activations on the stack — inclusive is credited only when this
     /// returns to zero, so recursion is not double counted.
     depth: u32,
@@ -118,6 +128,7 @@ struct FnAcc {
     f_outer: u64,
     io_outer: u64,
     w_outer: u64,
+    stream_outer: u64,
 }
 
 /// One live call-stack frame.
@@ -144,6 +155,7 @@ struct Frame {
     f_enter: u64,
     io_enter: u64,
     w_enter: u64,
+    stream_enter: u64,
     /// Summed elapsed time, allocations, frees, DB queries, and DB-driver wait
     /// of this frame's direct callees.
     children_ns: u64,
@@ -151,6 +163,7 @@ struct Frame {
     children_frees: u64,
     children_io: u64,
     children_wait: u64,
+    children_stream: u64,
 }
 
 /// One suspended coroutine's activations, off the shadow stack until it resumes.
@@ -269,6 +282,7 @@ struct Throw {
     a: u64,
     f: u64,
     io: u64,
+    stream: u64,
     w: u64,
     /// What this throw's handler has spent, charged to no one yet.
     ///
@@ -281,6 +295,7 @@ struct Throw {
     children_allocs: u64,
     children_frees: u64,
     children_io: u64,
+    children_stream: u64,
     children_wait: u64,
     /// `(callee, calls, summed inclusive ns)` for what this handler called.
     edges: Vec<(u32, u64, u64)>,
@@ -309,17 +324,17 @@ impl Unwind {
     /// beside it, so it is closed at the earlier instant too, and the span
     /// between lands on its caller — an ancestor, rather than on a frame that
     /// had already stopped running.
-    fn killer_of(&self, index: usize) -> Option<(u64, u64, u64, u64, u64)> {
+    fn killer_of(&self, index: usize) -> Option<(u64, u64, u64, u64, u64, u64)> {
         self.throws
             .iter()
             .find(|throw| throw.depth > index)
-            .map(|k| (k.t, k.a, k.f, k.io, k.w))
+            .map(|k| (k.t, k.a, k.f, k.io, k.stream, k.w))
     }
 }
 
 impl State {
     /// Marks the start of an unwind.
-    fn note_throw(&mut self, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn note_throw(&mut self, t: u64, a: u64, f: u64, io: u64, stream: u64, w: u64) {
         // A throw inside a catch handler replaces the unwind, but must not drop
         // what the previous one was still holding: that cost has already been
         // taken out of its frames, so losing it here would stop the exclusives
@@ -356,7 +371,9 @@ impl State {
         // replacing it: the frames the first one killed died then, and only its
         // own instants say when.
         if unwind.throws.len() < MAX_NESTED_THROWS {
-            unwind.throws.push(Throw { depth, t, a, f, io, w, ..Throw::default() });
+            unwind
+                .throws
+                .push(Throw { depth, t, a, f, io, stream, w, ..Throw::default() });
         } else if let Some(last) = unwind.throws.last_mut() {
             // Past the cap the newest throw takes over the last record and keeps
             // what it had accumulated. Dropping that charge instead would stop
@@ -409,7 +426,17 @@ impl State {
     /// Records entry to `id` with the timestamp `t`, allocation counter `a`,
     /// free counter `f`, io counter `io`, and io-wait nanoseconds `w` sampled
     /// at the call site.
-    fn enter_at(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn enter_at(
+        &mut self,
+        id: u32,
+        fp: usize,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        stream: u64,
+        w: u64,
+    ) {
         self.ensure(id);
         // A call made while an exception is still unwinding sits on top of the
         // frames it destroyed, so the frame below is not the caller — the
@@ -469,6 +496,7 @@ impl State {
             acc.a_outer = a;
             acc.f_outer = f;
             acc.io_outer = io;
+            acc.stream_outer = stream;
             acc.w_outer = w;
         }
         acc.depth += 1;
@@ -480,11 +508,13 @@ impl State {
             a_enter: a,
             f_enter: f,
             io_enter: io,
+            stream_enter: stream,
             w_enter: w,
             children_ns: 0,
             children_allocs: 0,
             children_frees: 0,
             children_io: 0,
+            children_stream: 0,
             children_wait: 0,
         });
     }
@@ -510,7 +540,18 @@ impl State {
     /// nested call closes only the inner frame and leaves the outer one standing;
     /// that case is no better than before this existed and no worse, and the
     /// test named for it says so rather than a comment claiming otherwise.
-    fn suspend_at(&mut self, id: u32, fp: usize, coro: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn suspend_at(
+        &mut self,
+        id: u32,
+        fp: usize,
+        coro: usize,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        stream: u64,
+        w: u64,
+    ) {
         // Paired with the id, the way `exit_at` pairs them: a freed coroutine
         // stack is handed back out, so a frame pointer alone names an activation
         // only among the live ones.
@@ -551,7 +592,7 @@ impl State {
         // the suspension's timestamp and the resume then reopened them as LIVE
         // callees, charging everything after through activations that no longer
         // existed.
-        self.close_frames_above(index, t, a, f, io, w);
+        self.close_frames_above(index, t, a, f, io, stream, w);
         let frame = self.stack.pop().expect("the index is inside the stack");
         let frames = vec![(frame.id, frame.fp)];
         // Traced like an exit, because it ends a span exactly as an exit does.
@@ -559,7 +600,7 @@ impl State {
         // Chrome/Perfetto timeline, and an abandoned generator with no span at
         // all while the aggregate table accounted for it.
         self.trace_span(frame.id, frame.t_enter, t);
-        self.close_frame(frame, t, a, f, io, w);
+        self.close_frame(frame, t, a, f, io, stream, w);
         self.parked.push(Parked { fp, coro, frames });
     }
 
@@ -579,14 +620,23 @@ impl State {
     /// Keyed by the coroutine rather than by a frame pointer because that is what
     /// the helper has. A coroutine has one suspension in flight at a time, so the
     /// key is exact; `rposition` still takes the newest, which is that one.
-    fn unpark_at(&mut self, coro: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn unpark_at(
+        &mut self,
+        coro: usize,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        stream: u64,
+        w: u64,
+    ) {
         let Some(at) = self.parked.iter().rposition(|group| group.coro == coro) else {
             return;
         };
         let Some(&(id, fp)) = self.parked[at].frames.first() else {
             return;
         };
-        self.restore(at, id, fp, t, a, f, io, w);
+        self.restore(at, id, fp, t, a, f, io, stream, w);
     }
 
     /// Opens a resumed coroutine's activations again, at this instant.
@@ -595,7 +645,17 @@ impl State {
     /// the suspension is accounted for, and this is a new one. `calls` is not
     /// touched and no edge is recorded — a resume is the same activation the
     /// enter already counted, arriving through the same caller.
-    fn resume_at(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn resume_at(
+        &mut self,
+        id: u32,
+        fp: usize,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        stream: u64,
+        w: u64,
+    ) {
         let Some(at) = self.parked.iter().rposition(|group| group.fp == fp) else {
             return;
         };
@@ -606,14 +666,25 @@ impl State {
         if self.parked[at].frames.first().is_none_or(|(first, _)| *first != id) {
             return;
         }
-        self.restore(at, id, fp, t, a, f, io, w);
+        self.restore(at, id, fp, t, a, f, io, stream, w);
     }
 
     /// Puts the parked group at `at` back on the stack, at this instant.
     ///
     /// Shared by the two ways a coroutine can come back: its own resume, and the
     /// runtime unparking it on a path that will not reach that resume.
-    fn restore(&mut self, at: usize, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn restore(
+        &mut self,
+        at: usize,
+        id: u32,
+        fp: usize,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        stream: u64,
+        w: u64,
+    ) {
         // A park refused at `MAX_PARKED` left this activation ON the stack, and
         // an older abandoned coroutine of the same function can own a parked
         // group at a coroutine-stack address that has since been handed back
@@ -658,11 +729,13 @@ impl State {
                 f_enter: f,
                 io_enter: io,
                 w_enter: w,
+                stream_enter: stream,
                 children_ns: 0,
                 children_allocs: 0,
                 children_frees: 0,
                 children_io: 0,
                 children_wait: 0,
+                children_stream: 0,
             });
         }
     }
@@ -670,7 +743,17 @@ impl State {
     /// Records exit from `id` with timestamp `t`, allocation counter `a`, free
     /// counter `f`, io counter `io`, and io-wait nanoseconds `w`, resyncing past
     /// any frames left by exception unwinding.
-    fn exit_at(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn exit_at(
+        &mut self,
+        id: u32,
+        fp: usize,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        stream: u64,
+        w: u64,
+    ) {
         // Which activation is ending, and whether it was ever tracked at all.
         //
         // An exit for a frame that is not on the stack has nothing to close: it
@@ -742,7 +825,7 @@ impl State {
         // their cost on them; simply discarding them left it inside the
         // catching function's own time, which then reads as the hot function
         // (measured: a catcher showing 99.7% self time for work it never did).
-        self.close_frames_above(index, t, a, f, io, w);
+        self.close_frames_above(index, t, a, f, io, stream, w);
         let Some(mut frame) = self.stack.pop() else {
             return;
         };
@@ -774,6 +857,9 @@ impl State {
                     frame.children_allocs.wrapping_add(throw.children_allocs);
                 frame.children_frees = frame.children_frees.wrapping_add(throw.children_frees);
                 frame.children_io = frame.children_io.wrapping_add(throw.children_io);
+                frame.children_stream = frame
+                    .children_stream
+                    .wrapping_add(throw.children_stream);
                 frame.children_wait = frame.children_wait.wrapping_add(throw.children_wait);
                 for (callee, calls, ns) in throw.edges {
                     let entry = self.edges.entry((id, callee)).or_insert((0, 0));
@@ -793,7 +879,7 @@ impl State {
             }
         }
         self.trace_span(id, frame.t_enter, t);
-        self.close_frame(frame, t, a, f, io, w);
+        self.close_frame(frame, t, a, f, io, stream, w);
     }
 
     /// Records one span on the opt-in timeline, if tracing is on and there is
@@ -830,7 +916,16 @@ impl State {
     /// must agree — a suspension that instead PARKED this debris would reopen
     /// dead activations as live callees on the resume, and charge everything
     /// after them through frames that no longer exist.
-    fn close_frames_above(&mut self, index: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn close_frames_above(
+        &mut self,
+        index: usize,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        stream: u64,
+        w: u64,
+    ) {
         while self.stack.len() > index + 1 {
             let stale = self.stack.pop().expect("the index is inside the stack");
             let killer = self
@@ -850,15 +945,16 @@ impl State {
                 // the guard exists for. Either that case is unreachable and the
                 // guard describes a phantom, or it is reachable and the counters
                 // wrap; the asymmetry is what could not be right either way.
-                Some((kt, ka, kf, kio, kw)) => {
+                Some((kt, ka, kf, kio, kstream, kw)) => {
                     let at = kt.max(stale.t_enter);
                     let allocs = ka.max(stale.a_enter);
                     let frees = kf.max(stale.f_enter);
                     let io_ops = kio.max(stale.io_enter);
+                    let stream_ops = kstream.max(stale.stream_enter);
                     let wait = kw.max(stale.w_enter);
-                    self.close_frame(stale, at, allocs, frees, io_ops, wait)
+                    self.close_frame(stale, at, allocs, frees, io_ops, stream_ops, wait)
                 }
-                None => self.close_frame(stale, t, a, f, io, w),
+                None => self.close_frame(stale, t, a, f, io, stream, w),
             }
         }
     }
@@ -880,19 +976,20 @@ impl State {
         a: u64,
         f: u64,
         io: u64,
+        stream: u64,
         w: u64,
     ) {
         // Let an activation dropped past the cap consume only its own recorded
         // frame pointer. Clearing these identities first would let a reused
         // address match an unwind-dead tracked frame instead.
         if let Some((id, fp)) = current {
-            self.exit_at(id, fp, t, a, f, io, w);
+            self.exit_at(id, fp, t, a, f, io, stream, w);
         }
         // No dropped activation will return after process termination, and its
         // identity must not consume a tracked ancestor's synthetic exit.
         self.dropped_fps = Vec::new();
         while let Some((id, fp)) = self.stack.last().map(|frame| (frame.id, frame.fp)) {
-            self.exit_at(id, fp, t, a, f, io, w);
+            self.exit_at(id, fp, t, a, f, io, stream, w);
         }
     }
 
@@ -903,12 +1000,22 @@ impl State {
     /// Shared by the normal return path and the exception-unwind path, so an
     /// unwound frame is measured the same way a returning one is — the two
     /// must not drift, or the exclusives stop partitioning the root.
-    fn close_frame(&mut self, frame: Frame, t: u64, a: u64, f: u64, io: u64, w: u64) {
+    fn close_frame(
+        &mut self,
+        frame: Frame,
+        t: u64,
+        a: u64,
+        f: u64,
+        io: u64,
+        stream: u64,
+        w: u64,
+    ) {
         let id = frame.id;
         let elapsed_ns = t.wrapping_sub(frame.t_enter);
         let elapsed_allocs = a.wrapping_sub(frame.a_enter);
         let elapsed_frees = f.wrapping_sub(frame.f_enter);
         let elapsed_io = io.wrapping_sub(frame.io_enter);
+        let elapsed_stream = stream.wrapping_sub(frame.stream_enter);
         let elapsed_wait = w.wrapping_sub(frame.w_enter);
         // Children can only exceed their parent's own span if the accounting
         // has gone wrong somewhere, and no sequence found so far reaches this —
@@ -932,6 +1039,9 @@ impl State {
         acc.excl_io = acc
             .excl_io
             .wrapping_add(elapsed_io.wrapping_sub(frame.children_io));
+        acc.excl_stream = acc
+            .excl_stream
+            .wrapping_add(elapsed_stream.wrapping_sub(frame.children_stream));
         acc.excl_wait = acc
             .excl_wait
             .wrapping_add(elapsed_wait.wrapping_sub(frame.children_wait));
@@ -941,6 +1051,9 @@ impl State {
             acc.incl_allocs = acc.incl_allocs.wrapping_add(a.wrapping_sub(acc.a_outer));
             acc.incl_frees = acc.incl_frees.wrapping_add(f.wrapping_sub(acc.f_outer));
             acc.incl_io = acc.incl_io.wrapping_add(io.wrapping_sub(acc.io_outer));
+            acc.incl_stream = acc
+                .incl_stream
+                .wrapping_add(stream.wrapping_sub(acc.stream_outer));
             acc.incl_wait = acc.incl_wait.wrapping_add(w.wrapping_sub(acc.w_outer));
         }
         // Charging this to the frame below would hand the handler's cost to a
@@ -951,6 +1064,7 @@ impl State {
             u.children_allocs = u.children_allocs.wrapping_add(elapsed_allocs);
             u.children_frees = u.children_frees.wrapping_add(elapsed_frees);
             u.children_io = u.children_io.wrapping_add(elapsed_io);
+            u.children_stream = u.children_stream.wrapping_add(elapsed_stream);
             u.children_wait = u.children_wait.wrapping_add(elapsed_wait);
             match u.edges.iter_mut().find(|(c, ..)| *c == id) {
                 Some(edge) => edge.2 = edge.2.wrapping_add(elapsed_ns),
@@ -964,6 +1078,7 @@ impl State {
             top.children_allocs = top.children_allocs.wrapping_add(elapsed_allocs);
             top.children_frees = top.children_frees.wrapping_add(elapsed_frees);
             top.children_io = top.children_io.wrapping_add(elapsed_io);
+            top.children_stream = top.children_stream.wrapping_add(elapsed_stream);
             top.children_wait = top.children_wait.wrapping_add(elapsed_wait);
         }
         if let Some(pid) = parent {
@@ -1084,7 +1199,7 @@ impl State {
             let incl_ret = acc.incl_allocs as i64 - acc.incl_frees as i64;
             let excl_ret = acc.excl_allocs as i64 - acc.excl_frees as i64;
             out.push_str(&format!(
-                "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_ret={} excl_ret={} incl_wait={} excl_wait={}\n",
+                "elephc-instr: {} calls={} incl_ns={} excl_ns={} incl_allocs={} excl_allocs={} incl_io={} excl_io={} incl_stream={} excl_stream={} incl_ret={} excl_ret={} incl_wait={} excl_wait={}\n",
                 name_of(id),
                 acc.calls,
                 // Ticks became nanoseconds here, once, rather than twice per
@@ -1096,6 +1211,8 @@ impl State {
                 acc.excl_allocs,
                 acc.incl_io,
                 acc.excl_io,
+                acc.incl_stream,
+                acc.excl_stream,
                 incl_ret,
                 excl_ret,
                 acc.incl_wait,
@@ -1141,6 +1258,69 @@ pub extern "C" fn elephc_instr_io() {
         return;
     }
     IO_OPS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Global STREAM operation counter. Bumped by `elephc_instr_stream`, called from
+/// the emitted runtime through the `_elephc_instr_stream_fn` slot; snapshotted
+/// per function at enter/exit exactly like the allocation and query counters.
+static STREAM_OPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many distinct stream OPERATION names one slice may record.
+///
+/// The name comes from a fixed table in the compiler — `fopen`, `fread`, … — so
+/// this can only be reached by a build that added more stream builtins than the
+/// cap, never by a program's own data. It exists so the list has a stated bound
+/// like the query list, not because anything is expected to hit it.
+const MAX_STREAM_OPS: usize = 64;
+
+/// Distinct stream operations and how many times each ran, in first-seen order.
+///
+/// The stream analogue of `QUERIES`: a count alone says a function did 1,200
+/// stream operations, and the breakdown says whether that is one `fopen` and
+/// 1,199 `fgets` — a read loop — or 1,200 `fopen` calls, which is a different
+/// bug entirely.
+static STREAM_NAMES: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+
+/// Records one stream operation, named. Reached from the emitted runtime through
+/// the `_elephc_instr_stream_fn` pointer slot, which is null unless
+/// `--instrument` linked and initialized this crate.
+///
+/// The bytes are copied here, so the caller may pass a pointer into its own
+/// read-only data and need not keep it alive.
+#[no_mangle]
+pub extern "C" fn elephc_instr_stream(ptr: *const u8, len: usize) {
+    // Dormant means dormant, exactly as for the query counter: the slot is
+    // filled at init, so without this a binary nobody asked to profile would
+    // still count every read it performed.
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    STREAM_OPS.fetch_add(1, Ordering::Relaxed);
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    let name = match std::str::from_utf8(unsafe { std::slice::from_raw_parts(ptr, len) }) {
+        Ok(name) => name,
+        Err(_) => return,
+    };
+    let Ok(mut names) = STREAM_NAMES.lock() else {
+        return;
+    };
+    if let Some(entry) = names.iter_mut().find(|(seen, _)| seen == name) {
+        entry.1 += 1;
+    } else if names.len() < MAX_STREAM_OPS {
+        names.push((name.to_string(), 1));
+    }
+}
+
+/// The stream operations recorded so far, most-run first.
+pub fn stream_operations() -> Vec<(String, u64)> {
+    let Ok(names) = STREAM_NAMES.lock() else {
+        return Vec::new();
+    };
+    let mut out = names.clone();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out
 }
 
 /// Global nanoseconds spent blocked inside database-driver calls. Bumped
@@ -1261,6 +1441,21 @@ pub extern "C" fn elephc_instr_query(ptr: *const u8, len: usize) {
         // the reader would take a partial list for the whole surface.
         DROPPED_QUERY_SHAPES.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Renders the recorded stream operations as `elephc-instr-stream: <count> <op>`
+/// lines, most-run first.
+///
+/// The stream analogue of `render_queries`, and there for the same reason: a
+/// count alone says a function performed 1,200 stream operations, and only the
+/// breakdown says whether that is one `fopen` and 1,199 `fgets` — a read loop —
+/// or 1,200 `fopen` calls, which is a different bug.
+fn render_stream_operations() -> String {
+    let mut out = String::new();
+    for (name, count) in stream_operations() {
+        out.push_str(&format!("elephc-instr-stream: {count} {name}\n"));
+    }
+    out
 }
 
 /// Renders the recorded queries as `elephc-instr-query: <count> <text>` lines,
@@ -1991,8 +2186,9 @@ pub extern "C" fn elephc_instr_throw(allocs: u64, frees: u64) {
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
+    let stream = STREAM_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().note_throw(t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().note_throw(t, allocs, frees, io, stream, w));
 }
 
 /// Records entry to the function `id`; `allocs` / `frees` are the program's
@@ -2006,8 +2202,9 @@ pub extern "C" fn elephc_instr_enter(id: u32, allocs: u64, frees: u64, frame: us
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
+    let stream = STREAM_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().enter_at(id, frame, t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().enter_at(id, frame, t, allocs, frees, io, stream, w));
 }
 
 /// Records exit from the function `id`; `allocs` / `frees` are the program's
@@ -2022,8 +2219,9 @@ pub extern "C" fn elephc_instr_exit(id: u32, allocs: u64, frees: u64, frame: usi
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
+    let stream = STREAM_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().exit_at(id, frame, t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().exit_at(id, frame, t, allocs, frees, io, stream, w));
 }
 
 /// Records that the function `id` is suspending a coroutine at a `yield` or a
@@ -2048,8 +2246,9 @@ pub extern "C" fn elephc_instr_suspend(
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
+    let stream = STREAM_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().suspend_at(id, frame, coro, t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().suspend_at(id, frame, coro, t, allocs, frees, io, stream, w));
 }
 
 /// Puts a coroutine's activations back when the runtime's suspend helper is
@@ -2067,8 +2266,9 @@ pub extern "C" fn elephc_instr_unpark(allocs: u64, frees: u64, coro: usize) {
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
+    let stream = STREAM_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().unpark_at(coro, t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().unpark_at(coro, t, allocs, frees, io, stream, w));
 }
 
 /// Records that the function `id` has been resumed at the suspension point
@@ -2085,8 +2285,9 @@ pub extern "C" fn elephc_instr_resume(id: u32, allocs: u64, frees: u64, frame: u
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
+    let stream = STREAM_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
-    STATE.with(|s| s.borrow_mut().resume_at(id, frame, t, allocs, frees, io, w));
+    STATE.with(|s| s.borrow_mut().resume_at(id, frame, t, allocs, frees, io, stream, w));
 }
 
 /// Finalizes and publishes an exact slice before a generated terminal path exits.
@@ -2108,11 +2309,12 @@ pub extern "C" fn elephc_instr_terminate(
     }
     let t = now_ticks();
     let io = IO_OPS.load(Ordering::Relaxed);
+    let stream = STREAM_OPS.load(Ordering::Relaxed);
     let w = WAIT_NS.load(Ordering::Relaxed);
     let current = (current_id != u32::MAX).then_some((current_id, frame));
     STATE.with(|s| {
         s.borrow_mut()
-            .terminate_at(current, t, allocs, frees, io, w)
+            .terminate_at(current, t, allocs, frees, io, stream, w)
     });
     SLICE_OPEN.store(false, Ordering::Relaxed);
     publish_active(false);
@@ -2732,7 +2934,13 @@ pub extern "C" fn elephc_instr_dump() {
         end_slice();
         return;
     }
-    let slice = format!("{}{}{}", render_trace(), text, render_queries());
+    let slice = format!(
+        "{}{}{}{}",
+        render_trace(),
+        text,
+        render_queries(),
+        render_stream_operations()
+    );
     // Someone asked for this one over the endpoint: hand it over instead of
     // logging it. Doing both would write a request's profile into the service's
     // log every time an operator looked at it — and so would logging the ones
@@ -2835,21 +3043,21 @@ mod tests {
     fn a_throw_out_of_the_dropped_region_does_not_swallow_a_real_exit() {
         let mut state = State::default();
         for depth in 0..MAX_STACK {
-            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0, 0);
         }
         let dropped: Vec<usize> = (0..3)
-            .map(|_| state.enter_sim(7, 1_000, 0, 0, 0, 0))
+            .map(|_| state.enter_sim(7, 1_000, 0, 0, 0, 0, 0))
             .collect();
         assert_eq!(state.dropped, 3, "the deeper calls should have been dropped");
         assert_eq!(state.stack.len(), MAX_STACK, "and none of them pushed");
 
         // The throw destroys those activations; none of them will ever exit.
-        state.note_throw(1_500, 0, 0, 0, 0);
+        state.note_throw(1_500, 0, 0, 0, 0, 0);
 
         let catcher = state.stack.last().expect("full stack").id;
         let catcher_fp = state.stack.last().expect("full stack").fp;
         let before = state.stack.len();
-        state.exit_at(catcher, catcher_fp, 2_000, 0, 0, 0, 0);
+        state.exit_at(catcher, catcher_fp, 2_000, 0, 0, 0, 0, 0);
         assert!(
             state.stack.len() < before,
             "the catching frame's exit was swallowed: stack still {} deep",
@@ -2859,7 +3067,7 @@ mod tests {
         // And an exit that DOES arrive for a dropped activation still closes
         // nothing, throw or no throw.
         let after = state.stack.len();
-        state.exit_at(7, dropped[0], 2_100, 0, 0, 0, 0);
+        state.exit_at(7, dropped[0], 2_100, 0, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), after, "a dropped exit disturbed the stack");
     }
 
@@ -2881,23 +3089,23 @@ mod tests {
     fn a_dropped_exit_whose_frame_pointer_aliases_a_stale_one_closes_nothing() {
         let mut state = State::default();
         for depth in 0..MAX_STACK {
-            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0, 0);
         }
         assert_eq!(state.stack.len(), MAX_STACK);
 
         // Raised at the top and caught at the root: every frame above index 0 is
         // dead, and every one of them is still on the shadow stack.
-        state.note_throw(1_500, 0, 0, 0, 0);
+        state.note_throw(1_500, 0, 0, 0, 0, 0);
 
         // The handler calls something. The stack is full, so the activation is
         // dropped — and the address it runs at is one the unwind freed.
         let stale_fp = state.stack[1].fp;
         let handler = 9u32;
-        state.enter_at(handler, stale_fp, 1_600, 0, 0, 0, 0);
+        state.enter_at(handler, stale_fp, 1_600, 0, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), MAX_STACK, "a dropped call pushes nothing");
 
         let before = state.stack.len();
-        state.exit_at(handler, stale_fp, 1_700, 0, 0, 0, 0);
+        state.exit_at(handler, stale_fp, 1_700, 0, 0, 0, 0, 0);
         assert_eq!(
             state.stack.len(),
             before,
@@ -2926,18 +3134,18 @@ mod tests {
     fn a_suspended_coroutine_is_not_the_caller_of_what_runs_next() {
         let mut state = State::default();
         // drain() on the main stack, then the generator body on its own.
-        state.enter_sim(0, 0, 0, 0, 0, 0);
-        state.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        state.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0, 0);
         // The body runs 20 ns of its own, then yields.
-        state.suspend_sim(1, CORO_BASE, 30, 0, 0, 0, 0);
+        state.suspend_sim(1, CORO_BASE, 30, 0, 0, 0, 0, 0);
         assert!(
             state.stack.iter().all(|frame| frame.id != 1),
             "a suspended body must not sit on the stack the consumer is running on"
         );
 
         // The consumer's work, which the generator neither did nor called.
-        state.enter_sim(2, 30, 0, 0, 0, 0);
-        state.exit_sim(2, 1030, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0);
+        state.exit_sim(2, 1030, 0, 0, 0, 0, 0);
         assert_eq!(
             state.edges.get(&(0, 2)).map(|e| e.0),
             Some(1),
@@ -2948,9 +3156,9 @@ mod tests {
             "the profile invented an edge from a coroutine that was not running"
         );
 
-        state.resume_at(1, CORO_BASE, 1030, 0, 0, 0, 0);
-        state.exit_at(1, CORO_BASE, 1040, 0, 0, 0, 0);
-        state.exit_sim(0, 1040, 0, 0, 0, 0);
+        state.resume_at(1, CORO_BASE, 1030, 0, 0, 0, 0, 0);
+        state.exit_at(1, CORO_BASE, 1040, 0, 0, 0, 0, 0);
+        state.exit_sim(0, 1040, 0, 0, 0, 0, 0);
 
         assert_eq!(
             state.fns[1].incl_ns, 30,
@@ -2973,13 +3181,13 @@ mod tests {
     #[test]
     fn a_resumed_coroutine_excludes_the_suspended_span_in_every_dimension() {
         let mut state = State::default();
-        state.enter_at(0, CORO_BASE, 100, 10, 5, 2, 50);
+        state.enter_at(0, CORO_BASE, 100, 10, 5, 2, 0, 50);
         // 20 ns, 3 allocs, 1 free, 1 io op and 10 ns of wait before the yield.
-        state.suspend_sim(0, CORO_BASE, 120, 13, 6, 3, 60);
+        state.suspend_sim(0, CORO_BASE, 120, 13, 6, 3, 0, 60);
         // The consumer spends a great deal of everything while it is away.
-        state.resume_at(0, CORO_BASE, 5_120, 913, 406, 303, 5_060);
+        state.resume_at(0, CORO_BASE, 5_120, 913, 406, 303, 0, 5_060);
         // Then 5 ns, 2 allocs, 1 free, 1 io op and 5 ns of wait after it.
-        state.exit_at(0, CORO_BASE, 5_125, 915, 407, 304, 5_065);
+        state.exit_at(0, CORO_BASE, 5_125, 915, 407, 304, 0, 5_065);
 
         let acc = &state.fns[0];
         assert_eq!(acc.excl_ns, 25, "time");
@@ -3002,11 +3210,11 @@ mod tests {
     #[test]
     fn an_abandoned_coroutine_still_reports_what_it_ran() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // consumer
-        state.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0); // the body, on its own stack
-        state.suspend_sim(1, CORO_BASE, 40, 0, 0, 0, 0); // 30 ns, then it yields
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // consumer
+        state.enter_at(1, CORO_BASE, 10, 0, 0, 0, 0, 0); // the body, on its own stack
+        state.suspend_sim(1, CORO_BASE, 40, 0, 0, 0, 0, 0); // 30 ns, then it yields
         // Nobody ever resumes it. The consumer goes on and returns.
-        state.exit_sim(0, 1_040, 0, 0, 0, 0);
+        state.exit_sim(0, 1_040, 0, 0, 0, 0, 0);
 
         assert_eq!(
             state.fns[1].excl_ns, 30,
@@ -3040,10 +3248,10 @@ mod tests {
         let mut state = State::default();
         let outer = CORO_BASE;
         let inner = CORO_BASE - 64;
-        state.enter_at(0, outer, 0, 0, 0, 0, 0);
-        state.enter_at(0, inner, 10, 0, 0, 0, 0);
+        state.enter_at(0, outer, 0, 0, 0, 0, 0, 0);
+        state.enter_at(0, inner, 10, 0, 0, 0, 0, 0);
 
-        state.suspend_sim(0, inner, 20, 0, 0, 0, 0);
+        state.suspend_sim(0, inner, 20, 0, 0, 0, 0, 0);
         assert_eq!(
             state.fns[0].depth, 1,
             "the outer activation is still running and still holds the span"
@@ -3053,10 +3261,10 @@ mod tests {
             "no inclusive time is credited while the outermost activation runs"
         );
 
-        state.resume_at(0, inner, 1_020, 0, 0, 0, 0);
+        state.resume_at(0, inner, 1_020, 0, 0, 0, 0, 0);
         assert_eq!(state.fns[0].depth, 2, "and the resume puts the activation back");
-        state.exit_at(0, inner, 1_030, 0, 0, 0, 0);
-        state.exit_at(0, outer, 1_040, 0, 0, 0, 0);
+        state.exit_at(0, inner, 1_030, 0, 0, 0, 0, 0);
+        state.exit_at(0, outer, 1_040, 0, 0, 0, 0, 0);
 
         assert_eq!(
             state.fns[0].incl_ns, 1_040,
@@ -3084,14 +3292,14 @@ mod tests {
         let mut state = State::default();
         // The catcher is a generator body on its own stack, with two frames
         // above it that a throw is about to destroy.
-        state.enter_at(0, CORO_BASE, 0, 0, 0, 0, 0);
-        state.enter_at(1, CORO_BASE - 64, 10, 0, 0, 0, 0);
-        state.enter_at(2, CORO_BASE - 128, 20, 0, 0, 0, 0);
-        state.note_throw(30, 0, 0, 0, 0);
+        state.enter_at(0, CORO_BASE, 0, 0, 0, 0, 0, 0);
+        state.enter_at(1, CORO_BASE - 64, 10, 0, 0, 0, 0, 0);
+        state.enter_at(2, CORO_BASE - 128, 20, 0, 0, 0, 0, 0);
+        state.note_throw(30, 0, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), 3, "the throw leaves them standing");
 
         // The catcher yields, 1000 ns later.
-        state.suspend_sim(0, CORO_BASE, 1_030, 0, 0, 0, 0);
+        state.suspend_sim(0, CORO_BASE, 1_030, 0, 0, 0, 0, 0);
 
         let group = state.parked.first().expect("the catcher parked");
         assert_eq!(
@@ -3128,25 +3336,25 @@ mod tests {
         let (first_coro, second_coro) = (0x1000usize, 0x2000usize);
 
         // An older generator of function 7, on the coroutine stack at CORO_BASE.
-        state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0);
-        state.suspend_at(7, CORO_BASE, first_coro, 10, 0, 0, 0, 0);
+        state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0, 0);
+        state.suspend_at(7, CORO_BASE, first_coro, 10, 0, 0, 0, 0, 0);
         assert_eq!(state.parked.len(), 1);
 
         // The table fills with unrelated coroutines.
         for index in 1..MAX_PARKED {
             let fp = CORO_BASE + index * 64;
-            state.enter_at(8, fp, index as u64, 0, 0, 0, 0);
-            state.suspend_at(8, fp, fp, index as u64, 0, 0, 0, 0);
+            state.enter_at(8, fp, index as u64, 0, 0, 0, 0, 0);
+            state.suspend_at(8, fp, fp, index as u64, 0, 0, 0, 0, 0);
         }
 
         // A new generator of the SAME function reuses that stack address under a
         // different fiber, and its park is refused at the cap.
-        state.enter_at(7, CORO_BASE, 2_000, 0, 0, 0, 0);
-        state.suspend_at(7, CORO_BASE, second_coro, 2_010, 0, 0, 0, 0);
+        state.enter_at(7, CORO_BASE, 2_000, 0, 0, 0, 0, 0);
+        state.suspend_at(7, CORO_BASE, second_coro, 2_010, 0, 0, 0, 0, 0);
         assert_eq!(state.parks_refused, 1, "the cap refused it");
         assert_eq!(state.stack.len(), 1, "so its frame is still standing");
 
-        state.resume_at(7, CORO_BASE, 2_020, 0, 0, 0, 0);
+        state.resume_at(7, CORO_BASE, 2_020, 0, 0, 0, 0, 0);
         assert_eq!(
             state.stack.len(),
             1,
@@ -3179,22 +3387,22 @@ mod tests {
         let shared_coro = 0x9_000usize;
 
         // An older coroutine at this fiber address, function 7, never resumed.
-        state.enter_at(7, old_frame, 0, 0, 0, 0, 0);
-        state.suspend_at(7, old_frame, shared_coro, 10, 0, 0, 0, 0);
+        state.enter_at(7, old_frame, 0, 0, 0, 0, 0, 0);
+        state.suspend_at(7, old_frame, shared_coro, 10, 0, 0, 0, 0, 0);
         assert_eq!(state.parked.len(), 1);
 
         // Everything else fills the table, each under its own coroutine.
         for index in 1..MAX_PARKED {
             let fp = CORO_BASE + index * 64;
-            state.enter_at(8, fp, index as u64, 0, 0, 0, 0);
-            state.suspend_at(8, fp, fp, index as u64, 0, 0, 0, 0);
+            state.enter_at(8, fp, index as u64, 0, 0, 0, 0, 0);
+            state.suspend_at(8, fp, fp, index as u64, 0, 0, 0, 0, 0);
         }
 
         // A new fiber takes the freed address, under a different function, and
         // suspends into one of the paths that raises instead of returning.
-        state.enter_at(9, new_frame, 2_000, 0, 0, 0, 0);
-        state.suspend_at(9, new_frame, shared_coro, 2_010, 0, 0, 0, 0);
-        state.unpark_at(shared_coro, 2_020, 0, 0, 0, 0);
+        state.enter_at(9, new_frame, 2_000, 0, 0, 0, 0, 0);
+        state.suspend_at(9, new_frame, shared_coro, 2_010, 0, 0, 0, 0, 0);
+        state.unpark_at(shared_coro, 2_020, 0, 0, 0, 0, 0);
 
         assert_eq!(
             state.stack.iter().map(|frame| frame.id).collect::<Vec<_>>(),
@@ -3222,10 +3430,10 @@ mod tests {
         let restore = TRACE_ON.swap(true, Ordering::Relaxed);
         let mut state = State::default();
 
-        state.enter_at(0, CORO_BASE, 100, 0, 0, 0, 0);
-        state.suspend_sim(0, CORO_BASE, 130, 0, 0, 0, 0);
-        state.resume_at(0, CORO_BASE, 500, 0, 0, 0, 0);
-        state.exit_at(0, CORO_BASE, 520, 0, 0, 0, 0);
+        state.enter_at(0, CORO_BASE, 100, 0, 0, 0, 0, 0);
+        state.suspend_sim(0, CORO_BASE, 130, 0, 0, 0, 0, 0);
+        state.resume_at(0, CORO_BASE, 500, 0, 0, 0, 0, 0);
+        state.exit_at(0, CORO_BASE, 520, 0, 0, 0, 0, 0);
 
         TRACE_ON.store(restore, Ordering::Relaxed);
         assert_eq!(
@@ -3247,15 +3455,15 @@ mod tests {
         let mut state = State::default();
         for index in 0..MAX_PARKED {
             let fp = CORO_BASE + index * 64;
-            state.enter_at(0, fp, index as u64, 0, 0, 0, 0);
-            state.suspend_sim(0, fp, index as u64, 0, 0, 0, 0);
+            state.enter_at(0, fp, index as u64, 0, 0, 0, 0, 0);
+            state.suspend_sim(0, fp, index as u64, 0, 0, 0, 0, 0);
         }
         assert_eq!(state.parked.len(), MAX_PARKED);
         assert_eq!(state.parks_refused, 0, "everything up to the cap is parked");
 
         let over = CORO_BASE + MAX_PARKED * 64;
-        state.enter_at(0, over, 1_000, 0, 0, 0, 0);
-        state.suspend_sim(0, over, 1_000, 0, 0, 0, 0);
+        state.enter_at(0, over, 1_000, 0, 0, 0, 0, 0);
+        state.suspend_sim(0, over, 1_000, 0, 0, 0, 0, 0);
         assert_eq!(state.parked.len(), MAX_PARKED, "the cap holds");
         assert_eq!(state.parks_refused, 1);
         assert_eq!(
@@ -3280,12 +3488,12 @@ mod tests {
     #[test]
     fn a_resume_at_a_reused_coroutine_address_restores_nothing() {
         let mut state = State::default();
-        state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0);
-        state.suspend_sim(7, CORO_BASE, 10, 0, 0, 0, 0);
+        state.enter_at(7, CORO_BASE, 0, 0, 0, 0, 0, 0);
+        state.suspend_sim(7, CORO_BASE, 10, 0, 0, 0, 0, 0);
         assert_eq!(state.parked.len(), 1);
 
         // Another function, the same address, never parked.
-        state.resume_at(9, CORO_BASE, 20, 0, 0, 0, 0);
+        state.resume_at(9, CORO_BASE, 20, 0, 0, 0, 0, 0);
         assert_eq!(
             state.parked.len(),
             1,
@@ -3294,7 +3502,7 @@ mod tests {
         assert!(state.stack.is_empty(), "and nothing was pushed for it");
 
         // Its rightful owner still finds them.
-        state.resume_at(7, CORO_BASE, 20, 0, 0, 0, 0);
+        state.resume_at(7, CORO_BASE, 20, 0, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), 1);
         assert!(state.parked.is_empty());
     }
@@ -3314,9 +3522,9 @@ mod tests {
     fn a_suspension_from_a_nested_call_parks_only_the_inner_frame() {
         let mut state = State::default();
         // body() on the coroutine stack, then inner() above it, which suspends.
-        state.enter_at(0, CORO_BASE, 0, 0, 0, 0, 0);
-        state.enter_at(1, CORO_BASE - 64, 10, 0, 0, 0, 0);
-        state.suspend_sim(1, CORO_BASE - 64, 20, 0, 0, 0, 0);
+        state.enter_at(0, CORO_BASE, 0, 0, 0, 0, 0, 0);
+        state.enter_at(1, CORO_BASE - 64, 10, 0, 0, 0, 0, 0);
+        state.suspend_sim(1, CORO_BASE - 64, 20, 0, 0, 0, 0, 0);
 
         assert_eq!(state.parked.len(), 1);
         assert_eq!(
@@ -3343,25 +3551,25 @@ mod tests {
     fn a_dropped_exit_out_of_order_leaves_nothing_behind() {
         let mut state = State::default();
         for depth in 0..MAX_STACK {
-            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0, 0);
         }
         // A throw puts stale frames on the stack; from here a dropped
         // activation's address can alias one of them.
-        state.note_throw(5, 0, 0, 0, 0);
+        state.note_throw(5, 0, 0, 0, 0, 0);
 
         let first = 0x5000usize;
         let second = 0x6000usize;
-        state.enter_at(8, first, 10, 0, 0, 0, 0);
-        state.enter_at(9, second, 20, 0, 0, 0, 0);
+        state.enter_at(8, first, 10, 0, 0, 0, 0, 0);
+        state.enter_at(9, second, 20, 0, 0, 0, 0, 0);
         assert_eq!(state.dropped_fps, vec![first, second]);
 
-        state.exit_at(8, first, 30, 0, 0, 0, 0);
+        state.exit_at(8, first, 30, 0, 0, 0, 0, 0);
         assert_eq!(
             state.dropped_fps,
             vec![second],
             "an out-of-order dropped exit must take its own identity with it"
         );
-        state.exit_at(9, second, 40, 0, 0, 0, 0);
+        state.exit_at(9, second, 40, 0, 0, 0, 0, 0);
         assert!(state.dropped_fps.is_empty());
         assert_eq!(state.stack.len(), MAX_STACK, "and neither touched the stack");
     }
@@ -3378,12 +3586,12 @@ mod tests {
     fn dropped_identities_cost_nothing_outside_an_unwind() {
         let mut state = State::default();
         for depth in 0..MAX_STACK {
-            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0, 0);
         }
 
         // No throw: every frame here is live, so an unknown frame pointer closes
         // nothing on its own and needs no identity.
-        state.enter_at(8, 0x5000, 10, 0, 0, 0, 0);
+        state.enter_at(8, 0x5000, 10, 0, 0, 0, 0, 0);
         assert!(
             state.dropped_fps.is_empty(),
             "an identity was recorded with nothing stale for it to guard against"
@@ -3391,17 +3599,17 @@ mod tests {
         assert_eq!(state.dropped_fps.capacity(), 0, "and nothing was allocated");
 
         let before = state.stack.len();
-        state.exit_at(8, 0x5000, 20, 0, 0, 0, 0);
+        state.exit_at(8, 0x5000, 20, 0, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), before, "its exit still closes nothing");
 
         // And the capacity is handed back when the unwind that needed it ends,
         // rather than kept for the life of the thread.
-        state.note_throw(30, 0, 0, 0, 0);
-        state.enter_at(9, 0x6000, 40, 0, 0, 0, 0);
+        state.note_throw(30, 0, 0, 0, 0, 0);
+        state.enter_at(9, 0x6000, 40, 0, 0, 0, 0, 0);
         assert_eq!(state.dropped_fps, vec![0x6000usize]);
         let catcher = state.stack[0].fp;
         let catcher_id = state.stack[0].id;
-        state.exit_at(catcher_id, catcher, 50, 0, 0, 0, 0);
+        state.exit_at(catcher_id, catcher, 50, 0, 0, 0, 0, 0);
         assert!(state.unwinding.is_none(), "the catcher ended the unwind");
         assert_eq!(
             state.dropped_fps.capacity(),
@@ -3420,7 +3628,7 @@ mod tests {
     fn a_throw_on_an_empty_stack_still_forgets_dropped_identities() {
         let mut state = State::default();
         state.dropped_fps.push(0x7000);
-        state.note_throw(10, 0, 0, 0, 0);
+        state.note_throw(10, 0, 0, 0, 0, 0);
         assert!(
             state.dropped_fps.is_empty(),
             "a throw at depth zero kept an identity nothing can vouch for"
@@ -3442,20 +3650,20 @@ mod tests {
     #[test]
     fn a_tracked_call_reusing_a_stale_address_closes_only_itself() {
         let mut state = State::default();
-        state.enter_sim(0, 10, 0, 0, 0, 0);
+        state.enter_sim(0, 10, 0, 0, 0, 0, 0);
         let catcher = state.stack[0].fp;
-        state.enter_sim(1, 20, 0, 0, 0, 0);
+        state.enter_sim(1, 20, 0, 0, 0, 0, 0);
         let stale = state.stack[1].fp;
-        state.enter_sim(2, 30, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0);
 
         // Raised at the top, caught at the root: frames 1 and 2 are dead and
         // still on the shadow stack.
-        state.note_throw(40, 0, 0, 0, 0);
+        state.note_throw(40, 0, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), 3);
 
         // The handler calls something, and the native stack hands it the address
         // frame 1 used to occupy. This one is TRACKED — the stack is not full.
-        state.enter_at(7, stale, 50, 0, 0, 0, 0);
+        state.enter_at(7, stale, 50, 0, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), 4, "a tracked call is pushed");
         assert_eq!(
             state.stack.iter().filter(|f| f.fp == stale).count(),
@@ -3465,7 +3673,7 @@ mod tests {
 
         // Its exit must close itself and nothing else — not the stale twin, and
         // not the frames between.
-        state.exit_at(7, stale, 60, 0, 0, 0, 0);
+        state.exit_at(7, stale, 60, 0, 0, 0, 0, 0);
         assert_eq!(
             state.stack.len(),
             3,
@@ -3486,13 +3694,13 @@ mod tests {
     fn a_throw_forgets_the_dropped_activations_it_destroyed() {
         let mut state = State::default();
         for depth in 0..MAX_STACK {
-            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0);
+            state.enter_sim((depth % 3) as u32, depth as u64, 0, 0, 0, 0, 0);
         }
         let reused = state.stack[1].fp;
 
         // Dropped past the cap, then destroyed by the throw before it can exit.
-        state.enter_at(9, reused, 1_000, 0, 0, 0, 0);
-        state.note_throw(1_500, 0, 0, 0, 0);
+        state.enter_at(9, reused, 1_000, 0, 0, 0, 0, 0);
+        state.note_throw(1_500, 0, 0, 0, 0, 0);
         assert!(
             state.dropped_fps.is_empty(),
             "an activation the unwind destroyed is still expected to exit"
@@ -3500,9 +3708,9 @@ mod tests {
 
         // The handler now calls something at the very same address. Its exit is
         // its own, and must be recognised rather than charged to the ghost.
-        state.enter_at(10, reused, 1_600, 0, 0, 0, 0);
+        state.enter_at(10, reused, 1_600, 0, 0, 0, 0, 0);
         let before = state.stack.len();
-        state.exit_at(10, reused, 1_700, 0, 0, 0, 0);
+        state.exit_at(10, reused, 1_700, 0, 0, 0, 0, 0);
         assert_eq!(state.stack.len(), before, "the live stack was disturbed");
         assert!(
             state.dropped_fps.is_empty(),
@@ -3519,12 +3727,12 @@ mod tests {
     #[test]
     fn a_catch_handler_is_not_charged_to_the_frames_it_unwound() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // catcher
-        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower, runs 10..20
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0); // thrower, runs 10..20
 
-        state.note_throw(20, 0, 0, 0, 0);
+        state.note_throw(20, 0, 0, 0, 0, 0);
         // The handler then works for a long time before the catcher returns.
-        state.exit_sim(0, 1_020, 0, 0, 0, 0);
+        state.exit_sim(0, 1_020, 0, 0, 0, 0, 0);
 
         let thrower = state.fns[1].incl_ns;
         assert_eq!(
@@ -3547,14 +3755,14 @@ mod tests {
     #[test]
     fn a_catch_handler_that_calls_something_still_leaves_the_unwound_frames_alone() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // catcher
-        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower, runs 10..20
-        state.note_throw(20, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0); // thrower, runs 10..20
+        state.note_throw(20, 0, 0, 0, 0, 0);
 
         // The handler calls one instrumented function, which returns normally.
-        state.enter_sim(2, 30, 0, 0, 0, 0);
-        state.exit_sim(2, 1_000, 0, 0, 0, 0);
-        state.exit_sim(0, 1_020, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0);
+        state.exit_sim(2, 1_000, 0, 0, 0, 0, 0);
+        state.exit_sim(0, 1_020, 0, 0, 0, 0, 0);
 
         assert_eq!(
             state.fns[1].incl_ns, 10,
@@ -4212,12 +4420,12 @@ mod tests {
     #[test]
     fn a_call_made_by_a_handler_is_an_edge_from_the_catcher() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // catcher
-        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower
-        state.note_throw(20, 0, 0, 0, 0);
-        state.enter_sim(2, 30, 0, 0, 0, 0); // what the handler calls
-        state.exit_sim(2, 900, 0, 0, 0, 0);
-        state.exit_sim(0, 1_000, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0); // thrower
+        state.note_throw(20, 0, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0); // what the handler calls
+        state.exit_sim(2, 900, 0, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0, 0);
 
         assert_eq!(
             state.edges.get(&(0, 2)),
@@ -4238,12 +4446,12 @@ mod tests {
     #[test]
     fn a_handlers_work_does_not_underflow_the_frame_it_unwound() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0);
-        state.enter_sim(1, 10, 0, 0, 0, 0);
-        state.note_throw(20, 0, 0, 0, 0);
-        state.enter_sim(2, 30, 0, 0, 0, 0);
-        state.exit_sim(2, 900, 0, 0, 0, 0);
-        state.exit_sim(0, 1_000, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0);
+        state.note_throw(20, 0, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0);
+        state.exit_sim(2, 900, 0, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0, 0);
 
         let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
         assert_eq!(
@@ -4265,13 +4473,13 @@ mod tests {
     #[test]
     fn an_unwound_frame_does_not_inherit_the_handlers_allocations() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // catcher
-        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0); // thrower
 
         // The thrower allocates ten objects and frees two, then throws.
-        state.note_throw(20, 10, 2, 0, 0);
+        state.note_throw(20, 10, 2, 0, 0, 0);
         // The handler allocates ninety more and frees eight.
-        state.exit_sim(0, 1_000, 100, 10, 0, 0);
+        state.exit_sim(0, 1_000, 100, 10, 0, 0, 0);
 
         assert_eq!(
             state.fns[1].incl_allocs, 10,
@@ -4299,14 +4507,14 @@ mod tests {
     #[test]
     fn a_function_that_catches_its_own_throw_keeps_the_handlers_work() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // caller
-        state.enter_sim(1, 10, 0, 0, 0, 0); // throws and catches, all its own
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // caller
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0); // throws and catches, all its own
 
-        state.note_throw(20, 0, 0, 0, 0);
-        state.enter_sim(2, 30, 0, 0, 0, 0); // the handler calls something
-        state.exit_sim(2, 900, 0, 0, 0, 0);
-        state.exit_sim(1, 950, 0, 0, 0, 0);
-        state.exit_sim(0, 1_000, 0, 0, 0, 0);
+        state.note_throw(20, 0, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0); // the handler calls something
+        state.exit_sim(2, 900, 0, 0, 0, 0, 0);
+        state.exit_sim(1, 950, 0, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0, 0);
 
         assert_eq!(
             state.edges.get(&(1, 2)).map(|e| e.0),
@@ -4326,14 +4534,14 @@ mod tests {
     #[test]
     fn a_rethrow_carries_the_first_unwinds_charge_to_the_next_catcher() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // outer catcher
-        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0); // thrower
 
-        state.note_throw(20, 0, 0, 0, 0);
-        state.enter_sim(2, 30, 0, 0, 0, 0); // the handler works
-        state.exit_sim(2, 500, 0, 0, 0, 0);
-        state.note_throw(600, 0, 0, 0, 0); // and then throws again
-        state.exit_sim(0, 1_000, 0, 0, 0, 0);
+        state.note_throw(20, 0, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0); // the handler works
+        state.exit_sim(2, 500, 0, 0, 0, 0, 0);
+        state.note_throw(600, 0, 0, 0, 0, 0); // and then throws again
+        state.exit_sim(0, 1_000, 0, 0, 0, 0, 0);
 
         let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
         assert_eq!(
@@ -4354,15 +4562,15 @@ mod tests {
     #[test]
     fn an_exception_caught_inside_a_handlers_callee_leaves_the_outer_one_alone() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // outer catcher
-        state.enter_sim(1, 10, 0, 0, 0, 0); // throws at 20
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0); // throws at 20
 
-        state.note_throw(20, 0, 0, 0, 0);
-        state.enter_sim(2, 30, 0, 0, 0, 0); // the handler calls the logger
-        state.enter_sim(3, 40, 0, 0, 0, 0); // which calls something that throws
-        state.note_throw(50, 0, 0, 0, 0);
-        state.exit_sim(2, 100, 0, 0, 0, 0); // and the logger catches it itself
-        state.exit_sim(0, 1_000, 0, 0, 0, 0);
+        state.note_throw(20, 0, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0); // the handler calls the logger
+        state.enter_sim(3, 40, 0, 0, 0, 0, 0); // which calls something that throws
+        state.note_throw(50, 0, 0, 0, 0, 0);
+        state.exit_sim(2, 100, 0, 0, 0, 0, 0); // and the logger catches it itself
+        state.exit_sim(0, 1_000, 0, 0, 0, 0, 0);
 
         assert!(state.stack.is_empty(), "the outer catcher did not resync");
         let total: u64 = state.fns.iter().map(|a| a.excl_ns).sum();
@@ -4404,16 +4612,16 @@ mod tests {
     #[test]
     fn a_second_throw_from_an_open_handler_frame_still_ends_at_the_catcher() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0); // outer catcher
-        state.enter_sim(1, 10, 0, 0, 0, 0); // thrower
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0); // outer catcher
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0); // thrower
 
-        state.note_throw(20, 0, 0, 0, 0);
-        state.enter_sim(2, 30, 0, 0, 0, 0); // the handler calls this...
-        state.enter_sim(3, 40, 0, 0, 0, 0); // ...which calls this
-        state.exit_sim(3, 50, 0, 0, 0, 0); // only the inner one returns
-        state.note_throw(600, 0, 0, 0, 0); // and then the handler throws again
+        state.note_throw(20, 0, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0); // the handler calls this...
+        state.enter_sim(3, 40, 0, 0, 0, 0, 0); // ...which calls this
+        state.exit_sim(3, 50, 0, 0, 0, 0, 0); // only the inner one returns
+        state.note_throw(600, 0, 0, 0, 0, 0); // and then the handler throws again
 
-        state.exit_sim(0, 1_000, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0, 0);
 
         assert!(state.stack.is_empty(), "the catcher's exit did not resync");
         assert_eq!(
@@ -4438,14 +4646,14 @@ mod tests {
     #[test]
     fn a_nested_unwind_still_accounts_for_exactly_the_roots_span() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0);
-        state.enter_sim(1, 10, 0, 0, 0, 0);
-        state.note_throw(20, 0, 0, 0, 0);
-        state.enter_sim(2, 30, 0, 0, 0, 0);
-        state.enter_sim(3, 40, 0, 0, 0, 0);
-        state.exit_sim(3, 50, 0, 0, 0, 0);
-        state.note_throw(600, 0, 0, 0, 0);
-        state.exit_sim(0, 1_000, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0);
+        state.note_throw(20, 0, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0);
+        state.enter_sim(3, 40, 0, 0, 0, 0, 0);
+        state.exit_sim(3, 50, 0, 0, 0, 0, 0);
+        state.note_throw(600, 0, 0, 0, 0, 0);
+        state.exit_sim(0, 1_000, 0, 0, 0, 0, 0);
 
         for (id, acc) in state.fns.iter().enumerate() {
             assert!(
@@ -4476,12 +4684,12 @@ mod tests {
     #[test]
     fn a_throw_at_depth_zero_leaves_the_next_slice_alone() {
         let mut state = State::default();
-        state.note_throw(0, 0, 0, 0, 0);
+        state.note_throw(0, 0, 0, 0, 0, 0);
 
-        state.enter_sim(0, 100, 0, 0, 0, 0);
-        state.enter_sim(1, 110, 0, 0, 0, 0);
-        state.exit_sim(1, 200, 0, 0, 0, 0);
-        state.exit_sim(0, 300, 0, 0, 0, 0);
+        state.enter_sim(0, 100, 0, 0, 0, 0, 0);
+        state.enter_sim(1, 110, 0, 0, 0, 0, 0);
+        state.exit_sim(1, 200, 0, 0, 0, 0, 0);
+        state.exit_sim(0, 300, 0, 0, 0, 0, 0);
 
         assert_eq!(state.fns[1].excl_ns, 90, "the callee ran for 90");
         assert_eq!(state.fns[0].excl_ns, 110, "the caller ran for 110");
@@ -4496,16 +4704,16 @@ mod tests {
     #[test]
     fn a_reset_mid_unwind_does_not_charge_the_next_slice() {
         let mut state = State::default();
-        state.enter_sim(0, 0, 0, 0, 0, 0);
-        state.enter_sim(1, 10, 0, 0, 0, 0);
-        state.note_throw(20, 0, 0, 0, 0);
-        state.enter_sim(2, 30, 0, 0, 0, 0);
-        state.exit_sim(2, 900, 0, 0, 0, 0);
+        state.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        state.enter_sim(1, 10, 0, 0, 0, 0, 0);
+        state.note_throw(20, 0, 0, 0, 0, 0);
+        state.enter_sim(2, 30, 0, 0, 0, 0, 0);
+        state.exit_sim(2, 900, 0, 0, 0, 0, 0);
         state.reset();
 
         // A fresh slice: one call, ten ticks, and nothing else.
-        state.enter_sim(0, 1_000, 0, 0, 0, 0);
-        state.exit_sim(0, 1_010, 0, 0, 0, 0);
+        state.enter_sim(0, 1_000, 0, 0, 0, 0, 0);
+        state.exit_sim(0, 1_010, 0, 0, 0, 0, 0);
         assert_eq!(
             state.fns[0].excl_ns, 10,
             "the previous slice's handler work followed the reset"
@@ -4599,9 +4807,18 @@ mod tests {
     impl State {
         /// Enters `id` at the frame pointer a real stack would hand this depth,
         /// and returns it, so a test can hold on to a particular activation.
-        fn enter_sim(&mut self, id: u32, t: u64, a: u64, f: u64, io: u64, w: u64) -> usize {
+        fn enter_sim(
+            &mut self,
+            id: u32,
+            t: u64,
+            a: u64,
+            f: u64,
+            io: u64,
+            stream: u64,
+            w: u64,
+        ) -> usize {
             let fp = SIM_BASE - self.stack.len() * 64;
-            self.enter_at(id, fp, t, a, f, io, w);
+            self.enter_at(id, fp, t, a, f, io, stream, w);
             fp
         }
 
@@ -4612,8 +4829,18 @@ mod tests {
         /// keys answer different questions in production — the pointer says which
         /// activation, `_fiber_current` says which suspension — so a test that
         /// needs them to differ says so by calling `suspend_at` itself.
-        fn suspend_sim(&mut self, id: u32, fp: usize, t: u64, a: u64, f: u64, io: u64, w: u64) {
-            self.suspend_at(id, fp, fp, t, a, f, io, w);
+        fn suspend_sim(
+            &mut self,
+            id: u32,
+            fp: usize,
+            t: u64,
+            a: u64,
+            f: u64,
+            io: u64,
+            stream: u64,
+            w: u64,
+        ) {
+            self.suspend_at(id, fp, fp, t, a, f, io, stream, w);
         }
 
         /// Exits the innermost live activation of `id`.
@@ -4622,7 +4849,16 @@ mod tests {
         /// what every non-recursive test means: with one activation live there is
         /// nothing to choose between. A test about recursion says which
         /// activation it means by passing the frame pointer `enter_sim` returned.
-        fn exit_sim(&mut self, id: u32, t: u64, a: u64, f: u64, io: u64, w: u64) {
+        fn exit_sim(
+            &mut self,
+            id: u32,
+            t: u64,
+            a: u64,
+            f: u64,
+            io: u64,
+            stream: u64,
+            w: u64,
+        ) {
             let fp = self
                 .stack
                 .iter()
@@ -4631,7 +4867,7 @@ mod tests {
                 // Not on the stack: dropped past the cap, or never entered. The
                 // address cannot collide with a live frame, which is the point.
                 .unwrap_or(SIM_BASE + 64);
-            self.exit_at(id, fp, t, a, f, io, w);
+            self.exit_at(id, fp, t, a, f, io, stream, w);
         }
     }
 
@@ -4768,12 +5004,12 @@ mod tests {
         // Timestamps then allocation counters. a=main, b=child.
         // main enters @t0/alloc0, a enters, b enters @t10/alloc3, unwinds.
         // Args: (id, ns, allocs, frees, io). Only b does io (2 queries).
-        s.enter_sim(0, 0, 0, 0, 0, 0); // main
-        s.enter_sim(1, 0, 0, 0, 0, 0); // a
-        s.enter_sim(2, 10, 3, 0, 0, 0); // b
-        s.exit_sim(2, 40, 8, 0, 2, 0); // b: 30ns, 5 allocs, 2 io
-        s.exit_sim(1, 50, 9, 0, 2, 0); // a: children 30/5/2 -> excl 20ns/4allocs/0io
-        s.exit_sim(0, 60, 12, 0, 2, 0); // main: excl 10ns/3allocs/0io
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0); // main
+        s.enter_sim(1, 0, 0, 0, 0, 0, 0); // a
+        s.enter_sim(2, 10, 3, 0, 0, 0, 0); // b
+        s.exit_sim(2, 40, 8, 0, 2, 0, 0); // b: 30ns, 5 allocs, 2 io
+        s.exit_sim(1, 50, 9, 0, 2, 0, 0); // a: children 30/5/2 -> excl 20ns/4allocs/0io
+        s.exit_sim(0, 60, 12, 0, 2, 0, 0); // main: excl 10ns/3allocs/0io
         assert_eq!(s.fns[2].incl_ns, 30);
         assert_eq!(s.fns[2].excl_ns, 30);
         assert_eq!(s.fns[2].incl_allocs, 5);
@@ -4802,10 +5038,10 @@ mod tests {
     #[test]
     fn termination_closes_the_live_stack_at_one_counter_snapshot() {
         let mut s = State::default();
-        s.enter_at(0, 0x1000, 10, 2, 0, 0, 0); // {main}
-        s.enter_at(1, 0x2000, 20, 3, 0, 0, 0); // function that calls exit(0)
+        s.enter_at(0, 0x1000, 10, 2, 0, 0, 0, 0); // {main}
+        s.enter_at(1, 0x2000, 20, 3, 0, 0, 0, 0); // function that calls exit(0)
 
-        s.terminate_at(Some((1, 0x2000)), 50, 7, 1, 2, 5);
+        s.terminate_at(Some((1, 0x2000)), 50, 7, 1, 2, 0, 5);
 
         assert!(s.stack.is_empty(), "termination must close every tracked frame");
         assert_eq!(s.fns[1].incl_ns, 30);
@@ -4826,12 +5062,12 @@ mod tests {
         let _serial = ticks_are_nanoseconds();
         let restore_trace = TRACE_ON.swap(true, Ordering::Relaxed);
         let mut s = State::default();
-        s.enter_at(0, 0x1000, 0, 0, 0, 0, 0); // {main}
-        s.enter_at(1, 0x2000, 5, 0, 0, 0, 0); // recursive catcher
-        s.enter_at(1, 0x3000, 10, 0, 0, 0, 0); // recursive thrower
-        s.note_throw(20, 0, 0, 0, 0);
+        s.enter_at(0, 0x1000, 0, 0, 0, 0, 0, 0); // {main}
+        s.enter_at(1, 0x2000, 5, 0, 0, 0, 0, 0); // recursive catcher
+        s.enter_at(1, 0x3000, 10, 0, 0, 0, 0, 0); // recursive thrower
+        s.note_throw(20, 0, 0, 0, 0, 0);
 
-        s.terminate_at(Some((1, 0x2000)), 50, 0, 0, 0, 0);
+        s.terminate_at(Some((1, 0x2000)), 50, 0, 0, 0, 0, 0);
 
         TRACE_ON.store(restore_trace, Ordering::Relaxed);
         assert!(s.stack.is_empty(), "termination must drain the resynchronized stack");
@@ -4847,12 +5083,12 @@ mod tests {
     /// function does not accumulate its own nested time repeatedly.
     fn recursion_does_not_double_count() {
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0);
-        s.enter_sim(0, 0, 1, 0, 0, 0);
-        s.enter_sim(0, 0, 2, 0, 0, 0);
-        s.exit_sim(0, 30, 5, 0, 0, 0);
-        s.exit_sim(0, 60, 7, 0, 0, 0);
-        s.exit_sim(0, 90, 10, 0, 0, 0); // outermost span 0..90 ns, 0..10 allocs
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 1, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 2, 0, 0, 0, 0);
+        s.exit_sim(0, 30, 5, 0, 0, 0, 0);
+        s.exit_sim(0, 60, 7, 0, 0, 0, 0);
+        s.exit_sim(0, 90, 10, 0, 0, 0, 0); // outermost span 0..90 ns, 0..10 allocs
         assert_eq!(s.fns[0].calls, 3);
         assert_eq!(s.fns[0].incl_ns, 90);
         assert_eq!(s.fns[0].incl_allocs, 10);
@@ -4866,10 +5102,10 @@ mod tests {
     /// how the stack recovers from an unwind it never saw.
     fn exit_resyncs_past_unwound_frames() {
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0); // a
-        s.enter_sim(1, 5, 1, 0, 0, 0); // b
-        s.enter_sim(2, 10, 2, 0, 0, 0); // c — unwound, no exits for c or b
-        s.exit_sim(0, 100, 9, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0); // a
+        s.enter_sim(1, 5, 1, 0, 0, 0, 0); // b
+        s.enter_sim(2, 10, 2, 0, 0, 0, 0); // c — unwound, no exits for c or b
+        s.exit_sim(0, 100, 9, 0, 0, 0, 0);
         assert_eq!(s.stack.len(), 0, "stack fully unwound");
         assert_eq!(s.fns[0].incl_ns, 100);
         assert_eq!(s.fns[0].incl_allocs, 9);
@@ -4886,14 +5122,14 @@ mod tests {
     #[test]
     fn a_recursive_function_that_catches_around_its_own_call_accounts_exactly() {
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0); // main, 0..1000
-        s.enter_sim(1, 10, 0, 0, 0, 0); // rec, outer, 10..600
-        s.enter_sim(1, 20, 0, 0, 0, 0); // rec, inner, 20..500
-        s.enter_sim(2, 30, 0, 0, 0, 0); // its callee, 30..40, killed by the throw
-        s.note_throw(40, 0, 0, 0, 0);
-        s.exit_sim(1, 500, 0, 0, 0, 0); // the inner activation catches
-        s.exit_sim(1, 600, 0, 0, 0, 0); // and the outer one returns normally
-        s.exit_sim(0, 1_000, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0); // main, 0..1000
+        s.enter_sim(1, 10, 0, 0, 0, 0, 0); // rec, outer, 10..600
+        s.enter_sim(1, 20, 0, 0, 0, 0, 0); // rec, inner, 20..500
+        s.enter_sim(2, 30, 0, 0, 0, 0, 0); // its callee, 30..40, killed by the throw
+        s.note_throw(40, 0, 0, 0, 0, 0);
+        s.exit_sim(1, 500, 0, 0, 0, 0, 0); // the inner activation catches
+        s.exit_sim(1, 600, 0, 0, 0, 0, 0); // and the outer one returns normally
+        s.exit_sim(0, 1_000, 0, 0, 0, 0, 0);
 
         assert!(s.stack.is_empty(), "the stack did not unwind");
         assert_eq!(s.fns[2].excl_ns, 10, "the callee ran ten ticks before the throw");
@@ -4925,14 +5161,14 @@ mod tests {
     #[test]
     fn a_recursive_call_that_throws_is_charged_to_the_activation_that_caught() {
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0); // {main}, 0..120
-        let outer = s.enter_sim(1, 10, 0, 0, 0, 0); // f(1), carries the try, 10..100
-        s.enter_sim(1, 20, 0, 0, 0, 0); // f(0), throws at 30
-        s.note_throw(30, 0, 0, 0, 0);
-        s.enter_sim(2, 40, 0, 0, 0, 0); // recover(), 40..70
-        s.exit_sim(2, 70, 0, 0, 0, 0);
-        s.exit_at(1, outer, 100, 0, 0, 0, 0); // f(1) — the OUTER one — returns
-        s.exit_sim(0, 120, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0); // {main}, 0..120
+        let outer = s.enter_sim(1, 10, 0, 0, 0, 0, 0); // f(1), carries the try, 10..100
+        s.enter_sim(1, 20, 0, 0, 0, 0, 0); // f(0), throws at 30
+        s.note_throw(30, 0, 0, 0, 0, 0);
+        s.enter_sim(2, 40, 0, 0, 0, 0, 0); // recover(), 40..70
+        s.exit_sim(2, 70, 0, 0, 0, 0, 0);
+        s.exit_at(1, outer, 100, 0, 0, 0, 0, 0); // f(1) — the OUTER one — returns
+        s.exit_sim(0, 120, 0, 0, 0, 0, 0);
 
         assert!(s.stack.is_empty(), "the stack did not unwind");
         assert_eq!(
@@ -4961,9 +5197,9 @@ mod tests {
     fn a_dump_with_frames_still_running_says_how_many() {
         let _serial = ticks_are_nanoseconds();
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0); // {main}, still running
-        s.enter_sim(1, 10, 0, 0, 0, 0); // and its callee
-        s.exit_sim(1, 40, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0); // {main}, still running
+        s.enter_sim(1, 10, 0, 0, 0, 0, 0); // and its callee
+        s.exit_sim(1, 40, 0, 0, 0, 0, 0);
 
         let names = ["{main}".to_string(), "work".to_string()];
         let out = s.render(&names);
@@ -4977,7 +5213,7 @@ mod tests {
         );
 
         // And a complete capture says nothing of the kind.
-        s.exit_sim(0, 100, 0, 0, 0, 0);
+        s.exit_sim(0, 100, 0, 0, 0, 0, 0);
         assert!(
             !s.render(&names).contains("still open at this dump"),
             "a complete capture claimed to be truncated"
@@ -5027,7 +5263,7 @@ mod tests {
     fn a_throw_with_an_empty_stack_records_nothing_to_resolve() {
         let mut s = State::default();
         for tick in 0..64 {
-            s.note_throw(tick, 0, 0, 0, 0);
+            s.note_throw(tick, 0, 0, 0, 0, 0);
         }
         assert!(
             s.unwinding.is_none(),
@@ -5036,10 +5272,10 @@ mod tests {
         );
 
         // And a real throw afterwards still works.
-        s.enter_sim(0, 100, 0, 0, 0, 0);
-        s.enter_sim(1, 110, 0, 0, 0, 0);
-        s.note_throw(120, 0, 0, 0, 0);
-        s.exit_sim(0, 200, 0, 0, 0, 0);
+        s.enter_sim(0, 100, 0, 0, 0, 0, 0);
+        s.enter_sim(1, 110, 0, 0, 0, 0, 0);
+        s.note_throw(120, 0, 0, 0, 0, 0);
+        s.exit_sim(0, 200, 0, 0, 0, 0, 0);
         assert_eq!(s.fns[1].excl_ns, 10, "the thrower died at its throw");
         let total: u64 = s.fns.iter().map(|a| a.excl_ns).sum();
         assert_eq!(total, 100, "self time did not partition the root");
@@ -5054,17 +5290,17 @@ mod tests {
     fn throws_past_the_nesting_cap_share_a_record_and_the_report_says_so() {
         let _serial = ticks_are_nanoseconds();
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0);
         for tick in 0..(MAX_NESTED_THROWS as u64 + 4) {
-            s.enter_sim(1, 10 + tick, 0, 0, 0, 0);
-            s.note_throw(20 + tick, 0, 0, 0, 0);
+            s.enter_sim(1, 10 + tick, 0, 0, 0, 0, 0);
+            s.note_throw(20 + tick, 0, 0, 0, 0, 0);
         }
         assert_eq!(
             s.throws_merged, 4,
             "records were recycled without the report admitting it"
         );
 
-        s.exit_sim(0, 10_000, 0, 0, 0, 0);
+        s.exit_sim(0, 10_000, 0, 0, 0, 0, 0);
         let names = ["{main}".to_string(), "f".to_string()];
         assert!(
             s.render(&names).contains("shared a record with an older one"),
@@ -5082,18 +5318,18 @@ mod tests {
     #[test]
     fn an_exit_for_a_frame_that_was_never_pushed_leaves_the_stack_alone() {
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0);
-        s.enter_sim(1, 10, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        s.enter_sim(1, 10, 0, 0, 0, 0, 0);
 
-        s.exit_sim(9, 50, 0, 0, 0, 0);
+        s.exit_sim(9, 50, 0, 0, 0, 0, 0);
 
         assert_eq!(s.stack.len(), 2, "an unknown exit emptied the stack");
         assert_eq!(s.fns[0].excl_ns, 0, "an enclosing frame was closed by it");
         assert_eq!(s.fns[1].excl_ns, 0, "an enclosing frame was closed by it");
 
         // And the real exits still work afterwards.
-        s.exit_sim(1, 60, 0, 0, 0, 0);
-        s.exit_sim(0, 100, 0, 0, 0, 0);
+        s.exit_sim(1, 60, 0, 0, 0, 0, 0);
+        s.exit_sim(0, 100, 0, 0, 0, 0, 0);
         assert_eq!(s.fns[1].excl_ns, 50);
         assert_eq!(s.fns[0].excl_ns, 50);
     }
@@ -5104,16 +5340,16 @@ mod tests {
     fn render_lists_metrics_and_edges() {
         let _serial = ticks_are_nanoseconds();
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0);
-        s.enter_sim(1, 0, 0, 0, 0, 0);
-        s.exit_sim(1, 40, 7, 5, 3, 0); // hot: 7 allocs, 5 frees, 3 io ops
-        s.exit_sim(0, 50, 8, 5, 3, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        s.enter_sim(1, 0, 0, 0, 0, 0, 0);
+        s.exit_sim(1, 40, 7, 5, 3, 0, 0); // hot: 7 allocs, 5 frees, 3 io ops
+        s.exit_sim(0, 50, 8, 5, 3, 0, 0);
         let names = vec!["{main}".to_string(), "hot".to_string()];
         let out = s.render(&names);
         // Retained = allocs - frees: hot keeps 2 of its 7; main's own 1 alloc is
         // never freed, so the run retains 3 in total.
-        assert!(out.contains("elephc-instr: {main} calls=1 incl_ns=50 excl_ns=10 incl_allocs=8 excl_allocs=1 incl_io=3 excl_io=0 incl_ret=3 excl_ret=1"), "{out}");
-        assert!(out.contains("elephc-instr: hot calls=1 incl_ns=40 excl_ns=40 incl_allocs=7 excl_allocs=7 incl_io=3 excl_io=3 incl_ret=2 excl_ret=2"), "{out}");
+        assert!(out.contains("elephc-instr: {main} calls=1 incl_ns=50 excl_ns=10 incl_allocs=8 excl_allocs=1 incl_io=3 excl_io=0 incl_stream=0 excl_stream=0 incl_ret=3 excl_ret=1"), "{out}");
+        assert!(out.contains("elephc-instr: hot calls=1 incl_ns=40 excl_ns=40 incl_allocs=7 excl_allocs=7 incl_io=3 excl_io=3 incl_stream=0 excl_stream=0 incl_ret=2 excl_ret=2"), "{out}");
         assert!(out.contains("elephc-instr-edge: {main} -> hot count=1 ns=40"), "{out}");
     }
 
@@ -5125,14 +5361,14 @@ mod tests {
         // `cleanup` frees more than it allocates (it releases what main built),
         // so its retained is negative — the dimension must not clamp at zero.
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0); // main
-        s.enter_sim(1, 10, 10, 0, 0, 0); // cleanup, entered after main made 10 objects
-        s.exit_sim(1, 20, 10, 8, 0, 0); // cleanup: 0 allocs, 8 frees -> retained -8
-        s.exit_sim(0, 30, 10, 8, 0, 0); // main: 10 allocs, 8 frees -> retained +2
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0); // main
+        s.enter_sim(1, 10, 10, 0, 0, 0, 0); // cleanup, entered after main made 10 objects
+        s.exit_sim(1, 20, 10, 8, 0, 0, 0); // cleanup: 0 allocs, 8 frees -> retained -8
+        s.exit_sim(0, 30, 10, 8, 0, 0, 0); // main: 10 allocs, 8 frees -> retained +2
         let names = vec!["{main}".to_string(), "cleanup".to_string()];
         let out = s.render(&names);
-        assert!(out.contains("cleanup calls=1 incl_ns=10 excl_ns=10 incl_allocs=0 excl_allocs=0 incl_io=0 excl_io=0 incl_ret=-8 excl_ret=-8"), "{out}");
-        assert!(out.contains("{main} calls=1 incl_ns=30 excl_ns=20 incl_allocs=10 excl_allocs=10 incl_io=0 excl_io=0 incl_ret=2 excl_ret=10"), "{out}");
+        assert!(out.contains("cleanup calls=1 incl_ns=10 excl_ns=10 incl_allocs=0 excl_allocs=0 incl_io=0 excl_io=0 incl_stream=0 excl_stream=0 incl_ret=-8 excl_ret=-8"), "{out}");
+        assert!(out.contains("{main} calls=1 incl_ns=30 excl_ns=20 incl_allocs=10 excl_allocs=10 incl_io=0 excl_io=0 incl_stream=0 excl_stream=0 incl_ret=2 excl_ret=10"), "{out}");
         // Self retained across the program sums to the root's inclusive retained.
         let sum: i64 = s
             .fns
@@ -5250,14 +5486,14 @@ mod tests {
         // Two identical "requests" on one worker. Without the reset the second
         // reports calls=2 and double the time — the --web bug this fixes.
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0);
-        s.exit_sim(0, 100, 5, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        s.exit_sim(0, 100, 5, 0, 0, 0, 0);
         let names = vec!["work".to_string()];
         let first = s.render(&names);
         assert!(first.contains("work calls=1 incl_ns=100"), "{first}");
         s.reset();
-        s.enter_sim(0, 1_000, 90, 0, 0, 0);
-        s.exit_sim(0, 1_100, 95, 0, 0, 0);
+        s.enter_sim(0, 1_000, 90, 0, 0, 0, 0);
+        s.exit_sim(0, 1_100, 95, 0, 0, 0, 0);
         let second = s.render(&names);
         assert!(
             second.contains("work calls=1 incl_ns=100 excl_ns=100 incl_allocs=5"),
@@ -5289,10 +5525,10 @@ mod tests {
         let mut s = State::default();
         // catcher(0) -> middle(1) -> inner(2); inner and middle are unwound by
         // a throw, so only catcher's exit hook ever runs.
-        s.enter_sim(0, 0, 0, 0, 0, 0);
-        s.enter_sim(1, 10, 0, 0, 0, 0);
-        s.enter_sim(2, 30, 0, 0, 0, 0);
-        s.exit_sim(0, 100, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0);
+        s.enter_sim(1, 10, 0, 0, 0, 0, 0);
+        s.enter_sim(2, 30, 0, 0, 0, 0, 0);
+        s.exit_sim(0, 100, 0, 0, 0, 0, 0);
 
         assert!(s.stack.is_empty(), "the throw unwound everything");
         // Each unwound frame is closed at the instant the throw was observed.
@@ -5315,29 +5551,29 @@ mod tests {
     fn overflowing_the_shadow_stack_keeps_the_frames_it_did_hold() {
         let mut s = State::default();
         // id 0 wraps everything and must survive intact.
-        s.enter_sim(0, 0, 0, 0, 0, 0);
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0);
         // Fill the stack to the cap with id 1. The timestamps only ever move
         // forward, as the counter this stands in for does: an exit stamped
         // before its own entry produces a negative span, and the totals below
         // then hold by wrapping around rather than by adding up.
         for i in 0..(MAX_STACK - 1) {
-            s.enter_sim(1, 1 + i as u64, 0, 0, 0, 0);
+            s.enter_sim(1, 1 + i as u64, 0, 0, 0, 0, 0);
         }
         assert_eq!(s.stack.len(), MAX_STACK);
         // Two further activations of a DIFFERENT id cannot be pushed.
-        s.enter_sim(2, 70_000, 0, 0, 0, 0);
-        s.enter_sim(2, 70_001, 0, 0, 0, 0);
+        s.enter_sim(2, 70_000, 0, 0, 0, 0, 0);
+        s.enter_sim(2, 70_001, 0, 0, 0, 0, 0);
         assert_eq!(s.dropped, 2);
         assert_eq!(s.stack.len(), MAX_STACK, "nothing was pushed past the cap");
         // Their exits must not disturb the stack.
-        s.exit_sim(2, 70_002, 0, 0, 0, 0);
-        s.exit_sim(2, 70_003, 0, 0, 0, 0);
+        s.exit_sim(2, 70_002, 0, 0, 0, 0, 0);
+        s.exit_sim(2, 70_003, 0, 0, 0, 0, 0);
         assert_eq!(s.stack.len(), MAX_STACK, "a dropped exit pops nothing");
         // Unwind normally.
         for i in 0..(MAX_STACK - 1) {
-            s.exit_sim(1, 80_000 + i as u64, 0, 0, 0, 0);
+            s.exit_sim(1, 80_000 + i as u64, 0, 0, 0, 0, 0);
         }
-        s.exit_sim(0, 200_000, 0, 0, 0, 0);
+        s.exit_sim(0, 200_000, 0, 0, 0, 0, 0);
         assert!(s.stack.is_empty(), "fully unwound");
         // The outermost frame kept its span, which is what used to be destroyed.
         assert_eq!(s.fns[0].incl_ns, 200_000);
@@ -5360,12 +5596,12 @@ mod tests {
         // 50ns outside recorded DB wait. Wait is attributed like every other
         // dimension, so the caller's own wait excludes its callees' wait.
         let mut s = State::default();
-        s.enter_sim(0, 0, 0, 0, 0, 0); // main
-        s.enter_sim(1, 10, 0, 0, 0, 0); // query
-        s.exit_sim(1, 110, 0, 0, 1, 80); // 100ns elapsed, 80ns of it waiting
-        s.enter_sim(2, 110, 0, 0, 1, 80); // compute
-        s.exit_sim(2, 160, 0, 0, 1, 80); // 50ns, no wait
-        s.exit_sim(0, 170, 0, 0, 1, 80); // main: 170ns total, 80 waited by a child
+        s.enter_sim(0, 0, 0, 0, 0, 0, 0); // main
+        s.enter_sim(1, 10, 0, 0, 0, 0, 0); // query
+        s.exit_sim(1, 110, 0, 0, 1, 0, 80); // 100ns elapsed, 80ns of it waiting
+        s.enter_sim(2, 110, 0, 0, 1, 0, 80); // compute
+        s.exit_sim(2, 160, 0, 0, 1, 0, 80); // 50ns, no wait
+        s.exit_sim(0, 170, 0, 0, 1, 0, 80); // main: 170ns total, 80 waited by a child
         assert_eq!(s.fns[1].incl_wait, 80);
         assert_eq!(s.fns[1].excl_wait, 80);
         assert_eq!(s.fns[2].excl_wait, 0, "the compute fixture has no DB wait");

@@ -2,7 +2,7 @@
 title: "curl_share_setopt()"
 description: "Sets an option for a cURL share handle."
 sidebar:
-  order: 362
+  order: 388
 ---
 
 ## curl_share_setopt()

@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), and the reference a `foreach` loop holds on an object source.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, stream-registry lifecycle, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), and the reference a `foreach` loop holds on an object source.
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
@@ -37,3 +37,15 @@ mod heap;
 mod heap_codegen;
 #[path = "runtime_gc/resource_scope_cleanup.rs"]
 mod resource_scope_cleanup;
+#[path = "runtime_gc/stream_registry.rs"]
+mod stream_registry;
+#[path = "runtime_gc/stream_backend_registry.rs"]
+mod stream_backend_registry;
+#[path = "runtime_gc/stream_context_registry.rs"]
+mod stream_context_registry;
+#[path = "runtime_gc/stream_filter_registry.rs"]
+mod stream_filter_registry;
+#[path = "runtime_gc/stream_tls_registry.rs"]
+mod stream_tls_registry;
+#[path = "runtime_gc/user_wrapper_registry.rs"]
+mod user_wrapper_registry;

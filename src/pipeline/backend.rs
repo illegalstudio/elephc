@@ -93,6 +93,14 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if with_crates.contains("regex") {
         ir_module.required_runtime_features.regex = true;
     }
+    // `unlink()`'s lowering publishes the PHAR deletion bridge by taking the ADDRESS of an extern
+    // only the `elephc-phar` staticlib defines, so it may only do so when that staticlib is being
+    // linked. The CHECKER is what decides that — `file_put_contents("phar://…")` requires it just
+    // as `new Phar` does — and its verdict never reached the lowering, which published for every
+    // dynamic path and left CI unable to link any mysqli program.
+    if required_libraries.iter().any(|library| library == "elephc_phar") {
+        ir_module.required_runtime_features.phar_archive = true;
+    }
     let probe = with_crates.contains("probe");
     if probe {
         // A build that cannot produce a real key does not produce a binary. The

@@ -21,7 +21,8 @@ mod values;
 pub use bootstrap::emit_copy_frame_pointer;
 pub use bootstrap::{
     emit_cdylib_exit_escape, emit_enable_heap_debug_flag, emit_enable_web_heap_guard_flag,
-    emit_exit, emit_exit_with_result_reg, emit_store_process_args_to_globals,
+    emit_exit, emit_exit_with_result_reg, emit_ignore_sigpipe,
+    emit_store_process_args_to_globals,
 };
 pub use calls::{
     build_outgoing_arg_assignments_for_target, emit_call_label, emit_call_reg,

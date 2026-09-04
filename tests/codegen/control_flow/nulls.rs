@@ -284,9 +284,9 @@ echo ($a[$hit_i][$miss_j] ?? 'dflt');
     );
     assert_eq!(out.stdout, "dflt");
     assert!(
-        !out.stderr.contains("Undefined") && !out.stderr.contains("Warning"),
-        "expected silent coalesce path, got stderr: {}",
-        out.stderr
+        !out.diagnostics.contains("Undefined") && !out.diagnostics.contains("Warning"),
+        "expected silent coalesce path, got diagnostics: {}",
+        out.diagnostics
     );
     assert!(out.success, "program should exit successfully");
 }

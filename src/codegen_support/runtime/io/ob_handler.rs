@@ -464,8 +464,17 @@ fn emit_ob_eval_trampoline_x86_64(emitter: &mut Emitter) {
 /// buffer's handler name and level, PHP-style: `<prefix>NAME (LEVEL)\n`.
 ///
 /// Inputs: `x0`/`rdi` = message prefix pointer, `x1`/`rsi` = prefix length,
-/// `x2`/`rdx` = slot index. No result. Routed through `__rt_stdout_write`, so
-/// active buffers capture the notice like PHP with display_errors enabled.
+/// `x2`/`rdx` = slot index. No result.
+///
+/// Every piece goes through `__rt_diag_warning`, not straight to the output funnel. That is what
+/// makes the notice PHP-SHAPED rather than merely present: the helper opens the line with the
+/// blank line PHP prints, appends ` in FILE on line N` once the piece carrying the newline
+/// arrives, and honours `@`. Writing the pieces directly produced a notice glued to whatever the
+/// program had just printed, with no location and immune to suppression.
+///
+/// `__rt_itoa` still formats the level through the shared concat buffer, which is safe here only
+/// because the very next call COPIES those bytes into the diagnostic buffer before anything else
+/// can run.
 pub fn emit_ob_notice_named(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_ob_notice_named_x86_64(emitter);
@@ -479,24 +488,34 @@ pub fn emit_ob_notice_named(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #16");                                    // establish the notice frame pointer
     emitter.instruction("str x2, [sp, #0]");                                    // save the buffer slot index
-    emitter.instruction("bl __rt_stdout_write");                                // write the notice prefix
+    emitter.instruction("mov x2, x1");                                          // diag ABI: length in x2
+    emitter.instruction("mov x1, x0");                                          // diag ABI: pointer in x1
+    emitter.instruction("bl __rt_diag_warning");                                // write the notice prefix
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the buffer slot index
     abi::emit_symbol_address(emitter, "x10", "_ob_name_ptrs");                  // materialize the handler-name pointer array
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // load the handler display-name pointer
     abi::emit_symbol_address(emitter, "x10", "_ob_name_lens");                  // materialize the handler-name length array
     emitter.instruction("ldr x1, [x10, x9, lsl #3]");                           // load the handler display-name length
-    emitter.instruction("bl __rt_stdout_write");                                // write the handler display name
+    emitter.instruction("mov x2, x1");                                          // diag ABI: length in x2
+    emitter.instruction("mov x1, x0");                                          // diag ABI: pointer in x1
+    emitter.instruction("bl __rt_diag_warning");                                // write the handler display name
     abi::emit_symbol_address(emitter, "x0", "_ob_ntc_g_open");                  // load the " (" separator
     emitter.instruction("mov x1, #2");                                          // separator byte length
-    emitter.instruction("bl __rt_stdout_write");                                // write the separator
+    emitter.instruction("mov x2, x1");                                          // diag ABI: length in x2
+    emitter.instruction("mov x1, x0");                                          // diag ABI: pointer in x1
+    emitter.instruction("bl __rt_diag_warning");                                // write the separator
     emitter.instruction("ldr x0, [sp, #0]");                                    // itoa input = the buffer slot index
     emitter.instruction("bl __rt_itoa");                                        // format the level → x1=ptr, x2=len
     emitter.instruction("mov x0, x1");                                          // write pointer = the formatted level
     emitter.instruction("mov x1, x2");                                          // write length = the formatted level length
-    emitter.instruction("bl __rt_stdout_write");                                // write the level digits
+    emitter.instruction("mov x2, x1");                                          // diag ABI: length in x2
+    emitter.instruction("mov x1, x0");                                          // diag ABI: pointer in x1
+    emitter.instruction("bl __rt_diag_warning");                                // write the level digits
     abi::emit_symbol_address(emitter, "x0", "_ob_ntc_g_close");                 // load the ")\n" terminator
     emitter.instruction("mov x1, #2");                                          // terminator byte length
-    emitter.instruction("bl __rt_stdout_write");                                // write the terminator
+    emitter.instruction("mov x2, x1");                                          // diag ABI: length in x2
+    emitter.instruction("mov x1, x0");                                          // diag ABI: pointer in x1
+    emitter.instruction("bl __rt_diag_warning");                                // write the terminator
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the notice frame
     emitter.instruction("ret");                                                 // return to caller
@@ -511,24 +530,24 @@ fn emit_ob_notice_named_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish the notice frame pointer
     emitter.instruction("sub rsp, 16");                                         // reserve an aligned slot for the slot index
     emitter.instruction("mov QWORD PTR [rbp - 8], rdx");                        // save the buffer slot index
-    emitter.instruction("call __rt_stdout_write");                              // write the notice prefix
+    emitter.instruction("call __rt_diag_warning");                              // write the notice prefix
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the buffer slot index
     abi::emit_symbol_address(emitter, "r11", "_ob_name_ptrs");                  // materialize the handler-name pointer array
     emitter.instruction("mov rdi, QWORD PTR [r11 + r10*8]");                    // load the handler display-name pointer
     abi::emit_symbol_address(emitter, "r11", "_ob_name_lens");                  // materialize the handler-name length array
     emitter.instruction("mov rsi, QWORD PTR [r11 + r10*8]");                    // load the handler display-name length
-    emitter.instruction("call __rt_stdout_write");                              // write the handler display name
+    emitter.instruction("call __rt_diag_warning");                              // write the handler display name
     abi::emit_symbol_address(emitter, "rdi", "_ob_ntc_g_open");                 // load the " (" separator
     emitter.instruction("mov esi, 2");                                          // separator byte length
-    emitter.instruction("call __rt_stdout_write");                              // write the separator
+    emitter.instruction("call __rt_diag_warning");                              // write the separator
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // itoa input = the buffer slot index
     emitter.instruction("call __rt_itoa");                                      // format the level → rax=ptr, rdx=len
     emitter.instruction("mov rdi, rax");                                        // write pointer = the formatted level
     emitter.instruction("mov rsi, rdx");                                        // write length = the formatted level length
-    emitter.instruction("call __rt_stdout_write");                              // write the level digits
+    emitter.instruction("call __rt_diag_warning");                              // write the level digits
     abi::emit_symbol_address(emitter, "rdi", "_ob_ntc_g_close");                // load the ")\n" terminator
     emitter.instruction("mov esi, 2");                                          // terminator byte length
-    emitter.instruction("call __rt_stdout_write");                              // write the terminator
+    emitter.instruction("call __rt_diag_warning");                              // write the terminator
     emitter.instruction("add rsp, 16");                                         // release the notice frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to caller

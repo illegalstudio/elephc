@@ -49,11 +49,11 @@ pub(super) fn lower(
         RuntimeFnId::Sprintf => Some({
             crate::codegen::lower_inst::builtins::strings::lower_sprintf(ctx, inst)
         }),
-        RuntimeFnId::Sscanf => Some({
-            crate::codegen::lower_inst::builtins::strings::lower_sscanf(ctx, inst)
-        }),
         RuntimeFnId::StrContains => Some({
             crate::codegen::lower_inst::builtins::strings::lower_str_contains(ctx, inst)
+        }),
+        RuntimeFnId::StrGetcsv => Some({
+            crate::codegen::lower_inst::builtins::io::lower_str_getcsv(ctx, inst)
         }),
         RuntimeFnId::StrEndsWith => Some({
             crate::codegen::lower_inst::builtins::strings::lower_binary_string_runtime(

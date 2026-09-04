@@ -65,6 +65,8 @@ impl EvalStreamResources {
             chunk_sizes: _,
             default_stream_context: _,
             disabled_builtin_stream_wrappers: _,
+            last_open_error: _,
+            last_directory: _,
             next_id: _,
             socket_names: _,
             user_stream_wrapper_classes: _,
@@ -214,8 +216,27 @@ impl EvalStreamResources {
         include_ending: bool,
         stop_at_newline: bool,
     ) -> Option<Vec<u8>> {
+        self.read_line_consumed(id, length, ending, include_ending, stop_at_newline)
+            .map(|(bytes, _)| bytes)
+    }
+
+    /// Reads one line-like byte sequence and also reports how many bytes it consumed.
+    ///
+    /// The returned buffer has the ending delimiter stripped, so its length cannot tell a
+    /// genuinely empty segment (`"||"` at the read position) apart from an exhausted
+    /// stream. `stream_get_line` needs that distinction: PHP returns `""` for the first
+    /// and `false` only for the second.
+    pub(crate) fn read_line_consumed(
+        &mut self,
+        id: i64,
+        length: usize,
+        ending: Option<&[u8]>,
+        include_ending: bool,
+        stop_at_newline: bool,
+    ) -> Option<(Vec<u8>, usize)> {
         let stream = self.streams.get_mut(&id)?;
         let mut output = Vec::new();
+        let mut consumed = 0_usize;
         let mut byte = [0_u8; 1];
         while output.len() < length {
             let read = stream.file.read(&mut byte).ok()?;
@@ -224,6 +245,7 @@ impl EvalStreamResources {
                 break;
             }
             output.push(byte[0]);
+            consumed += 1;
             if let Some(ending) = ending {
                 if !ending.is_empty() && output.ends_with(ending) {
                     if !include_ending {
@@ -235,7 +257,7 @@ impl EvalStreamResources {
                 break;
             }
         }
-        Some(output)
+        Some((output, consumed))
     }
 
     /// Writes all provided bytes to a stream resource and returns the written byte count.
@@ -300,8 +322,12 @@ impl EvalStreamResources {
     }
 
     /// Accepts read/write buffer settings for local file streams.
-    pub(crate) fn set_buffer(&self, id: i64, _size: i64) -> Option<i64> {
-        self.streams.get(&id).map(|_| 0)
+    ///
+    /// Answers only whether the id resolves to a live stream. The php-visible RESULT is not the
+    /// same for both setters — the write buffer reports `-1` and the read buffer `0` — so it
+    /// belongs to the caller that knows which of the two it is serving, not here.
+    pub(crate) fn set_buffer(&self, id: i64, _size: i64) -> Option<()> {
+        self.streams.get(&id).map(|_| ())
     }
 
     /// Applies an advisory lock operation to a stream's backing file descriptor.

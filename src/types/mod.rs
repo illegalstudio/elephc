@@ -18,6 +18,7 @@ mod array_keys;
 mod array_storage;
 /// PHP array extension integer constants.
 pub(crate) mod array_constants;
+pub(crate) mod zlib_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
 /// `ext/curl` integer constants (`CURLOPT_*`, `CURLINFO_*`, `CURLE_*`, `CURL_*`, ...),
@@ -39,6 +40,7 @@ pub(crate) mod json_constants;
 pub(crate) mod math_constants;
 /// OpenSSL option constants shared by checker and codegen.
 pub(crate) mod openssl_constants;
+pub(crate) mod output_handler_constants;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
 /// PHP type model and type environment for tracking variable types.
@@ -66,7 +68,9 @@ pub(crate) use array_keys::{
     normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
-pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
+pub(crate) use array_storage::{
+    array_storage_conversion, join_array_storage_conversion, key_preserving_sort_promotes,
+};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{

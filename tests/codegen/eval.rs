@@ -4680,7 +4680,7 @@ fn test_eval_null_argument_is_empty_fragment() {
 fn test_eval_integer_argument_is_coerced_then_parse_checked() {
     let err = compile_and_run_expect_failure("<?php eval(123);");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse diagnostic: {err}"
     );
 }
@@ -5465,7 +5465,7 @@ echo $x;
 "#,
     );
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "the interpolated fragment assigns to a literal and must be refused, as reference PHP \
          refuses it; stderr was: {err}"
     );
@@ -6648,6 +6648,38 @@ echo function_exists("spl_classes"); echo is_callable("spl_classes");');
     );
 }
 
+/// Verifies an eval()'d open failure names the file and the reason, as the compiled path does.
+///
+/// The AOT warning was fixed to carry both; the eval interpreter has its own emitter and was
+/// left behind saying `fopen(): Failed to open stream` with nothing after it. `file()` was
+/// worse: it announced itself as `file_get_contents()`. The reason is read from the OS rather
+/// than assumed, because "No such file or directory" is wrong for a file that exists and
+/// cannot be read.
+#[test]
+fn test_eval_open_failure_names_the_file_and_the_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('$a = fopen("missing_a.txt", "r");');
+eval('$b = file_get_contents("missing_b.txt");');
+eval('$c = file("missing_c.txt");');
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    for expected in [
+        "Warning: fopen(missing_a.txt): Failed to open stream: No such file or directory",
+        "Warning: file_get_contents(missing_b.txt): Failed to open stream: No such file or directory",
+        "Warning: file(missing_c.txt): Failed to open stream: No such file or directory",
+    ] {
+        assert!(
+            out.diagnostics.contains(expected),
+            "missing {expected:?}, got diagnostics={}",
+            out.diagnostics
+        );
+    }
+}
+
 /// Verifies eval fragments can construct and dispatch SPL container objects.
 #[test]
 fn test_eval_constructs_and_dispatches_spl_container_objects() {
@@ -7692,7 +7724,7 @@ echo $call_wrappers[10] . ":";
 $call_transports = call_user_func_array("stream_get_transports", []);
 echo $call_transports[11] . ":";
 $call_filters = call_user_func_array("stream_get_filters", []);
-echo $call_filters[13] . ":";
+echo $call_filters[8] . ":";
 $tmp = tmpfile();
 echo stream_is_local("php://memory") ? "local" : "bad"; echo ":";
 echo stream_supports_lock($tmp) ? "lock" : "bad"; echo ":";
@@ -7702,9 +7734,16 @@ echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_tr
 echo function_exists("stream_is_local"); echo function_exists("stream_supports_lock");');
 "#,
     );
+    // php 8.5.6 answers `https` / `file` / `phar` at wrapper indices 0/5/10 and
+    // `convert.iconv.*` / `dechunk` at filter indices 2/8 over nine families.
+    // The eval tables mirror the native lists, so this pins both. The old
+    // expectation read `11:file:https:...:14:string.rot13:...` off the pre-php
+    // wrapper order and the fourteen-concrete-name filter list. The transport
+    // half still reads the eval table's twelve entries, which have not been
+    // trimmed to php's ten the way the native list was.
     assert_eq!(
         out,
-        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:local:lock:calllocal:calllock:11111"
+        "11:https:file:12:tcp:tlsv1.0:9:convert.iconv.*:phar:tlsv1.3:dechunk:local:lock:calllocal:calllock:11111"
     );
 }
 
@@ -7935,7 +7974,7 @@ echo call_user_func("preg_match_all", "/([a-z])/", "ab", $flagged, PREG_SET_ORDE
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "1:old|2:old|1:old|2:old");
     for warning in [
@@ -7943,9 +7982,9 @@ echo call_user_func("preg_match_all", "/([a-z])/", "ab", $flagged, PREG_SET_ORDE
         "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }
@@ -8119,7 +8158,7 @@ echo count($read) . ":" . count($write) . ":" . count($except);');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "lock:old:0:1:0:0");
     for warning in [
@@ -8129,9 +8168,9 @@ echo count($read) . ":" . count($write) . ":" . count($except);');
         "stream_select(): Argument #3 ($except) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }
@@ -8983,8 +9022,10 @@ try {
 Error:Object of class EvalBuiltinSprintfPlain could not be converted to string|\
 Error:Object of class Closure could not be converted to string|"
     );
+    // php puts these on STDOUT — measured, `2>/dev/null` keeps them and `2>&1 >/dev/null` is
+    // empty — and the harness splits php's diagnostics out of stdout into `diagnostics`.
     assert_eq!(
-        output.stderr,
+        output.diagnostics,
         "Warning: Array to string conversion\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
@@ -9005,8 +9046,9 @@ echo sprintf("%d|%f", $box, $box);
     );
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "1|1.000000");
+    // See the sibling test: php writes these on stdout, and the harness splits them out.
     assert_eq!(
-        output.stderr,
+        output.diagnostics,
         "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
 Warning: Object of class EvalSprintfNumericWarning could not be converted to float\n"
     );
@@ -9589,10 +9631,10 @@ echo eval('return function_exists("define") && function_exists("defined") ? "Y" 
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "YY77NNYYYYY");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: define(): Constant already defined"),
-        "expected duplicate eval define warning, got stderr={}",
-        out.stderr
+        "expected duplicate eval define warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -9614,10 +9656,10 @@ echo eval('return (PHP_EOL === "\n" ? "eol" : "bad") . ":" .
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "eol:os:/:int:defined:root:case:locked");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: define(): Constant already defined"),
-        "expected predefined eval define warning, got stderr={}",
-        out.stderr
+        "expected predefined eval define warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -9634,6 +9676,7 @@ echo eval('return DynEvalSuppressedConst;');
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ok1");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies native `defined()` probes can see constants defined by eval after the barrier.
@@ -9688,8 +9731,61 @@ fn test_eval_missing_dynamic_constant_fetch_fails() {
 fn test_eval_parse_error_reports_eval_parse_diagnostic() {
     let err = compile_and_run_expect_failure("<?php eval('if (');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse-error diagnostic: {err}"
+    );
+}
+
+/// Verifies an `eval()` parse error carries php's LOCATION and php's exit status.
+///
+/// Measured on `php -n` 8.5.6, for a file whose fourth line is `eval("1 +");`:
+///
+/// ```text
+/// \nParse error: syntax error, unexpected end of file in /tmp/ev.php(4) : eval()'d code on line 1\n
+/// ```
+/// with status 255. elephc printed `Parse error: eval() fragment is invalid` and exited 1 —
+/// neither the location nor the status, and a wording that appears nowhere in php.
+///
+/// The line INSIDE the fragment is asserted on a THREE-line fragment as well, because that is
+/// the case a fixed `1` would get wrong: php reports an unterminated fragment against the end
+/// of input, which is the empty fourth line, not the last line carrying code.
+///
+/// What is deliberately NOT asserted is php's syntactic complaint. php words at least five
+/// (`unexpected end of file`, `… expecting "("`, `unexpected token ";"`, `Unclosed '('`,
+/// `Unmatched '}'`); the bridge answers a status code, so elephc always writes the first.
+#[test]
+fn test_eval_parse_error_carries_phps_location_and_exit_status() {
+    let single = compile_and_run_capture("<?php\necho \"kept\";\neval('1 +');\n");
+    assert!(!single.success, "an unparsable fragment must be fatal");
+    assert_eq!(single.exit_code, Some(255), "stderr={}", single.stderr);
+    assert_eq!(single.stdout, "kept");
+    assert!(
+        single
+            .stderr
+            .contains(") : eval()'d code on line 1\n"),
+        "the eval location tail is missing, got stderr={}",
+        single.stderr
+    );
+    assert!(
+        single
+            .stderr
+            .starts_with("\nParse error: syntax error, unexpected end of file in "),
+        "the parse error lost php's opening, got stderr={:?}",
+        single.stderr
+    );
+    assert!(
+        single.stderr.contains(".php(3) : eval()'d code"),
+        "the host file and the eval() call line are missing, got stderr={}",
+        single.stderr
+    );
+
+    let multi = compile_and_run_capture("<?php\neval(\"\\$a = 1;\\n\\$b = 2;\\n1 +\\n\");\n");
+    assert!(!multi.success, "an unparsable fragment must be fatal");
+    assert_eq!(multi.exit_code, Some(255), "stderr={}", multi.stderr);
+    assert!(
+        multi.stderr.contains(".php(2) : eval()'d code on line 4\n"),
+        "the fragment's own line was not measured, got stderr={}",
+        multi.stderr
     );
 }
 
@@ -9708,7 +9804,7 @@ fn assert_eval_failure_contains(source: &str, expected: &str) -> String {
 fn test_eval_error_contract_reports_parse_failure() {
     let stderr = assert_eval_failure_contains(
         "<?php eval('if (');",
-        "Parse error: eval() fragment is invalid",
+        "Parse error: syntax error, unexpected end of file",
     );
     assert_no_rust_panic_leaked(&stderr);
 }
@@ -9745,15 +9841,15 @@ echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
     assert!(
         warning.success,
         "warning fixture should not fail: {}",
-        warning.stderr
+        warning.diagnostics
     );
     assert_eq!(warning.stdout, "ok");
     assert!(
         warning
-            .stderr
+            .diagnostics
             .contains("Warning: define(): Constant already defined"),
         "stderr did not contain eval warning diagnostic: {}",
-        warning.stderr
+        warning.diagnostics
     );
 }
 
@@ -9763,7 +9859,7 @@ fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
     for (source, expected) in [
         (
             "<?php eval('if (');",
-            "Parse error: eval() fragment is invalid",
+            "Parse error: syntax error, unexpected end of file",
         ),
         (
             "<?php eval('clamp(5, 10, 0);');",
@@ -9950,7 +10046,11 @@ echo function_exists("sprintf"); echo is_callable("printf"); echo function_exist
     );
 }
 
-/// Verifies eval `sscanf()` returns indexed string matches through direct and callable paths.
+/// Verifies eval `sscanf()` returns php-typed matches through direct and callable paths.
+///
+/// `-2.5e3` reads back as `-2500`, not as the matched text: `%f` yields a FLOAT, so echoing
+/// it prints php's float rendering. The old assertion held the scanned SLICE, which is what
+/// the interpreter's scanf subset used to answer — `php -n` (8.5.6) gives `float(-2500)`.
 #[test]
 fn test_eval_dispatches_sscanf_builtin_call() {
     let out = compile_and_run(
@@ -9966,7 +10066,7 @@ echo $spread[0] . ":";
 echo function_exists("sscanf");');
 "#,
     );
-    assert_eq!(out, "John:1.5:30:-25:-2.5e3:ok:1");
+    assert_eq!(out, "John:1.5:30:-25:-2500:ok:1");
 }
 
 /// Verifies eval `min()` and `max()` select numeric values directly and through callables.
@@ -12837,15 +12937,15 @@ echo call_user_func("eval_cuf_ref_string", $value) . ":" . $value;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "ax:a");
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "eval_cuf_ref_string(): Argument #1 ($value) must be passed by reference, value given"
         ),
         "missing by-ref warning: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -12866,15 +12966,15 @@ echo call_user_func("eval_aot_cuf_ref_int", $value) . ":" . $value;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "5:3");
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "eval_aot_cuf_ref_int(): Argument #1 ($value) must be passed by reference, value given"
         ),
         "missing by-ref warning: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -12918,7 +13018,7 @@ echo call_user_func($staticFirst, $staticValue) . ":" . $staticValue;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "ax:a|5:3|qi:q|bx:b|6:4");
     for warning in [
@@ -12927,9 +13027,9 @@ echo call_user_func($staticFirst, $staticValue) . ":" . $staticValue;');
         "EvalCufMethodRefBox::__invoke(): Argument #1 ($value) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }
@@ -12977,7 +13077,7 @@ echo call_user_func($invokable, $invokableValue, 4) . ":" . $invokableValue;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "5:3|7:4|10:8|7:5|10:9|10:6");
     for warning in [
@@ -12986,9 +13086,9 @@ echo call_user_func($invokable, $invokableValue, 4) . ":" . $invokableValue;');
         "EvalAotCufMethodRefBox::__invoke(): Argument #1 ($value) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }
@@ -29135,7 +29235,7 @@ echo $x;
 fn test_eval_fragment_with_php_opening_tag_reports_parse_error() {
     let err = compile_and_run_expect_failure("<?php eval('<?php echo 1;');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse diagnostic: {err}"
     );
 }
@@ -29355,4 +29455,45 @@ echo ":"; echo intval("42");');
 "#,
     );
     assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
+}
+
+/// Verifies `eval()` reads every PHP numeric literal form in the same base the AOT compiler
+/// does, so the two halves of elephc cannot disagree about what a literal means.
+///
+/// Measured against PHP 8.5.6 (`php -n`), which prints the same value for the direct and the
+/// `eval()`d spelling of each form:
+/// `0700`/`0o700`/`0O700`/`0_700`/`0o7_00` → `448`, `0x1F`/`0X1f`/`0x1_F` → `31`,
+/// `0b101`/`0B101`/`0b1_01` → `5`, `1_000` → `1000`, `0` and `00` → `0`,
+/// `0100644` → `33188`, `010` → `8`, `1e3` → `1000`, `1e-3` → `0.001`, `1.5e2` → `150`.
+///
+/// Before this test the eval lexer scanned decimal digits only, so `eval('echo 0700;')`
+/// printed `700` and `eval('echo 0100644;')` printed `100644` — a silent wrong answer that
+/// made every permission mask evaluated at runtime mean something else — while the prefixed
+/// forms split into an integer plus an identifier. The direct (AOT) column is asserted in the
+/// same test so a future divergence in EITHER lexer fails here.
+///
+/// The two columns are printed by `echo` rather than compared as returned arrays because
+/// `eval('return [1, 2];')` segfaults on its own — an unrelated, pre-existing defect that
+/// would mask this one.
+#[test]
+fn test_eval_numeric_literal_bases_match_the_aot_lexer() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo 0700, ",", 0o700, ",", 0O700, ",", 0x1F, ",", 0X1f, ",", 0b101, ",", 0B101, ",", 1_000, "\n";');
+echo 0700, ",", 0o700, ",", 0O700, ",", 0x1F, ",", 0X1f, ",", 0b101, ",", 0B101, ",", 1_000, "\n";
+eval('echo 0, ",", 00, ",", 0100644, ",", 0_700, ",", 0o7_00, ",", 0x1_F, ",", 0b1_01, ",", 010, "\n";');
+echo 0, ",", 00, ",", 0100644, ",", 0_700, ",", 0o7_00, ",", 0x1_F, ",", 0b1_01, ",", 010, "\n";
+eval('echo 1e3, ":", 1e-3, ":", 1.5e2, ":", 1_000.5, "\n";');
+echo 1e3, ":", 1e-3, ":", 1.5e2, ":", 1_000.5, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "448,448,448,31,31,5,5,1000\n\
+         448,448,448,31,31,5,5,1000\n\
+         0,0,33188,448,448,31,5,8\n\
+         0,0,33188,448,448,31,5,8\n\
+         1000:0.001:150:1000.5\n\
+         1000:0.001:150:1000.5\n"
+    );
 }

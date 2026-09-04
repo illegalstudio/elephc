@@ -16,11 +16,7 @@
 ///
 /// Entries: `("PHP_SESSION_DISABLED", 0)`, `("PHP_SESSION_NONE", 1)`,
 /// `("PHP_SESSION_ACTIVE", 2)`.
-pub(crate) const SESSION_INT_CONSTANTS: &[(&str, i64)] = &[
-    ("PHP_SESSION_DISABLED", 0),
-    ("PHP_SESSION_NONE", 1),
-    ("PHP_SESSION_ACTIVE", 2),
-];
+pub(crate) use elephc_builtin_contract::php_constants::SESSION_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {

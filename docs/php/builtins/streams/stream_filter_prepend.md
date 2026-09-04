@@ -2,21 +2,21 @@
 title: "stream_filter_prepend()"
 description: "Attaches a filter to a stream (prepend)."
 sidebar:
-  order: 422
+  order: 448
 ---
 
 ## stream_filter_prepend()
 
 ```php
-function stream_filter_prepend(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed
+function stream_filter_prepend(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): mixed
 ```
 
 Attaches a filter to a stream (prepend).
 
 **Parameters**:
 - `$stream` (`resource`)
-- `$filtername` (`string`)
-- `$read_write` (`int`), default `3`, optional
+- `$filter_name` (`string`)
+- `$mode` (`int`), default `0`, optional
 - `$params` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`

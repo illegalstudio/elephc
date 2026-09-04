@@ -73,7 +73,18 @@ pub(in crate::interpreter) fn eval_fgetcsv_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
     let length = eval_optional_stream_length(length, values)?.unwrap_or(usize::MAX);
-    let separator = eval_optional_delimiter(separator, b',', values)?;
+    let separator = eval_csv_control_byte(
+        separator,
+        b',',
+        CsvControlArgument {
+            function: "fgetcsv",
+            position: 3,
+            parameter: "separator",
+            empty_allowed: false,
+        },
+        context,
+        values,
+    )?;
     let Some(mut line) = context
         .stream_resources_mut()
         .read_line(id, length, None, true, true)
@@ -84,6 +95,17 @@ pub(in crate::interpreter) fn eval_fgetcsv_result(
         return values.bool_value(false);
     }
     eval_trim_csv_line_end(&mut line);
+    if line.is_empty() {
+        // A line that was nothing but its terminator is php-src's BLANK LINE: `php_fgetcsv()`
+        // bails with `values = NULL` (`first_field && bptr == line_end`, file.c:1939) and
+        // `PHP_FUNCTION(fgetcsv)` substitutes `php_bc_fgetcsv_empty_line()` — one element holding
+        // null. It is NOT end of input, which the empty read above already answered with `false`.
+        // Measured on `php -n` 8.5.6, a blank line mid-file is `[NULL]` while `"   \n"` is `["   "]`.
+        let result = values.array_new(0)?;
+        let key = values.int(0)?;
+        let null = values.null()?;
+        return values.array_set(result, key, null);
+    }
     let fields = eval_parse_csv_record(&line, separator, b'"');
     eval_csv_fields_array(&fields, values)
 }

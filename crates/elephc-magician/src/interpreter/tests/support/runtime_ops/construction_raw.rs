@@ -93,6 +93,16 @@ macro_rules! impl_fake_construction_raw_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
     }
+    /// Reports whether a fake HOST resource payload names an already-closed handle.
+    ///
+    /// Reads the fake registry mirror, plus the legacy `-id` sentinel arm that
+    /// `fake_resource_id` already models — the same two states the runtime wrapper
+    /// resolves through `__rt_resource_type_name`.
+    fn resource_is_closed(&mut self, payload: u64) -> Result<bool, EvalStatus> {
+        let payload = payload as i64;
+        Ok(payload < 0 || self.closed_resources.contains(&payload))
+    }
+
     /// Extracts one fake low payload word for raw by-reference staging.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         Ok(match self.get(value) {

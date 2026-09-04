@@ -133,44 +133,13 @@ fn emit_non_countable_object_type_error(
                 .instruction(&format!("mov {}, QWORD PTR [r10 + r9 + 8]", name_len_reg)); // borrow the class-name byte length
         }
     }
-    emit_count_error_concat_prefix(ctx, COUNT_TYPE_ERROR_PREFIX);
-    emit_count_error_concat_suffix(ctx, " given");
+    super::super::exceptions::emit_message_concat_prefix(ctx, COUNT_TYPE_ERROR_PREFIX);
+    super::super::exceptions::emit_message_concat_suffix(ctx, " given");
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
     super::super::exceptions::emit_type_error_from_string_result(ctx);
 
     ctx.emitter.label(&countable);
     Ok(())
-}
-
-/// Prepends a static fragment to the message held in the string-result registers.
-fn emit_count_error_concat_prefix(ctx: &mut FunctionContext<'_>, prefix: &str) {
-    let (text_ptr, text_len) = abi::string_result_regs(ctx.emitter);
-    let (right_ptr, right_len) = count_concat_right_operand_regs(ctx);
-    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", right_ptr, text_ptr));              // move the built text into the concat right operand
-    ctx.emitter
-        .instruction(&format!("mov {}, {}", right_len, text_len));              // move its length into the concat right operand
-    abi::emit_symbol_address(ctx.emitter, text_ptr, &prefix_label);
-    abi::emit_load_int_immediate(ctx.emitter, text_len, prefix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// Appends a static fragment to the message held in the string-result registers.
-fn emit_count_error_concat_suffix(ctx: &mut FunctionContext<'_>, suffix: &str) {
-    let (right_ptr, right_len) = count_concat_right_operand_regs(ctx);
-    let (suffix_label, suffix_len) = ctx.data.add_string(suffix.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, right_ptr, &suffix_label);
-    abi::emit_load_int_immediate(ctx.emitter, right_len, suffix_len as i64);
-    abi::emit_call_label(ctx.emitter, "__rt_concat");
-}
-
-/// The register pair `__rt_concat` reads its right operand from.
-fn count_concat_right_operand_regs(ctx: &FunctionContext<'_>) -> (&'static str, &'static str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ("x3", "x4"),
-        Arch::X86_64 => ("rdi", "rsi"),
-    }
 }
 
 /// Raises the `count()` TypeError naming `type_name`, exactly as php-src words it.
@@ -228,8 +197,29 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             store_if_result(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
+            // php raises a TypeError for anything but an array or a Countable; answering 0 made
+            // `count($x) === 0` read a non-empty string, a null and an integer as empty
+            // collections. The rejection is probed before the count because __rt_mixed_count
+            // tail-calls the SPL counters, so it cannot report anything beside the count itself.
             emit_count_countable_guard(ctx, value)?;
             ctx.load_value_to_result(value)?;
+            let countable_label = ctx.next_label("count_countable");
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::emit_call_label(ctx.emitter, "__rt_count_reject_index");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #0");
+                    ctx.emitter.instruction(&format!("b.lt {}", countable_label)); // -1: really countable
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 0");
+                    ctx.emitter.instruction(&format!("jl {}", countable_label));   // -1: really countable
+                }
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_count_type_message");
+            super::super::exceptions::emit_type_error_from_string_result(ctx);
+            ctx.emitter.label(&countable_label);
+            abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             emit_non_countable_object_type_error(ctx, value)?;
             store_if_result(ctx, inst)

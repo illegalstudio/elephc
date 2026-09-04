@@ -144,10 +144,19 @@ impl Checker {
     }
 
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    ///
+    /// `places_rewritable` says whether THIS call site's lowering can carry a non-local place.
+    /// `ir_lower::expr::ref_place_args` rewrites a FREE FUNCTION call — it reads the place into a
+    /// hidden temporary, calls with that, and writes the temporary back — and there is no such
+    /// rewrite for a method, a closure, or a `callable`. Accepting a property for those compiled
+    /// a call that RAN and dropped the write in silence: `$this->twiddle($box->data)` left the
+    /// property unchanged where php mutates it. The flag is what keeps the checker from
+    /// promising what one of its lowerings cannot deliver.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
         arg: &Expr,
         env: &TypeEnv,
+        places_rewritable: bool,
     ) -> Result<bool, CompileError> {
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
@@ -155,6 +164,31 @@ impl Checker {
                 Ok(matches!(
                     self.infer_type(array, env)?.codegen_repr(),
                     PhpType::Array(_)
+                ))
+            }
+            // An ELEMENT of a property — `set($obj->items[1])` — stays REFUSED. php allows it,
+            // but the by-reference argument lowering resolves a cell address only for an element
+            // of a plain LOCAL, and `ref_place_args`' read/write-back does not fire for it
+            // either: accepting the shape produced a call that ran and dropped the write in
+            // silence, which is worse than the diagnostic. The refusal names the parameter.
+            // A PROPERTY is a writable place in php — `sort($obj->items)` and
+            // `bump($this->rows)` are ordinary code — and `ir_lower::expr::ref_place_args`
+            // lowers one by reading it into a hidden temporary, calling with that, and writing
+            // the temporary back. It can only do that for ARRAY storage, so this accepts
+            // exactly what it can lower: a scalar property keeps the existing diagnostic rather
+            // than compiling into a write-back that never happens.
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {
+                if !places_rewritable {
+                    return Ok(false);
+                }
+                Ok(matches!(
+                    self.infer_type(arg, env)?.codegen_repr(),
+                    PhpType::Array(_)
+                        | PhpType::AssocArray { .. }
+                        | PhpType::Int
+                        | PhpType::Float
+                        | PhpType::Bool
+                        | PhpType::Str
                 ))
             }
             _ => Ok(false),
@@ -212,17 +246,33 @@ impl Checker {
         )
     }
 
-    /// Normalizes arguments for a builtin or extern function call, rejecting unknown named
-    /// arguments and not allowing unknown named arguments to flow into the variadic parameter.
-    pub(crate) fn normalize_builtin_call_args(
+    /// Normalizes a builtin or extern call and reports which slots the NORMALIZER filled.
+    ///
+    /// Unknown named arguments are rejected rather than flowing into the variadic parameter.
+    ///
+    /// The by-reference check needs to tell an omitted parameter from a literal the program wrote
+    /// in that position: php accepts the first and raises an Error for the second, and after
+    /// normalization both are the same expression.
+    pub(crate) fn normalize_builtin_call_args_with_defaults(
         &self,
         sig: &FunctionSig,
         args: &[Expr],
         span: crate::span::Span,
         callee_desc: &str,
         env: &TypeEnv,
-    ) -> Result<Vec<Expr>, CompileError> {
-        self.normalize_call_args(sig, args, span, callee_desc, true, false, env)
+    ) -> Result<(Vec<Expr>, Vec<bool>), CompileError> {
+        let assoc_spread_sources = assoc_spread_sources(args, env);
+        let plan = call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+            sig,
+            args,
+            span,
+            call_args::regular_param_count(sig),
+            true,
+            false,
+            &assoc_spread_sources,
+        )
+        .map_err(|err| call_arg_plan_error(sig, callee_desc, err))?;
+        Ok((plan.normalized_args(), plan.slots_filled_by_default()))
     }
 
     /// Shared argument normalization for both user-defined and builtin calls. Delegates to the
@@ -281,6 +331,12 @@ impl Checker {
                 PhpType::AssocArray { key, value },
                 PhpType::Array(_) | PhpType::AssocArray { .. },
             ) if **key == PhpType::Mixed && **value == PhpType::Mixed => true,
+            // An EMPTY array literal is `array<never>` and is every array shape at once: php has
+            // one `[]`. `$h = []; fill_keyed($h);` with `function fill_keyed(array &$a)` whose
+            // body writes string keys re-types the parameter to a hash, and the call site would
+            // otherwise reject the very literal that started it. The lowering converts it with
+            // `Op::ArrayToHash`, which for an empty array moves nothing.
+            (PhpType::AssocArray { .. }, PhpType::Array(elem)) if **elem == PhpType::Never => true,
             (PhpType::Float, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Int, PhpType::Bool | PhpType::False | PhpType::Void) => true,
             (PhpType::Bool, PhpType::Int | PhpType::Void) => true,
@@ -514,7 +570,7 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    if !self.is_by_ref_argument_lvalue(arg, caller_env, false)? {
                         let param_name = sig
                             .params
                             .get(param_idx)

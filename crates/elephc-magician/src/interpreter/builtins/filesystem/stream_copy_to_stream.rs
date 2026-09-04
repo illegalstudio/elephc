@@ -76,7 +76,11 @@ pub(in crate::interpreter) fn eval_stream_copy_to_stream_result(
     let from = eval_stream_resource_id(from, values)?;
     let to = eval_stream_resource_id(to, values)?;
     let length = eval_optional_stream_length(length, values)?;
-    let offset = eval_optional_stream_offset(offset, values)?;
+    // php-src guards this seek with `pos > 0`, so a ZERO offset — the stub's own default —
+    // copies from the source's CURRENT position instead of rewinding it. MEASURED on `php -n`
+    // 8.5.6 with the source parked at byte 4 of `"0123456789"`: `0`, `-1` and the omitted
+    // default all copy `"456789"`, while `2` copies `"23456789"`.
+    let offset = eval_optional_stream_offset(offset, values)?.filter(|offset| *offset > 0);
     if let Some(result) =
         eval_user_wrapper_stream_copy_to_stream_result(from, to, length, offset, context, values)?
     {

@@ -246,9 +246,15 @@ function pos(): int {
 /// Verifies that `str_replace()` with only two arguments produces the correct arity error.
 #[test]
 fn test_error_str_replace_wrong_args() {
+    // Three OR FOUR: php's fourth argument is the by-reference `$count`, and it used to be capped
+    // out of the signature, so the idiomatic four-argument call was refused as an arity error.
     expect_error(
         "<?php str_replace(\"a\", \"b\");",
-        "str_replace() takes exactly 3 arguments",
+        "str_replace() takes 3 or 4 arguments",
+    );
+    expect_error(
+        "<?php str_replace(\"a\", \"b\", \"c\", $n, 5);",
+        "str_replace() takes 3 or 4 arguments",
     );
 }
 
@@ -268,20 +274,6 @@ fn test_error_printf_no_args() {
 #[test]
 fn test_error_ord_wrong_args() {
     expect_error("<?php ord();", "ord() takes exactly 1 argument");
-}
-
-/// Verifies that a pure-data registry builtin (`ord`) infers argument types so that
-/// an undefined variable passed as an argument produces the correct diagnostic.
-///
-/// This is a regression test for Fix B: before the fix, the registry-first dispatch
-/// branch skipped `infer_type` for builtins with no check hook, so undefined-variable
-/// errors were silently dropped.
-#[test]
-fn test_error_ord_undefined_variable_arg() {
-    expect_error(
-        "<?php ord($undeclared);",
-        "Undefined variable: $undeclared",
-    );
 }
 
 /// Verifies that `explode()` with only one argument produces the correct arity error.
@@ -470,6 +462,20 @@ fn test_error_sscanf_wrong_args() {
     expect_error(
         r#"<?php sscanf("hi");"#,
         "sscanf() takes at least 2 arguments",
+    );
+}
+
+/// Regression: `sscanf()`'s by-ref `$vars` form is bounded, and says so past the bound.
+///
+/// The form itself works now — `sscanf("alice 30", "%s %d", $name, $age)` assigns both variables
+/// and answers `int(2)`, as php does. Each arity is its own prelude function with that many
+/// by-reference parameters, so a call with more variables than the last declared arity has
+/// nothing to reach and is refused with a message that names the limit.
+#[test]
+fn test_error_sscanf_refuses_more_output_variables_than_it_declares() {
+    expect_error(
+        r#"<?php sscanf("1", "%d %d %d %d %d %d %d %d %d", $a, $b, $c, $d, $e, $f, $g, $h, $i);"#,
+        "sscanf(): at most 8 output variables are supported, got 9",
     );
 }
 

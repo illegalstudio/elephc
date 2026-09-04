@@ -156,6 +156,11 @@ macro_rules! impl_construction_raw_ops {
         Ok(unsafe { __elephc_eval_value_raw_word(value.as_ptr()) })
     }
 
+    /// Reports whether a HOST resource payload names an already-closed handle.
+    fn resource_is_closed(&mut self, payload: u64) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_resource_is_closed(payload) } != 0)
+    }
+
     /// Extracts the high raw payload word from a boxed Mixed cell.
     fn raw_value_high_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         Ok(unsafe { __elephc_eval_value_raw_high_word(value.as_ptr()) })

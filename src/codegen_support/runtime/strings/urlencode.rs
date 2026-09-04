@@ -56,21 +56,26 @@ pub fn emit_urlencode(emitter: &mut Emitter) {
     emitter.instruction("b __rt_urlencode_loop");                               // next byte
 
     // -- check alphanumeric and safe chars --
+    //
+    // IN ASCII ORDER, and that is the whole point: each "below this range" branch has to fall to
+    // the NEXT range, not to the punctuation check at the bottom. Testing 'A' first sent every
+    // digit — which is below 'A' — straight past its own arm to a check that only knows `-`, `_`
+    // and `.`, so `urlencode("0123456789")` answered `%30%31...` and the 0-9 arm was unreachable.
     emitter.label("__rt_urlencode_chk_alnum");
+    // -- check 0-9 --
+    emitter.instruction("cmp w12, #48");                                        // >= '0'?
+    emitter.instruction("b.lt __rt_urlencode_chk_safe");                        // below every alphanumeric range
+    emitter.instruction("cmp w12, #57");                                        // <= '9'?
+    emitter.instruction("b.le __rt_urlencode_passthru");                        // yes -> pass through
     // -- check A-Z --
     emitter.instruction("cmp w12, #65");                                        // >= 'A'?
-    emitter.instruction("b.lt __rt_urlencode_chk_safe");                        // no -> check safe chars
+    emitter.instruction("b.lt __rt_urlencode_chk_safe");                        // between '9' and 'A'
     emitter.instruction("cmp w12, #90");                                        // <= 'Z'?
     emitter.instruction("b.le __rt_urlencode_passthru");                        // yes -> pass through
     // -- check a-z --
     emitter.instruction("cmp w12, #97");                                        // >= 'a'?
-    emitter.instruction("b.lt __rt_urlencode_chk_safe");                        // no -> check safe chars
+    emitter.instruction("b.lt __rt_urlencode_chk_safe");                        // between 'Z' and 'a'
     emitter.instruction("cmp w12, #122");                                       // <= 'z'?
-    emitter.instruction("b.le __rt_urlencode_passthru");                        // yes -> pass through
-    // -- check 0-9 --
-    emitter.instruction("cmp w12, #48");                                        // >= '0'?
-    emitter.instruction("b.lt __rt_urlencode_chk_safe");                        // no -> check safe chars
-    emitter.instruction("cmp w12, #57");                                        // <= '9'?
     emitter.instruction("b.le __rt_urlencode_passthru");                        // yes -> pass through
 
     // -- check safe chars: - (45), _ (95), . (46) --
@@ -158,19 +163,22 @@ fn emit_urlencode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r11, 1");                                          // advance the concat-buffer destination cursor after emitting one query-style space replacement
     emitter.instruction("jmp __rt_urlencode_loop_linux_x86_64");                // continue encoding the remainder of the source string after replacing one space
 
+    // See the AArch64 arm: the ranges are tested IN ASCII ORDER so each "below" branch falls to
+    // the next range instead of to the punctuation check, which is what made every digit
+    // percent-encoded.
     emitter.label("__rt_urlencode_chk_alnum_linux_x86_64");
+    emitter.instruction("cmp dl, 48");                                          // is the current source byte at least '0', which could make it a decimal digit safe to pass through?
+    emitter.instruction("jb __rt_urlencode_chk_safe_linux_x86_64");             // below every alphanumeric range, so only the punctuation set can save it
+    emitter.instruction("cmp dl, 57");                                          // is the current source byte at most '9', which keeps it inside the decimal-digit safe range?
+    emitter.instruction("jbe __rt_urlencode_passthru_linux_x86_64");            // pass decimal digits straight through without percent-encoding them
     emitter.instruction("cmp dl, 65");                                          // is the current source byte at least 'A', which could make it an ASCII letter safe to pass through?
-    emitter.instruction("jb __rt_urlencode_chk_safe_linux_x86_64");             // continue with the remaining safe-byte checks when the byte falls below 'A'
+    emitter.instruction("jb __rt_urlencode_chk_safe_linux_x86_64");             // between '9' and 'A'
     emitter.instruction("cmp dl, 90");                                          // is the current source byte at most 'Z', which keeps it inside the uppercase ASCII safe range?
     emitter.instruction("jbe __rt_urlencode_passthru_linux_x86_64");            // pass uppercase ASCII letters straight through without percent-encoding them
     emitter.instruction("cmp dl, 97");                                          // is the current source byte at least 'a', which could make it a lowercase ASCII letter safe to pass through?
-    emitter.instruction("jb __rt_urlencode_chk_safe_linux_x86_64");             // continue with the remaining safe-byte checks when the byte falls below 'a'
+    emitter.instruction("jb __rt_urlencode_chk_safe_linux_x86_64");             // between 'Z' and 'a'
     emitter.instruction("cmp dl, 122");                                         // is the current source byte at most 'z', which keeps it inside the lowercase ASCII safe range?
     emitter.instruction("jbe __rt_urlencode_passthru_linux_x86_64");            // pass lowercase ASCII letters straight through without percent-encoding them
-    emitter.instruction("cmp dl, 48");                                          // is the current source byte at least '0', which could make it a decimal digit safe to pass through?
-    emitter.instruction("jb __rt_urlencode_chk_safe_linux_x86_64");             // continue with the punctuation safe-byte checks when the byte falls below '0'
-    emitter.instruction("cmp dl, 57");                                          // is the current source byte at most '9', which keeps it inside the decimal-digit safe range?
-    emitter.instruction("jbe __rt_urlencode_passthru_linux_x86_64");            // pass decimal digits straight through without percent-encoding them
 
     emitter.label("__rt_urlencode_chk_safe_linux_x86_64");
     emitter.instruction("cmp dl, 45");                                          // is the current source byte '-' which query-style urlencode() leaves untouched?

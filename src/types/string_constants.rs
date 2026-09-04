@@ -14,11 +14,7 @@
 /// Tuple of `(name, value)` pairs for PHP string integer constants.
 ///
 /// `str_pad()` uses these constants to select which side of the input is padded.
-pub(crate) const STRING_INT_CONSTANTS: &[(&str, i64)] = &[
-    ("STR_PAD_LEFT", 0),
-    ("STR_PAD_RIGHT", 1),
-    ("STR_PAD_BOTH", 2),
-];
+pub(crate) use elephc_builtin_contract::php_constants::STRING_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {

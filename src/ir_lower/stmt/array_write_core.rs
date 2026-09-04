@@ -88,6 +88,50 @@ pub(super) fn lower_write_key_and_value(
     (index_value, lower_expr(ctx, value))
 }
 
+/// Puts an empty array in a container php would auto-vivify, before an index write reads it.
+///
+/// `load_local` answers a slot no store definitely reached with `Op::WarnedNull` — php's rule for
+/// a READ, where an undefined name warns and answers null. A write TARGET is not a read: MEASURED
+/// on `php -n` 8.5.6, `function f(): void { $u['k'] = 5; echo $u['k']; } f()` prints `5` and warns
+/// nothing, and the same holds for `$u[] = 5`. Without this the container reached the backend as
+/// `Void` and the whole program was refused.
+///
+/// Only an ordinary frame local, and only one the checker already typed as a container — a global
+/// alias has storage of its own, and a name typed anything else is not this rule's business.
+pub(super) fn vivify_undefined_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &str,
+    span: Span,
+) {
+    // A `static` local's slot is never marked initialized by a store in THIS frame — its storage
+    // is a program-global symbol that outlives the call — so `local_name_is_undefined` says yes on
+    // every entry. Vivifying there threw the static's array away each time a method ran:
+    // `static $q = []; $q[] = count($q);` counted 1, 1 instead of 1, 2.
+    if !ctx.local_is_plain_frame_local(array) || !ctx.local_name_is_undefined(array) {
+        return;
+    }
+    let php_type = match ctx.local_type(array).codegen_repr() {
+        ty @ PhpType::AssocArray { .. } => ty,
+        ty @ PhpType::Array(_) => ty,
+        // A name nothing has stored to has no useful checker type; php vivifies an ARRAY there
+        // whatever the key, and a string key promotes it to a hash through the ordinary path.
+        _ => PhpType::Array(Box::new(PhpType::Never)),
+    };
+    let op = match php_type {
+        PhpType::AssocArray { .. } => Op::HashNew,
+        _ => Op::ArrayNew,
+    };
+    let empty = ctx.emit_value(
+        op,
+        Vec::new(),
+        Some(Immediate::Capacity(0)),
+        php_type.clone(),
+        op.default_effects(),
+        Some(span),
+    );
+    ctx.store_local(array, empty, php_type, Some(span));
+}
+
 /// Lowers an indexed array assignment.
 pub(super) fn lower_array_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -96,6 +140,7 @@ pub(super) fn lower_array_assign(
     value: &Expr,
     span: Span,
 ) {
+    vivify_undefined_container(ctx, array, span);
     let array_value = ctx.load_local(array, Some(span));
     let (mut index_value, mut value_value) = lower_write_key_and_value(ctx, index, value);
     let op = array_set_op(array_value.ir_type);

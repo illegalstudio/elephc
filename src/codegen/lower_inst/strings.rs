@@ -372,6 +372,17 @@ pub(super) fn lower_int_like_to_string(
             abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
             store_if_result(ctx, inst)
         }
+        // php's first-class callable syntax (`strlen(...)`) builds a Closure, and a Closure in a
+        // string context is a CATCHABLE `Error` at run time — `Object of class Closure could not
+        // be converted to string`, php-src's own wording. Refusing the program at compile time
+        // made a `try { … } catch (Error $e)` around it impossible to write.
+        PhpType::Callable => {
+            super::exceptions::emit_error(
+                ctx,
+                "Object of class Closure could not be converted to string",
+            );
+            store_if_result(ctx, inst)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             inst.op.name(),

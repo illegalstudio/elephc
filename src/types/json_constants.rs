@@ -12,38 +12,7 @@
 /// Tuple of `(name, value)` pairs for every `ext/json` integer constant.
 ///
 /// Example entries: `("JSON_HEX_TAG", 1)`, `("JSON_ERROR_NONE", 0)`.
-pub(crate) const JSON_INT_CONSTANTS: &[(&str, i64)] = &[
-    // Encoding flags (bitmask passed to json_encode).
-    ("JSON_HEX_TAG", 1),
-    ("JSON_HEX_AMP", 2),
-    ("JSON_HEX_APOS", 4),
-    ("JSON_HEX_QUOT", 8),
-    ("JSON_FORCE_OBJECT", 16),
-    ("JSON_NUMERIC_CHECK", 32),
-    ("JSON_UNESCAPED_SLASHES", 64),
-    ("JSON_PRETTY_PRINT", 128),
-    ("JSON_UNESCAPED_UNICODE", 256),
-    ("JSON_PARTIAL_OUTPUT_ON_ERROR", 512),
-    ("JSON_PRESERVE_ZERO_FRACTION", 1024),
-    ("JSON_INVALID_UTF8_IGNORE", 1_048_576),
-    ("JSON_INVALID_UTF8_SUBSTITUTE", 2_097_152),
-    ("JSON_THROW_ON_ERROR", 4_194_304),
-    // Decoding flags (bitmask passed to json_decode / json_validate).
-    ("JSON_OBJECT_AS_ARRAY", 1),
-    ("JSON_BIGINT_AS_STRING", 2),
-    // Error codes returned by json_last_error().
-    ("JSON_ERROR_NONE", 0),
-    ("JSON_ERROR_DEPTH", 1),
-    ("JSON_ERROR_STATE_MISMATCH", 2),
-    ("JSON_ERROR_CTRL_CHAR", 3),
-    ("JSON_ERROR_SYNTAX", 4),
-    ("JSON_ERROR_UTF8", 5),
-    ("JSON_ERROR_RECURSION", 6),
-    ("JSON_ERROR_INF_OR_NAN", 7),
-    ("JSON_ERROR_UNSUPPORTED_TYPE", 8),
-    ("JSON_ERROR_INVALID_PROPERTY_NAME", 9),
-    ("JSON_ERROR_UTF16", 10),
-];
+pub(crate) use elephc_builtin_contract::php_constants::JSON_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {

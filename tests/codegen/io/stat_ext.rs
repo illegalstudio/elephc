@@ -362,9 +362,15 @@ echo $f === false ? "f" : "!";
     assert_eq!(out, "slf");
 }
 
-/// Verifies `fstat()` rejects a false handle (from failed `fopen`) with a TypeError
-/// at runtime. The program is expected to fail with stderr containing
-/// "TypeError: fstat()" and "false given".
+/// Verifies `fstat()` rejects a false handle (from a failed `fopen`) with an uncaught TypeError.
+///
+/// The report is asserted on the DIAGNOSTIC stream, which is where php puts it: MEASURED on this
+/// exact program, `php -n` 8.5.6 writes `Fatal error: Uncaught TypeError: fstat(): Argument #1
+/// ($stream) must be of type resource, false given` to STDOUT, leaves stderr empty and exits 255.
+/// This used to read `out.stderr`, from when elephc routed an uncaught report around the output
+/// buffer instead of through it; the assert found an empty string once that was aligned with php.
+/// The property is unchanged — the TypeError is raised, names the argument and the given type,
+/// and the program fails.
 #[test]
 fn test_fstat_rejects_fopen_false_runtime_handle() {
     let out = compile_and_run_capture(
@@ -375,8 +381,10 @@ fstat($f);
     );
     assert!(!out.success, "program unexpectedly succeeded");
     assert!(
-        out.stderr.contains("TypeError: fstat()") && out.stderr.contains("false given"),
-        "expected fstat TypeError, got stderr={}",
+        out.diagnostics.contains("TypeError: fstat()")
+            && out.diagnostics.contains("false given"),
+        "expected fstat TypeError, got diagnostics={} stderr={}",
+        out.diagnostics,
         out.stderr
     );
 }

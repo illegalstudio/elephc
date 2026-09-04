@@ -74,6 +74,9 @@ pub(crate) struct Usage {
     /// The program contains a `yield` or `yield from`, which makes its enclosing function a
     /// generator and materializes a `Generator` object no source line names.
     pub(crate) uses_yield: bool,
+    /// The program contains a `match` with NO default arm, which throws an `UnhandledMatchError`
+    /// no source line names — the same shape as `uses_yield` and its `Generator`.
+    pub(crate) matches_without_default: bool,
     /// A `new $c` whose class name this walk cannot resolve to a literal.
     ///
     /// `codegen_support::dynamic_new::supported_dynamic_new_builtin_class_names` lists the
@@ -752,8 +755,11 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 }
                 scan_expr(value, usage);
             }
-            if let Some(default) = default {
-                scan_expr(default, usage);
+            match default {
+                Some(default) => scan_expr(default, usage),
+                // Nothing here names `UnhandledMatchError`, and this is the only construct that
+                // raises it.
+                None => usage.matches_without_default = true,
             }
         }
         ExprKind::ArrayAccess { array, index } => {

@@ -48,6 +48,34 @@ fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
     }
 }
 
+/// Returns true when rendering `expr` as a string can raise a catchable php `Error`.
+///
+/// php converts a value to a string for `echo`, `print`, `.`, `.=` and `(string)`. An object
+/// whose class publishes no `__toString` raises `Error: Object of class X could not be converted
+/// to string` — a Closure, which first-class callable syntax produces, is one of them — and
+/// `catch (Error $e)` observes it. Reporting the conversion as pure let the try/catch DCE pass
+/// (`optimize::control::dce::tries`) drop the very `catch` clause meant to see it, so
+/// `try { echo $o; } catch (Error $e)` never ran its catch.
+///
+/// A literal operand cannot be an object, so it keeps the expression pure and ordinary output —
+/// `echo "text"`, the overwhelmingly common case — is not pessimized. The same shape as
+/// [`binary_op_may_throw`], for the same reason.
+fn string_conversion_may_throw(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StringLiteral(_)
+        | ExprKind::IntLiteral(_)
+        | ExprKind::FloatLiteral(_)
+        | ExprKind::BoolLiteral(_)
+        | ExprKind::Null => false,
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::Concat,
+            right,
+        } => string_conversion_may_throw(left) || string_conversion_may_throw(right),
+        _ => true,
+    }
+}
+
 /// Returns true if any statement in `stmts` may throw an exception.
 /// Shorthand for checking `block_effect(stmts).may_throw`.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
@@ -67,7 +95,14 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Synthetic(stmts) => block_effect(stmts),
         StmtKind::IncludeOnceMark { .. } => Effect::PURE.with_side_effects(),
         StmtKind::IncludeOnceGuard { body, .. } => block_effect(body).with_side_effects(),
-        StmtKind::Echo(expr) => expr_effect(expr).with_side_effects(),
+        StmtKind::Echo(expr) => {
+            let effect = expr_effect(expr).with_side_effects();
+            if string_conversion_may_throw(expr) {
+                effect.with_may_throw()
+            } else {
+                effect
+            }
+        }
         StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
@@ -245,16 +280,36 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
-        | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. }
         | ExprKind::Spread(inner) => expr_effect(inner),
-        ExprKind::Print(inner) => expr_effect(inner).with_side_effects(),
+        ExprKind::Cast { expr: inner, target } => {
+            let effect = expr_effect(inner);
+            // Only the STRING cast renders its operand; `(int)`, `(bool)` and the rest coerce an
+            // object without ever calling `__toString`.
+            if matches!(target, CastType::String) && string_conversion_may_throw(inner) {
+                effect.with_may_throw()
+            } else {
+                effect
+            }
+        }
+        ExprKind::Print(inner) => {
+            let effect = expr_effect(inner).with_side_effects();
+            if string_conversion_may_throw(inner) {
+                effect.with_may_throw()
+            } else {
+                effect
+            }
+        }
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
-            if binary_op_may_throw(op, right) {
+            // A concatenation renders BOTH operands, so either side can raise the
+            // object-to-string `Error`; every other operator is judged by its right operand.
+            let concat_throws = matches!(op, BinOp::Concat)
+                && (string_conversion_may_throw(left) || string_conversion_may_throw(right));
+            if binary_op_may_throw(op, right) || concat_throws {
                 operands.with_may_throw()
             } else {
                 operands
@@ -358,7 +413,12 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 default
                     .as_ref()
                     .map(|expr| expr_effect(expr))
-                    .unwrap_or(Effect::PURE),
+                    // A match with NO default is the one that can THROW: php raises
+                    // `UnhandledMatchError` when no arm answers. Calling that absence PURE made a
+                    // match in STATEMENT position — its value discarded — a pure expression the
+                    // statement pruner dropped whole, so `match (99) { 1 => "a" };` did nothing
+                    // where php throws.
+                    .unwrap_or_else(|| Effect::PURE.with_may_throw()),
             ),
         ExprKind::ArrayAccess { array, index } => {
             let evaluated = expr_effect(array).combine(expr_effect(index));

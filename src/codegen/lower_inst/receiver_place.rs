@@ -134,6 +134,29 @@ impl ReceiverPlace {
         let value_ty = ctx.value_php_type(value)?;
         self.store_back(ctx, value, &value_ty)
     }
+
+    /// Publishes the receiver back WITHOUT taking over the value's owned reference.
+    ///
+    /// A local whose frame storage is boxed `Mixed` needs the republished container re-boxed, and
+    /// the ordinary store lets that boxing CONSUME the source reference — correct when the store is
+    /// the value's last use. It is not for a mutating builtin whose EIR releases the receiver after
+    /// the call: the container would be owned once by the fresh box and released twice, leaving the
+    /// slot pointing at freed storage. Measured on `function g(array $a) { $a["k"] = "img2";
+    /// natsort($a); return json_encode($a); }`, which printed the EMPTY string.
+    pub(super) fn store_back_borrowed_value(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        value: ValueId,
+    ) -> Result<()> {
+        match self {
+            Self::Opaque => Ok(()),
+            Self::Local(slot) => ctx.store_borrowed_value_to_local(*slot, value),
+            // A ref-cell and a property both publish through storage that does NOT re-box the
+            // value, so the ordinary store cannot consume a reference the caller still owns —
+            // the hazard this variant exists to avoid applies to frame slots only.
+            Self::RefCell(_) | Self::Property { .. } => self.store_back_value(ctx, value),
+        }
+    }
 }
 
 /// Finds a declared property behind the direct sort path's transparent value transitions.

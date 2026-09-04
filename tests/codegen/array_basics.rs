@@ -895,6 +895,144 @@ fn test_rsort() {
     assert_eq!(out, "321");
 }
 
+/// Verifies `sort()` orders an array of boxed `Mixed` elements the way php does.
+///
+/// This used to be a COMPILE error — `unsupported EIR backend feature: sort indexed-array element
+/// PHP type Mixed` — on php that runs. The shape is ordinary: any loop appending a `string|false`
+/// builtin result types the array as `array<Mixed>`.
+///
+/// The values are heterogeneous on purpose. An array typed Mixed whose values all happened to be
+/// strings would come out ordered under a comparator that never looked past the first word, so
+/// such a test would pass without the ordering being right.
+#[test]
+fn test_sort_orders_mixed_elements_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[] = 10; $a[] = "banana"; $a[] = 2; $a[] = "apple"; $a[] = true; $a[] = null;
+$b = $a;
+sort($a);
+echo json_encode($a), "\n";
+rsort($b);
+echo json_encode($b), "\n";
+"#,
+    );
+    // php's ordering here is not the intuitive one — `true` sorts LAST ascending and `null`
+    // last descending, because a bool operand converts both sides to bool before comparing.
+    // Measured on `php -n` 8.5.6 rather than reasoned about.
+    assert_eq!(
+        out,
+        "[null,2,10,\"apple\",\"banana\",true]\n[\"banana\",\"apple\",10,2,true,null]\n"
+    );
+}
+
+/// Verifies a `Mixed` sort follows php's numeric-string ordering, not a byte ordering.
+///
+/// `"9"` sorts after `"100"` under a plain string comparison and before it under php's, which
+/// compares two numeric strings as numbers. The comparator is `__rt_php_compare`, the same one
+/// `<=>` uses, so this is the property that says the sort did not shortcut to `strcmp`.
+#[test]
+fn test_sort_mixed_uses_phps_numeric_string_ordering() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [];
+$a[] = "10"; $a[] = "9"; $a[] = "100"; $a[] = 20;
+sort($a);
+echo json_encode($a), "\n";
+"#,
+    );
+    assert_eq!(out, "[\"9\",\"10\",20,\"100\"]\n");
+}
+
+/// Verifies the shape that first reported this: a `readdir()` loop, sorted.
+///
+/// `readdir()` answers `string|false`, so the accumulator is typed `array<Mixed>` and `sort()`
+/// refused to compile at all. The listing is what php answers, `.` and `..` included.
+#[test]
+fn test_sort_mixed_from_a_readdir_loop() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("sd");
+file_put_contents("sd/b.txt", "");
+file_put_contents("sd/a.txt", "");
+$h = opendir("sd");
+$seen = [];
+while (($e = readdir($h)) !== false) { $seen[] = $e; }
+closedir($h);
+sort($seen);
+echo implode(",", $seen);
+unlink("sd/a.txt");
+unlink("sd/b.txt");
+rmdir("sd");
+"#,
+    );
+    assert_eq!(out, ".,..,a.txt,b.txt");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies `array_filter()` preserves php's keys instead of renumbering the survivors.
+///
+/// `array_filter([0,1,2])` answered `[0=>1, 1=>2]` where php answers `[1=>1, 2=>2]` — a silent
+/// wrong answer in every callback form, including no callback at all. The keys were wrong AS
+/// KEYS, not merely in the rendering, which is what `isset` and `array_keys` pin here:
+/// `json_encode` shows a list whenever the survivors happen to occupy 0..n-1, so an encoded
+/// comparison alone would have passed on half the cases while still being wrong.
+#[test]
+fn test_array_filter_preserves_php_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$first = array_filter([0, 1, 2], fn($v) => (bool) $v);
+echo implode(",", array_keys($first)), "|", count($first), "|",
+     var_export(isset($first[0]), true), "\n";
+foreach ($first as $k => $v) { echo "$k=$v,"; }
+echo "\n";
+
+// A survivor set that happens to start at zero still reads as a list, exactly as php's does.
+echo json_encode(array_filter([1, 2, 0], fn($v) => (bool) $v)), "\n";
+echo json_encode(array_filter([1, 0, 3], fn($v) => (bool) $v)), "\n";
+echo json_encode(array_filter([1, 2, 3], fn($v) => true)), "\n";
+echo json_encode(array_filter([0, 0], fn($v) => (bool) $v)), "\n";
+echo json_encode(array_filter([0, 1, 2, 0, 3])), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1,2|2|false\n\
+         1=1,2=2,\n\
+         [1,2]\n\
+         {\"0\":1,\"2\":3}\n\
+         [1,2,3]\n\
+         []\n\
+         {\"1\":1,\"2\":2,\"4\":3}\n"
+    );
+}
+
+/// Verifies `array_filter()` accepts an associative source, and keeps its keys.
+///
+/// It used to refuse one outright: `array_filter() first argument must be array`, a compile error
+/// on php that runs. All three modes are exercised because each hands the callback a different
+/// argument shape, and a hash key may be an integer or a string in any of them.
+#[test]
+fn test_array_filter_accepts_an_associative_source() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(array_filter(["a" => 1, "b" => 0, "c" => 2])), "\n";
+echo json_encode(array_filter(["a" => 1, "b" => 0], fn($v) => (bool) $v)), "\n";
+echo json_encode(array_filter([1, 2, 3], fn($k) => $k > 0, ARRAY_FILTER_USE_KEY)), "\n";
+echo json_encode(array_filter([1, 2, 3], fn($v, $k) => $k > 0, ARRAY_FILTER_USE_BOTH)), "\n";
+echo json_encode(array_filter([0 => "a", "x" => "", 5 => "b"])), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"a\":1,\"c\":2}\n\
+         {\"a\":1}\n\
+         {\"1\":2,\"2\":3}\n\
+         {\"1\":2,\"2\":3}\n\
+         {\"0\":\"a\",\"5\":\"b\"}\n"
+    );
+}
+
 /// Verifies array keys.
 #[test]
 fn test_array_keys() {
@@ -1662,4 +1800,35 @@ var_dump(isset($neverIndexed["k"]));
 "#,
     );
     assert_eq!(out, "bool(false)\n");
+}
+
+
+/// Verifies a string-keyed array of resources stores resources, not integers.
+///
+/// `codegen_repr()` collapses `Resource` to `Int` — one machine word each — and the hash's value
+/// TAG was chosen through that collapse, so `["a" => STDOUT]` became a table of integers.
+///
+/// The declared type covers it up on the read side: `$a["a"]` answered "resource" out of a table
+/// holding an int. `var_dump()` and foreach read the STORED tag, so both are here. An INDEXED
+/// array was never affected — it has its own `__rt_array_set_resource` path that stamps tag 9 —
+/// which is why the list case is pinned beside the hash case.
+#[test]
+fn test_string_keyed_array_of_resources_stores_resources() {
+    let out = compile_and_run(
+        r####"<?php
+$assoc = ["out" => STDOUT];
+foreach ($assoc as $name => $handle) {
+    echo $name, "=", gettype($handle), ",", var_export(is_resource($handle), true), "|";
+}
+$list = [STDOUT];
+foreach ($list as $handle) {
+    echo "list=", gettype($handle), "|";
+}
+var_dump(["out" => STDOUT]);
+"####,
+    );
+    assert_eq!(
+        out,
+        "out=resource,true|list=resource|array(1) {\n  [\"out\"]=>\n  resource(2) of type (stream)\n}\n"
+    );
 }

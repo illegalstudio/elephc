@@ -98,16 +98,33 @@ impl Checker {
         }
     }
     /// Returns a variable type, allowing dynamic eval-created locals after an eval barrier.
+    ///
+    /// A name with no binding is `null`, not an error. PHP does not refuse these programs:
+    /// `zval_undefined_cv` (php-src `Zend/zend_execute.c:280`) raises `Warning: Undefined variable
+    /// $name` and returns `&EG(uninitialized_zval)`, so the read answers null and execution
+    /// continues. Reporting `Void` here is what lets the rest of inference type the surrounding
+    /// expression against `null` — a concatenation yields `""`, an addition yields `0` — instead
+    /// of the whole statement collapsing into a diagnostic.
+    ///
+    /// The WARNING is not raised here. Whether a given read is undefined is a flow-sensitive
+    /// question — `echo $x; $x = 1;` warns once, on the first line — and only EIR lowering tracks
+    /// which slots a store definitely reached. It emits `Op::WarnedNull` for those; see
+    /// `LoweringContext::read_is_of_an_undefined_local`.
+    ///
+    /// `$span` is kept in the signature: the diagnostic moved, it did not disappear, and the
+    /// argument documents where it would be raised from.
     fn variable_type_or_eval_dynamic(
         &self,
         name: &str,
         span: Span,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
-        env.get(name)
+        let _ = (name, span);
+        Ok(env
+            .get(name)
             .cloned()
             .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
-            .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
+            .unwrap_or(PhpType::Void))
     }
 
     /// Returns the element type of an array literal that contains at least one

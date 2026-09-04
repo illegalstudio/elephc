@@ -359,41 +359,146 @@ pub fn parse_for(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'for'")?;
 
     let init = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
-        let init_span = tokens[*pos].1.span;
-        let s = parse_assign_inline(tokens, pos, init_span)?;
-        Some(Box::new(s))
+        Some(Box::new(one_stmt(parse_for_clause_list(tokens, pos)?, span)))
     } else {
         None
     };
     expect_semicolon(tokens, pos)?;
 
-    let condition = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
-        Some(parse_expr(tokens, pos)?)
-    } else {
-        None
-    };
+    let mut conditions: Vec<Expr> = Vec::new();
+    if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
+        conditions.push(parse_expr(tokens, pos)?);
+        while *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+            *pos += 1;
+            conditions.push(parse_expr(tokens, pos)?);
+        }
+    }
     expect_semicolon(tokens, pos)?;
 
-    let update = if *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-        let update_span = tokens[*pos].1.span;
-        let s = parse_assign_inline(tokens, pos, update_span)?;
-        Some(Box::new(s))
+    let update_list = if *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        parse_for_clause_list(tokens, pos)?
     } else {
-        None
+        Vec::new()
     };
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after for clauses")?;
 
     let body = parse_control_body(tokens, pos, &Token::EndFor, "endfor")?;
 
-    Ok(Stmt::new(
+    // A condition list evaluates EVERY expression on every test and the LAST one decides. The
+    // `For` node holds a single condition, so the leading expressions are hoisted to the two
+    // places the test is reached from: before the loop, and at the end of the update clause,
+    // which is also where `continue` lands. The initializer moves out with them — the first test
+    // happens AFTER it, so `for ($p = 0; $p++, $p < 4; )` must not increment an unset `$p`.
+    let condition = conditions.pop();
+    let leading: Vec<Stmt> = conditions
+        .into_iter()
+        .map(|expr| {
+            let expr_span = expr.span;
+            Stmt::new(StmtKind::ExprStmt(expr), expr_span)
+        })
+        .collect();
+    let mut update_list = update_list;
+    update_list.extend(leading.iter().cloned());
+    let update = (!update_list.is_empty()).then(|| Box::new(one_stmt(update_list, span)));
+    if leading.is_empty() {
+        return Ok(Stmt::new(
+            StmtKind::For {
+                init,
+                condition,
+                update,
+                body,
+            },
+            span,
+        ));
+    }
+    let mut hoisted: Vec<Stmt> = init.into_iter().map(|init| *init).collect();
+    hoisted.extend(leading);
+    hoisted.push(Stmt::new(
         StmtKind::For {
-            init,
+            init: None,
             condition,
             update,
             body,
         },
         span,
-    ))
+    ));
+    Ok(Stmt::new(StmtKind::Synthetic(hoisted), span))
+}
+
+/// Collapses a `for` clause's statement list: one statement stays itself, several become a
+/// synthetic block so the existing single-statement `For` shape is preserved for the common case.
+fn one_stmt(mut stmts: Vec<Stmt>, span: Span) -> Stmt {
+    if stmts.len() == 1 {
+        return stmts.pop().expect("length checked");
+    }
+    Stmt::new(StmtKind::Synthetic(stmts), span)
+}
+
+/// Parses one `for` clause: PHP allows a comma-separated expression LIST in the initializer and
+/// the update, evaluating every element in order (`for ($i = 0, $n = count($a); …; $i++, $j--)`).
+fn parse_for_clause_list(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+) -> Result<Vec<Stmt>, CompileError> {
+    let mut stmts = vec![parse_for_clause_element(tokens, pos)?];
+    while *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+        *pos += 1;
+        stmts.push(parse_for_clause_element(tokens, pos)?);
+    }
+    Ok(stmts)
+}
+
+/// Parses one element of a `for` clause.
+///
+/// A write to a plain local keeps the dedicated `parse_assign_inline` shape, which yields
+/// `StmtKind::Assign` — the form the loop's representation fixpoint reads. Everything else PHP
+/// accepts in a clause (a bare call, a write through an offset or a property) is an ordinary
+/// expression statement.
+fn parse_for_clause_element(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+) -> Result<Stmt, CompileError> {
+    let span = tokens
+        .get(*pos)
+        .map(|(_, meta)| meta.span)
+        .unwrap_or_else(|| tokens[tokens.len().saturating_sub(1)].1.span);
+    if for_clause_element_writes_a_plain_local(tokens, *pos) {
+        return parse_assign_inline(tokens, pos, span);
+    }
+    let expr = parse_expr(tokens, pos)?;
+    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+}
+
+/// Returns whether the clause element at `pos` is `++$v` / `--$v` / `$v++` / `$v--` / `$v = …` /
+/// `$v op= …`, the shapes `parse_assign_inline` handles.
+fn for_clause_element_writes_a_plain_local(tokens: &[SpannedToken], pos: usize) -> bool {
+    match tokens.get(pos).map(|(token, _)| token) {
+        Some(Token::PlusPlus | Token::MinusMinus) => {
+            matches!(tokens.get(pos + 1).map(|(t, _)| t), Some(Token::Variable(_)))
+        }
+        Some(Token::Variable(_)) => matches!(
+            tokens.get(pos + 1).map(|(t, _)| t),
+            Some(
+                Token::PlusPlus
+                    | Token::MinusMinus
+                    | Token::Assign
+                    | Token::PlusAssign
+                    | Token::MinusAssign
+                    | Token::StarAssign
+                    | Token::StarStarAssign
+                    | Token::SlashAssign
+                    | Token::PercentAssign
+                    | Token::DotAssign
+                    | Token::AmpAssign
+                    | Token::PipeAssign
+                    | Token::CaretAssign
+                    | Token::LessLessAssign
+                    | Token::GreaterGreaterAssign
+                    | Token::QuestionQuestionAssign
+            )
+        ),
+        _ => false,
+    }
 }
 
 /// Parse: try { stmts } (catch (TypeA|TypeB $e) { stmts })+ (finally { stmts })?

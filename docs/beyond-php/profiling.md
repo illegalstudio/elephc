@@ -29,8 +29,8 @@ program or connects to one already running.
 
 A target this command **launches** — a source or a binary — is measured for its
 whole run and reports the full table: per-function calls, inclusive and self
-wall time, allocations, retained objects, DB queries and DB-driver wait. File
-I/O is not yet counted or timed. Every export follows:
+wall time, allocations, retained objects, DB queries, DB-driver wait and stream
+operations. Every export follows:
 [Speedscope](https://www.speedscope.app), [pprof](https://github.com/google/pprof),
 Graphviz, the HTML call graph.
 
@@ -307,12 +307,14 @@ per-line samples:
 |---|---|---|
 | 🕸 **Graph** | who calls whom | one box per function |
 | 🔥 **Flame** | the same tree as nested bars | width is time; click to zoom, <kbd>Esc</kbd> out |
-| 🗄 **Queries** | every distinct DB statement | with its exact run count |
+| 🗄 **I/O** | every distinct DB statement and stream operation | with its exact run count |
 | 📄 **Source** | your PHP file, annotated | per function (exact) or per line (sampled) |
 | ✅ **Checks** | the performance budget | and what this run measured |
 
 **Dimensions** recolour the graph and re-sort the list: ⏱ time, 🧠 memory,
-💧 retained, ⏳ wait, 🗄 SQL, \# calls. Not every capture has all six.
+💧 retained, ⏳ wait, 🗄 SQL, 🌊 streams, \# calls. Not every capture has all seven.
+A function whose stream work is not what is colouring the view still carries it
+as a badge beside its name, so it is visible from any dimension.
 
 **The sidebar** ranks functions by the current dimension, searchable, resizable,
 and groupable under classes and namespaces (⊞). Selecting one opens a bottom-up
@@ -327,7 +329,7 @@ filtered), *Fit in view*, *Critical path*, the pruning threshold, the theme
 
 | | | | |
 |---|---|---|---|
-| <kbd>m</kbd> cycle dimension | <kbd>f</kbd> flame | <kbd>q</kbd> queries | <kbd>s</kbd> source |
+| <kbd>m</kbd> cycle dimension | <kbd>f</kbd> flame | <kbd>q</kbd> I/O | <kbd>s</kbd> source |
 | <kbd>c</kbd> checks | <kbd>p</kbd> critical path | <kbd>0</kbd> fit in view | <kbd>r</kbd> start over |
 | <kbd>d</kbd> diff vs previous | <kbd>l</kbd> follow live | <kbd>←</kbd> <kbd>→</kbd> scrub captures | <kbd>?</kbd> this sheet |
 
@@ -802,8 +804,37 @@ callee many times and that callee issues one query each, the recommendation says
 so outright — "*N+1: `list_all` calls `get_user` 200 times and `get_user`
 issues 200 DB queries — batch them into one query*". `monitor`
 shows a `queries` column and per-function query counts in the graph tooltips.
-(HTTP has no client bridge in elephc yet; filesystem I/O can be added on the same
-runtime hook, but is not counted today.)
+(HTTP has no client bridge in elephc yet.)
+
+**And streams.** `incl_stream` / `excl_stream` count **stream operations** per
+function — `fopen`, `fread`, `fwrite`, `fgets`, `fclose`, `file_get_contents`,
+`file_put_contents` — attributed the same exact way, and reported in a `streams`
+column and as an `--assert streams:…` metric.
+
+They are counted *apart* from queries rather than folded into one "I/O" number,
+because the two are different problems with the same shape and different fixes: a
+thousand statements are batched into one, while a thousand reads are a handle you
+should have kept open. The N+1 recommendation says which it is — "*N+1: `report`
+calls `load_line` 200 times and `load_line` performs 600 stream operations — open
+once and reuse the handle, or read the file once*".
+
+Under the table, the run's operations are broken down by call:
+
+```text
+stream operations
+  fclose               20
+  fgets                20
+  fopen                20
+  file_get_contents    1
+```
+
+That breakdown is the part a count alone cannot give. Sixty operations is a read
+loop if it is one `fopen` and fifty-nine `fgets`, and a *reopen* loop if it is
+twenty of each — the same total, a different bug.
+
+Pure queries about a handle — `feof`, `ftell` — are deliberately not counted.
+They touch no descriptor, and counting them would report
+`while (!feof($h)) { fgets($h); }` as doing twice the work it does.
 
 **And what stays behind.** `incl_ret` / `excl_ret` are **retained** objects —
 allocated minus freed — attributed per function the same exact way, by reading
@@ -882,11 +913,11 @@ absent from a `--live` or `--attach` capture):
   dimension, edge thickness tracks each callee's inclusive share, and the
   threshold selector (All / ≥1% / ≥5% / ≥10%) prunes the long tail.
 
-### SQL queries (the N+1 view)
+### I/O: queries and streams (the N+1 view)
 
 ![The queries panel, with the N+1 flagged](../images/profiling/queries.png)
 
-When the run touched a database, a **🗄 Queries** panel (`q`) lists every distinct
+When the run touched a database, the **🗄 I/O** panel (`q`) lists every distinct
 statement and how many times it ran. Query text is normalized — string and
 numeric literals collapse to `?` — so 200 executions of the same prepared
 `SELECT`, or 200 `INSERT`s with different values, each fold into a single row
@@ -903,6 +934,26 @@ Runs                     Statement
 The counts are exact: the PDO bridge reports each executed statement to the
 profiler (pay-for-use — a binary built without the capability records nothing), so the
 panel and the N+1 recommendation below agree by construction.
+
+Below it, the same panel breaks the run's **stream operations** down by call —
+`fopen`, `fread`, `fwrite`, `fgets`, `fclose`, `file_get_contents`,
+`file_put_contents` — and flags a handle that was opened many times:
+
+```
+Runs                     Operation
+×20    ████████████████  fopen                                 reopened?
+×20    ████████████████  fgets
+×20    ████████████████  fclose
+×1     ▏                 file_get_contents
+```
+
+It is the `fopen` count that is flagged rather than the total, because the total
+alone cannot tell the two shapes apart: sixty operations is an ordinary read loop
+if it is one `fopen` and fifty-nine `fgets`, and a *reopen* loop — the stream
+N+1 — if it is twenty of each.
+
+Each half of the panel is written only when its subsystem was used, so a program
+that never opened a database is not told it ran no queries.
 
 ### Distributed profiling (W3C Trace Context)
 

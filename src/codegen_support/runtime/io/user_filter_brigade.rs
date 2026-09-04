@@ -24,14 +24,17 @@
 //! - `&$consumed` is passed as a Mixed(int=0) cell pointer. The method
 //!   can write to it through normal Mixed by-ref semantics, but the
 //!   caller does not currently propagate the value back into stream
-//!   accounting. `$closing` is passed as Mixed(int=0) (we don't yet
-//!   distinguish closing from non-closing dispatches).
+//!   accounting. `$closing` is passed as a plain int: an untyped parameter
+//!   is typed Int, so a boxed cell would arrive as its address. It is 1 only
+//!   for the closing flush `stream_filter_remove()` runs.
 //! - The method's `int` return value (PSFS_PASS_ON / FEED_ME /
-//!   ERR_FATAL) is observed only to decide whether to emit output —
-//!   empty output brigade always yields a zero-length result regardless
-//!   of the status code. v1 limitation: FEED_ME doesn't request more
-//!   input from the stream layer; ERR_FATAL doesn't propagate as an
-//!   error to the caller.
+//!   ERR_FATAL) is observed to decide the result:
+//!   - `PSFS_PASS_ON` (2): walk `$out->_buckets` and concatenate the
+//!     `data` strings into `_stream_filter_buf`.
+//!   - `PSFS_FEED_ME` (1): return NOTHING. The filter has taken the input and has
+//!     no output yet; `__rt_fread`'s buffered wrapper re-reads and dispatches again.
+//!   - `PSFS_ERR_FATAL` (0): return an empty result to signal a fatal
+//!     filter error to the caller.
 
 use crate::codegen_support::{
     abi, emit::Emitter, platform::Arch, sentinels::emit_branch_if_null_container,
@@ -52,6 +55,95 @@ pub fn emit_user_filter_brigade_invoke(emitter: &mut Emitter) {
     emit_user_filter_brigade_invoke_aarch64(emitter);
 }
 
+/// Publishes the stream the chain named into `$this->stream`, for one `filter()` call.
+///
+/// Reads `_user_filter_current_stream`, which the chain applier sets around the dispatch, and
+/// stores a boxed resource at the offset the class's user-filter vtable records in slot 6. Does
+/// nothing when either is absent: a class that declares no `stream` property, and a dispatch that
+/// did not come from a chain node, both leave the property alone.
+fn emit_user_filter_stream_seed_aarch64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_current_stream");
+    emitter.instruction("ldr x9, [x9]");                                        // the stream this call filters
+    emitter.instruction("cbz x9, __rt_ufbi_no_stream");                         // not a chain dispatch: nothing to publish
+    emitter.instruction("ldr x0, [sp, #0]");                                    // $this
+    emitter.instruction("ldr x10, [x0]");                                       // class_id at the head of the obj
+    abi::emit_symbol_address(emitter, "x11", "_user_filter_vtable_ptrs");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // per-class user-filter vtable
+    emitter.instruction("cbz x11, __rt_ufbi_no_stream");
+    emitter.instruction("ldr x11, [x11, #48]");                                 // slot 6 = the `stream` property offset
+    emitter.instruction("cbz x11, __rt_ufbi_no_stream");                        // the class declares no such property
+    emitter.instruction("str x11, [sp, #96]");                                  // the offset outlives the boxing call
+    emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
+    emitter.instruction("mov x1, x9");                                          // payload = the opaque stream handle
+    emitter.instruction("mov x2, #1");                                          // registry-owned resource marker
+    emitter.instruction("bl __rt_mixed_from_value");                            // x0 = the boxed resource
+    emitter.instruction("ldr x11, [sp, #96]");                                  // the property offset
+    emitter.instruction("ldr x10, [sp, #0]");                                   // $this
+    emitter.instruction("str x0, [x10, x11]");                                  // publish it for the call
+    emitter.label("__rt_ufbi_no_stream");
+}
+
+/// Takes `$this->stream` away again, which is what php does when `filter()` returns.
+fn emit_user_filter_stream_clear_aarch64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_current_stream");
+    emitter.instruction("ldr x9, [x9]");
+    emitter.instruction("cbz x9, __rt_ufbi_no_clear");                          // nothing was published
+    emitter.instruction("ldr x0, [sp, #0]");                                    // $this
+    emitter.instruction("ldr x10, [x0]");                                       // class_id
+    abi::emit_symbol_address(emitter, "x11", "_user_filter_vtable_ptrs");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");
+    emitter.instruction("cbz x11, __rt_ufbi_no_clear");
+    emitter.instruction("ldr x11, [x11, #48]");                                 // slot 6 = the `stream` property offset
+    emitter.instruction("cbz x11, __rt_ufbi_no_clear");
+    emitter.instruction("str xzr, [x0, x11]");                                  // php answers NULL outside the call
+    emitter.label("__rt_ufbi_no_clear");
+}
+
+/// The x86_64 mirror of `emit_user_filter_stream_seed_aarch64`.
+fn emit_user_filter_stream_seed_x86_64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_current_stream");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // the stream this call filters
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_ufbi_no_stream_x86");                          // not a chain dispatch: nothing to publish
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // $this
+    emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id at the head of the obj
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_vtable_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + r9*8]");                     // per-class user-filter vtable
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_ufbi_no_stream_x86");
+    emitter.instruction("mov r11, QWORD PTR [r11 + 48]");                       // slot 6 = the `stream` property offset
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_ufbi_no_stream_x86");                          // the class declares no such property
+    emitter.instruction("mov QWORD PTR [rbp - 104], r11");                      // the offset outlives the boxing call
+    emitter.instruction("mov rdi, 9");                                          // runtime tag 9 = resource
+    emitter.instruction("mov rsi, r10");                                        // payload = the opaque stream handle
+    emitter.instruction("mov rdx, 1");                                          // registry-owned resource marker
+    emitter.instruction("call __rt_mixed_from_value");                          // rax = the boxed resource
+    emitter.instruction("mov r11, QWORD PTR [rbp - 104]");                      // the property offset
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // $this
+    emitter.instruction("mov QWORD PTR [r9 + r11], rax");                       // publish it for the call
+    emitter.label("__rt_ufbi_no_stream_x86");
+}
+
+/// The x86_64 mirror of `emit_user_filter_stream_clear_aarch64`.
+fn emit_user_filter_stream_clear_x86_64(emitter: &mut Emitter) {
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_current_stream");
+    emitter.instruction("mov r10, QWORD PTR [r10]");
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_ufbi_no_clear_x86");                           // nothing was published
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // $this
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // class_id
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_vtable_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + rax*8]");
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_ufbi_no_clear_x86");
+    emitter.instruction("mov r11, QWORD PTR [r11 + 48]");                       // slot 6 = the `stream` property offset
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_ufbi_no_clear_x86");
+    emitter.instruction("mov QWORD PTR [r9 + r11], 0");                         // php answers NULL outside the call
+    emitter.label("__rt_ufbi_no_clear_x86");
+}
+
 /// Emits the user filter brigade invoke aarch64 stream runtime helper.
 fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -66,7 +158,7 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     //   [sp, #32]  = in_brigade obj
     //   [sp, #40]  = out_brigade obj
     //   [sp, #48]  = consumed Mixed (int=0)
-    //   [sp, #56]  = closing  Mixed (int=0)
+    //   [sp, #56]  = closing  int (0 or 1)
     //   [sp, #64]  = bucket obj (transient during setup)
     //   [sp, #72]  = mixed_bucket cell ptr (transient)
     //   [sp, #80]  = mixed_buckets_array cell ptr (transient)
@@ -130,8 +222,16 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("orr x10, x10, x11");                                   // combine runtime bit flags
     emitter.instruction("str x10, [x0, #-8]");                                  // store runtime value
     // Push the boxed bucket onto the array.
+    // php's closing dispatch delivers an EMPTY BRIGADE, not one empty bucket. elephc pushed a
+    // bucket whatever the input length, so `while ($b = stream_bucket_make_writeable($in))` ran a
+    // second time over an empty `$b->data` — a filter that MUTATES its buckets applied twice, and
+    // `$b->data = $b->data . "|"` over "abc" answered "abc||" where php answers "abc|". A filter
+    // that only forwards its buckets cannot see the difference, which is why nothing caught it.
+    emitter.instruction("ldr x9, [sp, #16]");                                   // the input length
+    emitter.instruction("cbz x9, __rt_ufbi_empty_brigade");                     // no input: hand over no buckets
     emitter.instruction("ldr x1, [sp, #72]");                                   // mixed_bucket
     abi::emit_call_label(emitter, "__rt_array_push_int");                       // x0 = updated array
+    emitter.label("__rt_ufbi_empty_brigade");
     // Box the array as Mixed(indexed-array).
     emitter.instruction("mov x1, x0");                                          // prepare AArch64 call argument
     emitter.instruction("mov x2, #0");                                          // prepare AArch64 call argument
@@ -150,19 +250,24 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_stdclass_new");                         // x0 = out_brigade obj
     emitter.instruction("str x0, [sp, #40]");                                   // save out_brigade
 
-    // -- Create consumed Mixed(int=0) --
-    emitter.instruction("mov x1, #0");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x2, #0");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x0, #0");                                          // tag = int
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.instruction("str x0, [sp, #48]");                                   // save consumed mixed cell
+    // -- Point &$consumed at a zeroed scratch slot --
+    // An untyped by-ref parameter is an Int by-ref, so the method writes a plain i64 through the
+    // address it receives — the same shape `stream_open`'s `&$opened_path` scratch uses. A Mixed
+    // cell was passed here before, and the method wrote its count over the cell's TAG word.
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_consumed_scratch");
+    emitter.instruction("str xzr, [x9]");                                       // php starts every dispatch at 0
+    emitter.instruction("str x9, [sp, #48]");                                   // save the address the method binds to
 
-    // -- Create closing Mixed(int=0) --
-    emitter.instruction("mov x1, #0");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x2, #0");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x0, #0");                                          // prepare AArch64 call argument
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.instruction("str x0, [sp, #56]");                                   // save closing mixed cell
+    // -- Load $closing as a PLAIN int, not a Mixed cell --
+    // An untyped `$closing` parameter is typed Int by the checker, so the method reads
+    // the register as a number. Boxing it handed the method the CELL ADDRESS instead:
+    // `if ($closing)` was true on every dispatch, which made a filter guarding its
+    // closing flush answer PSFS_ERR_FATAL for ordinary reads and writes too.
+    // Read/write dispatches leave the flag at 0; the flush `stream_filter_remove()`
+    // performs raises it so `filter()` sees PHP's `$closing = true`.
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_closing");
+    emitter.instruction("ldr x0, [x9]");                                        // the pending $closing value
+    emitter.instruction("str x0, [sp, #56]");                                   // save it for the call
 
     // -- Call filter($this, $in, $out, &consumed, $closing) --
     // The user method's params are inferred as Object (no typehint, default
@@ -170,15 +275,45 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     // dispatcher — hands them stdClass instances). Pass raw obj pointers
     // for $in / $out, and Mixed(int) cell pointers for $consumed / $closing
     // (those flow through the regular Mixed arg path on the method side).
+    // -- php publishes `$this->stream` for the DURATION of this call --
+    //
+    // Measured on `php -n` 8.5.6: the property is UNSET inside `onCreate()`, a live resource
+    // inside `filter()`, and NULL again inside `onClose()`. elephc left it null throughout, so a
+    // filter could not reach the stream it was filtering — the manual's own example does.
+    // The chain published which stream this is; slot 6 of the class's user-filter vtable says
+    // where the property lives, and is zero for a class that declares none.
+    emit_user_filter_stream_seed_aarch64(emitter);
+
     emitter.instruction("ldr x0, [sp, #0]");                                    // $this
     emitter.instruction("ldr x1, [sp, #32]");                                   // in_brigade obj (raw)
     emitter.instruction("ldr x2, [sp, #40]");                                   // out_brigade obj (raw)
     emitter.instruction("ldr x3, [sp, #48]");                                   // consumed mixed (pseudo by-ref)
-    emitter.instruction("ldr x4, [sp, #56]");                                   // closing mixed
+    emitter.instruction("ldr x4, [sp, #56]");                                   // closing as a plain int
     emitter.instruction("ldr x5, [sp, #24]");                                   // method ptr
     emitter.instruction("blr x5");                                              // invoke filter()
+    emitter.instruction("str x0, [sp, #88]");                                   // the PSFS code outlives the clear
+    emit_user_filter_stream_clear_aarch64(emitter);
+    emitter.instruction("ldr x0, [sp, #88]");                                   // and comes back for the store below
 
-    // -- Walk out_brigade._buckets and concatenate the data fields --
+    // -- observe the PSFS return code (x0): 0=ERR_FATAL, 1=FEED_ME, 2=PASS_ON --
+    emitter.instruction("str x0, [sp, #64]");                                   // save PSFS code (reuse bucket slot, now free)
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_last_psfs");
+    emitter.instruction("str x0, [x9]");                                        // publish it: the pair this returns cannot carry it
+
+    // -- publish whatever the method left in `&$consumed` --
+    // php reports it as `fwrite()`'s answer on a filtered write stream, so a filter that never
+    // assigns the parameter makes `fwrite()` return 0 even though the bytes were written.
+    abi::emit_symbol_address(emitter, "x11", "_user_filter_consumed_scratch");
+    emitter.instruction("ldr x10, [x11]");                                      // whatever the method wrote through the by-ref
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_last_consumed");
+    emitter.instruction("str x10, [x9]");                                       // publish it beside the PSFS code
+    emitter.instruction("ldr x0, [sp, #64]");                                   // restore the PSFS code for the branches below
+    emitter.instruction("cmp x0, #0");                                          // ERR_FATAL?
+    emitter.instruction("b.eq __rt_ufbi_fatal");                                 // -> empty result (error signal)
+    emitter.instruction("cmp x0, #1");                                          // FEED_ME?
+    emitter.instruction("b.eq __rt_ufbi_feed_me");                              // -> passthrough (return input unchanged)
+
+    // -- PASS_ON: walk out_brigade._buckets and concatenate the data fields --
     emitter.instruction("ldr x0, [sp, #40]");                                   // out_brigade obj
     abi::emit_symbol_address(emitter, "x1", "_brigade_buckets_key");
     emitter.instruction("mov x2, #8");                                          // prepare AArch64 call argument
@@ -257,6 +392,28 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #128");                                    // release runtime stack frame
     emitter.instruction("ret");                                                 // return to caller
 
+    // -- PSFS_ERR_FATAL: return empty (the stream layer treats this as a filter error) --
+    emitter.label("__rt_ufbi_fatal");
+    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+    emitter.instruction("mov x2, #0");                                          // empty result signals a fatal filter error
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // release runtime stack frame
+    emitter.instruction("ret");                                                 // return empty result to the caller
+
+    // -- PSFS_FEED_ME: the filter kept the input and produced nothing yet --
+    //
+    // This used to hand the ORIGINAL input back, on the theory that the stream layer would
+    // re-read and dispatch again. Nothing did, so the caller received the filter's raw,
+    // unfiltered bytes — a silent wrong result for any filter that buffers across dispatches.
+    // Answering empty is what PSFS_FEED_ME means; `__rt_fread`'s buffered wrapper is what
+    // fetches more input and dispatches again.
+    emitter.label("__rt_ufbi_feed_me");
+    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");              // a readable pointer for a zero-length result
+    emitter.instruction("mov x2, #0");                                          // the filter has produced nothing to pass on
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // release runtime stack frame
+    emitter.instruction("ret");                                                 // return an empty result
+
     emitter.label("__rt_ufbi_empty");
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
     emitter.instruction("mov x2, #0");                                          // prepare AArch64 call argument
@@ -279,7 +436,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp -  40] in_brigade obj
     //   [rbp -  48] out_brigade obj
     //   [rbp -  56] consumed mixed
-    //   [rbp -  64] closing  mixed
+    //   [rbp -  64] closing  int (0 or 1)
     //   [rbp -  72] bucket obj (transient) / later mixed_in
     //   [rbp -  80] mixed_bucket    / later mixed_out
     //   [rbp -  88] mixed_buckets_array
@@ -341,9 +498,14 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or r10, r11");                                         // combine runtime bit flags
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // store runtime value
     emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
+    // See the AArch64 counterpart: php's closing dispatch delivers an EMPTY BRIGADE, and a filter
+    // that mutates its buckets applied twice without this.
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // the input length
+    emitter.instruction("je __rt_ufbi_empty_brigade_x");                        // no input: hand over no buckets
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // mixed_bucket
     abi::emit_call_label(emitter, "__rt_array_push_int");
     emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
+    emitter.label("__rt_ufbi_empty_brigade_x");
     emitter.instruction("xor esi, esi");                                        // clear register value
     emitter.instruction("mov rax, 4");                                          // tag indexed-array
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
@@ -360,31 +522,59 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_stdclass_new");
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // out_brigade
 
-    // -- consumed Mixed(int=0) --
-    emitter.instruction("xor edi, edi");                                        // clear register value
-    emitter.instruction("xor esi, esi");                                        // clear register value
-    emitter.instruction("mov rax, 0");                                          // prepare runtime result value
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
+    // -- Point &$consumed at a zeroed scratch slot --
+    // See the AArch64 counterpart: an untyped by-ref parameter is an Int by-ref, so the method
+    // writes a plain i64 through the address it receives, not into a Mixed cell.
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_consumed_scratch");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // php starts every dispatch at 0
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // save the address the method binds to
 
-    // -- closing Mixed(int=0) --
-    emitter.instruction("xor edi, edi");                                        // clear register value
-    emitter.instruction("xor esi, esi");                                        // clear register value
-    emitter.instruction("mov rax, 0");                                          // prepare runtime result value
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // store runtime value
+    // -- $closing as a PLAIN int, not a Mixed cell --
+    // See the AArch64 counterpart: the method reads this register as a number, so a
+    // boxed cell reached it as an address and made `if ($closing)` always true. Only
+    // the flush `stream_filter_remove()` performs raises the flag.
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_closing");
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // the pending $closing value
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save it for the call
 
     // -- Call filter($this, $in, $out, $consumed, $closing) --
     // Pass raw obj pointers for $in/$out (the user method's params are
     // inferred as Object). $consumed and $closing are passed as Mixed(int)
     // cells through the regular Mixed-arg ABI path.
+    // See the AArch64 counterpart: php publishes `$this->stream` for the DURATION of this call.
+    emit_user_filter_stream_seed_x86_64(emitter);
+
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // $this
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // in_brigade obj (raw)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // out_brigade obj (raw)
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // consumed mixed
-    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // closing mixed
+    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // closing as a plain int
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // method ptr
-    emitter.instruction("call r11");                                            // call selected function pointer
+    emitter.instruction("call r11");                                            // call filter()
+    emitter.instruction("mov QWORD PTR [rbp - 96], rax");                       // the PSFS code outlives the clear
+    emit_user_filter_stream_clear_x86_64(emitter);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 96]");                       // and comes back for the store below
+
+    // -- observe the PSFS return code (rax): 0=ERR_FATAL, 1=FEED_ME, 2=PASS_ON --
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                        // save PSFS code (reuse bucket slot, now free)
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_last_psfs");
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish it: the pair this returns cannot carry it
+
+    // -- publish whatever the method left in `&$consumed` --
+    // php reports it as `fwrite()`'s answer on a filtered write stream, so a filter that never
+    // assigns the parameter makes `fwrite()` return 0 even though the bytes were written.
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_consumed_scratch");
+    emitter.instruction("mov r9, QWORD PTR [r11]");                             // whatever the method wrote through the by-ref
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_last_consumed");
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // publish it beside the PSFS code
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore the PSFS code for the branches below
+
+    emitter.instruction("test rax, rax");                                       // ERR_FATAL?
+    emitter.instruction("jz __rt_ufbi_fatal_x");                                 // -> empty result (error signal)
+    emitter.instruction("cmp rax, 1");                                          // FEED_ME?
+    emitter.instruction("je __rt_ufbi_feed_me_x");                              // -> passthrough (return input unchanged)
+
+    // -- PASS_ON: walk out_brigade._buckets, concatenate data --
 
     // -- Walk out_brigade._buckets, concatenate data --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // prepare SysV call argument
@@ -460,6 +650,32 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- PSFS_ERR_FATAL: return empty (the stream layer treats this as a filter error) --
+    emitter.label("__rt_ufbi_fatal_x");
+    abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // load runtime data address
+    emitter.instruction("xor edx, edx");                                        // empty result signals a fatal filter error
+    emitter.instruction("mov r12, QWORD PTR [rbp - 96]");                       // restore callee-saved regs
+    emitter.instruction("mov r13, QWORD PTR [rbp - 104]");                      // move runtime value between registers
+    emitter.instruction("mov r14, QWORD PTR [rbp - 112]");                      // move runtime value between registers
+    emitter.instruction("mov r15, QWORD PTR [rbp - 120]");                      // move runtime value between registers
+    emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return empty result to the caller
+
+    // -- PSFS_FEED_ME: the filter kept the input and produced nothing yet --
+    // See the AArch64 counterpart: handing the original input back leaked unfiltered bytes to
+    // the caller. `__rt_fread`'s buffered wrapper is what fetches more input and dispatches again.
+    emitter.label("__rt_ufbi_feed_me_x");
+    abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // a readable pointer for a zero-length result
+    emitter.instruction("xor edx, edx");                                        // the filter has produced nothing to pass on
+    emitter.instruction("mov r12, QWORD PTR [rbp - 96]");                       // restore callee-saved regs
+    emitter.instruction("mov r13, QWORD PTR [rbp - 104]");                      // move runtime value between registers
+    emitter.instruction("mov r14, QWORD PTR [rbp - 112]");                      // move runtime value between registers
+    emitter.instruction("mov r15, QWORD PTR [rbp - 120]");                      // move runtime value between registers
+    emitter.instruction("mov rsp, rbp");                                        // move runtime value between registers
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return original input unchanged
 
     emitter.label("__rt_ufbi_empty_x");
     abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // load runtime data address

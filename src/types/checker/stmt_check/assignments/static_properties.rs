@@ -155,44 +155,42 @@ pub(super) fn check_static_property_array_assign(
             return Ok(());
         }
     }
-    if idx_ty != PhpType::Int && idx_ty != PhpType::Mixed {
+    // A STRING key is as valid as an integer one, and this is where the static path had its own
+    // narrower answer: `public static array $store = []` refused `self::$store[$k] = $v` outright
+    // — `Array index must be integer` — while the INSTANCE property one line away accepted it and
+    // promoted the property to hash storage. MEASURED, php runs both.
+    let normalized_idx_ty = normalized_array_key_type(index, idx_ty);
+    if !super::properties::is_php_array_key_type(&normalized_idx_ty) {
         return Err(CompileError::new(span, "Array index must be integer"));
     }
 
-    let updated_prop_ty = match target.prop_ty {
-        PhpType::Array(elem_ty) => {
-            if target.property_has_declared_type {
-                checker.require_compatible_arg_type(
-                    elem_ty.as_ref(),
-                    &val_ty,
-                    span,
-                    &format!("Static property {}::${}[]", target.class_name, property),
-                )?;
-                PhpType::Array(elem_ty)
-            } else if *elem_ty == val_ty {
-                PhpType::Array(elem_ty)
-            } else {
-                let merged_ty = checker
-                    .merge_array_element_type(&elem_ty, &val_ty)
-                    .unwrap_or(PhpType::Mixed);
-                PhpType::Array(Box::new(merged_ty))
-            }
-        }
+    let updated_prop_ty = match &target.prop_ty {
+        // An UNDECLARED static property still holding its zero value becomes the array this
+        // write makes it. The instance path has no equivalent, so it stays here.
         PhpType::Int | PhpType::Void if !target.property_has_declared_type => {
             PhpType::Array(Box::new(val_ty.clone()))
         }
-        other => {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "Array index assignment requires an array static property, got {}",
-                    other
-                ),
-            ))
-        }
+        prop_ty => super::properties::updated_array_property_assign_type(
+            checker,
+            prop_ty,
+            target.property_has_declared_type,
+            &format!("Static property {}::${}[]", target.class_name, property),
+            index,
+            &normalized_idx_ty,
+            &val_ty,
+            span,
+        )?,
     };
 
-    if !target.property_has_declared_type {
+    // A DECLARED `array` still has to record that it now holds a hash, or the lowering keeps
+    // storing a list and the write lands nowhere the read can find it. Same guard the instance
+    // path uses, so a declared `array<int>` is not quietly widened by a string key.
+    if !target.property_has_declared_type
+        || super::properties::declared_generic_array_can_use_assoc_storage(
+            &target.prop_ty,
+            &updated_prop_ty,
+        )
+    {
         update_static_property_type(
             checker,
             property,

@@ -27,6 +27,9 @@ builtin! {
 /// Non-array arguments are rejected.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
     match ty {
         PhpType::Array(ref elem_ty) if **elem_ty == PhpType::Float => Ok(PhpType::Float),
         PhpType::Array(_) => Ok(PhpType::Int),

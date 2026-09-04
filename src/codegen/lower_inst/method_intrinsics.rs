@@ -237,6 +237,89 @@ pub(super) fn emit_method_call_on_null_fatal(ctx: &mut FunctionContext<'_>, meth
     );
 }
 
+/// Emits php's fatal for calling an instance method on a NON-object, naming what it found.
+///
+/// Entry state: the runtime tag of the unboxed receiver is in the integer result register and its
+/// payload in the string-pointer register — the state `__rt_mixed_unbox` leaves and the object
+/// guard branches on without disturbing.
+///
+/// MEASURED on `php -n` 8.5.6: `null`, `false`, `true`, `int`, `float`, `string`, `array` and
+/// `resource`. The two bool words are php's `zend_zval_value_name`, which names the VALUE — there
+/// is no `on bool` in php's output.
+pub(super) fn emit_method_call_on_non_object_fatal(
+    ctx: &mut FunctionContext<'_>,
+    method_name: &str,
+) {
+    // (runtime tag, php's word). Tag 3 is bool and needs the payload, so it is handled apart.
+    const TAG_WORDS: &[(i64, &str)] = &[
+        (8, "null"),
+        (0, "int"),
+        (2, "float"),
+        (1, "string"),
+        (4, "array"),
+        (5, "array"),
+        (9, "resource"),
+    ];
+    let bool_label = ctx.next_label("nonobject_bool");
+    let true_label = ctx.next_label("nonobject_true");
+    let word_labels: Vec<String> = TAG_WORDS
+        .iter()
+        .map(|(tag, _)| ctx.next_label(&format!("nonobject_tag_{}", tag)))
+        .collect();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // bool names its VALUE, not its type
+            ctx.emitter.instruction(&format!("b.eq {}", bool_label));
+            for ((tag, _), label) in TAG_WORDS.iter().zip(word_labels.iter()) {
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));
+                ctx.emitter.instruction(&format!("b.eq {}", label));
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // bool names its VALUE, not its type
+            ctx.emitter.instruction(&format!("je {}", bool_label));
+            for ((tag, _), label) in TAG_WORDS.iter().zip(word_labels.iter()) {
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));
+                ctx.emitter.instruction(&format!("je {}", label));
+            }
+        }
+    }
+    // A tag with no php word left: `null` is what php answers for every receiver that is no value
+    // at all, and it is what this site said before it could tell them apart.
+    emit_method_call_on_null_fatal(ctx, method_name);
+
+    ctx.emitter.label(&bool_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x1, {}", true_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");
+            ctx.emitter.instruction(&format!("jnz {}", true_label));
+        }
+    }
+    emit_method_call_on_word_fatal(ctx, method_name, "false");
+    ctx.emitter.label(&true_label);
+    emit_method_call_on_word_fatal(ctx, method_name, "true");
+
+    for ((_, word), label) in TAG_WORDS.iter().zip(word_labels.iter()) {
+        ctx.emitter.label(label);
+        emit_method_call_on_word_fatal(ctx, method_name, word);
+    }
+}
+
+/// Emits the fatal for one already-decided receiver word. Never returns.
+fn emit_method_call_on_word_fatal(
+    ctx: &mut FunctionContext<'_>,
+    method_name: &str,
+    word: &str,
+) {
+    exceptions::emit_error(
+        ctx,
+        &format!("Call to a member function {}() on {}", method_name, word),
+    );
+}
+
 /// Returns the direct runtime intrinsic for built-in `Generator` instance methods.
 pub(super) fn generator_intrinsic(class_name: &str, method_name: &str) -> Option<IntrinsicCall> {
     if class_name.trim_start_matches('\\') != "Generator" {

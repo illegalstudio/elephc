@@ -80,6 +80,9 @@ fn mapped_element_type(callback_ret_ty: PhpType) -> PhpType {
 /// of reach here: `check_arity` already refuses more than two arguments.)
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let arr_ty = arr_ty.array_or_false_member().cloned().unwrap_or(arr_ty);
     match arr_ty {
         PhpType::Array(elem_ty) => {
             if matches!(elem_ty.as_ref(), PhpType::Object(_)) {

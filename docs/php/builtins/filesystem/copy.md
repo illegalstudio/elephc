@@ -8,7 +8,7 @@ sidebar:
 ## copy()
 
 ```php
-function copy(string $from, string $to): bool
+function copy(string $from, string $to, mixed $context = null): bool
 ```
 
 Copies a file.
@@ -16,6 +16,7 @@ Copies a file.
 **Parameters**:
 - `$from` (`string`)
 - `$to` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

@@ -230,7 +230,7 @@ pub(super) fn function_belongs_to_phar_archive_helper_class(function: &Function)
 pub(super) fn is_phar_archive_helper_class_name(name: &str) -> bool {
     matches!(
         crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str(),
-        "phar" | "phardata" | "splfileobject" | "spltempfileobject"
+        "phar" | "phardata" | "ziparchive" | "splfileobject" | "spltempfileobject"
     )
 }
 

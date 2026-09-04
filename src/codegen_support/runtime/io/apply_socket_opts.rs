@@ -268,6 +268,20 @@ pub fn emit_apply_socket_server_opts(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // advance runtime pointer or counter
     emitter.instruction("str x0, [sp, #0]");                                    // save fd
 
+    // setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &1, 4) — UNCONDITIONAL, unlike everything
+    // below it. php-src sets SO_REUSEADDR on every socket it binds, so a server that
+    // restarts rebinds immediately instead of failing while the old port sits in
+    // TIME_WAIT. Without it, `stream_socket_server()` answered false for ~a minute after
+    // the previous run of the same program.
+    emitter.instruction("mov w9, #1");                                          // option value = 1
+    emitter.instruction("str w9, [sp, #8]");                                    // scratch doubles as the option-value buffer
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd — reloaded rather than assumed still live in x0
+    emitter.instruction(&format!("mov x1, #{}", plat.sol_socket()));            // SOL_SOCKET level
+    emitter.instruction(&format!("mov x2, #{}", plat.so_reuseaddr()));          // SO_REUSEADDR option name
+    emitter.instruction("add x3, sp, #8");                                      // option value pointer
+    emitter.instruction("mov x4, #4");                                          // sizeof(int)
+    emitter.syscall(105);                                                       // setsockopt — best-effort, ignore failures
+
     // so_reuseport lookup.
     emitter.instruction("str xzr, [sp, #8]");                                   // out_int default = 0
     abi::emit_symbol_address(emitter, "x0", "_socket_key_str");
@@ -387,6 +401,21 @@ fn emit_apply_socket_server_opts_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish runtime frame pointer
     emitter.instruction("sub rsp, 16");                                         // allocate runtime stack frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
+
+    // setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &1, 4) — UNCONDITIONAL, unlike everything
+    // below it. php-src sets SO_REUSEADDR on every socket it binds, so a server that
+    // restarts rebinds immediately instead of failing while the old port sits in
+    // TIME_WAIT. Without it, `stream_socket_server()` answered false for ~a minute after
+    // the previous run of the same program.
+    emitter.instruction("mov DWORD PTR [rbp - 16], 1");                         // option value = 1
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("mov esi, 1");                                          // SOL_SOCKET (Linux)
+    emitter.instruction("mov edx, 2");                                          // SO_REUSEADDR (Linux)
+    emitter.instruction("lea r10, [rbp - 16]");                                 // option value pointer
+    emitter.instruction("mov r8d, 4");                                          // sizeof(int)
+    emitter.instruction("mov eax, 54");                                         // Linux x86_64 syscall 54 = setsockopt
+    emitter.instruction("syscall");                                             // best-effort, ignore failures
+
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // out_int default
 
     abi::emit_symbol_address(emitter, "rdi", "_socket_key_str");                // load runtime data address

@@ -104,12 +104,31 @@ pub(crate) fn instrument_recommendations(graph: &crate::call_graph::CallGraph) -
             }
         }
     }
+    // Stream hotspot: which function performs the most stream work. Reported apart
+    // from the query hotspot because the fix is different — a file read loop is
+    // batched or buffered, not turned into one statement.
+    let total_stream: u64 = graph.nodes.iter().map(|n| n.stream_exclusive).sum();
+    if total_stream > 0 {
+        if let Some(hot) = graph.nodes.iter().max_by_key(|n| n.stream_exclusive) {
+            if hot.stream_exclusive > 0 {
+                hints.push(format!(
+                    "• {} performs the most stream operations — {} of {} total",
+                    hot.name, hot.stream_exclusive, total_stream
+                ));
+            }
+        }
+    }
     // High fan-out edges: a callee invoked many times from one caller. With exact
     // query counts we can tell a definite N+1 from a mere hot helper.
     let io_by_name: std::collections::HashMap<&str, u64> = graph
         .nodes
         .iter()
         .map(|n| (n.name.as_str(), n.io_exclusive))
+        .collect();
+    let stream_by_name: std::collections::HashMap<&str, u64> = graph
+        .nodes
+        .iter()
+        .map(|n| (n.name.as_str(), n.stream_exclusive))
         .collect();
     let mut fanout: Vec<(&str, &str, u64)> = graph
         .edges
@@ -127,9 +146,17 @@ pub(crate) fn instrument_recommendations(graph: &crate::call_graph::CallGraph) -
     fanout.sort_by(|a, b| b.2.cmp(&a.2));
     for (from, to, count) in fanout.into_iter().take(3) {
         let callee_io = io_by_name.get(to).copied().unwrap_or(0);
+        let callee_stream = stream_by_name.get(to).copied().unwrap_or(0);
         if callee_io > 0 {
             hints.push(format!(
                 "• N+1: {from} calls {to} {count} times and {to} issues {callee_io} DB queries — batch them into one query",
+            ));
+        } else if callee_stream > 0 {
+            // The same shape on the filesystem, and it is a certainty here for the
+            // same reason: the operation count is exact, so this is not "if {to}
+            // touches the filesystem" — it does, {callee_stream} times.
+            hints.push(format!(
+                "• N+1: {from} calls {to} {count} times and {to} performs {callee_stream} stream operations — open once and reuse the handle, or read the file once",
             ));
         } else {
             hints.push(format!(
@@ -248,6 +275,7 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut raw_edges: Vec<(String, String, u64, u64)> = Vec::new();
     let mut queries: Vec<(String, u64)> = Vec::new();
+    let mut stream_ops: Vec<(String, u64)> = Vec::new();
     let mut trace: Option<crate::call_graph::TraceContext> = None;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("elephc-instr-trace: ") {
@@ -270,6 +298,13 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
                     encoded => decode_field(encoded),
                 },
             });
+        } else if let Some(rest) = line.strip_prefix("elephc-instr-stream: ") {
+            // "<count> <operation name>"
+            if let Some((count, op)) = rest.split_once(' ') {
+                if let Ok(count) = count.parse::<u64>() {
+                    stream_ops.push((op.to_string(), count));
+                }
+            }
         } else if let Some(rest) = line.strip_prefix("elephc-instr-query: ") {
             // "<count> <sql text on one line>"
             if let Some((count, sql)) = rest.split_once(' ') {
@@ -308,6 +343,8 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
             let alloc_exclusive = instr_field(metrics, "excl_allocs=");
             let io_inclusive = instr_field(metrics, "incl_io=");
             let io_exclusive = instr_field(metrics, "excl_io=");
+            let stream_inclusive = instr_field(metrics, "incl_stream=");
+            let stream_exclusive = instr_field(metrics, "excl_stream=");
             let retained_inclusive = instr_field_i64(metrics, "incl_ret=");
             let retained_exclusive = instr_field_i64(metrics, "excl_ret=");
             let wait_inclusive = instr_field(metrics, "incl_wait=");
@@ -322,6 +359,8 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
                 alloc_exclusive,
                 io_inclusive,
                 io_exclusive,
+                stream_inclusive,
+                stream_exclusive,
                 retained_inclusive,
                 retained_exclusive,
                 wait_inclusive,
@@ -347,6 +386,7 @@ pub(crate) fn parse_instrument_dump(text: &str) -> crate::call_graph::CallGraph 
         edges,
         total,
         queries,
+        stream_ops,
         lines: None,
         trace,
     }
@@ -464,6 +504,9 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
     );
     // The queries column only appears when the program issued any DB query.
     let has_io = graph.nodes.iter().any(|n| n.io_inclusive > 0);
+    // The streams column, on the same rule: a program that opened no stream gets
+    // no column rather than a wall of zeroes.
+    let has_stream = graph.nodes.iter().any(|n| n.stream_inclusive > 0);
     // Likewise the retained column: only when some function ends with a net
     // heap delta (allocated minus freed), i.e. the run kept or released objects.
     let has_ret = graph.nodes.iter().any(|n| n.retained_inclusive != 0);
@@ -476,6 +519,11 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
         let name = ellipsize(&node.name, 26);
         let queries = if has_io {
             format!("  queries {}", node.io_exclusive)
+        } else {
+            String::new()
+        };
+        let streams = if has_stream {
+            format!("  streams {}", node.stream_exclusive)
         } else {
             String::new()
         };
@@ -495,11 +543,20 @@ pub(crate) fn instrument_table(graph: &crate::call_graph::CallGraph) -> String {
             String::new()
         };
         out.push_str(&format!(
-            "{name:<27} {}  incl {incl:>5.1}%  self {excl:>5.1}%  calls {calls}  self {}  allocs {}{queries}{retained}{wait}\n",
+            "{name:<27} {}  incl {incl:>5.1}%  self {excl:>5.1}%  calls {calls}  self {}  allocs {}{queries}{streams}{retained}{wait}\n",
             bar(incl, 20),
             fmt_ns(node.exclusive),
             node.alloc_exclusive,
         ));
+    }
+    // The breakdown under the table, when there is one. The column above says a
+    // function performed N stream operations; this says WHICH, which is what
+    // separates a read loop (one open, many reads) from a reopen loop.
+    if !graph.stream_ops.is_empty() {
+        out.push_str("\nstream operations\n");
+        for (op, count) in &graph.stream_ops {
+            out.push_str(&format!("  {op:<20} {count}\n"));
+        }
     }
     out
 }

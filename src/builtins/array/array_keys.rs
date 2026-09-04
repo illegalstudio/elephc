@@ -34,12 +34,22 @@ builtin! {
 /// An indexed array produces `Array<Int>`; an associative array produces
 /// `Array<key>`; a `Mixed` value produces `Array<Mixed>` because its runtime key kind
 /// (int for indexed storage, int-or-string for hash storage) is only known once the box is
-/// opened. Every other argument type is rejected — `array_keys(42)` and `array_keys("s")`
-/// remain compile errors. The argument is re-inferred here to drive the return type; the
+/// opened. An `array|false` union — what `stat()`, `file()` and `scandir()` return — is accepted
+/// through the member the family's unwrap will hand over, since php compiles that and throws only
+/// when the value really is `false`. Every other argument type is rejected — `array_keys(42)` and
+/// `array_keys("s")` remain compile errors. The argument is re-inferred here to drive the return type; the
 /// registry already inferred it once for side effects, and arity is pre-validated by the
 /// registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let inferred = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // `array_keys(stat($p))` is ordinary php: the union compiles, and only a runtime `false`
+    // throws. The unwrap the family shares is driven by `ARRAY_OR_FALSE_ARG_SITES`, which now
+    // names this slot; the key type comes from the array member, exactly as it would without the
+    // union around it.
+    let ty = match inferred.array_or_false_member() {
+        Some(member) => member.clone(),
+        None => inferred,
+    };
     match ty {
         PhpType::Array(_) => Ok(PhpType::Array(Box::new(PhpType::Int))),
         PhpType::AssocArray { key, .. } => Ok(PhpType::Array(key)),

@@ -24,7 +24,9 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// - Output: `rax` = parent directory pointer (slice of the input, no allocation), `rdx` = parent length
 ///
 /// # Behaviour mirrors PHP's `dirname()`:
-/// - empty path → "."
+/// - empty path → "" — NOT ".". MEASURED on `php -n` 8.5.6: `dirname("")` answers the empty
+///   string, while `dirname("c.txt")` — a path with no separator — answers ".". The two look
+///   like the same case and are not, which is how this one was written the wrong way round.
 /// - path with no separator → "."
 /// - path is "/" or only slashes → "/"
 /// - trailing slashes are stripped before locating the final separator
@@ -41,7 +43,7 @@ pub fn emit_dirname(emitter: &mut Emitter) {
     emitter.label_global("__rt_dirname");
 
     // -- empty path: return "." --
-    emitter.instruction("cbz x2, __rt_dirname_dot");                            // empty input → "."
+    emitter.instruction("cbz x2, __rt_dirname_empty");                          // empty input answers the EMPTY string, not "."
 
     // -- strip trailing slashes (but remember whether we saw any) --
     emitter.label("__rt_dirname_strip");
@@ -84,6 +86,10 @@ pub fn emit_dirname(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return root slash
 
     // -- result is "." (no separator at all, or the path was strictly trailing slashes that resolved to nothing actionable) --
+    emitter.label("__rt_dirname_empty");
+    emitter.instruction("mov x2, #0");                                          // php answers "" for "", keeping the caller's pointer
+    emitter.instruction("ret");
+
     emitter.label("__rt_dirname_dot");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_dirname_dot");    // load address of the literal "."
     emitter.instruction("mov x2, #1");                                          // length = 1
@@ -119,7 +125,7 @@ fn emit_dirname_linux_x86_64(emitter: &mut Emitter) {
     // ABI: rax=path_ptr, rdx=path_len. Returns rax/rdx.
 
     emitter.instruction("test rdx, rdx");                                       // empty input?
-    emitter.instruction("jz __rt_dirname_dot_x86");                             // empty path → "."
+    emitter.instruction("jz __rt_dirname_empty_x86");                           // empty input answers the EMPTY string, not "."
 
     // -- strip trailing slashes --
     emitter.label("__rt_dirname_strip_x86");
@@ -166,6 +172,10 @@ fn emit_dirname_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_dirname_slash"); // result = "/"
     emitter.instruction("mov rdx, 1");                                          // length = 1
     emitter.instruction("ret");                                                 // return root slash
+
+    emitter.label("__rt_dirname_empty_x86");
+    emitter.instruction("xor edx, edx");                                        // php answers "" for "", keeping the caller's pointer
+    emitter.instruction("ret");
 
     emitter.label("__rt_dirname_dot_x86");
     crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_dirname_dot");   // result = "."

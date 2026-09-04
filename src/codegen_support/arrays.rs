@@ -28,6 +28,7 @@ pub(crate) fn emit_array_value_type_stamp(
         PhpType::Mixed => 7,
         PhpType::Union(_) => 7,
         PhpType::Void => 8,
+        PhpType::Resource(_) => 9,
         _ => return,
     };
     match emitter.target.arch {

@@ -71,6 +71,20 @@ fn eval_array_map_result_from_scope(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // `array_map()` numbers its arrays from argument #2, since the callback is #1. php
+    // names only that first array `$array` and leaves the variadic tail unnamed —
+    // measured, so the tail cannot go through the flat name table.
+    for (index, &operand) in arrays.iter().enumerate() {
+        let param = if index == 0 { Some("array") } else { None };
+        super::array_arg_check::eval_expect_array_arg(
+            operand,
+            "array_map",
+            index + 2,
+            param,
+            context,
+            values,
+        )?;
+    }
     let [array] = arrays else {
         return eval_array_map_variadic_result_from_scope(
             callback,

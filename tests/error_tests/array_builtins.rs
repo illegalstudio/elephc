@@ -513,9 +513,14 @@ fn test_error_array_map_wrong_args() {
 /// Verifies that error array filter wrong args.
 #[test]
 fn test_error_array_filter_wrong_args() {
+    // `array_filter([])` is NOT an error: php declares
+    // `array_filter(array $array, ?callable $callback = null, int $mode = 0)`, so one
+    // argument is valid and keeps the truthy elements. This test used to assert the
+    // one-argument spelling was refused — it was pinning the removed bug. The arity
+    // error that remains real is exceeding php's maximum of three.
     expect_error(
-        r#"<?php array_filter([]);"#,
-        "array_filter() takes 2 or 3 arguments",
+        r#"<?php array_filter([], null, 0, 9);"#,
+        "array_filter() takes 1 to 3 arguments",
     );
 }
 

@@ -61,6 +61,7 @@ use crate::value::RuntimeCellHandle;
 #[cfg(feature = "curl")]
 mod curl;
 mod file_process_opening;
+pub(crate) use file_process_opening::{eval_open_failure_reason, EVAL_OPEN_DEFAULT_REASON};
 mod operations;
 mod resource_registration;
 mod sockets;
@@ -86,6 +87,21 @@ pub(crate) struct EvalStreamResources {
     directories: HashMap<i64, EvalDirectoryStream>,
     filter_resources: HashSet<i64>,
     hash_contexts: HashMap<i64, EvalHashContext>,
+    /// Why the most recent local open failed, in the platform's own words.
+    ///
+    /// `open_path` answers `None` for every kind of failure, which is all its callers need to
+    /// decide what to RETURN. It is not enough to decide what to SAY: PHP's warning quotes the
+    /// reason, and "No such file or directory" is wrong for a file that exists and cannot be
+    /// read. The opener records it here rather than changing its signature, so the callers that
+    /// only care about the result stay untouched.
+    last_open_error: Option<String>,
+    /// The directory resource `readdir()`/`rewinddir()`/`closedir()` use when handed no handle.
+    ///
+    /// php keeps ONE such slot, fed by `opendir()` — and so by `dir()`, which is built on it —
+    /// and never by `fopen()`. It holds the id and not the resource, so a closed directory needs
+    /// no bookkeeping here: the id simply stops being live, and the family raises php's
+    /// `TypeError: No resource supplied` on its own.
+    last_directory: Option<i64>,
     // Analogous to `hash_contexts`: PHP 8's `curl_init()` returns a `CurlHandle` OBJECT,
     // not a resource, so it is keyed from this SAME `next_id` counter (never its own),
     // consumes no PHP resource id, and is freed only here — see

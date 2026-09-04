@@ -260,6 +260,31 @@ pub(in crate::interpreter) fn eval_declared_builtin_default_value(
     eval_declared_builtin_spec(name).and_then(|spec| spec.default_value(param_index))
 }
 
+/// Applies php's argument TypeErrors before a shared-runtime dispatch.
+///
+/// The generated runtime's boxed-cell builtins assume well-typed arguments — the
+/// compiled checker enforces their contracts at compile time — so `eval()` must
+/// enforce the same contract, with php's exact wording, before crossing the ABI.
+fn eval_runtime_builtin_arg_check(
+    runtime_builtin: elephc_builtin_contract::RuntimeBuiltinId,
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if matches!(
+        runtime_builtin,
+        elephc_builtin_contract::RuntimeBuiltinId::ArrayKeyExists
+    ) {
+        super::array::array_arg_check::eval_check_array_args(
+            "array_key_exists",
+            evaluated_args,
+            context,
+            values,
+        )?;
+    }
+    Ok(())
+}
+
 /// Dispatches a declaratively migrated builtin from unevaluated positional expressions.
 pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
     name: &str,
@@ -277,6 +302,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_direct_call(
             for arg in args {
                 evaluated_args.push(eval_expr(arg, context, scope, values)?);
             }
+            eval_runtime_builtin_arg_check(runtime_builtin, &evaluated_args, context, values)?;
             if let Some(result) = values.runtime_builtin_call(runtime_builtin, &evaluated_args)? {
                 return Ok(Some(result));
             }
@@ -302,6 +328,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call(
     };
     if let Some(runtime_builtin) = spec.runtime_builtin {
         if runtime_builtin.supports_arity(evaluated_args.len()) {
+            eval_runtime_builtin_arg_check(runtime_builtin, evaluated_args, context, values)?;
             if let Some(result) = values.runtime_builtin_call(runtime_builtin, evaluated_args)? {
                 return Ok(Some(result));
             }

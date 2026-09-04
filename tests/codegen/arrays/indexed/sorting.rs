@@ -9,6 +9,16 @@
 
 use super::*;
 
+/// Verifies `asort()` orders an indexed receiver's VALUES ascending.
+///
+/// TRACKED DIVERGENCE, and this fixture pins only the half that holds. php passes
+/// `renumber = 0` to `zend_array_sort`, so it permutes the keys instead of rebuilding them:
+/// `php -n -r '$a=[3,1,2]; asort($a); echo $a[0], json_encode($a);'` prints
+/// `3{"1":1,"2":2,"0":3}`, where `$a[0]` is still the array's ORIGINAL first element. A packed
+/// receiver has no room for that permutation, so it is reindexed here and `$a[0]` reads the
+/// SMALLEST value instead. Preserving those keys means converting the receiver to a hash — the
+/// conversion `natsort()`/`natcasesort()` now perform, see `crate::types::key_preserving_sort_promotes`
+/// for why `asort` is not on it yet.
 /// Verifies `array_unique()` accepts an argument that is ALREADY a hash.
 ///
 /// It did not compile at all — `unsupported EIR backend feature: array_unique for PHP type
@@ -130,8 +140,8 @@ echo $a[0];
     assert_eq!(out, "1");
 }
 
-/// Verifies arsort maintains key-value associations and sorts by values in descending order.
-/// Fixture: [1, 3, 2] → sorted descending [3, 2, 1] → first element $a[0] should be 3.
+/// The descending spelling, with the same tracked divergence: php prints `1` for `$a[0]` after
+/// `$a=[1,3,2]; arsort($a);` (the original first element), where a reindexed receiver reads `3`.
 #[test]
 fn test_arsort() {
     let out = compile_and_run(
@@ -452,11 +462,14 @@ krsort($grid[1]);
     );
     assert!(!out.success, "scalar nested value should fail");
     assert!(
-        out.stdout.contains("krsort()")
-            && out.stdout.contains("Argument #1")
-            && out.stdout.contains("array"),
+        // The fatal travels on the DIAGNOSTIC stream, which is php's stdout: the harness splits
+        // that one stream into the program's own output and the diagnostics, and a program whose
+        // only output is the fatal has an EMPTY `stdout`.
+        out.diagnostics.contains("krsort()")
+            && out.diagnostics.contains("Argument #1")
+            && out.diagnostics.contains("array"),
         "expected a controlled krsort array TypeError, got: {}",
-        out.stdout,
+        out.diagnostics,
     );
 }
 
@@ -471,11 +484,14 @@ krsort($grid[9]);
     );
     assert!(!out.success, "missing nested value should fail");
     assert!(
-        out.stdout.contains("krsort()")
-            && out.stdout.contains("Argument #1")
-            && out.stdout.contains("array"),
+        // The fatal travels on the DIAGNOSTIC stream, which is php's stdout: the harness splits
+        // that one stream into the program's own output and the diagnostics, and a program whose
+        // only output is the fatal has an EMPTY `stdout`.
+        out.diagnostics.contains("krsort()")
+            && out.diagnostics.contains("Argument #1")
+            && out.diagnostics.contains("array"),
         "expected a controlled krsort array TypeError, got: {}",
-        out.stdout,
+        out.diagnostics,
     );
 }
 
@@ -506,11 +522,14 @@ krsort($matrix["missing"]);
     );
     assert!(!out.success, "missing nested array should fail");
     assert!(
-        out.stdout.contains("krsort()")
-            && out.stdout.contains("Argument #1")
-            && out.stdout.contains("array"),
+        // The fatal travels on the DIAGNOSTIC stream, which is php's stdout: the harness splits
+        // that one stream into the program's own output and the diagnostics, and a program whose
+        // only output is the fatal has an EMPTY `stdout`.
+        out.diagnostics.contains("krsort()")
+            && out.diagnostics.contains("Argument #1")
+            && out.diagnostics.contains("array"),
         "expected a controlled krsort array TypeError, got: {}",
-        out.stdout,
+        out.diagnostics,
     );
 }
 

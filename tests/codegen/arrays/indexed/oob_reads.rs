@@ -102,6 +102,7 @@ fn test_empty_array_string_key_null_coalesce_suppresses_warning() {
     assert!(out.success);
     assert_eq!(out.stdout, "x");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies direct string-key reads on indexed storage emit PHP's undefined-key
@@ -111,7 +112,7 @@ fn test_empty_array_string_key_direct_read_warns() {
     let out = compile_and_run_capture("<?php $a = []; echo '[' . $a['k'] . ']';");
     assert!(out.success);
     assert_eq!(out.stdout, "[]");
-    assert!(out.stderr.contains("Warning: Undefined array key \"k\""));
+    assert!(out.diagnostics.contains("Warning: Undefined array key \"k\""));
 }
 
 /// Verifies mixed-typed integer keys on indexed storage still warn on direct
@@ -121,7 +122,7 @@ fn test_indexed_mixed_integer_key_direct_read_warns() {
     let out = compile_and_run_capture("<?php $a = [1]; $k = 5; echo '[' . $a[$k] . ']';");
     assert!(out.success);
     assert_eq!(out.stdout, "[]");
-    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 5"));
 }
 
 /// Regression for #357: null keys on indexed-array reads normalize to the empty
@@ -132,6 +133,7 @@ fn test_indexed_null_key_null_coalesce() {
     assert!(out.success);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies integer indexed-array misses under `??` do not emit undefined-key
@@ -142,6 +144,7 @@ fn test_indexed_oob_null_coalesce_suppresses_warning() {
     assert!(out.success);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for #350: isset() on an empty array with a string key.

@@ -719,8 +719,19 @@ impl ExceptionFlowAnalysis {
                         .combined(self.expr_list_throws(patterns, bindings, class_context))
                         .combined(self.expr_throws(value, bindings, class_context));
                 }
-                if let Some(default) = default {
-                    thrown = thrown.combined(self.expr_throws(default, bindings, class_context));
+                match default {
+                    Some(default) => {
+                        thrown =
+                            thrown.combined(self.expr_throws(default, bindings, class_context));
+                    }
+                    // A `match` with no default arm raises `UnhandledMatchError` when nothing
+                    // answers, and that throw is exactly what an enclosing `catch` is there for.
+                    // Omitting it let post-typecheck DCE rule every clause unreachable, empty the
+                    // clause list, and collapse the whole `try` to its body — the throw then left
+                    // the function uncaught.
+                    None => {
+                        thrown = thrown.combined(ThrownTypes::exact("UnhandledMatchError"));
+                    }
                 }
                 thrown
             }

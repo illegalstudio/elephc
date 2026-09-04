@@ -51,6 +51,19 @@ pub(super) fn lower_referenced_builtin_spl_methods(
 /// Finds builtin SPL methods whose symbols are required by already-lowered EIR.
 pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, String)> {
     let mut methods = Vec::new();
+    // A DYNAMIC call — `$obj->$name()` — carries no method name for the walk below to read, so
+    // nothing was discovered and the dispatch ladder came up empty: MEASURED,
+    // `$info->$call()` over `["getFilename", "getSize"]` died with `callable array did not
+    // resolve to an invokable target` where php answers both. Calling each name STATICALLY first
+    // made the same loop work, which is what said the ladder is bounded by what was EMITTED.
+    //
+    // The widening is bounded by the classes the program CONSTRUCTS: a program with no dynamic
+    // invoke pays nothing, and one that has them pays only for the classes it built.
+    if module_has_dynamic_invoke(module) {
+        for class_name in constructed_builtin_spl_classes(module) {
+            push_every_supported_builtin_spl_method(&mut methods, module, &class_name);
+        }
+    }
     for function in module
         .functions
         .iter()
@@ -164,6 +177,92 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
         }
     }
     methods
+}
+
+/// Reports whether any function in the module invokes a callable whose target is decided at run
+/// time — `$obj->$name()`, `call_user_func([$obj, $name])`, and the closure forms.
+fn module_has_dynamic_invoke(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function.instructions.iter().any(|inst| {
+                if !matches!(inst.op, Op::CallableDescriptorInvoke) {
+                    return false;
+                }
+                // Only a callable ARRAY can name a method at run time. A closure call reaches the
+                // same opcode and names none, so accepting it would emit every method of every
+                // class the program built for a program that never dispatches on a name — and one
+                // of those bodies (`SplFileObject::fscanf`) needs an engine the program did not
+                // ask for, which is a link failure rather than a diagnostic.
+                inst.operands.first().copied().is_some_and(|callable| {
+                    matches!(
+                        function.value(callable).map(|value| &value.php_type),
+                        Some(PhpType::Array(_)) | Some(PhpType::AssocArray { .. })
+                    )
+                })
+            })
+        })
+}
+
+/// Every builtin SPL class the module builds an instance of, parents included.
+fn constructed_builtin_spl_classes(module: &Module) -> Vec<String> {
+    let mut names = Vec::new();
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        for inst in &function.instructions {
+            if !matches!(inst.op, Op::ObjectNew) {
+                continue;
+            }
+            let Some(class_name) = class_data_name(module, inst) else {
+                continue;
+            };
+            let mut current = Some(class_name);
+            while let Some(name) = current {
+                if !names.iter().any(|seen: &String| seen == name) {
+                    names.push(name.to_string());
+                }
+                current = module
+                    .class_infos
+                    .get(name)
+                    .and_then(|class_info| class_info.parent.as_deref());
+            }
+        }
+    }
+    names
+}
+
+/// Registers every method of `class_name` the backend can serve, for a ladder that cannot name
+/// the one it wants.
+fn push_every_supported_builtin_spl_method(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    class_name: &str,
+) {
+    let Some(class_info) = module.class_infos.get(class_name) else {
+        return;
+    };
+    let mut keys = class_info.methods.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    for method_key in keys {
+        if is_supported_builtin_spl_method(class_name, &method_key) {
+            methods.push((class_name.to_string(), method_key));
+        }
+    }
 }
 
 /// Returns true when generic `new $class` can emit static metadata for this class.
@@ -294,6 +393,7 @@ pub(super) fn push_supported_builtin_spl_method_for_receiver(
     class_name: &str,
     method_key: &str,
 ) {
+    push_builtin_spl_method_overrides(methods, module, class_name, method_key);
     let mut current = Some(class_name);
     while let Some(name) = current {
         if is_supported_builtin_spl_method(name, method_key) {
@@ -305,6 +405,54 @@ pub(super) fn push_supported_builtin_spl_method_for_receiver(
             .get(name)
             .and_then(|class_info| class_info.parent.as_deref());
     }
+}
+
+/// Pushes the same method on every builtin SPL class BELOW `class_name` that the program builds.
+///
+/// The walk above climbs to the class that DECLARES the method, which is the right answer for the
+/// receiver's static type and the wrong one for the object in it. A call through an
+/// `SplFileObject` parameter holding an `SplTempFileObject` dispatches through the vtable, and the
+/// subclass's own slot was never lowered: MEASURED, `function walk(SplFileObject $o) { $o->eof(); }`
+/// called with an `SplTempFileObject` SEGFAULTED on a null slot, and adding an unrelated
+/// `$temp->eof()` elsewhere in the same program made it work — which is what said the gap was
+/// emission and not dispatch.
+///
+/// Bounded by what the program CONSTRUCTS, because a virtual call can only land on a class
+/// something instantiated. A program that builds no SPL subclass pays a walk over its class table
+/// and emits nothing.
+fn push_builtin_spl_method_overrides(
+    methods: &mut Vec<(String, String)>,
+    module: &Module,
+    class_name: &str,
+    method_key: &str,
+) {
+    for candidate in constructed_builtin_spl_classes(module) {
+        if candidate == class_name
+            || !is_supported_builtin_spl_method(&candidate, method_key)
+            || !builtin_spl_class_descends_from(module, &candidate, class_name)
+        {
+            continue;
+        }
+        methods.push((candidate, method_key.to_string()));
+    }
+}
+
+/// Reports whether `candidate` has `ancestor` somewhere above it.
+fn builtin_spl_class_descends_from(module: &Module, candidate: &str, ancestor: &str) -> bool {
+    let mut current = module
+        .class_infos
+        .get(candidate)
+        .and_then(|class_info| class_info.parent.as_deref());
+    while let Some(name) = current {
+        if name == ancestor {
+            return true;
+        }
+        current = module
+            .class_infos
+            .get(name)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
 }
 
 /// Returns the class-name immediate attached to an instruction.

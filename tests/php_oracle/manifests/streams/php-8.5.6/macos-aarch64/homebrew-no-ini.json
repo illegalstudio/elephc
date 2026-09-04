@@ -1,0 +1,1479 @@
+{
+  "build": {
+    "binary_path": "/opt/homebrew/Cellar/php/8.5.6/bin/php",
+    "binary_source_attestation": "external-unverified"
+  },
+  "companion_evidence": {},
+  "gate": {
+    "acceptance_scope": [
+      "build-profile",
+      "configured-capabilities",
+      "public-stream-constants"
+    ],
+    "number": 0,
+    "open_requirements": [
+      "profile-binary-source-attestation",
+      "differential-oracle-corpus",
+      "elephc-classified-drift-ledger",
+      "authoritative-clang-source-reachability",
+      "linux-aarch64-profile",
+      "linux-x86_64-profile"
+    ],
+    "status": "partial"
+  },
+  "generator": {
+    "probe": "tools/php_oracle/manifest_probe.php",
+    "probe_sha256": "169ce98e1d5ef045951eb66e0fe6a1dbbfbb2b62faf61f17e8bc66b9c142d203",
+    "script": "tools/php_oracle/streams_manifest.py",
+    "script_sha256": "3c01fd0cc867558e0a674adcb634bcf22de0dda2b39b406c9edc3494f7e56ba9"
+  },
+  "kind": "php-src-stream-build-manifest",
+  "oracle": {
+    "debug": false,
+    "extensions": [
+      {
+        "name": "Core",
+        "version": "8.5.6"
+      },
+      {
+        "name": "date",
+        "version": "8.5.6"
+      },
+      {
+        "name": "lexbor",
+        "version": "8.5.6"
+      },
+      {
+        "name": "openssl",
+        "version": "8.5.6"
+      },
+      {
+        "name": "pcre",
+        "version": "8.5.6"
+      },
+      {
+        "name": "sqlite3",
+        "version": "8.5.6"
+      },
+      {
+        "name": "zlib",
+        "version": "8.5.6"
+      },
+      {
+        "name": "bcmath",
+        "version": "8.5.6"
+      },
+      {
+        "name": "bz2",
+        "version": "8.5.6"
+      },
+      {
+        "name": "calendar",
+        "version": "8.5.6"
+      },
+      {
+        "name": "ctype",
+        "version": "8.5.6"
+      },
+      {
+        "name": "curl",
+        "version": "8.5.6"
+      },
+      {
+        "name": "dba",
+        "version": "8.5.6"
+      },
+      {
+        "name": "uri",
+        "version": "8.5.6"
+      },
+      {
+        "name": "json",
+        "version": "8.5.6"
+      },
+      {
+        "name": "mbstring",
+        "version": "8.5.6"
+      },
+      {
+        "name": "SPL",
+        "version": "8.5.6"
+      },
+      {
+        "name": "FFI",
+        "version": "8.5.6"
+      },
+      {
+        "name": "fileinfo",
+        "version": "8.5.6"
+      },
+      {
+        "name": "filter",
+        "version": "8.5.6"
+      },
+      {
+        "name": "ftp",
+        "version": "8.5.6"
+      },
+      {
+        "name": "gd",
+        "version": "8.5.6"
+      },
+      {
+        "name": "gettext",
+        "version": "8.5.6"
+      },
+      {
+        "name": "gmp",
+        "version": "8.5.6"
+      },
+      {
+        "name": "hash",
+        "version": "8.5.6"
+      },
+      {
+        "name": "iconv",
+        "version": "8.5.6"
+      },
+      {
+        "name": "intl",
+        "version": "8.5.6"
+      },
+      {
+        "name": "session",
+        "version": "8.5.6"
+      },
+      {
+        "name": "ldap",
+        "version": "8.5.6"
+      },
+      {
+        "name": "standard",
+        "version": "8.5.6"
+      },
+      {
+        "name": "libxml",
+        "version": "8.5.6"
+      },
+      {
+        "name": "mysqlnd",
+        "version": "mysqlnd 8.5.6"
+      },
+      {
+        "name": "mysqli",
+        "version": "8.5.6"
+      },
+      {
+        "name": "odbc",
+        "version": "8.5.6"
+      },
+      {
+        "name": "Zend OPcache",
+        "version": "8.5.6"
+      },
+      {
+        "name": "pcntl",
+        "version": "8.5.6"
+      },
+      {
+        "name": "PDO",
+        "version": "8.5.6"
+      },
+      {
+        "name": "pdo_dblib",
+        "version": "8.5.6"
+      },
+      {
+        "name": "pdo_mysql",
+        "version": "8.5.6"
+      },
+      {
+        "name": "PDO_ODBC",
+        "version": "8.5.6"
+      },
+      {
+        "name": "pdo_pgsql",
+        "version": "8.5.6"
+      },
+      {
+        "name": "pdo_sqlite",
+        "version": "8.5.6"
+      },
+      {
+        "name": "pgsql",
+        "version": "8.5.6"
+      },
+      {
+        "name": "Phar",
+        "version": "8.5.6"
+      },
+      {
+        "name": "posix",
+        "version": "8.5.6"
+      },
+      {
+        "name": "random",
+        "version": "8.5.6"
+      },
+      {
+        "name": "readline",
+        "version": "8.5.6"
+      },
+      {
+        "name": "Reflection",
+        "version": "8.5.6"
+      },
+      {
+        "name": "exif",
+        "version": "8.5.6"
+      },
+      {
+        "name": "shmop",
+        "version": "8.5.6"
+      },
+      {
+        "name": "SimpleXML",
+        "version": "8.5.6"
+      },
+      {
+        "name": "snmp",
+        "version": "8.5.6"
+      },
+      {
+        "name": "soap",
+        "version": "8.5.6"
+      },
+      {
+        "name": "sockets",
+        "version": "8.5.6"
+      },
+      {
+        "name": "sodium",
+        "version": "8.5.6"
+      },
+      {
+        "name": "sysvmsg",
+        "version": "8.5.6"
+      },
+      {
+        "name": "sysvsem",
+        "version": "8.5.6"
+      },
+      {
+        "name": "sysvshm",
+        "version": "8.5.6"
+      },
+      {
+        "name": "tidy",
+        "version": "8.5.6"
+      },
+      {
+        "name": "tokenizer",
+        "version": "8.5.6"
+      },
+      {
+        "name": "dom",
+        "version": "20031129"
+      },
+      {
+        "name": "xml",
+        "version": "8.5.6"
+      },
+      {
+        "name": "xmlreader",
+        "version": "8.5.6"
+      },
+      {
+        "name": "xmlwriter",
+        "version": "8.5.6"
+      },
+      {
+        "name": "xsl",
+        "version": "8.5.6"
+      },
+      {
+        "name": "zip",
+        "version": "1.22.8"
+      }
+    ],
+    "integer_size": 8,
+    "loaded_ini": null,
+    "locale": "C/C.UTF-8/C/C/C/C",
+    "os": "Darwin",
+    "os_family": "Darwin",
+    "php_binary": "/opt/homebrew/Cellar/php/8.5.6/bin/php",
+    "php_binary_sha256": "d14949f7340cac099535d70cf511f7d58f23acbdd4ab63b129cd0126f74f9623",
+    "php_sapi": "cli",
+    "php_version": "8.5.6",
+    "php_version_id": 80506,
+    "scanned_ini": null,
+    "timezone": "UTC",
+    "uname_machine": "arm64",
+    "zend_version": "4.5.6",
+    "zts": false
+  },
+  "profile": {
+    "configure_argv": [
+      " './configure'  '--prefix=/opt/homebrew/Cellar/php/8.5.6' '--localstatedir=/opt/homebrew/var' '--sysconfdir=/opt/homebrew/etc/php/8.5' '--with-config-file-path=/opt/homebrew/etc/php/8.5' '--with-config-file-scan-dir=/opt/homebrew/etc/php/8.5/conf.d' '--with-pear=/opt/homebrew/Cellar/php/8.5.6/share/php/pear' '--enable-bcmath' '--enable-calendar' '--enable-dba' '--enable-exif' '--enable-ftp' '--enable-fpm' '--enable-gd' '--enable-intl' '--enable-mbregex' '--enable-mbstring' '--enable-mysqlnd' '--enable-pcntl' '--enable-phpdbg' '--enable-phpdbg-readline' '--enable-shmop' '--enable-soap' '--enable-sockets' '--enable-sysvmsg' '--enable-sysvsem' '--enable-sysvshm' '--with-apxs2=/opt/homebrew/opt/httpd/bin/apxs' '--with-bz2=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk/usr' '--with-curl' '--with-external-gd' '--with-external-pcre' '--with-ffi' '--with-fpm-user=_www' '--with-fpm-group=_www' '--with-gettext=/opt/homebrew/opt/gettext' '--with-gmp=/opt/homebrew/opt/gmp' '--with-iconv=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk/usr' '--with-layout=GNU' '--with-ldap-sasl' '--with-ldap=/opt/homebrew/opt/openldap' '--with-libedit' '--with-libxml' '--with-mhash=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk/usr' '--with-mysql-sock=/tmp/mysql.sock' '--with-mysqli=mysqlnd' '--with-ndbm=/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk/usr' '--with-openssl' '--with-password-argon2=/opt/homebrew/opt/argon2' '--with-pdo-dblib=/opt/homebrew/opt/freetds' '--with-pdo-mysql=mysqlnd' '--with-pdo-odbc=unixODBC,/opt/homebrew/opt/unixodbc' '--with-pdo-pgsql=/opt/homebrew/opt/libpq' '--with-pdo-sqlite' '--with-pgsql=/opt/homebrew/opt/libpq' '--with-pic' '--with-snmp=/opt/homebrew/opt/net-snmp' '--with-sodium' '--with-sqlite3' '--with-tidy=/opt/homebrew/opt/tidy-html5' '--with-unixODBC' '--with-xsl' '--with-zip' '--with-zlib' '--enable-dtrace' 'PKG_CONFIG_PATH=/opt/homebrew/opt/pkgconf/lib/pkgconfig:/opt/homebrew/opt/apr/lib/pkgconfig:/opt/homebrew/opt/openssl@3/lib/pkgconfig:/opt/homebrew/opt/apr-util/lib/pkgconfig:/opt/homebrew/opt/argon2/lib/pkgconfig:/opt/homebrew/opt/brotli/lib/pkgconfig:/opt/homebrew/opt/libnghttp2/lib/pkgconfig:/opt/homebrew/opt/libnghttp3/lib/pkgconfig:/opt/homebrew/opt/libngtcp2/lib/pkgconfig:/opt/homebrew/opt/libssh2/lib/pkgconfig:/opt/homebrew/opt/lz4/lib/pkgconfig:/opt/homebrew/opt/xz/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig:/opt/homebrew/opt/curl/lib/pkgconfig:/opt/homebrew/opt/unixodbc/lib/pkgconfig:/opt/homebrew/opt/libpng/lib/pkgconfig:/opt/homebrew/opt/freetype/lib/pkgconfig:/opt/homebrew/opt/fontconfig/lib/pkgconfig:/opt/homebrew/opt/jpeg-turbo/lib/pkgconfig:/opt/homebrew/opt/libvmaf/lib/pkgconfig:/opt/homebrew/opt/aom/lib/pkgconfig:/opt/homebrew/opt/dav1d/lib/pkgconfig:/opt/homebrew/opt/libavif/lib/pkgconfig:/opt/homebrew/opt/libtiff/lib/pkgconfig:/opt/homebrew/opt/webp/lib/pkgconfig:/opt/homebrew/opt/gd/lib/pkgconfig:/opt/homebrew/opt/gmp/lib/pkgconfig:/opt/homebrew/opt/icu4c@78/lib/pkgconfig:/opt/homebrew/opt/krb5/lib/pkgconfig:/opt/homebrew/opt/libpq/lib/pkgconfig:/opt/homebrew/opt/libsodium/lib/pkgconfig:/opt/homebrew/opt/libzip/lib/pkgconfig:/opt/homebrew/opt/net-snmp/lib/pkgconfig:/opt/homebrew/opt/oniguruma/lib/pkgconfig:/opt/homebrew/opt/openldap/lib/pkgconfig:/opt/homebrew/opt/pcre2/lib/pkgconfig:/opt/homebrew/opt/readline/lib/pkgconfig:/opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/tidy-html5/lib/pkgconfig' 'PKG_CONFIG_LIBDIR=/usr/lib/pkgconfig:/opt/homebrew/Library/Homebrew/os/mac/pkgconfig/26' 'SASL_CFLAGS=-I/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk/usr/include/sasl' 'SASL_LIBS=-lsasl2' 'PHP_BUILD_PROVIDER=Homebrew'"
+    ],
+    "elephc_args": [],
+    "elephc_bridges": [],
+    "elephc_features": [],
+    "environment": {
+      "LANG": "C",
+      "LC_ALL": "C",
+      "TZ": "UTC"
+    },
+    "explicit_ini": {
+      "date.timezone": "UTC",
+      "display_errors": "stderr",
+      "error_reporting": "-1",
+      "html_errors": "0",
+      "log_errors": "0"
+    },
+    "name": "homebrew-no-ini",
+    "php_argv": [
+      "-n",
+      "-d",
+      "date.timezone=UTC",
+      "-d",
+      "display_errors=stderr",
+      "-d",
+      "error_reporting=-1",
+      "-d",
+      "html_errors=0",
+      "-d",
+      "log_errors=0",
+      "tools/php_oracle/manifest_probe.php"
+    ],
+    "php_release": "8.5.6",
+    "php_src_commit": "fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633",
+    "php_src_tag": "php-8.5.6",
+    "php_src_tracked_clean": true,
+    "php_src_tree": "25cac7acbc3908cb38a8bfab6be326bdccd9d151",
+    "target": "macos-aarch64"
+  },
+  "reachability": null,
+  "schema_version": 1,
+  "surface": {
+    "classes": [],
+    "constants": {
+      "FILE_APPEND": {
+        "type": "int",
+        "value": 8
+      },
+      "FILE_BINARY": {
+        "type": "int",
+        "value": 0
+      },
+      "FILE_IGNORE_NEW_LINES": {
+        "type": "int",
+        "value": 2
+      },
+      "FILE_NO_DEFAULT_CONTEXT": {
+        "type": "int",
+        "value": 16
+      },
+      "FILE_SKIP_EMPTY_LINES": {
+        "type": "int",
+        "value": 4
+      },
+      "FILE_TEXT": {
+        "type": "int",
+        "value": 0
+      },
+      "FILE_USE_INCLUDE_PATH": {
+        "type": "int",
+        "value": 1
+      },
+      "GLOB_AVAILABLE_FLAGS": {
+        "type": "int",
+        "value": 1073746108
+      },
+      "GLOB_BRACE": {
+        "type": "int",
+        "value": 128
+      },
+      "GLOB_ERR": {
+        "type": "int",
+        "value": 4
+      },
+      "GLOB_MARK": {
+        "type": "int",
+        "value": 8
+      },
+      "GLOB_NOCHECK": {
+        "type": "int",
+        "value": 16
+      },
+      "GLOB_NOESCAPE": {
+        "type": "int",
+        "value": 4096
+      },
+      "GLOB_NOSORT": {
+        "type": "int",
+        "value": 32
+      },
+      "GLOB_ONLYDIR": {
+        "type": "int",
+        "value": 1073741824
+      },
+      "LOCK_EX": {
+        "type": "int",
+        "value": 2
+      },
+      "LOCK_NB": {
+        "type": "int",
+        "value": 4
+      },
+      "LOCK_SH": {
+        "type": "int",
+        "value": 1
+      },
+      "LOCK_UN": {
+        "type": "int",
+        "value": 3
+      },
+      "PSFS_ERR_FATAL": {
+        "type": "int",
+        "value": 0
+      },
+      "PSFS_FEED_ME": {
+        "type": "int",
+        "value": 1
+      },
+      "PSFS_FLAG_FLUSH_CLOSE": {
+        "type": "int",
+        "value": 2
+      },
+      "PSFS_FLAG_FLUSH_INC": {
+        "type": "int",
+        "value": 1
+      },
+      "PSFS_FLAG_NORMAL": {
+        "type": "int",
+        "value": 0
+      },
+      "PSFS_PASS_ON": {
+        "type": "int",
+        "value": 2
+      },
+      "SEEK_CUR": {
+        "type": "int",
+        "value": 1
+      },
+      "SEEK_END": {
+        "type": "int",
+        "value": 2
+      },
+      "SEEK_SET": {
+        "type": "int",
+        "value": 0
+      },
+      "STREAM_BUFFER_FULL": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_BUFFER_LINE": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_BUFFER_NONE": {
+        "type": "int",
+        "value": 0
+      },
+      "STREAM_CAST_AS_STREAM": {
+        "type": "int",
+        "value": 0
+      },
+      "STREAM_CAST_FOR_SELECT": {
+        "type": "int",
+        "value": 3
+      },
+      "STREAM_CLIENT_ASYNC_CONNECT": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_CLIENT_CONNECT": {
+        "type": "int",
+        "value": 4
+      },
+      "STREAM_CLIENT_PERSISTENT": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_CRYPTO_METHOD_ANY_CLIENT": {
+        "type": "int",
+        "value": 127
+      },
+      "STREAM_CRYPTO_METHOD_ANY_SERVER": {
+        "type": "int",
+        "value": 126
+      },
+      "STREAM_CRYPTO_METHOD_SSLv23_CLIENT": {
+        "type": "int",
+        "value": 57
+      },
+      "STREAM_CRYPTO_METHOD_SSLv23_SERVER": {
+        "type": "int",
+        "value": 120
+      },
+      "STREAM_CRYPTO_METHOD_SSLv2_CLIENT": {
+        "type": "int",
+        "value": 3
+      },
+      "STREAM_CRYPTO_METHOD_SSLv2_SERVER": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_CRYPTO_METHOD_SSLv3_CLIENT": {
+        "type": "int",
+        "value": 5
+      },
+      "STREAM_CRYPTO_METHOD_SSLv3_SERVER": {
+        "type": "int",
+        "value": 4
+      },
+      "STREAM_CRYPTO_METHOD_TLS_CLIENT": {
+        "type": "int",
+        "value": 121
+      },
+      "STREAM_CRYPTO_METHOD_TLS_SERVER": {
+        "type": "int",
+        "value": 120
+      },
+      "STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT": {
+        "type": "int",
+        "value": 9
+      },
+      "STREAM_CRYPTO_METHOD_TLSv1_0_SERVER": {
+        "type": "int",
+        "value": 8
+      },
+      "STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT": {
+        "type": "int",
+        "value": 17
+      },
+      "STREAM_CRYPTO_METHOD_TLSv1_1_SERVER": {
+        "type": "int",
+        "value": 16
+      },
+      "STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT": {
+        "type": "int",
+        "value": 33
+      },
+      "STREAM_CRYPTO_METHOD_TLSv1_2_SERVER": {
+        "type": "int",
+        "value": 32
+      },
+      "STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT": {
+        "type": "int",
+        "value": 65
+      },
+      "STREAM_CRYPTO_METHOD_TLSv1_3_SERVER": {
+        "type": "int",
+        "value": 64
+      },
+      "STREAM_CRYPTO_PROTO_SSLv3": {
+        "type": "int",
+        "value": 4
+      },
+      "STREAM_CRYPTO_PROTO_TLSv1_0": {
+        "type": "int",
+        "value": 8
+      },
+      "STREAM_CRYPTO_PROTO_TLSv1_1": {
+        "type": "int",
+        "value": 16
+      },
+      "STREAM_CRYPTO_PROTO_TLSv1_2": {
+        "type": "int",
+        "value": 32
+      },
+      "STREAM_CRYPTO_PROTO_TLSv1_3": {
+        "type": "int",
+        "value": 64
+      },
+      "STREAM_FILTER_ALL": {
+        "type": "int",
+        "value": 3
+      },
+      "STREAM_FILTER_READ": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_FILTER_WRITE": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_IGNORE_URL": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_IPPROTO_ICMP": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_IPPROTO_IP": {
+        "type": "int",
+        "value": 0
+      },
+      "STREAM_IPPROTO_RAW": {
+        "type": "int",
+        "value": 255
+      },
+      "STREAM_IPPROTO_TCP": {
+        "type": "int",
+        "value": 6
+      },
+      "STREAM_IPPROTO_UDP": {
+        "type": "int",
+        "value": 17
+      },
+      "STREAM_IS_URL": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_META_ACCESS": {
+        "type": "int",
+        "value": 6
+      },
+      "STREAM_META_GROUP": {
+        "type": "int",
+        "value": 5
+      },
+      "STREAM_META_GROUP_NAME": {
+        "type": "int",
+        "value": 4
+      },
+      "STREAM_META_OWNER": {
+        "type": "int",
+        "value": 3
+      },
+      "STREAM_META_OWNER_NAME": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_META_TOUCH": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_MKDIR_RECURSIVE": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_MUST_SEEK": {
+        "type": "int",
+        "value": 16
+      },
+      "STREAM_NOTIFY_AUTH_REQUIRED": {
+        "type": "int",
+        "value": 3
+      },
+      "STREAM_NOTIFY_AUTH_RESULT": {
+        "type": "int",
+        "value": 10
+      },
+      "STREAM_NOTIFY_COMPLETED": {
+        "type": "int",
+        "value": 8
+      },
+      "STREAM_NOTIFY_CONNECT": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_NOTIFY_FAILURE": {
+        "type": "int",
+        "value": 9
+      },
+      "STREAM_NOTIFY_FILE_SIZE_IS": {
+        "type": "int",
+        "value": 5
+      },
+      "STREAM_NOTIFY_MIME_TYPE_IS": {
+        "type": "int",
+        "value": 4
+      },
+      "STREAM_NOTIFY_PROGRESS": {
+        "type": "int",
+        "value": 7
+      },
+      "STREAM_NOTIFY_REDIRECTED": {
+        "type": "int",
+        "value": 6
+      },
+      "STREAM_NOTIFY_RESOLVE": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_NOTIFY_SEVERITY_ERR": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_NOTIFY_SEVERITY_INFO": {
+        "type": "int",
+        "value": 0
+      },
+      "STREAM_NOTIFY_SEVERITY_WARN": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_OOB": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_OPTION_BLOCKING": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_OPTION_READ_BUFFER": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_OPTION_READ_TIMEOUT": {
+        "type": "int",
+        "value": 4
+      },
+      "STREAM_OPTION_WRITE_BUFFER": {
+        "type": "int",
+        "value": 3
+      },
+      "STREAM_PEEK": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_PF_INET": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_PF_INET6": {
+        "type": "int",
+        "value": 30
+      },
+      "STREAM_PF_UNIX": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_REPORT_ERRORS": {
+        "type": "int",
+        "value": 8
+      },
+      "STREAM_SERVER_BIND": {
+        "type": "int",
+        "value": 4
+      },
+      "STREAM_SERVER_LISTEN": {
+        "type": "int",
+        "value": 8
+      },
+      "STREAM_SHUT_RD": {
+        "type": "int",
+        "value": 0
+      },
+      "STREAM_SHUT_RDWR": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_SHUT_WR": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_SOCK_DGRAM": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_SOCK_RAW": {
+        "type": "int",
+        "value": 3
+      },
+      "STREAM_SOCK_RDM": {
+        "type": "int",
+        "value": 4
+      },
+      "STREAM_SOCK_SEQPACKET": {
+        "type": "int",
+        "value": 5
+      },
+      "STREAM_SOCK_STREAM": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_URL_STAT_LINK": {
+        "type": "int",
+        "value": 1
+      },
+      "STREAM_URL_STAT_QUIET": {
+        "type": "int",
+        "value": 2
+      },
+      "STREAM_USE_PATH": {
+        "type": "int",
+        "value": 1
+      }
+    },
+    "crypto_methods": [
+      {
+        "name": "STREAM_CRYPTO_METHOD_ANY_CLIENT",
+        "type": "int",
+        "value": 127
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_ANY_SERVER",
+        "type": "int",
+        "value": 126
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_SSLv23_CLIENT",
+        "type": "int",
+        "value": 57
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_SSLv23_SERVER",
+        "type": "int",
+        "value": 120
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_SSLv2_CLIENT",
+        "type": "int",
+        "value": 3
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_SSLv2_SERVER",
+        "type": "int",
+        "value": 2
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_SSLv3_CLIENT",
+        "type": "int",
+        "value": 5
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_SSLv3_SERVER",
+        "type": "int",
+        "value": 4
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLS_CLIENT",
+        "type": "int",
+        "value": 121
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLS_SERVER",
+        "type": "int",
+        "value": 120
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLSv1_0_CLIENT",
+        "type": "int",
+        "value": 9
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLSv1_0_SERVER",
+        "type": "int",
+        "value": 8
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLSv1_1_CLIENT",
+        "type": "int",
+        "value": 17
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLSv1_1_SERVER",
+        "type": "int",
+        "value": 16
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT",
+        "type": "int",
+        "value": 33
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLSv1_2_SERVER",
+        "type": "int",
+        "value": 32
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT",
+        "type": "int",
+        "value": 65
+      },
+      {
+        "name": "STREAM_CRYPTO_METHOD_TLSv1_3_SERVER",
+        "type": "int",
+        "value": 64
+      }
+    ],
+    "filters": [
+      "zlib.*",
+      "bzip2.*",
+      "convert.iconv.*",
+      "string.rot13",
+      "string.toupper",
+      "string.tolower",
+      "convert.*",
+      "consumed",
+      "dechunk"
+    ],
+    "functions": [],
+    "transports": [
+      "tcp",
+      "udp",
+      "unix",
+      "udg",
+      "ssl",
+      "tls",
+      "tlsv1.0",
+      "tlsv1.1",
+      "tlsv1.2",
+      "tlsv1.3"
+    ],
+    "wrappers": [
+      "https",
+      "ftps",
+      "compress.zlib",
+      "compress.bzip2",
+      "php",
+      "file",
+      "glob",
+      "data",
+      "http",
+      "ftp",
+      "phar",
+      "zip"
+    ]
+  },
+  "wrapper_protocol": {
+    "callbacks": [
+      {
+        "definition_line": 115,
+        "invocations": [
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 1372
+          }
+        ],
+        "macro": "USERSTREAM_DIR_CLOSE",
+        "name": "dir_closedir"
+      },
+      {
+        "definition_line": 112,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[0], filename);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[1], options);"
+                ],
+                "position": 1
+              }
+            ],
+            "arity": 2,
+            "source_line": 419
+          }
+        ],
+        "macro": "USERSTREAM_DIR_OPEN",
+        "name": "dir_opendir"
+      },
+      {
+        "definition_line": 113,
+        "invocations": [
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 1336
+          }
+        ],
+        "macro": "USERSTREAM_DIR_READ",
+        "name": "dir_readdir"
+      },
+      {
+        "definition_line": 114,
+        "invocations": [
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 1389
+          }
+        ],
+        "macro": "USERSTREAM_DIR_REWIND",
+        "name": "dir_rewinddir"
+      },
+      {
+        "definition_line": 110,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[0], url);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[1], mode);"
+                ],
+                "position": 1
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[2], options);"
+                ],
+                "position": 2
+              }
+            ],
+            "arity": 3,
+            "source_line": 1161
+          }
+        ],
+        "macro": "USERSTREAM_MKDIR",
+        "name": "mkdir"
+      },
+      {
+        "definition_line": 109,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[0], url_from);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[1], url_to);"
+                ],
+                "position": 1
+              }
+            ],
+            "arity": 2,
+            "source_line": 1122
+          }
+        ],
+        "macro": "USERSTREAM_RENAME",
+        "name": "rename"
+      },
+      {
+        "definition_line": 111,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[0], url);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[1], options);"
+                ],
+                "position": 1
+              }
+            ],
+            "arity": 2,
+            "source_line": 1198
+          }
+        ],
+        "macro": "USERSTREAM_RMDIR",
+        "name": "rmdir"
+      },
+      {
+        "definition_line": 117,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[0], PHP_STREAM_AS_FD_FOR_SELECT);",
+                  "ZVAL_LONG(&args[0], PHP_STREAM_AS_STDIO);"
+                ],
+                "position": 0
+              }
+            ],
+            "arity": 1,
+            "source_line": 1421
+          }
+        ],
+        "macro": "USERSTREAM_CAST",
+        "name": "stream_cast"
+      },
+      {
+        "definition_line": 99,
+        "invocations": [
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 701
+          }
+        ],
+        "macro": "USERSTREAM_CLOSE",
+        "name": "stream_close"
+      },
+      {
+        "definition_line": 105,
+        "invocations": [
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 662
+          },
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 870
+          }
+        ],
+        "macro": "USERSTREAM_EOF",
+        "name": "stream_eof"
+      },
+      {
+        "definition_line": 102,
+        "invocations": [
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 722
+          }
+        ],
+        "macro": "USERSTREAM_FLUSH",
+        "name": "stream_flush"
+      },
+      {
+        "definition_line": 116,
+        "invocations": [
+          {
+            "argument_storage": "&zlock",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&zlock, lock);"
+                ],
+                "position": 0
+              }
+            ],
+            "arity": 1,
+            "source_line": 920
+          }
+        ],
+        "macro": "USERSTREAM_LOCK",
+        "name": "stream_lock"
+      },
+      {
+        "definition_line": 120,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[0], url);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[1], option);"
+                ],
+                "position": 1
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[2], *(long *)value);",
+                  "ZVAL_STRING(&args[2], value);"
+                ],
+                "position": 2
+              }
+            ],
+            "arity": 3,
+            "source_line": 1259
+          }
+        ],
+        "macro": "USERSTREAM_METADATA",
+        "name": "stream_metadata"
+      },
+      {
+        "definition_line": 98,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[0], filename);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[1], mode);"
+                ],
+                "position": 1
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[2], options);"
+                ],
+                "position": 2
+              },
+              {
+                "by_reference": true,
+                "initializers": [
+                  "ZVAL_NEW_REF(&args[3], &EG(uninitialized_zval));"
+                ],
+                "position": 3
+              }
+            ],
+            "arity": 4,
+            "source_line": 331
+          }
+        ],
+        "macro": "USERSTREAM_OPEN",
+        "name": "stream_open"
+      },
+      {
+        "definition_line": 100,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[0], count);"
+                ],
+                "position": 0
+              }
+            ],
+            "arity": 1,
+            "source_line": 624
+          }
+        ],
+        "macro": "USERSTREAM_READ",
+        "name": "stream_read"
+      },
+      {
+        "definition_line": 103,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[0], offset);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[1], whence);"
+                ],
+                "position": 1
+              }
+            ],
+            "arity": 2,
+            "source_line": 748
+          }
+        ],
+        "macro": "USERSTREAM_SEEK",
+        "name": "stream_seek"
+      },
+      {
+        "definition_line": 118,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[0], option);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[1], value);",
+                  "ZVAL_LONG(&args[1], tv.tv_sec);"
+                ],
+                "position": 1
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[2], tv.tv_usec);",
+                  "ZVAL_LONG(&args[2], *(long *)ptrparam);",
+                  "ZVAL_LONG(&args[2], BUFSIZ);"
+                ],
+                "position": 2
+              }
+            ],
+            "arity": 3,
+            "source_line": 1017
+          }
+        ],
+        "macro": "USERSTREAM_SET_OPTION",
+        "name": "stream_set_option"
+      },
+      {
+        "definition_line": 106,
+        "invocations": [
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 842
+          }
+        ],
+        "macro": "USERSTREAM_STAT",
+        "name": "stream_stat"
+      },
+      {
+        "definition_line": 104,
+        "invocations": [
+          {
+            "argument_storage": "NULL",
+            "arguments": [],
+            "arity": 0,
+            "source_line": 775
+          }
+        ],
+        "macro": "USERSTREAM_TELL",
+        "name": "stream_tell"
+      },
+      {
+        "definition_line": 119,
+        "invocations": [
+          {
+            "argument_storage": "&size",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&size, (zend_long)new_size);"
+                ],
+                "position": 0
+              }
+            ],
+            "arity": 1,
+            "source_line": 973
+          }
+        ],
+        "macro": "USERSTREAM_TRUNCATE",
+        "name": "stream_truncate"
+      },
+      {
+        "definition_line": 101,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRINGL(&args[0], (char*)buf, count);"
+                ],
+                "position": 0
+              }
+            ],
+            "arity": 1,
+            "source_line": 573
+          }
+        ],
+        "macro": "USERSTREAM_WRITE",
+        "name": "stream_write"
+      },
+      {
+        "definition_line": 108,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[0], url);"
+                ],
+                "position": 0
+              }
+            ],
+            "arity": 1,
+            "source_line": 1085
+          }
+        ],
+        "macro": "USERSTREAM_UNLINK",
+        "name": "unlink"
+      },
+      {
+        "definition_line": 107,
+        "invocations": [
+          {
+            "argument_storage": "args",
+            "arguments": [
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_STRING(&args[0], url);"
+                ],
+                "position": 0
+              },
+              {
+                "by_reference": false,
+                "initializers": [
+                  "ZVAL_LONG(&args[1], flags);"
+                ],
+                "position": 1
+              }
+            ],
+            "arity": 2,
+            "source_line": 1298
+          }
+        ],
+        "macro": "USERSTREAM_STATURL",
+        "name": "url_stat"
+      }
+    ],
+    "source": "main/streams/userspace.c",
+    "source_sha256": "e76770391e51537159dd13f9ce2e9a6ffec7a2d59a088cf001a88b0c5f5b7c9c"
+  }
+}

@@ -28,15 +28,88 @@ const Z_STREAM_SIZE: i64 = 112;
 /// Capacity of the shared `_stream_filter_buf` scratch used as the deflate
 /// output window.
 const FILTER_BUF_SIZE: i64 = 65536;
+/// Byte offset of `z_stream.total_in` on LP64: the running count of input bytes
+/// `deflate()` has consumed, and the only way to tell "nothing was ever written"
+/// from "something was" at close time.
+const Z_STREAM_TOTAL_IN_OFFSET: i64 = 16;
+
+/// Where `deflateInit2_`'s compression level comes from.
+#[derive(Clone, Copy)]
+pub(crate) enum DeflateLevel<'a> {
+    /// Baked in at emit time, as `stream_filter_append($h, 'zlib.deflate', ['level' => 9])`
+    /// allows: the filter reads its `$params` from a compile-time constant or not at all.
+    Constant(i64),
+    /// Read from a global slot at run time. The `compress.zlib://` wrapper's level comes from
+    /// the stream context's `zlib.level`, which is a live hash the compiler never sees, so the
+    /// opener walks it and publishes the answer before the initialization runs.
+    Slot(&'a str),
+}
+
+/// Everything that differs between the two deflate consumers.
+///
+/// The `zlib.deflate` FILTER and the `compress.zlib://` WRAPPER share this whole body and
+/// disagree on exactly three things, all MEASURED on `php -n` 8.5.6:
+/// - framing: the filter writes RAW deflate (`gzdeflate()`-shaped), the wrapper writes GZIP;
+/// - level: a compile-time `$params` entry versus the context's `zlib.level`;
+/// - the tail: the wrapper's stream is flushed with `Z_SYNC_FLUSH` before `Z_FINISH`, so its
+///   output carries the extra `00 00 ff ff` marker and is six bytes longer than `gzencode()`
+///   of the same payload. The filter's is not, and matches `gzdeflate()` byte for byte.
+#[derive(Clone, Copy)]
+pub(crate) struct DeflateShape<'a> {
+    /// Label of the inline `fwrite` helper this attachment publishes.
+    pub(crate) fwrite_label: &'a str,
+    /// Label of the inline close helper this attachment publishes.
+    pub(crate) close_label: &'a str,
+    /// Label the initialization falls through from.
+    pub(crate) skip_label: &'a str,
+    /// `deflateInit2_`'s level argument.
+    pub(crate) level: DeflateLevel<'a>,
+    /// `deflateInit2_`'s windowBits: `-15` raw deflate, `31` gzip.
+    pub(crate) window_bits: i64,
+    /// Whether close pushes a `Z_SYNC_FLUSH` pass before `Z_FINISH`.
+    pub(crate) sync_flush_on_close: bool,
+    /// Label of the inline `fflush` helper this attachment publishes.
+    ///
+    /// php makes `fflush()` a flush point for the filter: a deflate stream holds its bytes until
+    /// zlib's own window fills, and php pushes a `Z_SYNC_FLUSH` pass so what was written so far
+    /// reaches the stream. Measured on `php -n` 8.5.6 over 400 bytes to a file, `filesize()` reads
+    /// 0 after the write, 12 after `fflush()` and 14 after `fclose()`.
+    ///
+    /// It lives HERE rather than in the runtime because it calls `deflate()`: a runtime helper is
+    /// emitted for every program, and every program would then have to link libz.
+    pub(crate) flush_label: &'a str,
+}
+
+/// The `zlib.deflate` stream filter's shape: raw deflate, constant level, no sync flush.
+pub(crate) fn filter_shape<'a>(
+    fwrite_label: &'a str,
+    close_label: &'a str,
+    skip_label: &'a str,
+    flush_label: &'a str,
+    level: i64,
+) -> DeflateShape<'a> {
+    DeflateShape {
+        fwrite_label,
+        close_label,
+        skip_label,
+        level: DeflateLevel::Constant(level),
+        window_bits: -15,
+        sync_flush_on_close: false,
+        flush_label,
+    }
+}
 
 /// Emits the ARM64 helpers, then the deflate-stream initialization.
-pub(crate) fn emit_arm64(
-    emitter: &mut Emitter,
-    fwrite_label: &str,
-    close_label: &str,
-    skip_label: &str,
-    level: i64,
-) {
+pub(crate) fn emit_arm64(emitter: &mut Emitter, shape: DeflateShape<'_>) {
+    let DeflateShape {
+        fwrite_label,
+        close_label,
+        skip_label,
+        level,
+        window_bits,
+        sync_flush_on_close,
+        flush_label,
+    } = shape;
     // -- jump past the helper bodies so normal flow never falls into them --
     emitter.instruction(&format!("b {}", skip_label));                          // skip over the inline zlib helper routines
 
@@ -70,6 +143,7 @@ pub(crate) fn emit_arm64(
     emitter.instruction("mov x0, x10");                                         // arg 0 = z_stream pointer
     emitter.instruction("mov w1, #0");                                          // arg 1 = Z_NO_FLUSH (0)
     emitter.bl_c("deflate"); // run one deflate step over the input window
+    emitter.instruction("str x0, [sp, #24]");                                   // park deflate's status for the loop guard
                              // -- compute produced = capacity - avail_out and write it to the fd --
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the z_stream pointer after the deflate call
     emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after this deflate step
@@ -81,12 +155,21 @@ pub(crate) fn emit_arm64(
     emitter.instruction("uxtw x2, w12");                                        // produced byte count as the write length
     emitter.syscall(4);
     // -- repeat while input remains OR the output window filled completely --
+    // The status guard comes FIRST and is not optional. Every other exit from this loop needs
+    // zlib to have consumed something, so a `z_stream` zlib refused to initialize — which is
+    // what an out-of-range level produces — would leave `avail_in` pinned at the payload length
+    // and spin here forever. A negative status means no progress is coming; php's own answer in
+    // that situation is a stream that writes nothing, which is what falling out produces.
+    emitter.instruction("ldr x15, [sp, #24]");                                  // deflate's status for this step
+    emitter.instruction("cmp x15, #0");                                         // did zlib report an error?
+    emitter.instruction(&format!("b.lt {}_done", fwrite_label));                // stop instead of spinning on a dead stream
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the z_stream pointer after the write
     emitter.instruction("ldr w14, [x10, #8]");                                  // reload avail_in still pending
     emitter.instruction(&format!("cbnz w14, {}_loop", fwrite_label));           // more input bytes: keep deflating
     emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after this deflate step
     emitter.instruction(&format!("cbz w12, {}_loop", fwrite_label));            // window was filled: drain the remainder
                                                                      // -- done: return the original payload length --
+    emitter.label(&format!("{}_done", fwrite_label));
     emitter.instruction("ldr x0, [sp, #8]");                                    // return value = the saved payload length
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the helper frame
@@ -107,6 +190,41 @@ pub(crate) fn emit_arm64(
     emitter.instruction("str x10, [sp, #8]");                                   // save the z_stream pointer
     emitter.instruction("str xzr, [x10, #0]");                                  // z_stream.next_in = NULL: no further input
     emitter.instruction("str wzr, [x10, #8]");                                  // z_stream.avail_in = 0: input is exhausted
+
+    // -- the wrapper's extra Z_SYNC_FLUSH pass, skipped when nothing was written --
+    // php's `compress.zlib://` emits the `00 00 ff ff` sync marker before finishing, but only
+    // for a stream that saw bytes: `fopen(...,'w'); fclose()` produces a bare 20-byte gzip with
+    // no marker at all. `total_in` is what tells the two apart. MEASURED on `php -n` 8.5.6.
+    if sync_flush_on_close {
+        emitter.instruction(&format!(
+            "ldr x9, [x10, #{}]",
+            Z_STREAM_TOTAL_IN_OFFSET
+        ));                                                                     // total input bytes deflate has consumed
+        emitter.instruction(&format!("cbz x9, {}_synced", close_label));        // nothing was written: no sync marker
+        emitter.label(&format!("{}_sync", close_label));
+        emitter.instruction("ldr x10, [sp, #8]");                               // reload the z_stream pointer
+        abi::emit_symbol_address(emitter, "x11", "_stream_filter_buf");
+        emitter.instruction("str x11, [x10, #24]");                             // z_stream.next_out = scratch window base
+        emitter.instruction(&format!("mov w12, #{}", FILTER_BUF_SIZE & 0xFFFF)); // low half of the scratch window capacity
+        emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+        emitter.instruction("str w12, [x10, #32]");                             // z_stream.avail_out = scratch window capacity
+        emitter.instruction("mov x0, x10");                                     // arg 0 = z_stream pointer
+        emitter.instruction("mov w1, #2");                                      // arg 1 = Z_SYNC_FLUSH (2)
+        emitter.bl_c("deflate"); // close the block and emit the sync marker
+        emitter.instruction("ldr x10, [sp, #8]");                               // reload the z_stream pointer
+        emitter.instruction("ldr w12, [x10, #32]");                             // reload avail_out left after the sync step
+        emitter.instruction(&format!("mov w13, #{}", FILTER_BUF_SIZE & 0xFFFF)); // low half of the scratch window capacity
+        emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+        emitter.instruction("sub w12, w13, w12");                               // produced = capacity - avail_out
+        emitter.instruction("ldr x0, [sp, #0]");                                // fd = the saved file descriptor
+        abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+        emitter.instruction("uxtw x2, w12");                                    // produced byte count as the write length
+        emitter.syscall(4);
+        emitter.instruction("ldr x10, [sp, #8]");                               // reload the z_stream pointer after the write
+        emitter.instruction("ldr w12, [x10, #32]");                             // reload avail_out left after the sync step
+        emitter.instruction(&format!("cbz w12, {}_sync", close_label));         // window was filled: drain the remainder
+        emitter.label(&format!("{}_synced", close_label));
+    }
 
     // -- flush loop: deflate with Z_FINISH until Z_STREAM_END --
     emitter.label(&format!("{}_loop", close_label));
@@ -131,10 +249,13 @@ pub(crate) fn emit_arm64(
     emitter.instruction("uxtw x2, w12");                                        // produced byte count as the write length
     emitter.syscall(4);
     emitter.instruction("ldr x12, [sp, #16]");                                  // reload the saved deflate return code
+    emitter.instruction("cmp x12, #0");                                         // did zlib report an error?
+    emitter.instruction(&format!("b.lt {}_end", close_label));                  // stop instead of spinning on a dead stream
     emitter.instruction("cmp x12, #1");                                         // did deflate report Z_STREAM_END?
     emitter.instruction(&format!("b.ne {}_loop", close_label));                 // not finished yet: flush another chunk
 
     // -- end the deflate stream and drop the per-descriptor handle --
+    emitter.label(&format!("{}_end", close_label));
     emitter.instruction("ldr x0, [sp, #8]");                                    // arg 0 = z_stream pointer
     emitter.bl_c("deflateEnd"); // release zlib's internal deflate state
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
@@ -144,6 +265,62 @@ pub(crate) fn emit_arm64(
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the fclose path
+
+
+    // ================================================================
+    // zlib deflate fflush helper.
+    // Input:  x0 = fd. Output: nothing; the caller keeps its own result.
+    //
+    // php makes `fflush()` a flush point for the filter: a deflate stream holds its bytes until
+    // zlib's own window fills, and php pushes a `Z_SYNC_FLUSH` pass so what was written so far
+    // reaches the stream. Measured on `php -n` 8.5.6 over 400 bytes to a file, `filesize()` reads
+    // 0 after the write, 12 after `fflush()` and 14 after `fclose()` — the close adds only the
+    // finishing block. Without it a long-lived stream compressed everything and sent none of it.
+    //
+    // The pass is NOT what the write path should do per call: with `Z_NO_FLUSH` there, a
+    // write-then-close stream still answers exactly `gzdeflate()`, which is php's answer too.
+    // ================================================================
+    emitter.label(flush_label);
+    emitter.instruction("sub sp, sp, #32");                                     // frame: [0]=fd [8]=z_stream
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // the descriptor the bytes go to
+    abi::emit_symbol_address(emitter, "x9", "_zstream_handles");
+    emitter.instruction("ldr x10, [x9, x0, lsl #3]");                           // this descriptor's z_stream, or zero
+    emitter.instruction(&format!("cbz x10, {}_done", flush_label));             // no deflate filter: nothing to flush
+    emitter.instruction("str x10, [sp, #8]");                                   // it outlives the deflate calls
+    emitter.instruction(&format!(
+        "ldr x9, [x10, #{}]", Z_STREAM_TOTAL_IN_OFFSET
+    ));                                                                         // input consumed so far
+    emitter.instruction(&format!("cbz x9, {}_done", flush_label));              // nothing written: php emits no marker either
+    emitter.instruction("str xzr, [x10, #0]");                                  // z_stream.next_in = NULL: no further input
+    emitter.instruction("str wzr, [x10, #8]");                                  // z_stream.avail_in = 0: input is exhausted
+    emitter.label(&format!("{}_loop", flush_label));
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the z_stream pointer
+    abi::emit_symbol_address(emitter, "x11", "_stream_filter_buf");
+    emitter.instruction("str x11, [x10, #24]");                                 // z_stream.next_out = scratch window base
+    emitter.instruction(&format!("mov w12, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
+    emitter.instruction(&format!("movk w12, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction("str w12, [x10, #32]");                                 // z_stream.avail_out = scratch window capacity
+    emitter.instruction("mov x0, x10");                                         // arg 0 = z_stream pointer
+    emitter.instruction("mov w1, #2");                                          // arg 1 = Z_SYNC_FLUSH (2)
+    emitter.bl_c("deflate");                                                    // close the block and emit the sync marker
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the z_stream pointer
+    emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after the sync step
+    emitter.instruction(&format!("mov w13, #{}", FILTER_BUF_SIZE & 0xFFFF));    // low half of the scratch window capacity
+    emitter.instruction(&format!("movk w13, #{}, lsl #16", FILTER_BUF_SIZE >> 16)); // high half of the scratch window capacity
+    emitter.instruction("sub w12, w13, w12");                                   // produced = capacity - avail_out
+    emitter.instruction("ldr x0, [sp, #0]");                                    // fd = the saved file descriptor
+    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
+    emitter.instruction("uxtw x2, w12");                                        // produced byte count as the write length
+    emitter.syscall(4);
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the z_stream pointer after the write
+    emitter.instruction("ldr w12, [x10, #32]");                                 // reload avail_out left after the sync step
+    emitter.instruction(&format!("cbz w12, {}_loop", flush_label));             // window was filled: drain the remainder
+    emitter.label(&format!("{}_done", flush_label));
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the flush frame
+    emitter.instruction("ret");
 
     // ================================================================
     // Initialization: allocate and register a z_stream for this fd.
@@ -167,13 +344,20 @@ pub(crate) fn emit_arm64(
     emitter.instruction(&format!("b {}_zero", skip_label));                     // continue zeroing the struct
     emitter.label(&format!("{}_zeroed", skip_label));
 
-    // -- deflateInit2_(strm, level, Z_DEFLATED, -15, memLevel, strategy, ...) --
-    // windowBits -15 selects raw deflate (no zlib header), matching PHP's
-    // zlib.deflate stream filter.
+    // -- deflateInit2_(strm, level, Z_DEFLATED, windowBits, memLevel, strategy, ...) --
+    // windowBits -15 selects raw deflate (no header), matching PHP's zlib.deflate stream
+    // filter; 31 selects gzip framing, which is what the `compress.zlib://` wrapper writes.
+    match level {
+        DeflateLevel::Constant(level) => {
+            emitter.instruction(&format!("mov x1, #{}", level));                // arg 1 = compression level ($params, default Z_DEFAULT_COMPRESSION -1)
+        }
+        DeflateLevel::Slot(symbol) => {
+            abi::emit_load_symbol_to_reg(emitter, "x1", symbol, 0);             // arg 1 = the level the opener read from the stream context
+        }
+    }
     emitter.instruction("ldr x0, [sp, #8]");                                    // arg 0 = z_stream pointer
-    emitter.instruction(&format!("mov x1, #{}", level));                        // arg 1 = compression level ($params, default Z_DEFAULT_COMPRESSION -1)
     emitter.instruction("mov x2, #8");                                          // arg 2 = Z_DEFLATED method
-    emitter.instruction("mov x3, #-15");                                        // arg 3 = windowBits -15: raw deflate, no header
+    emitter.instruction(&format!("mov x3, #{}", window_bits));                  // arg 3 = windowBits: -15 raw deflate, 31 gzip
     emitter.instruction("mov x4, #8");                                          // arg 4 = default memLevel
     emitter.instruction("mov x5, #0");                                          // arg 5 = Z_DEFAULT_STRATEGY
     abi::emit_symbol_address(emitter, "x6", "_zlib_version");
@@ -189,13 +373,16 @@ pub(crate) fn emit_arm64(
     emitter.instruction("mov w11, #4");                                         // write-filter id 4 = zlib.deflate
     emitter.instruction("strb w11, [x9, x0]");                                  // record the zlib write filter for this descriptor
 
-    // -- publish the helper addresses so __rt_fwrite / fclose can call them --
+    // -- publish the helper addresses so __rt_fwrite / fclose / fflush can call them --
     abi::emit_symbol_address(emitter, "x11", fwrite_label);
     abi::emit_symbol_address(emitter, "x9", "_zlib_fwrite_fn");
     emitter.instruction("str x11, [x9]");                                       // _zlib_fwrite_fn = the deflate fwrite helper
     abi::emit_symbol_address(emitter, "x11", close_label);
     abi::emit_symbol_address(emitter, "x9", "_zlib_close_fn");
     emitter.instruction("str x11, [x9]");                                       // _zlib_close_fn = the deflate close helper
+    abi::emit_symbol_address(emitter, "x11", flush_label);
+    abi::emit_symbol_address(emitter, "x9", "_zlib_flush_fn");
+    emitter.instruction("str x11, [x9]");                                       // _zlib_flush_fn = the deflate sync-flush helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the file descriptor
@@ -207,13 +394,16 @@ pub(crate) fn emit_arm64(
 }
 
 /// Emits the x86_64 helpers, then the deflate-stream initialization.
-pub(crate) fn emit_x86_64(
-    emitter: &mut Emitter,
-    fwrite_label: &str,
-    close_label: &str,
-    skip_label: &str,
-    level: i64,
-) {
+pub(crate) fn emit_x86_64(emitter: &mut Emitter, shape: DeflateShape<'_>) {
+    let DeflateShape {
+        fwrite_label,
+        close_label,
+        skip_label,
+        level,
+        window_bits,
+        sync_flush_on_close,
+        flush_label,
+    } = shape;
     // -- jump past the helper bodies so normal flow never falls into them --
     emitter.instruction(&format!("jmp {}", skip_label));                        // skip over the inline zlib helper routines
 
@@ -245,6 +435,7 @@ pub(crate) fn emit_x86_64(
     emitter.instruction("mov rdi, r10");                                        // arg 0 = z_stream pointer
     emitter.instruction("xor esi, esi");                                        // arg 1 = Z_NO_FLUSH (0)
     emitter.instruction("call deflate");                                        // run one deflate step over the input window
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // park deflate's status for the loop guard
                                          // -- compute produced = capacity - avail_out and write it to the fd --
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the z_stream pointer
     emitter.instruction(&format!("mov eax, {}", FILTER_BUF_SIZE));              // scratch window capacity
@@ -254,12 +445,17 @@ pub(crate) fn emit_x86_64(
     abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the compressed chunk through libc write()
                                        // -- repeat while input remains OR the output window filled completely --
+    // The status guard comes FIRST, for the same reason as the AArch64 body: a `z_stream` zlib
+    // refused to initialize never drains `avail_in`, and this loop would spin forever.
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // did zlib report an error?
+    emitter.instruction(&format!("jl {}_done", fwrite_label));                  // stop instead of spinning on a dead stream
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the z_stream pointer
     emitter.instruction("cmp DWORD PTR [r10 + 8], 0");                          // any avail_in input bytes still pending?
     emitter.instruction(&format!("jne {}_loop", fwrite_label));                 // more input bytes: keep deflating
     emitter.instruction("cmp DWORD PTR [r10 + 32], 0");                         // did the output window fill completely?
     emitter.instruction(&format!("je {}_loop", fwrite_label));                  // window was filled: drain the remainder
                                                                // -- done: return the original payload length --
+    emitter.label(&format!("{}_done", fwrite_label));
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return value = the saved payload length
     emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -282,6 +478,36 @@ pub(crate) fn emit_x86_64(
     emitter.instruction("mov QWORD PTR [r10 + 0], 0");                          // z_stream.next_in = NULL: no further input
     emitter.instruction("mov DWORD PTR [r10 + 8], 0");                          // z_stream.avail_in = 0: input is exhausted
 
+    // -- the wrapper's extra Z_SYNC_FLUSH pass, skipped when nothing was written --
+    // Same rule as the AArch64 body: php's wrapper emits the `00 00 ff ff` marker only for a
+    // stream that actually saw bytes, and `total_in` is what tells the two apart.
+    if sync_flush_on_close {
+        emitter.instruction(&format!(
+            "cmp QWORD PTR [r10 + {}], 0",
+            Z_STREAM_TOTAL_IN_OFFSET
+        ));                                                                     // total input bytes deflate has consumed
+        emitter.instruction(&format!("je {}_synced", close_label));             // nothing was written: no sync marker
+        emitter.label(&format!("{}_sync", close_label));
+        emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                   // reload the z_stream pointer
+        abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf"); // scratch window base
+        emitter.instruction("mov QWORD PTR [r10 + 24], r11");                   // z_stream.next_out = scratch window base
+        emitter.instruction(&format!("mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE)); // z_stream.avail_out = scratch window capacity
+        emitter.instruction("mov rdi, r10");                                    // arg 0 = z_stream pointer
+        emitter.instruction("mov esi, 2");                                      // arg 1 = Z_SYNC_FLUSH (2)
+        emitter.instruction("call deflate");                                    // close the block and emit the sync marker
+        emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                   // reload the z_stream pointer
+        emitter.instruction(&format!("mov eax, {}", FILTER_BUF_SIZE));          // scratch window capacity
+        emitter.instruction("sub eax, DWORD PTR [r10 + 32]");                   // produced = capacity - avail_out
+        emitter.instruction("mov edx, eax");                                    // produced byte count as the write length
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // fd = the preserved file descriptor
+        abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // write buffer = the scratch window base
+        emitter.instruction("call write");                                      // write the sync-flushed chunk through libc write()
+        emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                   // reload the z_stream pointer after the write
+        emitter.instruction("cmp DWORD PTR [r10 + 32], 0");                     // did the output window fill completely?
+        emitter.instruction(&format!("je {}_sync", close_label));               // window was filled: drain the remainder
+        emitter.label(&format!("{}_synced", close_label));
+    }
+
     // -- flush loop: deflate with Z_FINISH until Z_STREAM_END --
     emitter.label(&format!("{}_loop", close_label));
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the z_stream pointer
@@ -300,10 +526,13 @@ pub(crate) fn emit_x86_64(
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the preserved file descriptor
     abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf"); // write buffer = the scratch window base
     emitter.instruction("call write");                                          // write the compressed tail chunk through libc write()
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // did zlib report an error?
+    emitter.instruction(&format!("jl {}_end", close_label));                    // stop instead of spinning on a dead stream
     emitter.instruction("cmp QWORD PTR [rbp - 24], 1");                         // did deflate report Z_STREAM_END?
     emitter.instruction(&format!("jne {}_loop", close_label));                  // not finished yet: flush another chunk
 
     // -- end the deflate stream and drop the per-descriptor handle --
+    emitter.label(&format!("{}_end", close_label));
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // arg 0 = z_stream pointer
     emitter.instruction("call deflateEnd");                                     // release zlib's internal deflate state
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
@@ -317,6 +546,54 @@ pub(crate) fn emit_x86_64(
     // ================================================================
     // Initialization: allocate and register a z_stream for this fd.
     // ================================================================
+
+    // ================================================================
+    // zlib deflate fflush helper. See the ARM64 counterpart for the rule.
+    // Input:  rdi = fd. Output: nothing; the caller keeps its own result.
+    // ================================================================
+    emitter.label(flush_label);
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // frame: [-8]=fd [-16]=z_stream
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // the descriptor the bytes go to
+    abi::emit_symbol_address(emitter, "r9", "_zstream_handles");
+    emitter.instruction("mov r10, QWORD PTR [r9 + rdi*8]");                     // this descriptor's z_stream, or zero
+    emitter.instruction("test r10, r10");
+    emitter.instruction(&format!("jz {}_done", flush_label));                   // no deflate filter: nothing to flush
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // it outlives the deflate calls
+    emitter.instruction(&format!(
+        "mov r9, QWORD PTR [r10 + {}]", Z_STREAM_TOTAL_IN_OFFSET
+    ));                                                                         // input consumed so far
+    emitter.instruction("test r9, r9");
+    emitter.instruction(&format!("jz {}_done", flush_label));                   // nothing written: php emits no marker either
+    emitter.instruction("mov QWORD PTR [r10 + 0], 0");                          // z_stream.next_in = NULL: no further input
+    emitter.instruction("mov DWORD PTR [r10 + 8], 0");                          // z_stream.avail_in = 0: input is exhausted
+    emitter.label(&format!("{}_loop", flush_label));
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the z_stream pointer
+    abi::emit_symbol_address(emitter, "r11", "_stream_filter_buf");
+    emitter.instruction("mov QWORD PTR [r10 + 24], r11");                       // z_stream.next_out = scratch window base
+    emitter.instruction(&format!(
+        "mov DWORD PTR [r10 + 32], {}", FILTER_BUF_SIZE
+    ));                                                                         // z_stream.avail_out = scratch window capacity
+    emitter.instruction("mov rdi, r10");                                        // arg 0 = z_stream pointer
+    emitter.instruction("mov esi, 2");                                          // arg 1 = Z_SYNC_FLUSH (2)
+    emitter.instruction("call deflate");                                        // close the block and emit the sync marker
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the z_stream pointer
+    emitter.instruction("mov r9d, DWORD PTR [r10 + 32]");                       // reload avail_out left after the sync step
+    emitter.instruction(&format!("mov r11d, {}", FILTER_BUF_SIZE));             // the scratch window capacity
+    emitter.instruction("sub r11d, r9d");                                       // produced = capacity - avail_out
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd = the saved file descriptor
+    abi::emit_symbol_address(emitter, "rsi", "_stream_filter_buf");
+    emitter.instruction("mov edx, r11d");                                       // produced byte count as the write length
+    emitter.instruction("call write");                                          // write the compressed chunk through libc write()
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the z_stream pointer after the write
+    emitter.instruction("cmp DWORD PTR [r10 + 32], 0");                         // reload avail_out left after the sync step
+    emitter.instruction(&format!("je {}_loop", flush_label));                   // window was filled: drain the remainder
+    emitter.label(&format!("{}_done", flush_label));
+    emitter.instruction("add rsp, 32");                                         // release the flush frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");
+
     emitter.label(skip_label);
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the initialization frame pointer
@@ -342,13 +619,21 @@ pub(crate) fn emit_x86_64(
     emitter.instruction(&format!("jmp {}_zero", skip_label));                   // continue zeroing the struct
     emitter.label(&format!("{}_zeroed", skip_label));
 
-    // -- deflateInit2_(strm, level, Z_DEFLATED, -15, memLevel, strategy, ...) --
-    // windowBits -15 selects raw deflate (no zlib header), matching PHP's
-    // zlib.deflate stream filter. The version/size args 7-8 go on the stack.
+    // -- deflateInit2_(strm, level, Z_DEFLATED, windowBits, memLevel, strategy, ...) --
+    // windowBits -15 selects raw deflate (no header), matching PHP's zlib.deflate stream
+    // filter; 31 selects gzip framing, which is what the `compress.zlib://` wrapper writes.
+    // The version/size args 7-8 go on the stack.
+    match level {
+        DeflateLevel::Constant(level) => {
+            emitter.instruction(&format!("mov esi, {}", level));                // arg 1 = compression level ($params, default Z_DEFAULT_COMPRESSION -1)
+        }
+        DeflateLevel::Slot(symbol) => {
+            abi::emit_load_symbol_to_reg(emitter, "rsi", symbol, 0);            // arg 1 = the level the opener read from the stream context
+        }
+    }
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // arg 0 = z_stream pointer
-    emitter.instruction(&format!("mov esi, {}", level));                        // arg 1 = compression level ($params, default Z_DEFAULT_COMPRESSION -1)
     emitter.instruction("mov edx, 8");                                          // arg 2 = Z_DEFLATED method
-    emitter.instruction("mov ecx, -15");                                        // arg 3 = windowBits -15: raw deflate, no header
+    emitter.instruction(&format!("mov ecx, {}", window_bits));                  // arg 3 = windowBits: -15 raw deflate, 31 gzip
     emitter.instruction("mov r8d, 8");                                          // arg 4 = default memLevel
     emitter.instruction("xor r9d, r9d");                                        // arg 5 = Z_DEFAULT_STRATEGY
     emitter.instruction("sub rsp, 16");                                         // reserve the two stack arguments (kept 16-aligned)
@@ -373,6 +658,9 @@ pub(crate) fn emit_x86_64(
     emitter.instruction(&format!("lea r10, [rip + {}]", close_label));          // address of the deflate close helper
     abi::emit_symbol_address(emitter, "r9", "_zlib_close_fn"); // _zlib_close_fn slot
     emitter.instruction("mov QWORD PTR [r9], r10");                             // _zlib_close_fn = the deflate close helper
+    emitter.instruction(&format!("lea r10, [rip + {}]", flush_label));          // address of the deflate sync-flush helper
+    abi::emit_symbol_address(emitter, "r9", "_zlib_flush_fn"); // _zlib_flush_fn slot
+    emitter.instruction("mov QWORD PTR [r9], r10");                             // _zlib_flush_fn = the deflate sync-flush helper
 
     // -- re-box the descriptor as a resource, matching stream_filter_append --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // resource payload = the descriptor

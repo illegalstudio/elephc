@@ -49,7 +49,18 @@ pub(crate) fn lower_static_type_predicate(
 ) -> Result<()> {
     ensure_arg_count(inst, name, 1)?;
     let value = expect_operand(inst, 0)?;
-    let ty = ctx.value_php_type(value)?;
+    // The RAW php type. `value_php_type` answers with `codegen_repr()`, which maps a resource
+    // onto the machine word it travels in — an integer — so `is_int(STDIN)` compared `Int` with
+    // `Int` and said TRUE where php says false. The same value's `gettype()` said `resource`,
+    // because that one asks the runtime rather than the type. A resource is the only shape whose
+    // representation collides with another predicate's answer; every other mapping `codegen_repr`
+    // performs is either identity or onto `Mixed`, which the branch below handles separately.
+    let ty = ctx.raw_value_php_type(value)?;
+    if matches!(ty, PhpType::Resource(_)) {
+        emit_static_bool(ctx, false);
+        return store_if_result(ctx, inst);
+    }
+    let ty = ty.codegen_repr();
     if ty == PhpType::TaggedScalar {
         if expected == PhpType::Int {
             emit_tagged_scalar_int_predicate(ctx, value)?;

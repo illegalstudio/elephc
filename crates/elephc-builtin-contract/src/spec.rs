@@ -83,6 +83,31 @@ pub enum TypeSpec {
     /// Same reason as `Ptr`: `__elephc_normalize_callable` checks as `PhpType::Callable`, whose
     /// representation is a descriptor rather than a boxed cell.
     Callable,
+    /// PHP's `?T` — a parameter that accepts `null` as a VALUE of its own.
+    ///
+    /// Not the same thing as `default: Some(DefaultSpec::Null)`, which says what an OMITTED
+    /// argument becomes. A REQUIRED nullable — php's `?int $seconds` on `stream_select()` — has
+    /// no default at all, and declaring it as the bare scalar makes a written `null`
+    /// indistinguishable from `0`. For that function they are opposite instructions: null blocks
+    /// forever, `0` returns immediately.
+    ///
+    /// Declaring `Mixed` instead would be the same mistake `Ptr` exists to avoid — it accepts
+    /// `stream_select($r, $w, $e, "abc")`, which php refuses, and this builtin has no check hook
+    /// to catch it afterwards.
+    Nullable(&'static TypeSpec),
+    /// PHP's `A|B` — a parameter that accepts either type, and TELLS THEM APART.
+    ///
+    /// Not interchangeable with `Mixed`, and not collapsible to either member. `chown()` declares
+    /// `string|int $user` and the two members mean OPPOSITE things: a string is looked up as a
+    /// user NAME, an int is used as a uid. MEASURED on `php -n` 8.5.6, `chown($f, "501")` warns
+    /// `Unable to find uid for 501` where `chown($f, 501)` succeeds.
+    ///
+    /// Declaring one member instead — `Str`, as this contract did — is what made the argument
+    /// coercion convert an int-valued operand to a string, so `chown($p, fileowner($p))` looked
+    /// up the user named "501" and answered `false` for a program php answers `true` for.
+    /// Declaring `Mixed` would fix that and then document a lie, the same one `Ptr` exists to
+    /// avoid: the generated page would say `mixed $user` where php says `string|int $user`.
+    Union(&'static [TypeSpec]),
 }
 
 /// Static PHP value used as an optional builtin parameter default.
@@ -124,6 +149,11 @@ pub struct ParamSpec {
     pub default: Option<DefaultSpec>,
     /// Compatibility mirror of `passing` used by current registry consumers.
     pub by_ref: bool,
+    /// For a by-reference parameter the builtin only WRITES: the type the
+    /// caller's variable holds afterwards. `None` for in-out or by-value
+    /// parameters. Keeping the written type beside the slot it is written
+    /// into stops the two from drifting apart.
+    pub writes: Option<TypeSpec>,
 }
 
 /// Backend-neutral callable signature selected for one catalog consumer.
@@ -192,6 +222,14 @@ pub struct BuiltinContract {
     pub params: &'static [ParamSpec],
     /// PHP-visible variadic parameter name, when present.
     pub variadic: Option<&'static str>,
+    /// For a variadic tail the builtin only WRITES: the type each caller variable
+    /// holds afterwards. `None` for a by-value tail, which is nearly all of them.
+    ///
+    /// `sscanf()` and `fscanf()` are the tail that writes: php's
+    /// `sscanf($s, '%d %s', $n, $w)` fills both variables and neither has to exist
+    /// beforehand. Saying so here is what stops the checker reading those arguments
+    /// and rejecting the manual's own idiom with `Undefined variable`.
+    pub variadic_writes: Option<TypeSpec>,
     /// Optional supported minimum-arity override.
     pub min_args: Option<usize>,
     /// Optional supported maximum-arity override.

@@ -31,7 +31,12 @@ pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     emitter.label_global("__rt_mixed_unbox");
 
     // -- null mixed pointers behave like null payloads --
-    emitter.instruction("cbz x0, __rt_mixed_unbox_null");                       // null boxed values unwrap to the null runtime tag
+    // php null is TWO values: a zero pointer and the in-band sentinel. Testing only for zero here
+    // and on the nested follow below let `class One { public $a; }` — a property declared without
+    // a default, whose slot carries the sentinel — walk into a dereference of
+    // `0x7ffffffffffffffe`. `isset(get_object_vars($o)["a"])` and `var_dump($o)` both SEGFAULTED,
+    // and this helper's own doc already promised to normalize a "zero/sentinel payload".
+    emit_branch_if_null_container(emitter, "x0", "x9", "__rt_mixed_unbox_null");
 
     // -- keep following nested mixed payloads until we reach a concrete tag --
     emitter.label("__rt_mixed_unbox_loop");
@@ -40,7 +45,7 @@ pub fn emit_mixed_unbox(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #7");                                          // does this mixed box wrap another mixed value?
     emitter.instruction("b.ne __rt_mixed_unbox_done");                          // stop once the payload tag is concrete
     emitter.instruction("ldr x0, [x0, #8]");                                    // follow the nested mixed pointer stored in value_lo
-    emitter.instruction("cbz x0, __rt_mixed_unbox_null");                       // null nested boxes unwrap to the null runtime tag
+    emit_branch_if_null_container(emitter, "x0", "x9", "__rt_mixed_unbox_null"); // a nested null is zero OR the sentinel
     emitter.instruction("b __rt_mixed_unbox_loop");                             // continue peeling nested mixed wrappers
 
     emitter.label("__rt_mixed_unbox_done");
@@ -68,8 +73,8 @@ fn emit_mixed_unbox_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: mixed_unbox ---");
     emitter.label_global("__rt_mixed_unbox");
 
-    emitter.instruction("test rax, rax");                                       // null mixed pointers behave like null payloads
-    emitter.instruction("je __rt_mixed_unbox_null");                            // null boxed values unwrap to the null runtime tag
+    // See the AArch64 counterpart: null is the zero pointer AND the in-band sentinel.
+    emit_branch_if_null_container(emitter, "rax", "r11", "__rt_mixed_unbox_null");
 
     emitter.label("__rt_mixed_unbox_loop");
     emitter.instruction("mov r10, rax");                                        // preserve the current mixed cell pointer while inspecting its tag
@@ -77,8 +82,7 @@ fn emit_mixed_unbox_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 7");                                          // does this mixed box wrap another mixed value?
     emitter.instruction("jne __rt_mixed_unbox_done");                           // stop once the payload tag is concrete
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // follow the nested mixed pointer stored in value_lo
-    emitter.instruction("test rax, rax");                                       // null nested boxes unwrap to the null runtime tag
-    emitter.instruction("je __rt_mixed_unbox_null");                            // normalize null nested boxes to the null runtime tag
+    emit_branch_if_null_container(emitter, "rax", "r11", "__rt_mixed_unbox_null"); // a nested null is zero OR the sentinel
     emitter.instruction("jmp __rt_mixed_unbox_loop");                           // continue peeling nested mixed wrappers
 
     emitter.label("__rt_mixed_unbox_done");

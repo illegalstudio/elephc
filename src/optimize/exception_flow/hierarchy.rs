@@ -26,6 +26,24 @@ pub(super) struct ExceptionHierarchy {
     trait_method_barriers: HashSet<String>,
 }
 
+/// php's own throwable tree, for the hierarchy built without checker metadata.
+///
+/// MEASURED on `php -n` 8.5.6 with `class_parents()`; every one of these is a class php declares
+/// itself, so a program that names one names a relation no AST walk can see.
+const BUILTIN_THROWABLE_PARENTS: [(&str, &str); 11] = [
+    ("TypeError", "Error"),
+    ("ArgumentCountError", "TypeError"),
+    ("ValueError", "Error"),
+    ("ArithmeticError", "Error"),
+    ("DivisionByZeroError", "ArithmeticError"),
+    ("AssertionError", "Error"),
+    ("UnhandledMatchError", "Error"),
+    ("FiberError", "Error"),
+    ("RuntimeException", "Exception"),
+    ("ReflectionException", "Exception"),
+    ("JsonException", "Exception"),
+];
+
 impl ExceptionHierarchy {
     /// Builds authoritative hierarchy facts from type-checker metadata.
     pub(super) fn from_type_metadata(
@@ -79,6 +97,18 @@ impl ExceptionHierarchy {
                 .entry(key)
                 .or_default()
                 .insert("Throwable".to_string());
+        }
+        // Without this, `is_subtype("UnhandledMatchError", "Throwable")` was *false* rather than
+        // unknown, and DCE deleted the `catch (Throwable $e)` that php runs. A class the program
+        // declares wins: this hierarchy is also built from partial ASTs, and a relation read off
+        // the source is the more authoritative one wherever the two disagree.
+        for (class, parent) in BUILTIN_THROWABLE_PARENTS {
+            let key = php_symbol_key(class);
+            if self.class_names.contains(&key) {
+                continue;
+            }
+            self.class_names.insert(key.clone());
+            self.parents.insert(key, parent.to_string());
         }
     }
 

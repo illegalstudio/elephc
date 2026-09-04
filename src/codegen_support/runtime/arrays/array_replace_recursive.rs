@@ -162,7 +162,7 @@ fn emit_array_replace_recursive_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_array_replace_recursive_insert");              // scalar values need no retain
     emitter.instruction("cmp r10, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_array_replace_recursive_insert");              // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // load the heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the heap-backed value low word where __rt_incref reads it on x86_64
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed value for the result hash owner
     emitter.instruction("jmp __rt_array_replace_recursive_insert");             // continue to the insertion
     emitter.label("__rt_array_replace_recursive_persist");

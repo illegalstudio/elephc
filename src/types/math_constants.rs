@@ -16,12 +16,7 @@
 /// Tuple of `(name, value)` pairs for PHP math integer constants.
 ///
 /// `round()` uses these constants to select how exact `.5` ties are broken.
-pub(crate) const MATH_INT_CONSTANTS: &[(&str, i64)] = &[
-    ("PHP_ROUND_HALF_UP", 1),
-    ("PHP_ROUND_HALF_DOWN", 2),
-    ("PHP_ROUND_HALF_EVEN", 3),
-    ("PHP_ROUND_HALF_ODD", 4),
-];
+pub(crate) use elephc_builtin_contract::php_constants::MATH_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {

@@ -134,7 +134,7 @@ pub fn emit_symlink(emitter: &mut Emitter) {
     // but the field width differs by platform.
     // ================================================================
     let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
     let frame_size = (stat_buf + 32 + 15) & !15;
     let save_offset = frame_size - 16;
 

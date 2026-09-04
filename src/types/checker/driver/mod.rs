@@ -263,6 +263,10 @@ pub(super) fn check_types_impl(
         errors.extend(error.flatten());
     }
     checker.declared_classes = class_map.keys().cloned().collect();
+    // php raises these while LINKING each class, before the script produces anything, so they
+    // are computed here from the finished class map rather than at any call site.
+    checker.tentative_return_deprecations =
+        super::tentative_return_types::tentative_return_deprecations(&class_map);
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
     checker.declared_trait_methods = declared_trait_methods;
@@ -391,7 +395,8 @@ pub(super) fn check_types_impl(
 
     checker.prescan_extern_decls(program, &mut errors);
 
-    let (_, initial_top_level_errors) = checker.check_top_level_program(program);
+    let (_, initial_top_level_errors, initial_through_null) =
+        checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
     // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
@@ -403,13 +408,22 @@ pub(super) fn check_types_impl(
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
 
-    let (final_global_env, final_top_level_errors) = checker.check_top_level_program(program);
-    for (initial_errors, final_errors) in initial_top_level_errors
+    let (final_global_env, final_top_level_errors, _) = checker.check_top_level_program(program);
+    for ((initial_errors, final_errors), through_null) in initial_top_level_errors
         .into_iter()
         .zip(final_top_level_errors.into_iter())
+        .zip(initial_through_null.into_iter().chain(std::iter::repeat(false)))
     {
         if !final_errors.is_empty() {
             errors.extend(final_errors);
+            continue;
+        }
+        // A statement the initial pass typed THROUGH a null receiver was typed before method
+        // bodies were checked, so an untyped property had not yet learned its type from a
+        // constructor assignment and read as null for no better reason than that. Whatever the
+        // rest of the expression concluded from that null belongs to the final pass, which just
+        // accepted this statement.
+        if through_null {
             continue;
         }
         if !Checker::can_suppress_initial_top_level_errors(&initial_errors) {

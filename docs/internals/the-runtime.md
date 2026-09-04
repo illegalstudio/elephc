@@ -65,13 +65,17 @@ __rt_build_argv    build $argv from C strings
 
 **Source:** `src/codegen_support/runtime/diagnostics.rs`
 
-These helpers implement PHP's `@` error-suppression operator and the runtime warning channel. The suppression depth lives in `_rt_diag_suppression`; while it is non-zero, suppressible warnings are silently dropped instead of written to stderr. They are emitted before any PHP-visible helper so the rest of the runtime can report warnings through a single path.
+These helpers implement PHP's `@` error-suppression operator and the runtime warning channel. The suppression depth lives in `_rt_diag_suppression`; while it is non-zero, suppressible warnings are silently dropped instead of written out. They are emitted before any PHP-visible helper so the rest of the runtime can report warnings through a single path.
+
+Warnings go to **stdout, through `__rt_stdout_write`** — not to stderr. That is what PHP's CLI does, measured on `php -n` 8.5.6: `2>&1 1>/dev/null` shows an empty stderr, and an `ob_start()` callback wraps a warning exactly as it wraps an `echo`, so a program that captures its own output captures its diagnostics too.
+
+One diagnostic is composed from several `__rt_diag_warning` calls (head, name, tail). The pieces accumulate in `_rt_diag_buf` and the whole line is written when the piece ending in a newline arrives, so PHP's ` in FILE on line N` suffix is appended once per line rather than once per piece. The location itself is published per instruction by the lowering (`_rt_diag_loc_ptr`/`_rt_diag_loc_len`, gated on `Effects::MAY_WARN`) and rendered at compile time, because `__rt_itoa` writes through the shared concat buffer and would corrupt a string being concatenated when a warning interrupts it.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_diag_push_suppression` | Enter one nested `@` suppression scope (increment `_rt_diag_suppression`) | — | — |
 | `__rt_diag_pop_suppression` | Leave one `@` suppression scope, clamped against underflow | — | — |
-| `__rt_diag_warning` | Write a runtime warning string to stderr unless suppression is active | `x1`/`x2` = message string | — |
+| `__rt_diag_warning` | Buffer one piece of a diagnostic, and write the whole line through `__rt_stdout_write` once it ends in a newline, unless suppression is active | `x1`/`x2` = message piece | — |
 
 ## String routines
 

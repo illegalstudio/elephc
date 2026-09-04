@@ -180,6 +180,67 @@ fn test_for_break() {
     assert_eq!(out, "012");
 }
 
+/// Verifies a comma-separated initializer runs every expression, in order.
+///
+/// `for ($i = 0, $n = count($a); …)` is textbook PHP and the parser accepted only ONE expression
+/// per clause, so the whole loop was refused at parse time.
+#[test]
+fn test_for_comma_separated_initializer() {
+    let out = compile_and_run(
+        "<?php $a = [5, 6, 7, 8]; for ($i = 0, $n = count($a); $i < $n; $i++) { echo $a[$i]; }",
+    );
+    assert_eq!(out, "5678");
+}
+
+/// Verifies a comma-separated update clause runs every expression, in order.
+#[test]
+fn test_for_comma_separated_update() {
+    let out =
+        compile_and_run("<?php $t = 0; for ($i = 0; $i < 3; $i++, $t = $i * 2) { } echo $t;");
+    assert_eq!(out, "6");
+}
+
+/// Verifies a clause that is not a plain local write — a bare call, a write through an offset.
+#[test]
+fn test_for_clause_accepts_calls_and_offset_writes() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(int $x): int
+{
+    return $x + 1;
+}
+$j = 0;
+for (bump($j); $j < 3; $j = bump($j)) {
+}
+echo $j;
+$b = [0, 0, 0];
+for ($k = 0; $k < 3; $b[$k] = $k, $k++) {
+}
+echo "|", implode(",", $b);
+"#,
+    );
+    assert_eq!(out, "3|0,1,2");
+}
+
+/// Verifies a comma-separated condition evaluates every expression and the LAST one decides.
+///
+/// `$p++` runs on every test including the first, so the loop exits with `$p` at 4: three tests
+/// that entered the body plus the one that ended it.
+#[test]
+fn test_for_comma_separated_condition() {
+    let out = compile_and_run("<?php for ($p = 0; $p++, $p < 4; ) { } echo $p;");
+    assert_eq!(out, "4");
+}
+
+/// Verifies `continue` in a loop with a condition list still re-runs the leading expressions.
+#[test]
+fn test_for_comma_condition_is_reevaluated_after_continue() {
+    let out = compile_and_run(
+        "<?php $seen = 0; for ($i = 0; $seen++, $i < 4; $i++) { if ($i == 1) { continue; } } echo $seen;",
+    );
+    assert_eq!(out, "5");
+}
+
 // --- FizzBuzz ---
 
 /// Verifies nested if/elseif/else chain correctly maps 1–15 to Fizz/Buzz/FizzBuzz/decimal output.

@@ -114,11 +114,15 @@ foreach ($animals as $animal) {
     assert_eq!(out, "Rex Mia ");
 }
 
-/// Tests that a match expression without a default case produces a fatal error
-/// ("unhandled match case") when the matched value has no corresponding arm.
+/// Tests that a match expression with no arm for its subject raises php's own error.
 ///
-/// Fixture: `$value = 3` matched against arms 1 and 2 only. Verifies fatal error
-/// message is produced.
+/// It is an `UnhandledMatchError` and it NAMES the subject — MEASURED on `php -n` 8.5.6,
+/// `Uncaught UnhandledMatchError: Unhandled match case 3`. This test used to accept any output
+/// containing the lowercase `unhandled match case`, which is what elephc printed before the error
+/// became a catchable Throwable carrying php's wording; the substring stopped matching at the
+/// capital `U`, and the assertion is now php's text.
+///
+/// Fixture: `$value = 3` matched against arms 1 and 2 only.
 #[test]
 fn test_match_without_default_is_fatal() {
     let err = compile_and_run_expect_failure(
@@ -130,7 +134,10 @@ echo match($value) {
 };
 "#,
     );
-    assert!(err.contains("unhandled match case"), "{err}");
+    assert!(
+        err.contains("Uncaught UnhandledMatchError: Unhandled match case 3"),
+        "{err}"
+    );
 }
 
 /// Verifies the v017-trio example PHP fixture compiles and runs, asserting the

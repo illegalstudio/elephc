@@ -144,7 +144,7 @@ pub(super) fn lower_throwable_standard_method_loaded(
         "getmessage" => lower_throwable_get_message(ctx, object_reg),
         "getcode" => lower_throwable_get_code(ctx, object_reg),
         "getfile" => lower_throwable_get_file(ctx),
-        "gettraceasstring" => lower_throwable_empty_string(ctx),
+        "gettraceasstring" => lower_throwable_get_trace_as_string(ctx, object_reg),
         "getline" => lower_throwable_get_line(ctx, object_reg),
         "gettrace" => lower_throwable_empty_trace_array(ctx),
         "getprevious" => lower_throwable_get_previous(ctx, object_reg, inst),
@@ -179,15 +179,28 @@ pub(super) fn lower_throwable_get_code(ctx: &mut FunctionContext<'_>, object_reg
     Ok(PhpType::Int)
 }
 
-/// Materializes the synthetic empty-string result used by `Throwable::getTraceAsString()`.
+/// Renders `Throwable::getTraceAsString()` from the frames recorded for THIS exception.
 ///
-/// Still synthetic: reference PHP returns at least `#0 {main}`, and elephc keeps no call stack to
-/// render. `getFile()` no longer shares this path — see [`lower_throwable_get_file`].
-pub(super) fn lower_throwable_empty_string(ctx: &mut FunctionContext<'_>) -> Result<PhpType> {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    let (label, len) = ctx.data.add_string(b"");
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+/// php's text is the same frames the uncaught report prints, without the `Stack trace:` header,
+/// without the ` thrown in` tail, and — because php's frames are newline-SEPARATED — without a
+/// trailing newline. A frameless exception is `#0 {main}`, not the empty string.
+///
+/// The completeness proof travels on the payload rather than being consulted from a global,
+/// because the site that built this exception is long gone by the time anyone asks. Without a
+/// proof the answer stays EMPTY: a trace that is short asserts an empty stack, which is a wrong
+/// answer rather than a missing one.
+pub(super) fn lower_throwable_get_trace_as_string(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+) -> Result<PhpType> {
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        arg_reg,
+        object_reg,
+        crate::codegen_support::sentinels::THROWABLE_TRACE_EXACT_OFFSET as usize,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_trace_as_string");
     Ok(PhpType::Str)
 }
 

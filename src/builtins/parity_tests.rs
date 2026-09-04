@@ -53,6 +53,26 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ),
         ("image_prelude", crate::image_prelude::image_declarations()),
         ("curl_prelude", parsed_curl_prelude()),
+        // This branch's four. They are PHP source like curl's, not built AST like the rest.
+        (
+            "dir_prelude",
+            parsed_php_prelude("dir", crate::dir_prelude::DIR_PRELUDE_SRC),
+        ),
+        (
+            "gz_prelude",
+            parsed_php_prelude("gz", crate::gz_prelude::GZ_PRELUDE_SRC),
+        ),
+        (
+            "similar_text_prelude",
+            parsed_php_prelude(
+                "similar_text",
+                crate::similar_text_prelude::SIMILAR_TEXT_PRELUDE_SRC,
+            ),
+        ),
+        (
+            "scanf_prelude",
+            parsed_php_prelude("scanf", crate::scanf_prelude::SCANF_PRELUDE_SRC),
+        ),
         (
             "version_prelude",
             crate::version_prelude::version_declarations(
@@ -104,10 +124,66 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
 
 /// Parses `CURL_PRELUDE_SRC` exactly as `curl_prelude::inject_if_used_for_version` does.
 fn parsed_curl_prelude() -> crate::parser::ast::Program {
-    let tokens = crate::lexer::tokenize(crate::curl_prelude::CURL_PRELUDE_SRC)
-        .expect("curl prelude must tokenize");
-    crate::parser::parse_internal(&tokens).expect("curl prelude must parse")
+    parsed_php_prelude("curl", crate::curl_prelude::CURL_PRELUDE_SRC)
 }
+
+/// The preludes whose canonical form is PHP SOURCE TEXT, not a built Rust AST.
+///
+/// `prelude_sources` hands these out verbatim rather than through
+/// `synthetic_class::print::print_program`: printing a parsed program back is faithful, but the
+/// source is what a reader of the prelude sees, and for these it is the authority.
+const PHP_SOURCE_PRELUDES: &[(&str, &str)] = &[
+    ("curl_prelude", crate::curl_prelude::CURL_PRELUDE_SRC),
+    ("dir_prelude", crate::dir_prelude::DIR_PRELUDE_SRC),
+    ("gz_prelude", crate::gz_prelude::GZ_PRELUDE_SRC),
+    ("similar_text_prelude", crate::similar_text_prelude::SIMILAR_TEXT_PRELUDE_SRC),
+    ("scanf_prelude", crate::scanf_prelude::SCANF_PRELUDE_SRC),
+];
+
+/// Tokenizes and parses one PHP-source prelude, naming it in the failure.
+fn parsed_php_prelude(label: &str, source: &str) -> crate::parser::ast::Program {
+    let tokens = crate::lexer::tokenize(source)
+        .unwrap_or_else(|error| panic!("the {label} prelude must tokenize: {error:?}"));
+    crate::parser::parse_internal(&tokens)
+        .unwrap_or_else(|error| panic!("the {label} prelude must parse: {error:?}"))
+}
+
+/// Parameters a prelude declares LOOSER than its contract, on purpose, with the measurement.
+///
+/// A contract records what PHP DECLARES. A prelude declaration is what elephc's CHECKER
+/// enforces, and the two are not the same instrument: php's coercive mode converts at the
+/// boundary, elephc's checker refuses there. Where php's own declaration would make elephc
+/// reject a program php runs, the prelude keeps the looser spelling and the divergence is
+/// written down here.
+///
+/// SHRINK-ONLY. An entry whose prelude and contract have come to agree FAILS, so this list
+/// cannot quietly outlive its reason.
+const LOOSER_THAN_CONTRACT_PARAMS: &[(&str, &str, &str)] = &[
+    (
+        "gzencode",
+        "data",
+        "MEASURED on `php -n` 8.5.6: php declares `string $data` and still runs \
+         `gzdecode(gzencode($s))`, because its encoders answer `string|false` and coercive mode \
+         converts the `false` to `\"\"`. elephc's checker has no such coercion, so declaring \
+         `string` here refuses at COMPILE TIME a program php executes.",
+    ),
+    (
+        "zlib_encode",
+        "data",
+        "the encode half of the same measurement as gzencode()",
+    ),
+    (
+        "gzdecode",
+        "data",
+        "the decode half: `gzdecode(gzencode($s))` is the shape php runs and a `string` \
+         declaration rejects",
+    ),
+    (
+        "zlib_decode",
+        "data",
+        "the decode half of the same measurement as zlib_encode()",
+    ),
+];
 
 /// Every injected prelude rendered back to PHP source, for the two audits that read
 /// DECLARATION TEXT rather than call sites.
@@ -126,10 +202,9 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
     injected_prelude_programs()
         .into_iter()
         .map(|(name, program)| {
-            let source = if name == "curl_prelude" {
-                crate::curl_prelude::CURL_PRELUDE_SRC.to_string()
-            } else {
-                crate::synthetic_class::print::print_program(&program)
+            let source = match PHP_SOURCE_PRELUDES.iter().find(|(known, _)| *known == name) {
+                Some((_, php)) => (*php).to_string(),
+                None => crate::synthetic_class::print::print_program(&program),
             };
             (name, source)
         })
@@ -329,12 +404,26 @@ fn prelude_contracts_match_their_injected_signatures() {
             let at = format!("{name}(${}) in {prelude}", param.name);
             assert_eq!(actual.by_ref, param.by_ref, "{at}: by-reference marker");
             assert!(!actual.variadic, "{at}: fixed parameter declared variadic");
-            assert!(
-                php_type_matches(param.ty, &actual.php_type),
-                "{at}: declared type `{}` is not the contract's {:?}",
-                actual.php_type,
-                param.ty
-            );
+            let recorded = LOOSER_THAN_CONTRACT_PARAMS
+                .iter()
+                .find(|(fn_name, param_name, _)| {
+                    *fn_name == name && *param_name == param.name
+                })
+                .map(|(_, _, reason)| *reason);
+            if let Some(reason) = recorded {
+                assert!(
+                    !php_type_matches(param.ty, &actual.php_type),
+                    "{at}: the prelude and the contract agree now — drop it from \
+                     LOOSER_THAN_CONTRACT_PARAMS (recorded reason: {reason})"
+                );
+            } else {
+                assert!(
+                    php_type_matches(param.ty, &actual.php_type),
+                    "{at}: declared type `{}` is not the contract's {:?}",
+                    actual.php_type,
+                    param.ty
+                );
+            }
             match (param.default, actual.default.as_deref()) {
                 (None, None) => {}
                 (Some(expected), Some(text)) => assert!(
@@ -484,13 +573,18 @@ fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
 
 /// Returns whether a prelude's declared PHP type is the contract's neutral type.
 ///
-/// `TypeSpec` has no object, array or union vocabulary, so every non-scalar surface is
-/// spelled `Mixed` in the catalog and the prelude is free to declare `CurlHandle`,
-/// `array`, `mixed` or a union for it. The check is therefore compatibility, not
-/// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared as a
-/// scalar in the prelude, because a scalar is precisely what the catalog can express and
-/// deliberately did not. A leading `?` is stripped: nullability is carried by the
+/// `TypeSpec` has no object or array vocabulary, so those surfaces are spelled `Mixed` in the
+/// catalog and the prelude is free to declare `CurlHandle`, `array` or `mixed` for one. The check
+/// is therefore compatibility, not equality — but it is not vacuous either: a `Mixed` contract
+/// must NOT be declared as a scalar in the prelude, because a scalar is precisely what the catalog
+/// can express and deliberately did not. A leading `?` is stripped: nullability is carried by the
 /// parameter's default, which is compared separately.
+///
+/// `Nullable` and `Union` ARE spellable, so neither collapses into `Mixed`'s open surface —
+/// collapsing is what those variants exist to prevent. `Nullable(T)` compares as `T`, the `?`
+/// having already been stripped, and a `Union` must be declared as exactly its own members: php
+/// spells `chown()`'s parameter `string|int` and tells the two apart, so a prelude narrowing it to
+/// one member is the divergence this test is here to catch, not a compatible spelling.
 fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
     let declared = declared.trim().trim_start_matches('?').trim();
     let scalar = match expected {
@@ -511,6 +605,28 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
                 "int" | "float" | "string" | "bool" | "ptr" | "callable"
             );
         }
+        TypeSpec::Nullable(inner) => return php_type_matches(*inner, declared),
+        TypeSpec::Union(members) => {
+            let mut declared_members: Vec<&str> =
+                declared.split('|').map(str::trim).filter(|part| !part.is_empty()).collect();
+            declared_members.sort_unstable();
+            declared_members.dedup();
+            let mut expected_members: Vec<&str> = Vec::with_capacity(members.len());
+            for member in members.iter() {
+                match member {
+                    TypeSpec::Int => expected_members.push("int"),
+                    TypeSpec::Float => expected_members.push("float"),
+                    TypeSpec::Str => expected_members.push("string"),
+                    TypeSpec::Bool => expected_members.push("bool"),
+                    // A union member with no single spelling cannot be compared member by
+                    // member, and answering `true` would make the whole union vacuous.
+                    _ => return false,
+                }
+            }
+            expected_members.sort_unstable();
+            expected_members.dedup();
+            return declared_members == expected_members;
+        }
     };
     declared == scalar
 }
@@ -526,7 +642,14 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         // Parsed rather than string-compared so `1.0`, `1.00` and `1e0` all agree with
         // `Float(1.0)` while `5.0` does not.
         DefaultSpec::Float(value) => declared.parse::<f64>() == Ok(*value),
-        DefaultSpec::Int(value) => declared.parse::<i64>() == Ok(*value),
+        // A php constant is as legitimate a spelling as the literal, and often the honest one:
+        // php's own manual writes `gzseek(..., int $whence = SEEK_SET)`. The name is resolved
+        // through the shared table rather than special-cased, so `SEEK_END` against a contract
+        // of `0` still fails and an undeclared name still fails.
+        DefaultSpec::Int(value) => {
+            declared.parse::<i64>() == Ok(*value)
+                || elephc_builtin_contract::php_constants::int_constant(declared) == Some(*value)
+        }
         DefaultSpec::Str(value) => {
             declared == format!("\"{value}\"") || declared == format!("'{value}'")
         }

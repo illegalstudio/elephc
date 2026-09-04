@@ -371,8 +371,36 @@ PHP's own key comparison is not transitive (for `10`, `"20a"` and `6`, PHP repor
 case elephc's result and PHP's result are both consistent with the comparison but can differ,
 because each resolves the cycle through its own sort algorithm.
 
-`uasort()`, `uksort()`, `natsort()` and `natcasesort()` do not yet accept an associative array and
-report a clear unsupported-feature error.
+`uasort()` and `uksort()` do not yet accept an associative array and report a clear
+unsupported-feature error.
+
+`natsort()` and `natcasesort()` preserve keys the way PHP does, over **string** values. PHP sorts
+naturally with `renumber = 0`, so only the iteration order moves and every key stays attached to
+its own value — `natsort(["img12", "img2"])` is `{"1": "img2", "0": "img12"}`, not a renumbered
+list. An indexed receiver has no room for that permutation in its slot positions, so elephc
+converts it to an integer-keyed array first; `$n[0]` afterwards still finds the array's *original*
+first element, and `implode()` reads the sorted order.
+
+Values of any other type keep the older behaviour: an associative receiver reports the
+unsupported-feature error, and an indexed one is reindexed. PHP compares every value *as a string*
+here, and that is only exact for string payloads — `natsort` puts `-5` before `-10` (it compares
+`"-5"` against `"-10"`) where `asort` puts `-10` first — so borrowing the numeric comparator would
+silently produce `asort()`'s order under `natsort()`'s name.
+
+Because the receiver becomes an integer-keyed array, a builtin with no associative-array form —
+`sort()`, `rsort()`, `shuffle()`, `usort()`, `array_pop()`, `array_shift()`, `array_reverse()`,
+`array_slice()`, `array_merge()`, `array_unique()`, `array_diff()`, `array_intersect()`,
+`array_chunk()`, `array_combine()`, `array_fill_keys()` — reports its unsupported-feature error if
+it is applied to the array *after* the sort. `array_values($n)` converts back to a packed list and
+matches PHP.
+
+`asort()` and `arsort()` pass `renumber = 0` too, so PHP permutes their keys as well
+(`$a = [3, 1, 2]; asort($a);` leaves `$a[0]` holding `3`). On an **indexed** receiver elephc still
+reindexes them, so the sorted *values* match PHP while the keys do not; on an associative receiver
+both are exact. Converting an indexed `asort()` receiver the way the natural sorts do is a small
+change, but it would make every one of the builtins listed above — plus `array_sum()`,
+`array_product()`, and `implode()` over float values — refuse the array afterwards, so it waits on
+associative-array forms for those.
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. `usort()` also sorts arrays of **strings**: `usort($words, fn($a, $b) => strlen($a) <=> strlen($b))` reorders the string array in place, keeps elements the comparator reports equal in their original relative order, and renumbers the keys from zero like PHP. `uasort()` and `uksort()` over a string array still report a clear unsupported-feature error, because they must preserve the original key association.
 

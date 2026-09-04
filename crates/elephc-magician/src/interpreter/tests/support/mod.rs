@@ -91,10 +91,21 @@ pub(super) struct FakeOps {
     /// structurally unable to observe the very bug this models, because the fake's
     /// counter would keep advancing exactly as the buggy runtime's did.
     pub(super) inert_resources: std::collections::HashSet<i64>,
+    /// Host resource payloads whose registry slot is no longer `Live`.
+    ///
+    /// Fake mirror of `__rt_resource_lookup_any` answering a slot whose status is not
+    /// `RESOURCE_STATUS_LIVE`. Since the generation-safe registry migration an OPEN host
+    /// payload is an opaque handle and `fclose` publishes the closed state on the slot
+    /// instead of stamping a sentinel into the box, so nothing about the payload word
+    /// itself separates an open handle from a closed one. A fake that answered "open" for
+    /// every non-negative payload would be structurally unable to see that.
+    pub(super) closed_resources: std::collections::HashSet<i64>,
     pub(super) object_classes: HashMap<usize, String>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,
+    /// `@` suppression depth; while non-zero, `warning()` records nothing.
+    pub(super) suppress_depth: u32,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
     pub(super) ob_stack: Vec<FakeObLevel>,

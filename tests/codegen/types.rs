@@ -18,6 +18,12 @@ mod enums;
 mod type_annotations;
 #[path = "types/narrowing.rs"]
 mod narrowing;
+#[path = "types/static_property_hash.rs"]
+mod static_property_hash;
+#[path = "types/property_element_unset.rs"]
+mod property_element_unset;
+#[path = "types/reassign_across_kinds.rs"]
+mod reassign_across_kinds;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
 #[path = "types/strict_types.rs"]

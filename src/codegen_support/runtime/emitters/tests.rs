@@ -95,6 +95,53 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
     }
 }
 
+/// Verifies the linux x86_64 runtime ASSEMBLES, not merely that it contains the right symbols.
+///
+/// Its AArch64 twin (`test_macos_dead_strip_runtime_assembles`) has existed for a while; this side
+/// had only a symbol-presence check, so a malformed x86_64 instruction — a wrong operand size, an
+/// addressing form the assembler rejects — reached CI before anything noticed. Everything in the
+/// x86_64 arm of a two-target helper is written blind on an Apple machine, which is exactly the
+/// code that needs an assembler to look at it.
+///
+/// Skipped when no cross-assembler is available, so it never fails for the wrong reason.
+#[test]
+fn test_linux_x86_64_runtime_assembles() {
+    let asm = crate::codegen_support::generate_runtime_with_features_pic(
+        8 * 1024 * 1024,
+        Target::new(Platform::Linux, Arch::X86_64),
+        RuntimeFeatures::all(),
+        true,
+    );
+
+    let dir = std::env::temp_dir().join(format!("elephc_x86_asm_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let asm_path = dir.join("runtime.s");
+    let obj_path = dir.join("runtime.o");
+    std::fs::write(&asm_path, &asm).expect("write asm");
+
+    let output = std::process::Command::new("clang")
+        .args(["--target=x86_64-unknown-linux-gnu", "-c", "-o"])
+        .arg(&obj_path)
+        .arg(&asm_path)
+        .output();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let Ok(output) = output else {
+        eprintln!("no clang to cross-assemble with; skipping");
+        return;
+    };
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() && stderr.contains("unknown target triple") {
+        eprintln!("clang cannot target x86_64-linux here; skipping");
+        return;
+    }
+    assert!(
+        output.status.success(),
+        "linux x86_64 runtime failed to assemble:\n{}",
+        stderr
+    );
+}
+
 /// Every process-fatal buffer, pointer-null, and container-capacity helper named by
 /// cdylib safety review must unwind an active boundary on all supported targets.
 #[test]

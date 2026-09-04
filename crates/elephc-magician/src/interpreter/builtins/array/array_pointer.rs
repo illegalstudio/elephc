@@ -82,7 +82,7 @@ pub(in crate::interpreter) fn eval_array_pointer_declared_call(
         return Err(EvalStatus::RuntimeFatal);
     };
     let (array, _target) =
-        super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values)?;
+        super::mutation::eval_array_mutation_lvalue_arg(name, arg, context, scope, values)?;
     let (cursor, result) = eval_array_pointer_move(name, array, context, values)?;
     context.set_array_cursor(array, cursor);
     Ok(result)

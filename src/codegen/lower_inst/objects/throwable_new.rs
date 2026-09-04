@@ -8,6 +8,7 @@
 //! - Creation lines, message storage, previous-object retention, and target layouts are unchanged.
 
 use super::*;
+use crate::codegen_support::sentinels::THROWABLE_TRACE_EXACT_OFFSET;
 
 /// Lowers builtin Throwable allocation using the compact runtime payload layout.
 pub(super) fn lower_builtin_throwable_new(
@@ -118,6 +119,17 @@ const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
 /// it is thrown — `$e = new RuntimeException(...)` on line 2 followed by `throw $e;` on line 5
 /// reports line 2 — so the value belongs here rather than on the throw terminator.
 pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64, creation_line: u32) {
+    // php captures a trace when a Throwable is CONSTRUCTED. Resetting here is what stops an
+    // earlier builtin exception — caught, and so never reported — from leaving its frame behind
+    // for this one to print as its own. Nothing is live yet: the allocation starts below.
+    //
+    // NOT inside a synthesized body. A `new` there is php-src's own internal `new`, and the frame
+    // the caller recorded for the builtin-class method now running is part of THIS exception's
+    // trace — `#0 p.php(13): SplFileInfo->getSize()`. Resetting would throw away the one frame
+    // that makes the chain complete.
+    if !function_is_synthetic(ctx) {
+        abi::emit_call_label(ctx.emitter, "__rt_trace_reset");
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // -- allocate and stamp the compact Throwable payload --
@@ -131,6 +143,7 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
             ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
             emit_throwable_creation_line_aarch64(ctx, "x0", "x9", creation_line);
+            emit_throwable_trace_exact(ctx, "x0", "x9");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null until constructor init
         }
         Arch::X86_64 => {
@@ -148,8 +161,45 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
             emit_throwable_creation_line_x86_64(ctx, "rax", creation_line);
+            emit_throwable_trace_exact(ctx, "rax", "r10");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null until constructor init
         }
+    }
+}
+
+/// Reports whether the function being lowered was SYNTHESIZED rather than written by the user.
+///
+/// A builtin class compiled from a synthesized PHP AST is in php-src's position: its `new` is
+/// internal, and the frame that belongs in the trace is the CALL the program made into it.
+fn function_is_synthetic(ctx: &FunctionContext<'_>) -> bool {
+    ctx.function.flags.is_synthetic
+}
+
+/// Stamps whether this Throwable's recorded frame list is COMPLETE.
+///
+/// Two sites can prove it, and they prove it differently. A `new` in USER code knows its own
+/// function: `main` has nothing above it, so an empty frame list IS the whole chain — php prints
+/// `#0 {main}` — while a `new` inside any other function would need that function's frame and its
+/// callers, which nothing here can walk. A `new` inside a SYNTHESIZED body cannot know: the answer
+/// belongs to whoever called into the builtin class, and that site publishes it.
+///
+/// The proof is stamped onto the VALUE because by report time the constructing site is gone. A
+/// global consulted then would be answering for whatever was constructed last.
+fn emit_throwable_trace_exact(ctx: &mut FunctionContext<'_>, payload_reg: &str, scratch_reg: &str) {
+    if function_is_synthetic(ctx) {
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_rt_trace_site_exact", 0);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch_reg, i64::from(ctx.is_main));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!(
+            "str {}, [{}, #{}]",
+            scratch_reg, payload_reg, THROWABLE_TRACE_EXACT_OFFSET
+        )), // whether the report may print the frames recorded for this exception
+        Arch::X86_64 => ctx.emitter.instruction(&format!(
+            "mov QWORD PTR [{} + {}], {}",
+            payload_reg, THROWABLE_TRACE_EXACT_OFFSET, scratch_reg
+        )), // whether the report may print the frames recorded for this exception
     }
 }
 
@@ -165,10 +215,15 @@ pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_aarch64(
     creation_line: u32,
 ) {
     if creation_line == 0 {
+        // A `new` with no span of its own is one a SYNTHESIZED body performed — an SPL
+        // constructor, a stat getter. php reports the line of the call the program made INTO that
+        // method, because its own `new` lives in php-src and has no php line: MEASURED,
+        // `(new SplFileInfo("nope"))->getSize()` reports the line of the `getSize()` call.
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_rt_internal_call_line", 0);
         ctx.emitter.instruction(&format!(
-            "str xzr, [{}, #{}]",
-            payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        ));                                                                     // no span on the allocating instruction: an unknown line reads back as zero
+            "str {}, [{}, #{}]",
+            scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        ));                                                                     // the caller's line, or zero when there was no call into a builtin
         return;
     }
     abi::emit_load_int_immediate(ctx.emitter, scratch_reg, i64::from(creation_line));
@@ -187,10 +242,20 @@ pub(in crate::codegen::lower_inst) fn emit_throwable_creation_line_x86_64(
     payload_reg: &str,
     creation_line: u32,
 ) {
+    if creation_line == 0 {
+        // See the AArch64 counterpart: a `new` with no span belongs to a synthesized body, and
+        // php names the call the program made into it.
+        abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_rt_internal_call_line", 0);
+        ctx.emitter.instruction(&format!(
+            "mov QWORD PTR [{} + {}], r10",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        ));                                                                     // the caller's line, or zero when there was no call into a builtin
+        return;
+    }
     ctx.emitter.instruction(&format!(
         "mov QWORD PTR [{} + {}], {}",
         payload_reg, THROWABLE_CREATION_LINE_OFFSET, creation_line
-    ));                                                                         // store the one-based source line of the `new` expression (zero when unknown)
+    ));                                                                         // store the one-based source line of the `new` expression
 }
 
 /// Saves the newly allocated Throwable object while constructor operands are loaded.

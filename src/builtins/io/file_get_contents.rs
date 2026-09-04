@@ -35,11 +35,6 @@ builtin! {
 }
 
 /// Returns `Union(Str, Bool)` and records the runtime libraries the call may need.
-///
-/// A literal `https://`/`ftps://` URL is read over TLS, so it links `elephc_tls`.
-/// A non-literal path routes through the runtime URL dispatcher, whose scheme and
-/// PHAR entry flags are unknown at compile time, so it conservatively links TLS
-/// plus the PHAR bridge and decompression libraries (`z`, `bz2`).
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     Ok(PhpType::Union(vec![PhpType::Str, PhpType::False]))

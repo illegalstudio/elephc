@@ -233,7 +233,7 @@ fn emit_hash_to_hash_unique_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_h2h_uniq_insert_x");                           // scalars need no retain
     emitter.instruction("cmp r10, 7");                                          // above the heap-backed tag range?
     emitter.instruction("jg __rt_h2h_uniq_insert_x");                           // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // the heap-backed payload
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // the heap-backed payload — __rt_incref reads RAX, never rdi
     emitter.instruction("call __rt_incref");                                    // retain it for the result
     emitter.instruction("jmp __rt_h2h_uniq_insert_x");                          // payload retained: insert it
     emitter.label("__rt_h2h_uniq_persist_x");

@@ -45,6 +45,7 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || unset_array_access_has_property_array_receiver(ctx, array)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -75,6 +76,42 @@ pub(super) fn unset_array_access_has_local_array_receiver(
         ctx.local_type(name).codegen_repr(),
         PhpType::AssocArray { .. } | PhpType::Array(_)
     )
+}
+
+/// Returns true when an array-access unset receiver is a PROPERTY holding an array.
+///
+/// `unset($obj->prop[$k])` had no direct lowering at all, so it fell through to the generic
+/// builtin call and the backend refused it: `unset target shape with 1 lowered operands`. That is
+/// a compile error on ordinary php, and on the container code that made it worth finding.
+///
+/// ASSOCIATIVE storage only. A PACKED property would have to become a hash at the unset site,
+/// because PHP does not renumber what survives — and a property's type is one value for the whole
+/// program rather than a flow-sensitive one, so recording that promotion retroactively refuses the
+/// `$obj->prop[] = $v` written ABOVE the unset. A local has no such problem, which is why the
+/// local path converts and this one does not. Left exactly as it was: still refused, not silently
+/// renumbered.
+pub(super) fn unset_array_access_has_property_array_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::PropertyAccess { object, property } = &array.kind else {
+        return false;
+    };
+    let Some((class_name, _)) = isset_object_expr_class(ctx, object) else {
+        return false;
+    };
+    let Some(class_info) = ctx.classes.get(class_name.as_str()) else {
+        return false;
+    };
+    // A property reached through `__get` is not storage this can write back to.
+    if !property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
+        return false;
+    }
+    class_info
+        .visible_property(property)
+        .is_some_and(|(_, (_, property_ty))| {
+            matches!(property_ty.codegen_repr(), PhpType::AssocArray { .. })
+        })
 }
 
 /// Returns true when an array-access unset receiver is a static ArrayAccess object.
@@ -125,6 +162,11 @@ pub(super) fn lower_unset_array_access(
             }
         }
     }
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if lower_unset_property_element(ctx, object, property, index, expr) {
+            return;
+        }
+    }
     let synthetic = Expr::new(
         ExprKind::MethodCall {
             object: Box::new(array.clone()),
@@ -134,6 +176,61 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Lowers `unset($obj->prop[$key])` on a property that holds an ARRAY.
+///
+/// The dispatch above only ever recognised a plain LOCAL, so an array held in a property fell
+/// through to the `offsetUnset()` synthetic — which a class that does not implement `ArrayAccess`
+/// cannot answer, and the backend refused the call outright: `unset target shape with 1 lowered
+/// operands`. That refusal is a compile error on ordinary php, and it is the same one
+/// `unset($obj->prop[$k])` produces in Symfony's own container code.
+///
+/// `HashUnset` publishes the possibly-relocated table back through the receiver's PLACE, and a
+/// `PropGet` reached through an `Acquire` is one the backend already resolves, so nothing new is
+/// needed to make the write land.
+///
+/// Answers whether it handled the target: an `ArrayAccess` object still belongs to the caller's
+/// `offsetUnset()` path below.
+fn lower_unset_property_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    let object_value = lower_expr(ctx, object);
+    let Some(property_ty) =
+        crate::ir_lower::stmt::static_property_helpers::object_property_type(
+            ctx,
+            object_value.value,
+            property,
+        )
+    else {
+        return false;
+    };
+    if !matches!(property_ty.codegen_repr(), PhpType::AssocArray { .. }) {
+        return false;
+    }
+    let data = ctx.intern_string(property);
+    let loaded = ctx.emit_value(
+        Op::PropGet,
+        vec![object_value.value],
+        Some(Immediate::Data(data)),
+        property_ty.codegen_repr(),
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let loaded = crate::ir_lower::ownership::acquire_if_refcounted(ctx, loaded, Some(expr.span));
+    let index_value = lower_expr(ctx, index);
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![loaded.value, index_value.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    true
 }
 
 /// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.

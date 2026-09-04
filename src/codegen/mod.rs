@@ -420,6 +420,19 @@ fn finalize_user_asm(
         // canonicalized string into any program that mentions it, and reference PHP
         // prints it in every fatal error.
         module.source_path.as_deref(),
+        // Whether anything in this module could stand between `{main}` and a raising builtin.
+        // Only the EIR bodies answer it: the checker's maps carry the built-in Throwable
+        // hierarchy and a synthetic entry even for a program that declares nothing — measured,
+        // they report `functions=1 classes=11` for `throw new RuntimeException("boom");`.
+        // Synthetic bodies do not appear in php's trace: a program that merely NAMES
+        // `RuntimeException` gets eight `_class_propinit_N` property initialisers, and counting
+        // them closed the gate on every program.
+        module
+            .class_methods
+            .iter()
+            .chain(module.closures.iter())
+            .chain(module.functions.iter())
+            .any(|function| !function.flags.is_synthetic && !function.flags.is_main),
         module.target,
     );
 

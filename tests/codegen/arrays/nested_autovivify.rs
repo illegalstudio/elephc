@@ -80,9 +80,9 @@ echo $a[7][1] . "\n";
     );
     assert_eq!(out.stdout, "patched\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -104,9 +104,9 @@ echo $a[0][1] . "\n";
     );
     assert_eq!(out.stdout, "append\ny\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -130,9 +130,9 @@ echo $a[7][1] . "\n";
     );
     assert_eq!(out.stdout, "gap\nfar\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -154,9 +154,9 @@ echo $a[1][0] . "\n";
     );
     assert_eq!(out.stdout, "thruNull\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -178,9 +178,9 @@ echo $a['k'][0] . "\n";
     );
     assert_eq!(out.stdout, "assocMiss\na\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -203,9 +203,9 @@ echo $a['x']['y']['z'] . "\n";
     );
     assert_eq!(out.stdout, "1\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -227,9 +227,9 @@ echo $a[3][2][1] . "\n";
     );
     assert_eq!(out.stdout, "deep\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -254,9 +254,9 @@ patch(['a' => 1, 'z' => 'w']);
     );
     assert_eq!(out.stdout, "5\n1\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -281,9 +281,9 @@ patch([[1, 2], [3, 4]]);
     );
     assert_eq!(out.stdout, "deep\n4\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -309,9 +309,9 @@ echo $m['a'] . "\n";
     );
     assert_eq!(out.stdout, "5\n1\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -329,9 +329,9 @@ echo $a[0][0] . "\n";
     );
     assert_eq!(out.stdout, "added\nx\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -400,9 +400,9 @@ echo $r[7][1] . "\n";
     );
     assert_eq!(out.stdout, "patched\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "autovivifying write must not warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -426,9 +426,9 @@ echo count($r), ":", $r["key"], "\n";
     assert!(out.success, "program must exit successfully, stderr: {}", out.stderr);
     assert_eq!(out.stdout, "1:value\n");
     assert!(
-        out.stderr.contains("Undefined array key 5"),
+        out.diagnostics.contains("Undefined array key 5"),
         "the read that produced the null value must still warn, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -454,9 +454,9 @@ echo $r["outer"]["inner"], ":", count($r), "\n";
     assert!(out.success, "program must exit successfully, stderr: {}", out.stderr);
     assert_eq!(out.stdout, "7:1\n");
     assert!(
-        !out.stderr.contains("Undefined array key"),
+        !out.diagnostics.contains("Undefined array key"),
         "legal nested autovivification must stay silent, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),

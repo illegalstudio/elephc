@@ -13,6 +13,7 @@ mod common;
 mod number_format;
 mod printf;
 mod sprintf;
+mod scanf_engine;
 mod sprintf_format;
 mod sscanf;
 mod vprintf;

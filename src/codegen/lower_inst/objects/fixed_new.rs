@@ -12,6 +12,7 @@ use super::*;
 /// Lowers fixed-class object allocation and optional constructor invocation.
 pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let class_name = class_name_immediate(ctx, inst)?.to_string();
+    super::super::method_resolution::publish_internal_call_line(ctx, inst, &class_name);
     if is_fiber_class(&class_name) {
         return lower_fiber_new(ctx, inst);
     }

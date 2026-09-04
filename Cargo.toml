@@ -107,6 +107,10 @@ serde_json = "1"
 # success coverage does not depend on outbound network access.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+# The `ssl.peer_fingerprint` tests derive the expected pin from the same fixture
+# certificate the local HTTPS server presents, so the pin cannot drift from the
+# cert it is supposed to match.
+sha1 = "0.10"
 
 [features]
 # Keeps the codegen test package and its PDO dev-dependency on the same libpq

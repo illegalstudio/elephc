@@ -155,6 +155,30 @@ pub(super) fn lower_static_property_array_assign(
         return;
     }
 
+    // HASH storage, the shape a declared `array` takes on once a string key is written into it.
+    // Without this the write fell through to the Mixed fallback below while every READ of the
+    // same property loaded it as a hash — `self::$store[$k] = $v` then `count(self::$store)`
+    // answered 0, in silence. The instance-property path has had this branch all along; this is
+    // the same one, through the static accessors.
+    if let Some(property_ty) =
+        static_property_type(ctx, receiver, property).filter(is_assoc_array_type)
+    {
+        let property_value = load_static_property_as(ctx, receiver, property, property_ty, span);
+        // PHP reads a plain-variable index at STORE time, after the right-hand side, so
+        // `$o->a[$i] = ($i = 1)` writes index 1.
+        let (index, value) =
+            crate::ir_lower::stmt::array_write_core::lower_write_key_and_value(ctx, index, value);
+        ctx.emit_void(
+            Op::HashSet,
+            vec![property_value.value, index.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(span),
+        );
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        return;
+    }
+
     let property_value = if let Some(property_ty) = static_property_type(ctx, receiver, property)
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {

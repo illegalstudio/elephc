@@ -270,24 +270,32 @@ fn test_rawurldecode() {
 /// `rawurlencode()` at all (binary-safe `multipart/form-data` parts need no percent
 /// encoding), so this bug has no effect on curl uploads either way.
 ///
-/// UPDATE THIS TEST, DO NOT DELETE IT, when the bug is fixed: swap the expected values for
-/// PHP's own (`"42"`, `"a1b2"`, twice each).
+/// FIXED, and the expectations below are php's own, as the earlier form of this test asked for.
+///
+/// The safe-byte ladder tested 'A'-'Z', then 'a'-'z', then '0'-'9', and each "below this range"
+/// branch jumped to the FINAL punctuation check instead of to the next range — so a digit, being
+/// below 'A', was sent past its own arm on the very first comparison, and the 0-9 arm was
+/// unreachable text. Testing the ranges in ASCII order costs no extra comparison and lets each
+/// "below" branch fall to the next-higher range. Both arches, both encoders.
+///
+/// MEASURED on `php -n` 8.5.6 across fourteen shapes, so this pins more than the digits: the two
+/// encoders' real difference is `~` and a space, and it is asserted here too.
 #[test]
-fn test_urlencode_and_rawurlencode_percent_encode_digits_pre_existing_bug() {
+fn test_urlencode_and_rawurlencode_pass_digits_through() {
     let out = compile_and_run(
         r#"<?php
 echo urlencode("42"), ":";
 echo urlencode("a1b2"), ":";
 echo rawurlencode("42"), ":";
-echo rawurlencode("a1b2");"#,
+echo rawurlencode("a1b2"), ":";
+echo urlencode("abc9z_ ~"), ":";
+echo rawurlencode("abc9z_ ~"), ":";
+echo urlencode("\x00\xff9"), ":";
+echo rawurlencode("a-b.c_d~e");"#,
     );
     assert_eq!(
         out,
-        "%34%32:a%31b%32:%34%32:a%31b%32",
-        "this pins a KNOWN, pre-existing bug: PHP answers 42:a1b2:42:a1b2. If this now \
-         fails with PHP's own values, urlencode()/rawurlencode() were fixed on this \
-         target — update the expected string here (do not delete the test), and check \
-         whether the other two targets were fixed together or now diverge."
+        "42:a1b2:42:a1b2:abc9z_+%7E:abc9z_%20~:%00%FF9:a-b.c_d~e"
     );
 }
 

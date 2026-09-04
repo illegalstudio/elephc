@@ -12,14 +12,19 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::data::ARRAY_TO_STRING_MSG;
 
 /// Emits the `__rt_iterable_write_stdout` runtime helper.
 ///
 /// Dispatches to the x86_64 Linux variant on that target; on ARM64 emits directly.
 /// Writes the literal `"Array"` to stdout for indexed-array (kind 2) and hash-table
-/// (kind 3) iterable payloads. Object payloads (kind 4) and all other heap kinds are
-/// silently skipped, matching PHP's `echo $array;` behavior. The write is routed
-/// through `__rt_stdout_write` so the `--web` capture indirection sees the bytes.
+/// (kind 3) iterable payloads, raising php's `Array to string conversion` warning first —
+/// MEASURED, `function show(iterable $items) { echo $items; }` called twice printed
+/// `Array|Array` where php raises one warning PER CALL, naming the `echo`'s own line. The
+/// warning belongs here rather than at the call site because only the runtime knows the kind:
+/// the same helper serves payloads that print nothing at all. Object payloads (kind 4) and
+/// every other heap kind stay silent. The write is routed through `__rt_stdout_write` so the
+/// `--web` capture indirection sees the bytes.
 ///
 /// Input: x0/rax = iterable heap pointer.
 /// Output: writes `"Array"` to stdout for array-like iterables; no output otherwise.
@@ -46,6 +51,9 @@ pub fn emit_iterable_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("b __rt_iterable_write_stdout_done");                   // every other heap kind is a silent no-op
 
     emitter.label("__rt_iterable_write_stdout_array");
+    abi::emit_symbol_address(emitter, "x1", "_array_to_string_msg");            // php warns at every array-to-string conversion, including this one
+    emitter.instruction(&format!("mov x2, #{}", ARRAY_TO_STRING_MSG.len()));    // the warning's byte length
+    emitter.instruction("bl __rt_diag_warning");                                // the line comes from the echo instruction, which admits it may warn
     abi::emit_symbol_address(emitter, "x1", "_iterable_array_str");             // load the page that contains the literal "Array" bytes
     emitter.instruction("mov x2, #5");                                          // 5-byte length of the literal "Array"
     emitter.instruction("mov x0, x1");                                          // capture-aware write: "Array" pointer → x0
@@ -82,6 +90,9 @@ fn emit_iterable_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_iterable_write_stdout_done");                 // every other heap kind is a silent no-op
 
     emitter.label("__rt_iterable_write_stdout_array");
+    abi::emit_symbol_address(emitter, "rdi", "_array_to_string_msg");           // php warns at every array-to-string conversion, including this one
+    emitter.instruction(&format!("mov rsi, {}", ARRAY_TO_STRING_MSG.len()));    // the warning's byte length
+    emitter.instruction("call __rt_diag_warning");                              // the line comes from the echo instruction, which admits it may warn
     abi::emit_symbol_address(emitter, "rsi", "_iterable_array_str");            // point at the literal "Array" bytes
     emitter.instruction("mov edx, 5");                                          // 5-byte length of the literal "Array"
     emitter.instruction("mov rdi, rsi");                                        // capture-aware write: "Array" pointer → first arg register

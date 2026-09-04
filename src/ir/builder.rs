@@ -323,6 +323,11 @@ impl<'f> Builder<'f> {
     /// rewrites a `LocalSlot`'s `php_type`/`ir_type` in place, and `terminate` writes a
     /// terminator into a block that already existed. Only a wholesale clone restores both the
     /// tables' lengths and the contents of the entries that survived.
+    /// Returns the name of the function being built.
+    pub fn function_name(&self) -> &str {
+        &self.func.name
+    }
+
     pub fn snapshot_function(&self) -> Function {
         self.func.clone()
     }
@@ -580,6 +585,15 @@ impl<'f> Builder<'f> {
 
 /// Returns the local frame PHP representation that can store both observed types.
 fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType {
+    if let (PhpType::Resource(current_kind), PhpType::Resource(incoming_kind)) =
+        (current, incoming)
+    {
+        return if current_kind == incoming_kind {
+            current.clone()
+        } else {
+            PhpType::Resource(None)
+        };
+    }
     let current = current.codegen_repr();
     let incoming = incoming.codegen_repr();
     if current == incoming {

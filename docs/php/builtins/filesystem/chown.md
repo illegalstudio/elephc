@@ -8,14 +8,14 @@ sidebar:
 ## chown()
 
 ```php
-function chown(string $filename, string $user): bool
+function chown(string $filename, mixed $user): bool
 ```
 
 Changes file owner.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$user` (`string`)
+- `$user` (`mixed`)
 
 **Returns**: `bool`
 

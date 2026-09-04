@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **515 / 2030** (25%).
+Overall builtin coverage: **548 / 2030** (27%).
 
 ## Builtin coverage by PHP module
 
@@ -52,10 +52,10 @@ Overall builtin coverage: **515 / 2030** (25%).
 | `shmop` | 0 / 6 | 0% | 0 | 0 |
 | `simplexml` | 0 / 3 | 0% | 0 | 0 |
 | `soap` | 0 / 2 | 0% | 0 | 0 |
-| `sockets` | 0 / 37 | 0% | 0 | 0 |
+| `sockets` | 1 / 37 | 3% | 1 | 1 |
 | `sodium` | 0 / 110 | 0% | 0 | 0 |
 | `spl` | 15 / 15 | 100% | 15 | 15 |
-| `standard` | 364 / 542 | 67% | 364 | 339 |
+| `standard` | 377 / 542 | 70% | 377 | 348 |
 | `sysvmsg` | 0 / 7 | 0% | 0 | 0 |
 | `sysvsem` | 0 / 4 | 0% | 0 | 0 |
 | `sysvshm` | 0 / 7 | 0% | 0 | 0 |
@@ -64,7 +64,7 @@ Overall builtin coverage: **515 / 2030** (25%).
 | `xmlwriter` | 0 / 42 | 0% | 0 | 0 |
 | `zend opcache` | 0 / 7 | 0% | 0 | 0 |
 | `zip` | 0 / 10 | 0% | 0 | 0 |
-| `zlib` | 4 / 30 | 13% | 4 | 4 |
+| `zlib` | 23 / 30 | 77% | 23 | 4 |
 
 The table counts functions implemented as native registry builtins. Modules marked † have some or all of their functions implemented through other elephc mechanisms (compiler rewrites or runtime preludes); their real support status is tracked in the Extensions section below.
 

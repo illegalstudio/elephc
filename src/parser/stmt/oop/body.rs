@@ -333,8 +333,51 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
             } else {
                 None
             };
-            let (hooks, hook_accessors) =
-                parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?;
+            // php's grammar is a comma-separated LIST sharing one set of modifiers and one type,
+            // each element carrying its own default. A trailing comma is a parse error, and so is
+            // a hook block after a comma — hooks belong to a single property.
+            let mut siblings: Vec<(String, Option<Expr>)> = Vec::new();
+            while matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Comma)) {
+                *pos += 1;
+                let Some(Token::Variable(sibling_name)) = tokens.get(*pos).map(|(t, _)| t.clone())
+                else {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Expected a property name after ',' in a property declaration",
+                    ));
+                };
+                *pos += 1;
+                if sibling_name == prop_name
+                    || siblings.iter().any(|(name, _)| *name == sibling_name)
+                    || properties.iter().any(|property| property.name == sibling_name)
+                {
+                    return Err(CompileError::new(
+                        member_span,
+                        &format!("Cannot redeclare property ${}", sibling_name),
+                    ));
+                }
+                let sibling_default =
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::Assign {
+                        *pos += 1;
+                        Some(parse_expr(tokens, pos)?)
+                    } else {
+                        None
+                    };
+                siblings.push((sibling_name, sibling_default));
+            }
+            let (hooks, hook_accessors) = if siblings.is_empty() {
+                parse_property_hooks(tokens, pos, member_span, &prop_name, type_expr.as_ref())?
+            } else {
+                // php: `expecting "," or ";"` — the hook block is what it will not accept here.
+                if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Semicolon)) {
+                    return Err(CompileError::new(
+                        member_span,
+                        "Expected ';' after a comma-separated property declaration",
+                    ));
+                }
+                *pos += 1;
+                (PropertyHooks::none(), Vec::new())
+            };
             if modifiers.is_abstract && default.is_some() {
                 return Err(CompileError::new(
                     member_span,
@@ -400,22 +443,30 @@ pub(in crate::parser::stmt) fn parse_class_like_body(
                 ));
             }
             methods.extend(hook_accessors);
-            properties.push(ClassProperty {
-                name: prop_name,
-                visibility: modifiers.visibility,
-                set_visibility: modifiers.set_visibility,
-                type_expr,
-                hooks,
-                readonly: modifiers.is_readonly,
-                is_final: modifiers.is_final,
-                is_static: modifiers.is_static,
-                is_abstract: modifiers.is_abstract,
-                by_ref: false,
-                is_promoted: false,
-                default,
-                span: member_span,
-                attributes: member_attributes,
-            });
+            // The whole list shares the modifiers, the type and the attributes; only the name and
+            // the default differ. Hooks are on the first one or on none, which the parse above
+            // already guaranteed.
+            for (index, (name, default)) in std::iter::once((prop_name, default))
+                .chain(siblings)
+                .enumerate()
+            {
+                properties.push(ClassProperty {
+                    name,
+                    visibility: modifiers.visibility.clone(),
+                    set_visibility: modifiers.set_visibility.clone(),
+                    type_expr: type_expr.clone(),
+                    hooks: if index == 0 { hooks.clone() } else { PropertyHooks::none() },
+                    readonly: modifiers.is_readonly,
+                    is_final: modifiers.is_final,
+                    is_static: modifiers.is_static,
+                    is_abstract: modifiers.is_abstract,
+                    by_ref: false,
+                    is_promoted: false,
+                    default,
+                    span: member_span,
+                    attributes: member_attributes.clone(),
+                });
+            }
             continue;
         }
 

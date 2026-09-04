@@ -8,18 +8,16 @@
 //!   `stream_wrapper_register` builtin.
 //!
 //! Key details:
-//! - Stores up to 64 `(protocol_ptr, protocol_len, class_ptr, class_len)`
-//!   tuples in `_user_wrappers` (each slot is 32 bytes; an empty slot has a
-//!   null `protocol_ptr`). Returns 1 on a successful registration, 0 when the
-//!   table is full.
-//! - Both strings are persisted with `__rt_str_persist` before being stored:
-//!   the registration outlives the call, so keeping the caller's pointer means
-//!   the registered scheme silently follows whatever that buffer holds later.
-//!   A literal argument hid this — it lives in rodata and never moves — while
-//!   `$s = "aa"; stream_wrapper_register($s, "W"); $s = "zz";` left `aa://`
-//!   unroutable and `zz://`, never registered, dispatching into the wrapper.
-//! - The free slot is located BEFORE persisting, so a full table allocates
-//!   nothing.
+//! - Stores `(protocol_ptr, protocol_len, class_ptr, class_len)` tuples in the
+//!   heap-backed registration table and the matching registration flags in the
+//!   parallel flag table. An empty slot has a null `protocol_ptr`.
+//! - The slot comes from `__rt_user_wrappers_reserve`, which grows the table on
+//!   demand, so registration is bounded only by the heap. PHP imposes no limit,
+//!   and the previous fixed 64-slot array silently refused the 65th call.
+//! - Both names are copied into owned heap storage via `__rt_str_persist`
+//!   before they are stored: a registration outlives the caller's buffer, and a
+//!   PHP-level `$scheme = "dyn" . $i;` reuses one local slot per iteration, so
+//!   keeping the borrowed pointer made every entry alias the final value.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -37,8 +35,8 @@ pub(crate) const DUPLICATE_PROTOCOL_WARNING: &str =
     "Warning: stream_wrapper_register(): Protocol is already defined.\n";
 
 /// Emits the `__rt_stream_wrapper_register` runtime helper.
-/// Input:  AArch64 x0 = proto ptr, x1 = proto len, x2 = class ptr, x3 = class len.
-///         x86_64  rdi = proto ptr, rsi = proto len, rdx = class ptr, rcx = class len.
+/// Input:  AArch64 x0 = proto ptr, x1 = proto len, x2 = class ptr, x3 = class len,
+///         x4 = flags. x86_64 uses rdi/rsi/rdx/rcx/r8 for the same values.
 /// Output: 1 when the registration was stored, 0 when the table is full.
 pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -49,117 +47,176 @@ pub fn emit_stream_wrapper_register(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_wrapper_register ---");
     emitter.label_global("__rt_stream_wrapper_register");
+    // The registration outlives every caller-owned buffer, so the helper needs a
+    // real frame: `__rt_str_persist` is a call and would otherwise clobber LR.
+    emitter.instruction("stp x29, x30, [sp, #-80]!");                           // establish the frame and preserve the return address
+    emitter.instruction("mov x29, sp");                                         // frame pointer for the persisted-argument spill area
+    emitter.instruction("str x0, [sp, #16]");                                   // spill the borrowed protocol pointer
+    emitter.instruction("str x1, [sp, #24]");                                   // spill the protocol length
+    emitter.instruction("str x2, [sp, #32]");                                   // spill the borrowed class-name pointer
+    emitter.instruction("str x3, [sp, #40]");                                   // spill the class-name length
+    emitter.instruction("str x4, [sp, #48]");                                   // spill the registration flags
 
-    // Frame: [sp,#0..16] x29/x30, [sp,#16] free slot base, [sp,#24] class-name
-    //   pointer, [sp,#32] class-name length.
-    emitter.instruction("sub sp, sp, #48");                                     // frame for the two string-persist calls
-    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    // -- php burns a resource id here, and elephc must burn it too --
+    //
+    // php allocates a registration resource userland never sees. Nothing reads it, but the id
+    // CURSOR is observable: every `var_dump()` of a later stream, and the `$context` handed to a
+    // wrapper, reported one less than php. MEASURED — a REFUSED registration burns one as well,
+    // an unregistration burns none, and a call that throws for an undefined class burns none
+    // because the throw comes first, which is why this sits at the top of the helper the throw
+    // path never reaches.
+    abi::emit_symbol_address(emitter, "x9", "_resource_id_next");
+    emitter.instruction("ldr x10, [x9]");
+    emitter.instruction("add x10, x10, #1");                                    // the id php spends on the registration
+    emitter.instruction("str x10, [x9]");
 
-    // -- reject a protocol PHP would not accept, before touching the table --
-    emitter.instruction("mov x5, #0");                                          // protocol byte index
-    emitter.label("__rt_swr_chk");
-    emitter.instruction("cmp x5, x1");                                          // checked every protocol byte?
-    emitter.instruction("b.ge __rt_swr_scan_start");                            // the whole protocol is in PHP's accepted set
-    emitter.instruction("ldrb w6, [x0, x5]");                                   // next protocol byte
-    emitter.instruction("cmp w6, #43");                                         // '+'
-    emitter.instruction("b.eq __rt_swr_chk_next");                              // '+' is accepted — next byte
-    emitter.instruction("cmp w6, #45");                                         // below '-' is outside the set (',' and friends)
-    emitter.instruction("b.lt __rt_swr_badproto");                              // outside PHP's scheme alphabet — warn and fail
-    emitter.instruction("cmp w6, #46");                                         // '-' or '.'
-    emitter.instruction("b.le __rt_swr_chk_next");                              // '-' and '.' are accepted — next byte
-    emitter.instruction("cmp w6, #48");                                         // '/' sits between '.' and '0'
-    emitter.instruction("b.lt __rt_swr_badproto");                              // outside PHP's scheme alphabet — warn and fail
-    emitter.instruction("cmp w6, #57");                                         // '0'..'9'
-    emitter.instruction("b.le __rt_swr_chk_next");                              // digits are accepted — next byte
-    emitter.instruction("cmp w6, #65");                                         // punctuation between '9' and 'A'
-    emitter.instruction("b.lt __rt_swr_badproto");                              // outside PHP's scheme alphabet — warn and fail
-    emitter.instruction("cmp w6, #90");                                         // 'A'..'Z'
-    emitter.instruction("b.le __rt_swr_chk_next");                              // uppercase letters are accepted — next byte
-    emitter.instruction("cmp w6, #97");                                         // punctuation between 'Z' and 'a'
-    emitter.instruction("b.lt __rt_swr_badproto");                              // outside PHP's scheme alphabet — warn and fail
-    emitter.instruction("cmp w6, #122");                                        // 'a'..'z'
-    emitter.instruction("b.gt __rt_swr_badproto");                              // above 'z' — warn and fail
-    emitter.label("__rt_swr_chk_next");
-    emitter.instruction("add x5, x5, #1");                                      // advance the byte index
-    emitter.instruction("b __rt_swr_chk");                                      // keep validating
+    // -- php refuses a protocol holding a byte outside [A-Za-z0-9+.-] --
+    // An EMPTY protocol registers successfully (measured), so the scan must be a per-byte filter
+    // rather than a "looks like a scheme" test.
+    emitter.instruction("ldr x9, [sp, #16]");                                   // the borrowed protocol pointer
+    emitter.instruction("ldr x10, [sp, #24]");                                  // the protocol length
+    emitter.instruction("mov x11, #0");                                         // byte cursor
+    emitter.label("__rt_swr_char_scan");
+    emitter.instruction("cmp x11, x10");                                        // examined every byte?
+    emitter.instruction("b.hs __rt_swr_chars_ok");
+    emitter.instruction("ldrb w12, [x9, x11]");
+    emitter.instruction("cmp w12, #0x30");                                      // below '0' — the three punctuation bytes live there
+    emitter.instruction("b.lo __rt_swr_char_punct");
+    emitter.instruction("cmp w12, #0x39");                                      // '9'
+    emitter.instruction("b.ls __rt_swr_char_next");
+    emitter.instruction("cmp w12, #0x41");                                      // 'A'
+    emitter.instruction("b.lo __rt_swr_bad_proto");
+    emitter.instruction("cmp w12, #0x5a");                                      // 'Z'
+    emitter.instruction("b.ls __rt_swr_char_next");
+    emitter.instruction("cmp w12, #0x61");                                      // 'a'
+    emitter.instruction("b.lo __rt_swr_bad_proto");
+    emitter.instruction("cmp w12, #0x7a");                                      // 'z'
+    emitter.instruction("b.ls __rt_swr_char_next");
+    emitter.instruction("b __rt_swr_bad_proto");                                // above 'z', including every non-ASCII byte
+    emitter.label("__rt_swr_char_punct");
+    emitter.instruction("cmp w12, #0x2b");                                      // '+'
+    emitter.instruction("b.eq __rt_swr_char_next");
+    emitter.instruction("cmp w12, #0x2d");                                      // '-'
+    emitter.instruction("b.eq __rt_swr_char_next");
+    emitter.instruction("cmp w12, #0x2e");                                      // '.'
+    emitter.instruction("b.eq __rt_swr_char_next");
+    emitter.instruction("b __rt_swr_bad_proto");
+    emitter.label("__rt_swr_char_next");
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction("b __rt_swr_char_scan");
+    emitter.label("__rt_swr_chars_ok");
 
-    // -- one pass over _user_wrappers: reject a duplicate, remember the first free slot --
-    emitter.label("__rt_swr_scan_start");
-    abi::emit_symbol_address(emitter, "x4", "_user_wrappers");
+    // -- php refuses a protocol that is already registered --
+    // The comparison is byte-exact: registration is case-SENSITIVE, so `Cd`, `cd` and `CD` are
+    // three separate registrations rather than one.
+    super::emit_load_table_base(emitter, "x4");
     emitter.instruction("mov x5, #0");                                          // wrapper slot index
-    emitter.instruction("mov x7, #-1");                                         // first free slot, -1 until one is seen
-    emitter.label("__rt_swr_scan");
-    emitter.instruction("cmp x5, #64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
-    emitter.instruction("b.ge __rt_swr_scanned");                               // the table has been walked end to end
+    emitter.label("__rt_swr_dup_scan");
+    super::emit_load_table_cap(emitter, "x6");
+    emitter.instruction("cmp x5, x6");                                          // scanned every allocated slot?
+    emitter.instruction("b.ge __rt_swr_dup_builtin");
     emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
-    emitter.instruction("ldr x12, [x6]");                                       // stored protocol pointer
-    emitter.instruction("cbz x12, __rt_swr_free");                              // a null pointer marks an empty slot
-    emitter.instruction("ldr x13, [x6, #8]");                                   // stored protocol length
-    emitter.instruction("cmp x13, x1");                                         // same length as the protocol being registered?
-    emitter.instruction("b.ne __rt_swr_scan_next");                             // different length — cannot be the same protocol
-    emitter.instruction("mov x14, #0");                                         // byte compare index
-    emitter.label("__rt_swr_cmp");
-    emitter.instruction("cmp x14, x1");                                         // compared every byte?
-    emitter.instruction("b.ge __rt_swr_dupproto");                              // identical protocol — PHP refuses to redefine it
-    emitter.instruction("ldrb w15, [x12, x14]");                                // stored protocol byte
-    emitter.instruction("ldrb w16, [x0, x14]");                                 // candidate protocol byte
-    emitter.instruction("cmp w15, w16");                                        // do the bytes match?
-    emitter.instruction("b.ne __rt_swr_scan_next");                             // differs — not the same protocol
-    emitter.instruction("add x14, x14, #1");                                    // advance the compare index
-    emitter.instruction("b __rt_swr_cmp");                                      // continue comparing
-    emitter.label("__rt_swr_free");
-    emitter.instruction("cmn x7, #1");                                          // is the first free slot still unset (-1)?
-    emitter.instruction("b.ne __rt_swr_scan_next");                             // already remembered an earlier free slot
-    emitter.instruction("mov x7, x5");                                          // remember this one
-    emitter.label("__rt_swr_scan_next");
-    emitter.instruction("add x5, x5, #1");                                      // advance the slot index
-    emitter.instruction("b __rt_swr_scan");                                     // continue scanning
-    emitter.label("__rt_swr_scanned");
-    emitter.instruction("cmn x7, #1");                                          // did the walk find a free slot?
-    emitter.instruction("b.eq __rt_swr_full");                                  // table full
-    emitter.instruction("add x6, x4, x7, lsl #5");                              // slot base of the first free slot
+    emitter.instruction("ldr x7, [x6]");                                        // stored protocol pointer
+    emitter.instruction("cbz x7, __rt_swr_dup_next");                           // skip empty slots
+    emitter.instruction("ldr x8, [x6, #8]");                                    // stored protocol length
+    emitter.instruction("ldr x10, [sp, #24]");                                  // requested protocol length
+    emitter.instruction("cmp x8, x10");
+    emitter.instruction("b.ne __rt_swr_dup_next");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // requested protocol pointer
+    emitter.instruction("mov x11, #0");                                         // byte cursor
+    emitter.label("__rt_swr_dup_cmp");
+    emitter.instruction("cmp x11, x10");                                        // compared every byte?
+    emitter.instruction("b.hs __rt_swr_dup_proto");                             // the names agree
+    emitter.instruction("ldrb w12, [x7, x11]");
+    emitter.instruction("ldrb w13, [x9, x11]");
+    emitter.instruction("cmp w12, w13");
+    emitter.instruction("b.ne __rt_swr_dup_next");
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction("b __rt_swr_dup_cmp");
+    emitter.label("__rt_swr_dup_next");
+    emitter.instruction("add x5, x5, #1");
+    emitter.instruction("b __rt_swr_dup_scan");
 
-    // -- take ownership of both strings, then store the registration --
-    emitter.label("__rt_swr_store");
-    emitter.instruction("str x6, [sp, #16]");                                   // save the free slot base across the persist calls
-    emitter.instruction("str x2, [sp, #24]");                                   // save the class-name pointer across the protocol persist
-    emitter.instruction("str x3, [sp, #32]");                                   // save the class-name length across the protocol persist
-    emitter.instruction("mov x2, x1");                                          // protocol length → persist length input
-    emitter.instruction("mov x1, x0");                                          // protocol pointer → persist pointer input
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned protocol bytes, x2 = length
-    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
-    emitter.instruction("str x1, [x6]");                                        // owned protocol pointer
-    emitter.instruction("str x2, [x6, #8]");                                    // protocol length
-    emitter.instruction("ldr x1, [sp, #24]");                                   // class-name pointer → persist pointer input
-    emitter.instruction("ldr x2, [sp, #32]");                                   // class-name length → persist length input
-    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned class name, x2 = length
-    emitter.instruction("ldr x6, [sp, #16]");                                   // reload the free slot base
-    emitter.instruction("str x1, [x6, #16]");                                   // owned class-name pointer
-    emitter.instruction("str x2, [x6, #24]");                                   // class-name length
+    emitter.label("__rt_swr_dup_builtin");
+    // A built-in occupies its name too, so `stream_wrapper_register("file", …)` is false — unless
+    // it was UNREGISTERED, which frees the name. That is the same bitmask
+    // `stream_wrapper_unregister` maintains, read rather than duplicated.
+    emitter.instruction("ldr x0, [sp, #16]");
+    emitter.instruction("ldr x1, [sp, #24]");
+    abi::emit_call_label(emitter, "__rt_builtin_wrapper_index");                // x0 = built-in index or -1
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_swr_proto_ok");                              // not a built-in name either
+    abi::emit_symbol_address(emitter, "x9", "_disabled_builtin_wrappers");
+    emitter.instruction("ldr x10, [x9]");                                       // current disabled mask
+    emitter.instruction("mov x11, #1");
+    emitter.instruction("lsl x11, x11, x0");                                    // the bit for this wrapper
+    emitter.instruction("tst x10, x11");
+    emitter.instruction("b.ne __rt_swr_proto_ok");                              // unregistered: the name is free again
+    emitter.instruction("b __rt_swr_dup_proto");
+    emitter.label("__rt_swr_proto_ok");
+
+    // -- reserve a free slot, growing the table when every slot is taken --
+    // Reserving happens BEFORE persisting so a failed reservation cannot leak
+    // owned copies. Past the two refusals above, the only failure mode left is
+    // heap exhaustion, which the helper reports as -1.
+    emitter.instruction("bl __rt_user_wrappers_reserve");                       // x0 = free slot index (-1 on heap exhaustion)
+    emitter.instruction("cmp x0, #0");                                          // did the reservation fail?
+    emitter.instruction("b.lt __rt_swr_full");                                  // report false when no slot could be reserved
+    emitter.instruction("mov x5, x0");                                          // wrapper slot index
+
+    // -- copy both names onto the heap so the table never aliases caller storage --
+    // A PHP-level `$scheme = "dyn" . $i;` reuses one local slot per iteration, so
+    // storing the borrowed pointer made every registration alias the final value.
+    emitter.label("__rt_swr_found");
+    emitter.instruction("str x5, [sp, #56]");                                   // remember the target slot index across the calls
+    emitter.instruction("ldr x1, [sp, #16]");                                   // borrowed protocol pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // protocol length
+    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned protocol copy
+    emitter.instruction("str x1, [sp, #16]");                                   // replace the spill with the owned pointer
+    emitter.instruction("ldr x1, [sp, #32]");                                   // borrowed class-name pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                   // class-name length
+    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned class-name copy
+    emitter.instruction("str x1, [sp, #32]");                                   // replace the spill with the owned pointer
+
+    // -- store the registration into the reserved slot --
+    // The slot base is re-derived: the persist calls clobber the caller-saved scratch.
+    super::emit_load_table_base(emitter, "x6");
+    emitter.instruction("ldr x5, [sp, #56]");                                   // reload the target slot index
+    emitter.instruction("add x7, x6, x5, lsl #5");                              // slot base = table + index * 32
+    emitter.instruction("ldr x9, [sp, #16]");
+    emitter.instruction("str x9, [x7]");                                        // owned protocol pointer
+    emitter.instruction("ldr x9, [sp, #24]");
+    emitter.instruction("str x9, [x7, #8]");                                    // protocol length
+    emitter.instruction("ldr x9, [sp, #32]");
+    emitter.instruction("str x9, [x7, #16]");                                   // owned class-name pointer
+    emitter.instruction("ldr x9, [sp, #40]");
+    emitter.instruction("str x9, [x7, #24]");                                   // class-name length
+    super::emit_load_flags_base(emitter, "x10");
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the registration flags
+    emitter.instruction("str x9, [x10, x5, lsl #3]");                           // store definition flags beside the registration slot
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
-    emitter.instruction("b __rt_swr_ret");                                      // share the common epilogue
-
-    emitter.label("__rt_swr_badproto");
-    abi::emit_symbol_address(emitter, "x1", "_swr_bad_proto_msg");
-    emitter.instruction(&format!("mov x2, #{}", BAD_PROTOCOL_WARNING.len()));   // length of the invalid-scheme warning
-    emitter.instruction("bl __rt_diag_warning");                                // honours an enclosing @ suppression
-    emitter.instruction("mov x0, #0");                                          // PHP returns false for an invalid protocol
-    emitter.instruction("b __rt_swr_ret");                                      // share the common epilogue
-
-    emitter.label("__rt_swr_dupproto");
-    abi::emit_symbol_address(emitter, "x1", "_swr_dup_proto_msg");
-    emitter.instruction(&format!("mov x2, #{}", DUPLICATE_PROTOCOL_WARNING.len())); // length of the already-defined warning
-    emitter.instruction("bl __rt_diag_warning");                                // honours an enclosing @ suppression
-    emitter.instruction("mov x0, #0");                                          // PHP returns false rather than redefining
-    emitter.instruction("b __rt_swr_ret");                                      // share the common epilogue
+    emitter.instruction("ldp x29, x30, [sp], #80");                             // tear down the frame
+    emitter.instruction("ret");                                                 // return to the caller
 
     emitter.label("__rt_swr_full");
     emitter.instruction("mov x0, #0");                                          // return false when the table is full
+    emitter.instruction("ldp x29, x30, [sp], #80");                             // tear down the frame
+    emitter.instruction("ret");                                                 // return to the caller
 
-    emitter.label("__rt_swr_ret");
-    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.label("__rt_swr_bad_proto");
+    abi::emit_symbol_address(emitter, "x1", "_swr_bad_proto_msg");
+    emitter.instruction(&format!("mov x2, #{}", BAD_PROTOCOL_WARNING.len()));
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // `@` suppresses it, as it does in php
+    emitter.instruction("mov x0, #0");                                          // php answers false for a malformed protocol
+    emitter.instruction("ldp x29, x30, [sp], #80");                             // tear down the frame
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_swr_dup_proto");
+    abi::emit_symbol_address(emitter, "x1", "_swr_dup_proto_msg");
+    emitter.instruction(&format!("mov x2, #{}", DUPLICATE_PROTOCOL_WARNING.len()));
+    abi::emit_call_label(emitter, "__rt_diag_warning");
+    emitter.instruction("mov x0, #0");                                          // php answers false for a name already taken
+    emitter.instruction("ldp x29, x30, [sp], #80");                             // tear down the frame
     emitter.instruction("ret");                                                 // return to the caller
 }
 
@@ -168,127 +225,176 @@ fn emit_stream_wrapper_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_wrapper_register ---");
     emitter.label_global("__rt_stream_wrapper_register");
-
-    // Frame: [rbp-8] free slot base, [rbp-16] class-name pointer, [rbp-24]
-    //   class-name length. push rbp then sub rsp,48 keeps rsp 16-aligned.
+    // The registration outlives every caller-owned buffer, so the helper needs a
+    // real frame: `__rt_str_persist` is a call and would otherwise clobber scratch.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // frame for the two string-persist calls
-    // The class name is spilled BEFORE the scan, not at the store below. x86_64 has far fewer
-    // scratch registers than AArch64, and the byte-compare loop below takes `rcx` as its index
-    // and `edx` for the loaded byte — but `rdx` is the class-name POINTER and `rcx` its LENGTH.
-    // That loop runs only when a slot is occupied AND its length matches, which is the second
-    // registration of a same-length scheme onward: `stream_wrapper_register("aa", …)` then
-    // `("bb", …)` stored a byte value as `bb`'s class pointer, so `bb://` never dispatched and a
-    // later read through that pointer killed the process. AArch64 keeps the scan in x12-x16, all
-    // clear of its argument registers, so the same source is correct there and wrong here.
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the class-name pointer before the scan can clobber rdx
-    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the class-name length before the scan can clobber rcx
+    emitter.instruction("mov rbp, rsp");                                        // establish the spill-area frame pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve the persisted-argument spill slots (keeps rsp 16-byte aligned)
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // spill the borrowed protocol pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // spill the protocol length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // spill the borrowed class-name pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // spill the class-name length
 
-    // -- reject a protocol PHP would not accept, before touching the table --
-    emitter.instruction("xor r9, r9");                                          // protocol byte index
-    emitter.label("__rt_swr_chk_x86");
-    emitter.instruction("cmp r9, rsi");                                         // checked every protocol byte?
-    emitter.instruction("jge __rt_swr_scan_start_x86");                         // the whole protocol is in PHP's accepted set
-    emitter.instruction("movzx r10d, BYTE PTR [rdi + r9]");                     // next protocol byte
-    emitter.instruction("cmp r10b, 43");                                        // '+'
-    emitter.instruction("je __rt_swr_chk_next_x86");                            // '+' is accepted — next byte
-    emitter.instruction("cmp r10b, 45");                                        // below '-' is outside the set
-    emitter.instruction("jb __rt_swr_badproto_x86");                            // outside PHP's scheme alphabet — warn and fail
-    emitter.instruction("cmp r10b, 46");                                        // '-' or '.'
-    emitter.instruction("jbe __rt_swr_chk_next_x86");                           // '-' and '.' are accepted — next byte
-    emitter.instruction("cmp r10b, 48");                                        // '/' sits between '.' and '0'
-    emitter.instruction("jb __rt_swr_badproto_x86");                            // outside PHP's scheme alphabet — warn and fail
-    emitter.instruction("cmp r10b, 57");                                        // '0'..'9'
-    emitter.instruction("jbe __rt_swr_chk_next_x86");                           // digits are accepted — next byte
-    emitter.instruction("cmp r10b, 65");                                        // punctuation between '9' and 'A'
-    emitter.instruction("jb __rt_swr_badproto_x86");                            // outside PHP's scheme alphabet — warn and fail
-    emitter.instruction("cmp r10b, 90");                                        // 'A'..'Z'
-    emitter.instruction("jbe __rt_swr_chk_next_x86");                           // uppercase letters are accepted — next byte
-    emitter.instruction("cmp r10b, 97");                                        // punctuation between 'Z' and 'a'
-    emitter.instruction("jb __rt_swr_badproto_x86");                            // outside PHP's scheme alphabet — warn and fail
-    emitter.instruction("cmp r10b, 122");                                       // 'a'..'z'
-    emitter.instruction("ja __rt_swr_badproto_x86");                            // above 'z' — warn and fail
-    emitter.label("__rt_swr_chk_next_x86");
-    emitter.instruction("inc r9");                                              // advance the byte index
-    emitter.instruction("jmp __rt_swr_chk_x86");                                // keep validating
+    // -- php burns a resource id here; see the AArch64 arm --
+    abi::emit_symbol_address(emitter, "r9", "_resource_id_next");
+    emitter.instruction("mov r10, QWORD PTR [r9]");
+    emitter.instruction("inc r10");                                             // the id php spends on the registration
+    emitter.instruction("mov QWORD PTR [r9], r10");
+    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // spill the registration flags
 
-    // -- one pass over _user_wrappers: reject a duplicate, remember the first free slot --
-    emitter.label("__rt_swr_scan_start_x86");
-    abi::emit_symbol_address(emitter, "r8", "_user_wrappers");                  // wrapper table base
+    // -- php refuses a protocol holding a byte outside [A-Za-z0-9+.-] --
+    // See the AArch64 arm: an EMPTY protocol registers successfully, so this is a per-byte filter.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // the borrowed protocol pointer
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // the protocol length
+    emitter.instruction("xor r11, r11");                                        // byte cursor
+    emitter.label("__rt_swr_char_scan_x");
+    emitter.instruction("cmp r11, r10");                                        // examined every byte?
+    emitter.instruction("jae __rt_swr_chars_ok_x");
+    emitter.instruction("movzx eax, BYTE PTR [r9 + r11]");
+    emitter.instruction("cmp eax, 0x30");                                       // below '0' — the three punctuation bytes live there
+    emitter.instruction("jb __rt_swr_char_punct_x");
+    emitter.instruction("cmp eax, 0x39");                                       // '9'
+    emitter.instruction("jbe __rt_swr_char_next_x");
+    emitter.instruction("cmp eax, 0x41");                                       // 'A'
+    emitter.instruction("jb __rt_swr_bad_proto_x");
+    emitter.instruction("cmp eax, 0x5a");                                       // 'Z'
+    emitter.instruction("jbe __rt_swr_char_next_x");
+    emitter.instruction("cmp eax, 0x61");                                       // 'a'
+    emitter.instruction("jb __rt_swr_bad_proto_x");
+    emitter.instruction("cmp eax, 0x7a");                                       // 'z'
+    emitter.instruction("jbe __rt_swr_char_next_x");
+    emitter.instruction("jmp __rt_swr_bad_proto_x");                            // above 'z', including every non-ASCII byte
+    emitter.label("__rt_swr_char_punct_x");
+    emitter.instruction("cmp eax, 0x2b");                                       // '+'
+    emitter.instruction("je __rt_swr_char_next_x");
+    emitter.instruction("cmp eax, 0x2d");                                       // '-'
+    emitter.instruction("je __rt_swr_char_next_x");
+    emitter.instruction("cmp eax, 0x2e");                                       // '.'
+    emitter.instruction("je __rt_swr_char_next_x");
+    emitter.instruction("jmp __rt_swr_bad_proto_x");
+    emitter.label("__rt_swr_char_next_x");
+    emitter.instruction("inc r11");
+    emitter.instruction("jmp __rt_swr_char_scan_x");
+    emitter.label("__rt_swr_chars_ok_x");
+
+    // -- php refuses a protocol that is already registered --
+    // See the AArch64 arm: byte-exact, because registration is case-SENSITIVE.
+    super::emit_load_table_base(emitter, "rax");
     emitter.instruction("xor r9, r9");                                          // wrapper slot index
-    emitter.instruction("mov rax, -1");                                         // first free slot, -1 until one is seen
-    emitter.label("__rt_swr_scan_x86");
-    emitter.instruction("cmp r9, 64");                                          // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
-    emitter.instruction("jge __rt_swr_scanned_x86");                            // the table has been walked end to end
+    emitter.label("__rt_swr_dup_scan_x");
+    super::emit_load_table_cap(emitter, "r10");
+    emitter.instruction("cmp r9, r10");                                         // scanned every allocated slot?
+    emitter.instruction("jge __rt_swr_dup_builtin_x");
+    emitter.instruction("mov r11, r9");
+    emitter.instruction("shl r11, 5");                                          // slot offset = index * 32
+    emitter.instruction("add r11, rax");                                        // slot base
+    emitter.instruction("mov rcx, QWORD PTR [r11]");                            // stored protocol pointer
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jz __rt_swr_dup_next_x");                              // skip empty slots
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // requested protocol length
+    emitter.instruction("cmp QWORD PTR [r11 + 8], rsi");                        // stored length
+    emitter.instruction("jne __rt_swr_dup_next_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // requested protocol pointer
+    emitter.instruction("xor rdx, rdx");                                        // byte cursor
+    emitter.label("__rt_swr_dup_cmp_x");
+    emitter.instruction("cmp rdx, rsi");                                        // compared every byte?
+    emitter.instruction("jae __rt_swr_dup_proto_x");                            // the names agree
+    emitter.instruction("movzx r8d, BYTE PTR [rcx + rdx]");
+    emitter.instruction("cmp r8b, BYTE PTR [rdi + rdx]");
+    emitter.instruction("jne __rt_swr_dup_next_x");
+    emitter.instruction("inc rdx");
+    emitter.instruction("jmp __rt_swr_dup_cmp_x");
+    emitter.label("__rt_swr_dup_next_x");
+    emitter.instruction("inc r9");
+    emitter.instruction("jmp __rt_swr_dup_scan_x");
+
+    emitter.label("__rt_swr_dup_builtin_x");
+    // See the AArch64 arm: a built-in occupies its name unless it has been unregistered.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+    abi::emit_call_label(emitter, "__rt_builtin_wrapper_index");                // rax = built-in index or -1
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_swr_proto_ok_x");                              // not a built-in name either
+    abi::emit_symbol_address(emitter, "r9", "_disabled_builtin_wrappers");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // current disabled mask
+    emitter.instruction("mov rcx, rax");                                        // the shift count must live in cl
+    emitter.instruction("mov r11, 1");
+    emitter.instruction("shl r11, cl");                                         // the bit for this wrapper
+    emitter.instruction("test r10, r11");
+    emitter.instruction("jnz __rt_swr_proto_ok_x");                             // unregistered: the name is free again
+    emitter.instruction("jmp __rt_swr_dup_proto_x");
+    emitter.label("__rt_swr_proto_ok_x");
+
+    // -- reserve a free slot, growing the table when every slot is taken --
+    // Reserving happens BEFORE persisting so a failed reservation cannot leak
+    // owned copies. PHP never refuses a registration, so the only failure mode
+    // left is heap exhaustion, which the helper reports as -1.
+    emitter.instruction("call __rt_user_wrappers_reserve");                     // rax = free slot index (-1 on heap exhaustion)
+    emitter.instruction("test rax, rax");                                       // did the reservation fail?
+    emitter.instruction("js __rt_swr_full_x86");                                // report false when no slot could be reserved
+    emitter.instruction("mov r9, rax");                                         // wrapper slot index
+
+    // -- copy both names onto the heap so the table never aliases caller storage --
+    // A PHP-level `$scheme = "dyn" . $i;` reuses one local slot per iteration, so
+    // storing the borrowed pointer made every registration alias the final value.
+    // NOTE: __rt_str_persist consumes the source pointer in rax (not rdi) on x86_64.
+    emitter.label("__rt_swr_found_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // remember the target slot index across the calls
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // borrowed protocol pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // protocol length
+    emitter.instruction("call __rt_str_persist");                               // rax = owned protocol copy
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // replace the spill with the owned pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // borrowed class-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // class-name length
+    emitter.instruction("call __rt_str_persist");                               // rax = owned class-name copy
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // replace the spill with the owned pointer
+
+    // -- store the registration into the reserved slot --
+    // The slot base is re-derived: the persist calls clobber the caller-saved scratch.
+    super::emit_load_table_base(emitter, "r8");                                 // wrapper table base
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the target slot index
     emitter.instruction("mov r10, r9");                                         // copy the slot index for scaling
     emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
     emitter.instruction("add r10, r8");                                         // slot base = table + offset
-    emitter.instruction("mov r11, QWORD PTR [r10]");                            // stored protocol pointer
-    emitter.instruction("test r11, r11");                                       // a null pointer marks an empty slot
-    emitter.instruction("jz __rt_swr_free_x86");                                // remember it and move on
-    emitter.instruction("cmp QWORD PTR [r10 + 8], rsi");                        // same length as the protocol being registered?
-    emitter.instruction("jne __rt_swr_scan_next_x86");                          // different length — cannot be the same protocol
-    emitter.instruction("xor rcx, rcx");                                        // byte compare index
-    emitter.label("__rt_swr_cmp_x86");
-    emitter.instruction("cmp rcx, rsi");                                        // compared every byte?
-    emitter.instruction("jge __rt_swr_dupproto_x86");                           // identical protocol — PHP refuses to redefine it
-    emitter.instruction("movzx edx, BYTE PTR [r11 + rcx]");                     // stored protocol byte
-    emitter.instruction("cmp dl, BYTE PTR [rdi + rcx]");                        // against the candidate protocol byte
-    emitter.instruction("jne __rt_swr_scan_next_x86");                          // differs — not the same protocol
-    emitter.instruction("inc rcx");                                             // advance the compare index
-    emitter.instruction("jmp __rt_swr_cmp_x86");                                // continue comparing
-    emitter.label("__rt_swr_free_x86");
-    emitter.instruction("cmp rax, -1");                                         // is the first free slot still unset?
-    emitter.instruction("jne __rt_swr_scan_next_x86");                          // already remembered an earlier free slot
-    emitter.instruction("mov rax, r9");                                         // remember this one
-    emitter.label("__rt_swr_scan_next_x86");
-    emitter.instruction("inc r9");                                              // advance the slot index
-    emitter.instruction("jmp __rt_swr_scan_x86");                               // continue scanning
-    emitter.label("__rt_swr_scanned_x86");
-    emitter.instruction("cmp rax, -1");                                         // did the walk find a free slot?
-    emitter.instruction("je __rt_swr_full_x86");                                // table full
-    emitter.instruction("mov r10, rax");                                        // first free slot index
-    emitter.instruction("shl r10, 5");                                          // slot offset = index * 32
-    emitter.instruction("add r10, r8");                                         // slot base = table + offset
-
-    // -- take ownership of both strings, then store the registration --
-    emitter.label("__rt_swr_store_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the free slot base across the persist calls
-    emitter.instruction("mov rax, rdi");                                        // protocol pointer → persist pointer input
-    emitter.instruction("mov rdx, rsi");                                        // protocol length → persist length input
-    emitter.instruction("call __rt_str_persist");                               // rax = owned protocol bytes, rdx = length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");
     emitter.instruction("mov QWORD PTR [r10], rax");                            // owned protocol pointer
-    emitter.instruction("mov QWORD PTR [r10 + 8], rdx");                        // protocol length
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // class-name pointer → persist pointer input
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // class-name length → persist length input
-    emitter.instruction("call __rt_str_persist");                               // rax = owned class name, rdx = length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the free slot base
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // protocol length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");
     emitter.instruction("mov QWORD PTR [r10 + 16], rax");                       // owned class-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 24], rdx");                       // class-name length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");
+    emitter.instruction("mov QWORD PTR [r10 + 24], rax");                       // class-name length
+    super::emit_load_flags_base(emitter, "r10");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the registration flags
+    emitter.instruction("mov QWORD PTR [r10 + r9 * 8], rax");                   // store definition flags beside the registration slot
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
-    emitter.instruction("jmp __rt_swr_ret_x86");                                // share the common epilogue
-
-    emitter.label("__rt_swr_badproto_x86");
-    abi::emit_symbol_address(emitter, "rdi", "_swr_bad_proto_msg");
-    emitter.instruction(&format!("mov esi, {}", BAD_PROTOCOL_WARNING.len()));   // length of the invalid-scheme warning
-    emitter.instruction("call __rt_diag_warning");                              // honours an enclosing @ suppression
-    emitter.instruction("xor eax, eax");                                        // PHP returns false for an invalid protocol
-    emitter.instruction("jmp __rt_swr_ret_x86");                                // share the common epilogue
-
-    emitter.label("__rt_swr_dupproto_x86");
-    abi::emit_symbol_address(emitter, "rdi", "_swr_dup_proto_msg");
-    emitter.instruction(&format!("mov esi, {}", DUPLICATE_PROTOCOL_WARNING.len())); // length of the already-defined warning
-    emitter.instruction("call __rt_diag_warning");                              // honours an enclosing @ suppression
-    emitter.instruction("xor eax, eax");                                        // PHP returns false rather than redefining
-    emitter.instruction("jmp __rt_swr_ret_x86");                                // share the common epilogue
+    emitter.instruction("mov rsp, rbp");                                        // discard the spill slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the caller
 
     emitter.label("__rt_swr_full_x86");
     emitter.instruction("xor eax, eax");                                        // return false when the table is full
+    emitter.instruction("mov rsp, rbp");                                        // discard the spill slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the caller
 
-    emitter.label("__rt_swr_ret_x86");
-    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    // `__rt_diag_warning` takes its pointer in RDI and its length in RSI here, where the AArch64
+    // arm passes x1 and x2 — the registers are not the same and the two arms cannot be mirrored.
+    emitter.label("__rt_swr_bad_proto_x");
+    abi::emit_symbol_address(emitter, "rdi", "_swr_bad_proto_msg");
+    emitter.instruction(&format!("mov rsi, {}", BAD_PROTOCOL_WARNING.len()));
+    abi::emit_call_label(emitter, "__rt_diag_warning");                         // `@` suppresses it, as it does in php
+    emitter.instruction("xor eax, eax");                                        // php answers false for a malformed protocol
+    emitter.instruction("mov rsp, rbp");                                        // discard the spill slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_swr_dup_proto_x");
+    abi::emit_symbol_address(emitter, "rdi", "_swr_dup_proto_msg");
+    emitter.instruction(&format!("mov rsi, {}", DUPLICATE_PROTOCOL_WARNING.len()));
+    abi::emit_call_label(emitter, "__rt_diag_warning");
+    emitter.instruction("xor eax, eax");                                        // php answers false for a name already taken
+    emitter.instruction("mov rsp, rbp");                                        // discard the spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 }

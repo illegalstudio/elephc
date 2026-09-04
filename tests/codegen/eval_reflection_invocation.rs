@@ -44,7 +44,7 @@ return $aotRef->invokeArgs([&$aotArgsValue]) . ":" . gettype($aotArgsValue) . ":
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "4:string:1|5:integer:5|10:string:3|11:integer:11");
     for warning in [
@@ -52,9 +52,9 @@ return $aotRef->invokeArgs([&$aotArgsValue]) . ":" . gettype($aotArgsValue) . ":
         "eval_reflect_aot_invoke_ref_fn(): Argument #1 ($value) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }
@@ -123,7 +123,7 @@ return $aotStatic->invokeArgs(null, [&$aotStaticArgsValue]) . ":" . gettype($aot
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(
         out.stdout,
@@ -136,9 +136,9 @@ return $aotStatic->invokeArgs(null, [&$aotStaticArgsValue]) . ":" . gettype($aot
         "EvalReflectAotInvokeRefMethodBox::add(): Argument #1 ($value) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }

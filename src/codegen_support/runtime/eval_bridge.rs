@@ -288,6 +288,102 @@ mod tests {
         }
     }
 
+    /// Pins that boxing an eval resource first materializes the request-default context,
+    /// and that boxing a hash context does NOT.
+    ///
+    /// PHP mints resource id 4 for the request's default stream context at the first
+    /// stream open of any kind. A stream opened INSIDE a runtime-interpreted `eval()`
+    /// runs no `fopen` lowering, so nothing created that context and every eval resource
+    /// reported an id one lower than PHP's: `eval('$a = fopen(…)')` answered `4` where
+    /// PHP 8.5.6 answers `5`. This wrapper is where eval mints an id, so the creation
+    /// belongs here — and only here: `hash_init()` returns a `HashContext` OBJECT that
+    /// consumes no resource id and opens no stream, so its wrapper must stay clear of
+    /// the call or every `hash_init()` would burn id 4 and shift the ids back.
+    #[test]
+    fn boxing_an_eval_resource_creates_the_request_default_context_first() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            let resource_body = body_of(&asm, "__elephc_eval_value_resource");
+            let hash_body = body_of(&asm, "__elephc_eval_value_hash_context");
+            assert!(
+                resource_body.contains("__rt_stream_default_context_ensure"),
+                "eval resources must create the request default context first ({target:?}):\n{resource_body}"
+            );
+            assert!(
+                !hash_body.contains("__rt_stream_default_context_ensure"),
+                "an eval hash context opens no stream and must not create one ({target:?}):\n{hash_body}"
+            );
+        }
+    }
+
+    /// Pins the whole body of `__elephc_eval_resource_is_closed` on AArch64.
+    ///
+    /// The symbol is how eval learns that a HOST resource was closed. Nothing about the
+    /// payload word carries that state any more: since the generation-safe registry
+    /// migration an open payload is an opaque handle and `fclose` publishes the closed
+    /// state on the registry slot, so `fclose($r); eval('var_dump($r);')` printed
+    /// `resource(5) of type (stream)` while the same program's native `var_dump($r)`
+    /// printed `(Unknown)`.
+    ///
+    /// The body must keep calling `__rt_resource_type_name` — the ONE place that maps a
+    /// payload to a name — rather than re-deriving the predicate here, and it must
+    /// compare the returned POINTER against the `_resource_type_unknown` literal rather
+    /// than its length: PHP has resource type names this compiler does not model yet
+    /// (`stream-context`, `stream filter`), and a length test would call every one of
+    /// them closed the day they land.
+    #[test]
+    fn aarch64_asks_the_registry_whether_a_host_resource_is_closed() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(
+            asm.contains(
+                "__elephc_eval_resource_is_closed:\n\
+                 \x20   sub sp, sp, #16\n\
+                 \x20   stp x29, x30, [sp]\n\
+                 \x20   mov x29, sp\n\
+                 \x20   bl __rt_resource_type_name\n\
+                 \x20   adrp x9, _resource_type_unknown@PAGE\n\
+                 \x20   add x9, x9, _resource_type_unknown@PAGEOFF\n\
+                 \x20   cmp x1, x9\n\
+                 \x20   cset x0, eq\n\
+                 \x20   ldp x29, x30, [sp]\n\
+                 \x20   add sp, sp, #16\n\
+                 \x20   ret\n"
+            ),
+            "{asm}"
+        );
+    }
+
+    /// Pins the same body on x86_64, where the payload arrives in `rdi` per the SysV ABI
+    /// and the internal `__rt_resource_type_name` contract is payload=rax, name ptr=rax.
+    ///
+    /// `mov eax, 0` and not `xor eax, eax`: the zeroing sits BETWEEN the compare and
+    /// `sete al`, and `xor` would clear the very flags `sete` reads, making the wrapper
+    /// answer "open" for every resource on this target while every AArch64 pin above kept
+    /// passing — the single-arch blind spot this tree has already been bitten by.
+    #[test]
+    fn x86_64_asks_the_registry_whether_a_host_resource_is_closed() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(
+            asm.contains(
+                "__elephc_eval_resource_is_closed:\n\
+                 \x20   push rbp\n\
+                 \x20   mov rbp, rsp\n\
+                 \x20   mov rax, rdi\n\
+                 \x20   call __rt_resource_type_name\n\
+                 \x20   lea rcx, [rip + _resource_type_unknown]\n\
+                 \x20   cmp rax, rcx\n\
+                 \x20   mov eax, 0\n\
+                 \x20   sete al\n\
+                 \x20   pop rbp\n\
+                 \x20   ret\n"
+            ),
+            "{asm}"
+        );
+    }
+
     /// Pins the AArch64 eval key-sort bridge to the shared AOT regular comparator.
     #[test]
     fn aarch64_eval_key_sort_uses_native_regular_comparator() {

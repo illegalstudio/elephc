@@ -12,17 +12,7 @@
 //!   and invalid-sequence handling bits) so flag arithmetic folds identically to PHP.
 
 /// PHP `ENT_*` integer constants consumed by `htmlspecialchars()`/`htmlentities()` flags.
-pub(crate) const ENT_INT_CONSTANTS: &[(&str, i64)] = &[
-    ("ENT_QUOTES", 3),
-    ("ENT_COMPAT", 2),
-    ("ENT_NOQUOTES", 0),
-    ("ENT_HTML401", 0),
-    ("ENT_HTML5", 48),
-    ("ENT_XHTML", 32),
-    ("ENT_XML1", 16),
-    ("ENT_SUBSTITUTE", 8),
-    ("ENT_IGNORE", 4),
-];
+pub(crate) use elephc_builtin_contract::php_constants::ENT_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {

@@ -10,7 +10,11 @@
 //!   runtime's path-op helpers instead of reusing open stream resources.
 
 use super::super::super::*;
+use super::chdir::MkdirOptions;
 use super::user_wrapper_streams::eval_user_wrapper_method;
+
+/// `STREAM_REPORT_ERRORS`, the `$options` bit php sets on every wrapper path operation.
+const STREAM_REPORT_ERRORS: i64 = 8;
 
 /// Dispatches `unlink($path)` to a wrapper object's `unlink()` method.
 pub(in crate::interpreter) fn eval_user_wrapper_unlink_result(
@@ -21,19 +25,26 @@ pub(in crate::interpreter) fn eval_user_wrapper_unlink_result(
     eval_user_wrapper_path_method_result(path, "unlink", context, values, |_| Ok(Vec::new()))
 }
 
-/// Dispatches `mkdir($path)` or `rmdir($path)` to the registered wrapper.
+/// Dispatches `mkdir($path, ...)` or `rmdir($path)` to the registered wrapper.
 pub(in crate::interpreter) fn eval_user_wrapper_single_path_op_result(
     name: &str,
     path: &str,
+    options: MkdirOptions,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     match name {
+        // php passes ($path, $mode, STREAM_REPORT_ERRORS | STREAM_MKDIR_RECURSIVE) — measured on
+        // 8.5.6 as (511, 8) by default and (448, 9) for `mkdir($p, 0700, true)`. Zero was wrong on
+        // both counts.
         "mkdir" => eval_user_wrapper_path_method_result(path, name, context, values, |values| {
-            Ok(vec![values.int(0)?, values.int(0)?])
+            let mode = values.int(i64::from(options.permissions))?;
+            let flags = STREAM_REPORT_ERRORS | i64::from(options.recursive);
+            Ok(vec![mode, values.int(flags)?])
         }),
+        // php passes ($path, STREAM_REPORT_ERRORS).
         "rmdir" => eval_user_wrapper_path_method_result(path, name, context, values, |values| {
-            Ok(vec![values.int(0)?])
+            Ok(vec![values.int(STREAM_REPORT_ERRORS)?])
         }),
         _ => Ok(None),
     }

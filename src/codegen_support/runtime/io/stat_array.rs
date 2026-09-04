@@ -14,13 +14,16 @@ use crate::codegen_support::abi;
 /// `__rt_stat_array` / `__rt_lstat_array` / `__rt_fstat_array`: build a
 /// PHP-compatible associative array describing a path or file descriptor.
 ///
-/// The returned hash carries both numeric (0..=12) and string keys, in the
-/// order PHP documents:
+/// The returned hash carries both numeric (0..=12) and string keys, and php fills them ONE SET AT
+/// A TIME rather than in pairs — MEASURED, for `stat()`, `lstat()` and `fstat()` alike:
 ///
 /// ```text
-/// 0/dev, 1/ino, 2/mode, 3/nlink, 4/uid, 5/gid, 6/rdev,
-/// 7/size, 8/atime, 9/mtime, 10/ctime, 11/blksize, 12/blocks
+/// 0,1,2,3,4,5,6,7,8,9,10,11,12,dev,ino,mode,nlink,uid,gid,rdev,size,atime,mtime,ctime,blksize,blocks
 /// ```
+///
+/// Reading that as `0/dev, 1/ino, ...` — which is how the manual presents the FIELDS — and
+/// inserting each pair together produced `0,dev,1,ino,...`. Both key sets are there either way, so
+/// a lookup by name never noticed; anything reading the array as a SEQUENCE did.
 ///
 /// All values are inserted as `Int` (tag = 0). On stat failure the runtime
 /// returns a null hash pointer so builtin codegen can box PHP `false`.
@@ -31,7 +34,7 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     }
 
     let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
     // Frame layout:
     //   sp + 0 .. stat_buf       : stat buffer (must be at sp+0 for the syscall)
     //   sp + stat_buf            : hash pointer slot (8 bytes)
@@ -43,14 +46,14 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
 
     // Field descriptor: (numeric_idx, key_symbol, key_len, value_offset_fn,
     //                    load_instr_fn).
-    let mode_off = plat.stat_mode_offset();
+    let mode_off = plat.stat_mode_offset(emitter.target.arch);
     let size_off = plat.stat_size_offset();
     let atime_off = plat.stat_atime_offset();
     let mtime_off = plat.stat_mtime_offset();
     let ctime_off = plat.stat_ctime_offset();
     let ino_off = plat.stat_ino_offset();
-    let uid_off = plat.stat_uid_offset();
-    let gid_off = plat.stat_gid_offset();
+    let uid_off = plat.stat_uid_offset(emitter.target.arch);
+    let gid_off = plat.stat_gid_offset(emitter.target.arch);
     let dev_off = plat.stat_dev_offset();
     let rdev_off = plat.stat_rdev_offset();
     let nlink_off = plat.stat_nlink_offset();
@@ -85,8 +88,9 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
         emitter.instruction("bl __rt_hash_new");                                // returns hash pointer in x0
         emitter.instruction(&format!("str x0, [sp, #{}]", hash_slot));          // save hash pointer
 
-        for (idx, key_sym, key_len, load_instr) in &entries {
-            // numeric key insertion
+        // Every NUMERIC key first, then every named one: php's order, and not the pairwise one
+        // the field list reads like.
+        for (idx, _, _, load_instr) in &entries {
             emitter.instruction(&format!("ldr x0, [sp, #{}]", hash_slot));      // reload hash pointer
             emitter.instruction(&format!("mov x1, #{}", idx));                  // key_lo = numeric key value
             emitter.instruction("mov x2, #-1");                                 // key_hi = -1 (integer-key marker)
@@ -96,8 +100,8 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
             emitter.instruction("mov x5, #0");                                  // value tag = Int
             emitter.instruction("bl __rt_hash_set");                            // insert entry; x0 = updated hash
             emitter.instruction(&format!("str x0, [sp, #{}]", hash_slot));      // persist updated hash pointer
-
-            // string key insertion
+        }
+        for (_, key_sym, key_len, load_instr) in &entries {
             emitter.instruction(&format!("ldr x0, [sp, #{}]", hash_slot));      // reload hash pointer
             abi::emit_symbol_address(emitter, "x1", key_sym);                   // load page of the key literal
             emitter.instruction(&format!("mov x2, #{}", key_len));              // key length
@@ -117,10 +121,12 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.raw("    .p2align 2");                                              // ensure 4-byte alignment for the next runtime helper
     emitter.comment("--- runtime: stat (associative array) ---");
     emitter.label_global("__rt_stat_array");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack frame
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
-    emitter.instruction("bl __rt_cstr");                                        // null-terminate the path
+    emitter.instruction("bl __rt_path_cstr");                                   // null-terminate the path
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer
     emitter.syscall(338);                                                       // stat(path, buf)
     emitter.instruction("cmp x0, #0");                                          // success?
@@ -143,7 +149,7 @@ pub fn emit_stat_array(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack frame
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_offset));      // save frame pointer and return address
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
-    emitter.instruction("bl __rt_cstr");                                        // null-terminate the path
+    emitter.instruction("bl __rt_path_cstr");                                   // null-terminate the path
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer
     emitter.syscall(340);                                                       // lstat(path, buf)
     emitter.instruction("cmp x0, #0");                                          // success?
@@ -238,8 +244,8 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("mov rsi, 0");                                      // second hash_new argument: value type = Int
         emitter.instruction("call __rt_hash_new");                              // returns hash pointer in rax
         emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", hash_slot_neg)); // save hash pointer
-        for (idx, key_sym, key_len, load_instr) in entries {
-            // numeric key
+        // See the AArch64 arm: every NUMERIC key first, then every named one.
+        for (idx, _, _, load_instr) in entries {
             emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", hash_slot_neg)); // hash pointer
             emitter.instruction(&format!("mov rsi, {}", idx));                  // key_lo = numeric key
             emitter.instruction("mov rdx, -1");                                 // key_hi = -1 (integer marker)
@@ -249,8 +255,8 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
             emitter.instruction("mov r9, 0");                                   // value tag = Int
             emitter.instruction("call __rt_hash_set");                          // insert
             emitter.instruction(&format!("mov QWORD PTR [rbp - {}], rax", hash_slot_neg)); // persist hash
-
-            // string key
+        }
+        for (_, key_sym, key_len, load_instr) in entries {
             emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", hash_slot_neg)); // hash pointer
             abi::emit_symbol_address(emitter, "rsi", key_sym);                  // key pointer
             emitter.instruction(&format!("mov rdx, {}", key_len));              // key length
@@ -268,10 +274,12 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stat (associative array) ---");
     emitter.label_global("__rt_stat_array");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction(&format!("sub rsp, {}", frame));                        // reserve stat buffer + hash slot
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc stat() argument
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc stat() argument: stat buffer
     emitter.instruction("call stat");                                           // libc stat()
@@ -294,7 +302,7 @@ fn emit_stat_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction(&format!("sub rsp, {}", frame));                        // reserve stat buffer + hash slot
-    emitter.instruction("call __rt_cstr");                                      // path → C string in rax
+    emitter.instruction("call __rt_path_cstr");                                 // path → C string in rax
     emitter.instruction("mov rdi, rax");                                        // first libc lstat() argument
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_neg));              // second libc lstat() argument
     emitter.instruction("call lstat");                                          // libc lstat()

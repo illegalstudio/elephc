@@ -37,7 +37,7 @@ class ContractPipelineTests(unittest.TestCase):
         cls.render_by_name = {record["name"]: record for record in registry}
 
     def test_all_non_registry_contract_routes_are_exported(self) -> None:
-        """Keep the six constructs, 38 preludes, and three eval-only routes explicit."""
+        """Keep the six constructs, 58 preludes, and three eval-only routes explicit."""
         routes = Counter(
             (record.get("aot") or {}).get("kind")
             for record in self.records
@@ -49,10 +49,12 @@ class ContractPipelineTests(unittest.TestCase):
                 {
                     "language-construct": 5,
                     "dedicated-syntax": 1,
-                    # Four hash_* plus the thirty-four PHP-visible curl_* contracts,
-                    # which the canonical `--features curl` docs configuration
-                    # publishes (see extract.run_gen_builtins).
-                    "prelude": 38,
+                    # MEASURED on the merged catalogue: `dir()`, the 14 `gz*` stream
+                    # functions, `zlib_get_coding_type` and `similar_text` from this
+                    # branch, plus the four hash_* and the thirty-four PHP-visible
+                    # curl_* contracts the canonical `--features curl` docs
+                    # configuration publishes (see extract.run_gen_builtins).
+                    "prelude": 58,
                     "none": 3,
                 }
             ),

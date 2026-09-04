@@ -22,10 +22,10 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_php_input` runtime helper for the active target.
 ///
-/// When `web` is true, returns the captured request body as an owned PHP string
-/// (empty body → null pointer → `false`, a tolerable edge case). When `web` is
-/// false, returns a null pointer so `file_get_contents('php://input')` boxes to
-/// `false` in a non-web binary without referencing the bridge.
+/// When `web` is true, returns the captured request body as an owned PHP string. When `web` is
+/// false there is no body to return — and php answers the EMPTY STRING for that, in CLI, whether
+/// or not stdin holds anything. Both arms end at the same place: a real pointer of length zero,
+/// which is how `file_get_contents()` already tells `""` from `false`.
 pub fn emit_php_input(emitter: &mut Emitter, web: bool) {
     if emitter.target.arch == Arch::X86_64 {
         emit_php_input_x86_64(emitter, web);
@@ -45,9 +45,12 @@ pub fn emit_php_input(emitter: &mut Emitter, web: bool) {
         emitter.bl_c("elephc_web_body_ptr");                                    // x0 = pointer to the request body bytes from the bridge
         emitter.instruction("ldr x1, [sp, #8]");                                // reload the body length into the ptr_read_string length argument
         emitter.instruction("bl __rt_ptr_read_string");                         // copy the body into an owned PHP string (x1=ptr, x2=len out)
-    } else {
-        emitter.instruction("mov x1, #0");                                      // non-web: null string pointer so the caller boxes PHP false
+        emitter.instruction("cbnz x1, __rt_php_input_ret");                     // a body of its own: hand it back
     }
+    // No body at all, in either build: php answers "" and not false.
+    crate::codegen::abi::emit_symbol_address(emitter, "x1", "_rt_diag_nl");     // any real address; the length is what makes it empty
+    emitter.instruction("mov x2, #0");
+    emitter.label("__rt_php_input_ret");
 
     emitter.instruction("ldr x30, [sp]");                                       // restore the caller return address
     emitter.instruction("add sp, sp, #16");                                     // release the helper frame
@@ -70,9 +73,13 @@ fn emit_php_input_x86_64(emitter: &mut Emitter, web: bool) {
         emitter.bl_c("elephc_web_body_ptr");                                    // rax = pointer to the request body bytes from the bridge
         emitter.instruction("mov rdx, QWORD PTR [rbp - 8]");                    // reload the body length into the ptr_read_string length argument
         emitter.instruction("call __rt_ptr_read_string");                       // copy the body into an owned PHP string (rax=ptr, rdx=len out)
-    } else {
-        emitter.instruction("xor eax, eax");                                    // non-web: null string pointer so the caller boxes PHP false
+        emitter.instruction("test rax, rax");
+        emitter.instruction("jnz __rt_php_input_ret_x86");                      // a body of its own: hand it back
     }
+    // No body at all, in either build: php answers "" and not false.
+    crate::codegen::abi::emit_symbol_address(emitter, "rax", "_rt_diag_nl");    // any real address; the length is what makes it empty
+    emitter.instruction("xor edx, edx");
+    emitter.label("__rt_php_input_ret_x86");
 
     emitter.instruction("add rsp, 16");                                         // release the aligned spill slot
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

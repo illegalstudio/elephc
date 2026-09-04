@@ -450,6 +450,14 @@ pub trait RuntimeValueOps {
     /// Extracts the high raw payload word from a boxed Mixed cell.
     fn raw_value_high_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Reports whether a HOST resource payload names an already-closed handle.
+    ///
+    /// The answer belongs to the compiled program's resource registry, not to eval:
+    /// since the generation-safe registry migration a live payload is an opaque handle
+    /// and `fclose` publishes the closed state on the registry slot, so no property of
+    /// the payload word itself can tell the two apart.
+    fn resource_is_closed(&mut self, payload: u64) -> Result<bool, EvalStatus>;
+
     /// Duplicates one raw string payload so a staged native by-ref slot owns it.
     fn retain_raw_string_words(&mut self, ptr: u64, len: u64) -> Result<(u64, u64), EvalStatus>;
 
@@ -498,6 +506,17 @@ pub trait RuntimeValueOps {
 
     /// Emits or suppresses one PHP runtime warning through the target runtime.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;
+
+    /// Raises the `@` diagnostic-suppression depth for the expression being evaluated.
+    ///
+    /// php's error-suppression operator silences every diagnostic raised while its inner
+    /// expression evaluates — value and exceptions pass through untouched. The depth
+    /// nests, because `@` expressions do.
+    fn suppress_begin(&mut self);
+
+    /// Lowers the `@` diagnostic-suppression depth; the pair must unwind on EVERY exit,
+    /// exceptional ones included, or one caught throw would silence the rest of the run.
+    fn suppress_end(&mut self);
 
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;

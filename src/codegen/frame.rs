@@ -258,6 +258,9 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // Must follow the argc/argv store: the signal() call clobbers the process
+    // argument registers, which silently emptied $argc/$argv.
+    abi::emit_ignore_sigpipe(ctx.emitter);
     // Measure the stack only after argc/argv are safe in globals: the initializer is an
     // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
     // is never guarded — it is the root of every call chain and runs before the floor exists.
@@ -269,6 +272,8 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
+    ctx.emitter.comment("initialize opaque resource registry");
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_init");
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
@@ -466,10 +471,19 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    // Deterministic resource shutdown, symmetric with the per-request reset the
+    // --web path already performs at frame.rs:420. Without it a CLI program leaks
+    // every request-owned resource still live at exit, most visibly the default
+    // stream context that the first stream open creates.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_request_reset");
+    // Then release the slot array itself. Only the CLI does this: a --web worker
+    // reuses one registry across requests, so it stops at the request reset above.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_teardown");
     // The exact root brackets every PHP callback that shutdown can invoke:
-    // output handlers above and object destructors from the cleanup paths. If
-    // it exits earlier, those functions become disconnected graph roots and
-    // their work no longer partitions `{main}`.
+    // output handlers above, object destructors from the cleanup paths, and the
+    // resource teardown just above — which closes streams and can run a wrapper's
+    // `stream_close()`. If it exits earlier, those functions become disconnected
+    // graph roots and their work no longer partitions `{main}`.
     emit_instr_exit(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
@@ -523,6 +537,10 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    // The CLI superglobals no longer need a release of their own: the prologue seeds only the
+    // ones the program NAMES, so the loop below — which walks exactly the named globals — is
+    // already their owner. While seeding was unconditional this loop could not see them, and
+    // five hashes leaked out of every program that never touched one.
     let globals = ctx.module.data.global_names.clone();
     for name in globals {
         if ctx.module.extern_globals.contains_key(&name) {
@@ -590,6 +608,8 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    ctx.emitter.comment("initialize opaque resource registry");
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_init");
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
@@ -613,9 +633,19 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
+    // Drain still-active output buffers, for the same reason and in the same position
+    // as the CLI epilogue: PHP flushes whatever `ob_start()` left open at request
+    // shutdown, and user output handlers must run while locals and statics are alive.
+    // Without this a request that left a buffer open returned nothing AND swallowed
+    // every later request served by the same worker, because the level leaked.
+    abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
     emit_main_local_epilogue_cleanup(ctx);
-    // Per-request local teardown may run PHP destructors, so it belongs inside
-    // the request's `{main}` frame just like process-exit teardown does.
+    ctx.emitter
+        .comment("close and invalidate abandoned request-owned resources");
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_request_reset");
+    // Per-request local teardown may run PHP destructors — and a resource reset may run a
+    // wrapper's `stream_close()` — so the exact root closes after it, inside the request's
+    // `{main}` frame just as process-exit teardown does.
     emit_instr_exit(ctx);
     // Under `--web` the handler returns to the bridge server loop instead of
     // exiting, so the exit-based main epilogue (where `--gc-stats` normally
@@ -673,6 +703,9 @@ pub(super) fn emit_web_entry_stub(
     ctx.emitter
         .comment("save argc/argv to globals for the bridge and handler");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // Must follow the argc/argv store: the signal() call clobbers the process
+    // argument registers, which silently emptied $argc/$argv.
+    abi::emit_ignore_sigpipe(ctx.emitter);
     // `--web` forks its workers from this process and each worker serves requests on its own
     // main stack, so the floor measured here stays valid in every child. Measuring before the
     // bridge call also keeps the clobbered argument registers away from `elephc_web_run`.
@@ -762,8 +795,8 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
             ctx.local_slot_has_store(local.id) || function_has_eval_scope(ctx.function)
         })
         .filter_map(|local| {
-            let ty = local.php_type.codegen_repr();
-            if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
+            let ty = cleanup_storage_type(&local.php_type);
+            if !cleanup_tracked_codegen_type(&ty) {
                 return None;
             }
             let offset = ctx.local_offset(local.id).ok()?;
@@ -1111,7 +1144,7 @@ fn function_cleanup_locals(
                 || function_has_eval_scope(ctx.function)
         })
         .filter_map(|local| {
-            let ty = local.php_type.codegen_repr();
+            let ty = cleanup_storage_type(&local.php_type);
             if !cleanup_tracked_codegen_type(&ty) {
                 return None;
             }
@@ -1163,12 +1196,35 @@ pub(super) fn emit_owned_local_cleanup(
     match ty {
         PhpType::Str => emit_main_string_cleanup(ctx, offset),
         PhpType::Callable => emit_main_refcounted_cleanup(ctx, offset, ty),
+        PhpType::Resource(_) => emit_resource_local_cleanup(ctx, offset),
         other if other.is_refcounted() => emit_main_refcounted_cleanup(ctx, offset, other),
         _ => {}
     }
     if let Some(done) = done {
         ctx.emitter.label(&done);
     }
+}
+
+/// Releases an opaque resource handle owned by a local slot exactly once.
+fn emit_resource_local_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let done = ctx.next_label("resource_local_cleanup_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", result_reg, done));          // skip an uninitialized or already-detached resource owner
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", result_reg, result_reg));   // is an opaque resource handle still owned by this slot?
+            ctx.emitter.instruction(&format!("jz {}", done));                   // skip an uninitialized or already-detached resource owner
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the opaque handle to the registry release helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+    ctx.emitter.label(&done);
 }
 
 /// Returns whether a local kind can own values through ordinary `StoreLocal`.
@@ -1184,8 +1240,8 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
 
 /// Returns the local slot whose cleanup this return path must skip, if ownership is transferred.
 pub(super) fn return_cleanup_skip_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
-    let result_ty = function.value(value)?.php_type.codegen_repr();
-    let return_ty = function.return_php_type.codegen_repr();
+    let result_ty = cleanup_storage_type(&function.value(value)?.php_type);
+    let return_ty = cleanup_storage_type(&function.return_php_type);
     let mut visited = HashSet::new();
     return_cleanup_skip_slot_inner(function, value, &result_ty, &return_ty, &mut visited)
 }
@@ -1277,12 +1333,27 @@ fn local_codegen_type(function: &Function, slot: LocalSlotId) -> Option<PhpType>
         .locals
         .get(slot.as_raw() as usize)
         .filter(|local| local.id == slot)
-        .map(|local| local.php_type.codegen_repr())
+        .map(|local| cleanup_storage_type(&local.php_type))
 }
 
 /// Returns true when a codegen type carries refcounted ownership to release or transfer.
 fn cleanup_tracked_codegen_type(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()
+    matches!(
+        ty,
+        PhpType::Str | PhpType::Callable | PhpType::Resource(_)
+    ) || ty.is_refcounted()
+}
+
+/// Returns the runtime storage type used for local-owner cleanup.
+///
+/// Resources share an integer machine representation, but their local owner
+/// must remain distinguishable from scalar integers so the registry reference
+/// is released when the slot leaves scope.
+fn cleanup_storage_type(ty: &PhpType) -> PhpType {
+    match ty {
+        PhpType::Resource(kind) => PhpType::Resource(kind.clone()),
+        other => other.codegen_repr(),
+    }
 }
 
 /// Returns true when loading a local into an SSA result leaves the same owner in the result.
@@ -1500,6 +1571,16 @@ fn emit_instr_init(ctx: &mut FunctionContext<'_>) {
     let scratch = abi::int_arg_reg_name(target, 0);
     abi::emit_symbol_address(ctx.emitter, scratch, &io_fn);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &target.extern_symbol("elephc_instr_io_fn"), 0);
+    // The stream counter's slot, filled the same way and for the same reason: the
+    // emitted stream builtins read it and stay inert while it is zero.
+    let stream = target.extern_symbol("elephc_instr_stream");
+    abi::emit_symbol_address(ctx.emitter, scratch, &stream);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        scratch,
+        &target.extern_symbol("elephc_instr_stream_fn"),
+        0,
+    );
     // Companion slot: elephc_instr_query, so the PDO bridge can report each
     // query's SQL text (the N+1 view) the same pay-for-use way as the counter.
     let query_fn = target.extern_symbol("elephc_instr_query");

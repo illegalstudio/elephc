@@ -22,7 +22,7 @@ use crate::codegen::Emit;
 use crate::codegen::WebIsolation;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
-use crate::ir::{BasicBlock, Function, InstId, Module};
+use crate::ir::{BasicBlock, Function, Immediate, InstId, Module};
 use crate::names::{
     function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -105,7 +105,10 @@ pub(super) fn emit_module(
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
-    if web {
+    // Reserved in every build, not only under `--web`: a CLI program reads these too, and PHP
+    // has them as arrays there. Leaving the storage absent left `$_SERVER` reading as a zeroed
+    // word — a null — which `count()` now correctly refuses instead of silently answering 0.
+    {
         let sg_type = crate::superglobals::superglobal_type();
         let sg_size = sg_type.codegen_repr().stack_size().max(8);
         for name in crate::superglobals::SUPERGLOBALS {
@@ -907,6 +910,91 @@ fn class_method_entry_symbol(function: &Function) -> Result<String> {
 /// a separate process-entry stub is emitted that calls `elephc_web_run` with
 /// argc/argv and the handler address, then exits with the bridge return value.
 #[allow(clippy::too_many_arguments)]
+/// PHP's auto-globals: the superglobals a CLI request materializes ON MENTION.
+///
+/// Two measurements of `php -n` look contradictory and are both right. Walking `$GLOBALS`
+/// reports `$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE` and `$_FILES` present while `$_ENV` and
+/// `$_REQUEST` are absent; yet `isset($_ENV)` answers TRUE. The difference is the mention
+/// itself: PHP compiles a reference to an auto-global into a marker and populates the variable
+/// at run time, so naming `$_ENV` is what brings it into existence. That is why the seeding
+/// below is conditional — it is not an optimisation, it is the rule PHP follows.
+///
+/// `$_SESSION` and `$GLOBALS` are deliberately absent from this list. `$_SESSION` appears only
+/// once `session_start()` has run, so seeding it would make `isset($_SESSION)` answer the
+/// opposite of PHP in a fresh script, and PHP's own regression test says so.
+pub(crate) const CLI_INITIALIZED_SUPERGLOBALS: &[&str] = &[
+    "_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST",
+];
+
+/// Gives those superglobals a live empty hash before a CLI program's first statement.
+///
+/// PHP has these as arrays in CLI — `count($_SERVER)` answers 68 there, not an error — while
+/// elephc reserved the storage only under `--web` and left it zeroed otherwise. A zeroed word
+/// reads back as null, which was invisible for as long as `count()` answered 0 for a null and
+/// surfaced the moment it started raising PHP's TypeError. Seeding an empty hash is the floor,
+/// not the finish: populating them the way PHP does is separate work.
+fn emit_cli_superglobal_initializers(ctx: &mut FunctionContext<'_>) {
+    for name in CLI_INITIALIZED_SUPERGLOBALS {
+        // Seed only what the program names. A superglobal no statement mentions cannot be
+        // observed, and seeding it is not free: each hash is a live heap block from the first
+        // instruction onwards, which exhausted the deliberately tiny arenas the allocator's own
+        // tests run under and made every program pay for storage it never reads.
+        if !ctx.has_global_name(name) {
+            continue;
+        }
+        let symbol = crate::names::ir_global_symbol(name);
+        // __rt_hash_new takes TWO arguments: capacity AND the value_type tag. Passing only the
+        // capacity left the tag reading whatever the register happened to hold, which built a
+        // malformed hash that boxed back as null — the symptom that looked like the seeding
+        // never happening at all.
+        let (cap_reg, tag_reg) = match ctx.emitter.target.arch {
+            Arch::AArch64 => ("x0", "x1"),
+            Arch::X86_64 => ("rdi", "rsi"),
+        };
+        abi::emit_load_int_immediate(ctx.emitter, cap_reg, 8);
+        abi::emit_load_int_immediate(ctx.emitter, tag_reg, 7);                  // entries are boxed Mixed
+        abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+        // Boxed, not raw: outside `--web` the checker leaves these names `Mixed`, so the slot is
+        // read as a tagged cell. `__rt_mixed_from_value` takes the TAG first and the payload
+        // second — handing it the pointer as the tag is what made the cell read back as null.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // the hash is the payload
+                ctx.emitter.instruction("mov x0, #5");                          // tag 5 = associative array
+                ctx.emitter.instruction("mov x2, #0");
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // the hash is the payload
+                ctx.emitter.instruction("mov rax, 5");                          // tag 5 = associative array
+                ctx.emitter.instruction("xor esi, esi");
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        // The boxer RETAINS the hash, so it now has two owners: this frame and the cell. Drop
+        // this one, leaving the cell as the single owner the epilogue release can free —
+        // otherwise every seeded superglobal survives to exit and a heap-debug run reports five
+        // live blocks in a program that never touched a superglobal at all.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_push_reg(ctx.emitter, "x0");
+                ctx.emitter.instruction("ldr x0, [x0, #8]");                    // the hash the cell carries
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+                abi::emit_pop_reg(ctx.emitter, "x0");
+            }
+            Arch::X86_64 => {
+                abi::emit_push_reg(ctx.emitter, "rax");
+                // __rt_decref_hash takes its pointer in RAX on x86, not rdi. Passing it in rdi
+                // decremented whatever rax happened to hold and corrupted the heap — a segfault
+                // at startup in every program, on the one architecture this host cannot run.
+                ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");        // the hash the cell carries
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            }
+        }
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
+    }
+}
+
 fn emit_main_function(
     module: &Module,
     function: &Function,
@@ -935,10 +1023,13 @@ fn emit_main_function(
         frame::emit_web_handler_prologue(&mut ctx);
     } else {
         frame::emit_main_prologue(&mut ctx);
+        emit_cli_superglobal_initializers(&mut ctx);
     }
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
     }
+    emit_http_response_header_deprecation(&mut ctx);
+    emit_tentative_return_deprecations(&mut ctx);
     // Enum cases are NOT initialized here any more: each case now materializes on
     // its first evaluation through `super::enum_singletons`, so a case that user
     // code never touches allocates nothing and burns no object handle — which is
@@ -957,6 +1048,127 @@ fn emit_main_function(
         frame::emit_web_entry_stub(&mut ctx, web_isolation);
     }
     Ok(())
+}
+
+/// php-src's `E_DEPRECATED` text for naming `$http_response_header`.
+///
+/// MEASURED on `php -n` 8.5.6, where the notice reads `The predefined locally
+/// scoped $http_response_header variable is deprecated, call
+/// http_get_last_response_headers() instead`. The ` in %s on line %d` suffix php
+/// appends is supplied by the diagnostic channel, from the line published in
+/// `emit_http_response_header_deprecation` below.
+const HTTP_RESPONSE_HEADER_DEPRECATION: &str =
+    "Deprecated: The predefined locally scoped $http_response_header variable is deprecated, \
+     call http_get_last_response_headers() instead\n";
+
+/// Emits php 8.5's `$http_response_header` deprecation once, before any user output.
+///
+/// php raises this notice while COMPILING a file that names the variable, so it
+/// fires once per file, before the script produces anything, and even when the
+/// naming statement never runs (`if (false) { echo $http_response_header; }` still
+/// prints it — MEASURED). elephc's equivalent of "the file names it" is the
+/// variable reaching `module.data.global_names`, and its equivalent of "before
+/// any output" is the main prologue, so the notice lands there — once, whatever
+/// the number of mentions, which is also what php does.
+/// Emits php's tentative-return deprecations, which it raises while LINKING each class.
+///
+/// Same reasoning as the notice below: php raises these while COMPILING the file, so they fire
+/// before the script produces anything and whether or not the method is ever called. The checker
+/// computed them from the finished class map; each carries the line of the METHOD php names, which
+/// is why the location is published per message rather than once.
+fn emit_tentative_return_deprecations(ctx: &mut FunctionContext<'_>) {
+    let deprecations = ctx.module.tentative_return_deprecations.clone();
+    for (line, message) in deprecations {
+        let (label, len) = ctx.data.add_string(message.as_bytes());
+        // BEFORE the message registers are loaded: the publisher works through scratch registers.
+        super::lower_inst::publish_diagnostic_line(ctx, line);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_symbol_address(ctx.emitter, "x1", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+                abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    }
+}
+
+fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {
+    if crate::codegen::compile_php_version() < crate::php_version::PhpVersion::Php85 {
+        return;
+    }
+    if !ctx
+        .module
+        .data
+        .global_names
+        .iter()
+        .any(|name| name == "http_response_header")
+    {
+        return;
+    }
+    let (label, len) = ctx
+        .data
+        .add_string(HTTP_RESPONSE_HEADER_DEPRECATION.as_bytes());
+    // BEFORE the message registers are loaded: the publisher works through scratch registers,
+    // and which ones those are is not this call site's business to depend on.
+    super::lower_inst::publish_diagnostic_line(
+        ctx,
+        first_mention_line(ctx.module, "http_response_header"),
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");                       // php's stdout diagnostic funnel, and `@` suppresses it
+}
+
+/// Returns the source line of the FIRST mention of `$name`, for a diagnostic raised about it.
+///
+/// The mention is what php names — MEASURED: `if (false) { echo $http_response_header; }` on line
+/// 3 prints `on line 3`, even though the statement never runs, because php raises this while
+/// COMPILING. `global_names` interns names without spans, so the line has to come back from the
+/// instructions that carry the name as their immediate. The MINIMUM is taken rather than the
+/// first one walked: several functions are scanned and their instruction order is the lowering's,
+/// not the source's, while php reports the earliest mention in the file.
+fn first_mention_line(module: &crate::ir::Module, name: &str) -> u32 {
+    let Some(data_id) = module
+        .data
+        .global_names
+        .iter()
+        .position(|candidate| candidate.trim_start_matches('\\') == name)
+    else {
+        return 0;
+    };
+    let mut earliest = 0u32;
+    let groups = [
+        &module.functions,
+        &module.class_methods,
+        &module.closures,
+    ];
+    for group in groups {
+        for function in group.iter() {
+            for inst in &function.instructions {
+                if !matches!(inst.immediate, Some(Immediate::GlobalName(id)) if id.as_raw() as usize == data_id)
+                {
+                    continue;
+                }
+                let Some(span) = inst.span else { continue };
+                if span.line != 0 && (earliest == 0 || span.line < earliest) {
+                    earliest = span.line;
+                }
+            }
+        }
+    }
+    earliest
 }
 
 /// Returns true when a function is the process entry function.

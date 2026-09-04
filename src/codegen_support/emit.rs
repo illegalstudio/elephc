@@ -161,6 +161,27 @@ impl Emitter {
         }
     }
 
+    /// Declares a global symbol that is a SECOND ENTRY POINT into the block already being
+    /// emitted, not a function of its own.
+    ///
+    /// Use this — never `label_global` — when the code above reaches the new name by falling
+    /// through or by an ordinary branch. On macOS each global otherwise starts its own subsection
+    /// and the linker is free to move or strip it: an assembler-resolved branch between two
+    /// subsections carries no relocation, so the dependency is invisible and the target
+    /// disappears from any program that does not name it some other way. `.alt_entry` says the
+    /// two are one block. On Linux the equivalent statement is simply not opening a new section.
+    pub fn label_global_alt_entry(&mut self, name: &str) {
+        if self.platform == Platform::Linux {
+            let _ = writeln!(self.buf, ".globl {}", name);
+            let _ = writeln!(self.buf, ".type {}, %function", name);
+            let _ = writeln!(self.buf, "{}:", name);
+        } else {
+            let _ = writeln!(self.buf, ".alt_entry {}", name);
+            let _ = writeln!(self.buf, ".globl {}", name);
+            let _ = writeln!(self.buf, "{}:", name);
+        }
+    }
+
     /// The section a later [`Self::reopen_text_section`] should return to.
     pub fn current_text_section(&self) -> Option<String> {
         self.current_text_section.clone()

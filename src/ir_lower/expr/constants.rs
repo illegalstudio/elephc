@@ -194,6 +194,11 @@ fn emit_typed_constant(
     expr: &Expr,
 ) -> LoweredValue {
     let ir_type = value_ir_type(&php_type);
+    let ownership = if matches!(php_type, PhpType::Resource(_)) {
+        Ownership::Persistent
+    } else {
+        Ownership::for_php_type(&php_type)
+    };
     let value = ctx
         .builder
         .emit_with_effects(
@@ -202,7 +207,7 @@ fn emit_typed_constant(
             immediate,
             ir_type,
             php_type.clone(),
-            Ownership::for_php_type(&php_type),
+            ownership,
             op.default_effects(),
             Some(expr.span),
         )

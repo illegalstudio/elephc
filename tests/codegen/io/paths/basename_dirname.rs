@@ -182,3 +182,25 @@ fn test_dirname_levels_past_root_stays_root() {
     let out = compile_and_run(r#"<?php echo dirname("/usr", 3);"#);
     assert_eq!(out, "/");
 }
+
+/// Verifies `dirname("")` answers the EMPTY string, and the neighbours that look like it do not.
+///
+/// MEASURED on `php -n` 8.5.6: an empty path answers `""`, while a path with no separator at all
+/// — `"c.txt"` — answers `"."`. The two read as the same case and are not, which is how the empty
+/// one was written to answer `"."` and stayed that way, documented contract included.
+#[test]
+fn dirname_of_an_empty_path_is_empty_not_a_dot() {
+    let out = compile_and_run_capture(
+        r#"<?php
+foreach (["", "c.txt", ".", "..", "/", "//", "/a/b", "/a/b/", "a//b///c"] as $p) {
+    echo var_export(dirname($p), true), "|", var_export(basename($p), true), ";";
+}
+echo "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "''|'';'.'|'c.txt';'.'|'.';'.'|'..';'/'|'';'/'|'';'/a'|'b';'/a'|'b';'a//b'|'c';\n"
+    );
+}

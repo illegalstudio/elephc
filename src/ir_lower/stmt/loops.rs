@@ -23,8 +23,12 @@ pub(super) fn lower_while(
     branch_to(ctx, header);
 
     ctx.builder.position_at_end(header);
+    // The back edge re-enters the condition, so a store inside it — `while (($s = f()) !== '')`,
+    // the idiomatic read loop — overwrites the previous iteration's value and must release it.
+    ctx.enter_loop_back_edge_expression();
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
+    ctx.leave_loop_back_edge_expression();
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: body_block,
@@ -73,8 +77,10 @@ pub(super) fn lower_do_while(
     branch_to(ctx, cond_block);
 
     ctx.builder.position_at_end(cond_block);
+    ctx.enter_loop_back_edge_expression();
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
+    ctx.leave_loop_back_edge_expression();
     ctx.builder.terminate(Terminator::CondBr {
         cond: cond.value,
         then_target: body_block,
@@ -136,8 +142,11 @@ fn lower_for_once(
 
     ctx.builder.position_at_end(header);
     let cond = if let Some(condition) = condition {
+        ctx.enter_loop_back_edge_expression();
         let cond = lower_expr(ctx, condition);
-        ctx.truthy_consuming(cond, Some(condition.span))
+        let cond = ctx.truthy_consuming(cond, Some(condition.span));
+        ctx.leave_loop_back_edge_expression();
+        cond
     } else {
         emit_const_bool(ctx, true, None)
     };
@@ -163,7 +172,9 @@ fn lower_for_once(
 
     ctx.builder.position_at_end(update_block);
     if let Some(update) = update {
+        ctx.enter_loop_back_edge_expression();
         lower_stmt(ctx, update);
+        ctx.leave_loop_back_edge_expression();
     }
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);

@@ -83,6 +83,7 @@ pub(crate) fn lower_main(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.widened_scalar_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -205,6 +206,7 @@ pub(crate) fn lower_user_function(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.widened_scalar_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -311,6 +313,7 @@ pub(crate) fn lower_class_method(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.widened_scalar_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -407,6 +410,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.widened_scalar_locals,
         &bind_kill_sites,
         &retype_sites,
         &mixed_storage_store_sites,
@@ -518,6 +522,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.widened_scalar_locals,
         &bind_kill_sites,
         &retype_sites,
         &mixed_storage_store_sites,
@@ -622,6 +627,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.widened_scalar_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -977,6 +983,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.widened_scalar_locals,
         &check_result.local_bind_kill_sites,
         &check_result.local_retype_sites,
         &check_result.mixed_storage_store_sites,
@@ -1183,6 +1190,7 @@ fn lower_closure_function_with_signature(
         parent.builtin_call_types,
         parent.loop_storage_types,
         parent.string_incdec_locals,
+        parent.widened_scalar_locals,
         parent.bind_kill_sites,
         parent.retype_sites,
         parent.mixed_storage_store_sites,
@@ -1224,6 +1232,7 @@ fn lower_body_into_function(
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
+    widened_scalar_locals: &std::collections::HashSet<(String, String)>,
     bind_kill_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     retype_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     mixed_storage_store_sites: &std::collections::HashMap<
@@ -1277,6 +1286,7 @@ fn lower_body_into_function(
         builtin_call_types,
         loop_storage_types,
         string_incdec_locals,
+        widened_scalar_locals,
         bind_kill_sites,
         retype_sites,
         mixed_storage_store_sites,
@@ -1658,7 +1668,18 @@ fn magic_method_param_keeps_eir_contract(
 }
 
 /// Widens inferred container return elements that may be built from dynamic params.
+///
+/// MUST STAY IN STEP with the call-site copy in `crate::ir_lower::expr::call_return_types`:
+/// this one types the body and that one types the caller. When they disagree the caller
+/// reads the callee's return in the wrong representation, with nothing to flag it.
 fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
+    // A resource can only leave such a function BOXED. `codegen_repr()` collapses
+    // Resource to Int, so the body ended up casting its now-Mixed parameter down to a
+    // plain integer: `function f($c) { return $c; }` handed back the resource's display
+    // id, and `is_resource()` on the result answered false.
+    if matches!(return_type, PhpType::Resource(_)) {
+        return PhpType::Mixed;
+    }
     match return_type.codegen_repr() {
         PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
         PhpType::AssocArray { key, .. } => PhpType::AssocArray {
@@ -1849,6 +1870,12 @@ fn direct_closure_return_expr_type(
         if let Some((_, php_type)) = params.iter().find(|(param_name, _)| param_name == name) {
             return php_type.clone();
         }
+        // Neither captured nor a parameter, in a body that is exactly `return $name;`: PHP has
+        // no other way for that name to hold anything, so the read is an undefined one and the
+        // closure returns null. The syntactic fallback below answers `int` for any variable,
+        // which stamped this closure `-> I64` and made `var_dump($f())` print
+        // `int(9223372036854775806)` — the raw null sentinel read back as an integer.
+        return PhpType::Void;
     }
     if let ExprKind::PropertyAccess { object, property } = &expr.kind {
         let receiver_name = match &object.kind {

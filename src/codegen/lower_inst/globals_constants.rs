@@ -166,6 +166,36 @@ pub(super) fn lower_const_bool(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers a null constant to the selected one-word or tagged-scalar representation.
+/// Lowers a read of a local no store definitely reached: PHP's warning, then `null`.
+///
+/// The message arrived finished from EIR — both halves are compile-time constants — so this only
+/// has to hand it to the shared diagnostic funnel. The ` in FILE on line N` suffix is NOT appended
+/// here: the instruction carries `MAY_WARN`, so `publish_diagnostic_location` has already stamped
+/// the line, exactly as it does for every other warning.
+///
+/// The value produced is the same `null` `Op::ConstNull` produces, and by the same helper, so a
+/// consumer expecting a tagged scalar gets one; PHP's `zval_undefined_cv` likewise answers with
+/// `&EG(uninitialized_zval)` rather than a value of its own.
+pub(super) fn lower_warned_null(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let data = expect_data(inst)?;
+    let (label, len) = ctx.intern_string_data(data)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    lower_const_null(ctx, inst)
+}
+
 pub(super) fn lower_const_null(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.result_php_type.codegen_repr() == PhpType::TaggedScalar {
         crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);

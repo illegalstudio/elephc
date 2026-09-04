@@ -39,6 +39,21 @@ pub(super) fn array_filter_source_element_type(ty: PhpType) -> Result<PhpType> {
                 elem
             )))
         }
+        // An associative source filters through the same runtime; only its keys already exist.
+        PhpType::AssocArray { value, .. } => {
+            let value = value.codegen_repr();
+            if matches!(
+                value,
+                PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Void | PhpType::Never
+            ) || value.is_refcounted()
+            {
+                return Ok(value);
+            }
+            Err(CodegenIrError::unsupported(format!(
+                "array_filter associative-array value PHP type {:?}",
+                value
+            )))
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "array_filter for PHP type {:?}",
             other
@@ -49,6 +64,14 @@ pub(super) fn array_filter_source_element_type(ty: PhpType) -> Result<PhpType> {
 /// Verifies the filtered result preserves the source element type metadata.
 pub(super) fn require_array_filter_result_type(source_elem_ty: &PhpType, result_ty: &PhpType) -> Result<()> {
     match result_ty {
+        // php's `array_filter()` preserves keys, so the result is a keyed table whatever the
+        // source was — an indexed array cannot express `[1 => 1, 2 => 2]`.
+        PhpType::AssocArray { value, .. }
+            if value.codegen_repr() == source_elem_ty.codegen_repr()
+                || matches!(source_elem_ty, PhpType::Never | PhpType::Void) =>
+        {
+            Ok(())
+        }
         PhpType::Array(elem)
             if elem.codegen_repr() == source_elem_ty.codegen_repr()
                 || matches!(source_elem_ty, PhpType::Never | PhpType::Void) =>
@@ -60,11 +83,6 @@ pub(super) fn require_array_filter_result_type(source_elem_ty: &PhpType, result_
             other, source_elem_ty
         ))),
     }
-}
-
-/// Returns true when filtering should preserve/copy refcounted payload slots.
-pub(super) fn array_filter_uses_refcounted_runtime(elem_ty: &PhpType) -> bool {
-    elem_ty.is_refcounted() || matches!(elem_ty.codegen_repr(), PhpType::Str)
 }
 
 /// Loads the optional `array_filter()` mode operand into the runtime helper register.

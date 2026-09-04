@@ -11,7 +11,8 @@
 use std::fmt::Write;
 
 use crate::support::{
-    compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
+    compile_and_run, compile_and_run_capture, compile_and_run_capture_with_regex,
+    compile_and_run_in_dir, compile_and_run_with_regex,
 };
 
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
@@ -604,6 +605,141 @@ echo implode(",", $d);');
     assert_eq!(
         out,
         "1,90,91,92,4,5|2,3:1,90,91,92,4,5|2,3:0|1,7,8,2,3:1,9,3"
+    );
+}
+
+/// Verifies `glob()`'s flags behave the same inside `eval()` as they do compiled.
+///
+/// The eval interpreter walks the filesystem itself rather than calling libc `glob()`, so this is
+/// a genuinely second implementation of php's behaviour. Every expectation was read off `php -n`
+/// 8.5.6 first, including the two that are not the obvious answers: with `GLOB_BRACE` the sort
+/// runs per expansion — `{c*,a*}` answers `c.log` before `a.txt` — and duplicates are kept.
+#[test]
+fn test_eval_glob_flags_match_the_compiled_surface() {
+    let out = compile_and_run(
+        r#"<?php
+mkdir("eg");
+mkdir("eg/sub");
+file_put_contents("eg/a.txt", "a");
+file_put_contents("eg/b.md", "b");
+file_put_contents("eg/c.log", "c");
+
+eval('echo implode(",", glob("eg/*", GLOB_ONLYDIR)), "\n";');
+eval('echo implode(",", glob("eg/*", GLOB_MARK)), "\n";');
+eval('echo implode(",", glob("eg/*", GLOB_MARK | GLOB_ONLYDIR)), "\n";');
+eval('echo implode(",", glob("eg/zz*", GLOB_NOCHECK)), "\n";');
+eval('echo count(glob("eg/zz*", GLOB_NOCHECK | GLOB_ONLYDIR)), "\n";');
+// The sort is per brace expansion, and the expansions keep the order they were written in.
+eval('echo implode(",", glob("eg/{c*,a*}", GLOB_BRACE)), "\n";');
+// Overlapping alternatives list the same match twice; php does not deduplicate.
+eval('echo implode(",", glob("eg/{*.txt,*}", GLOB_BRACE)), "\n";');
+eval('echo implode(",", glob("eg/{a.txt,{b.md,c.log}}", GLOB_BRACE)), "\n";');
+eval('echo implode(",", glob("eg/{zz,a.txt}", GLOB_BRACE | GLOB_NOCHECK)), "\n";');
+eval('echo count(glob("eg/*", GLOB_NOSORT)), "\n";');
+
+unlink("eg/a.txt");
+unlink("eg/b.md");
+unlink("eg/c.log");
+rmdir("eg/sub");
+rmdir("eg");
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "eg/sub\n\
+         eg/a.txt,eg/b.md,eg/c.log,eg/sub/\n\
+         eg/sub/\n\
+         eg/zz*\n\
+         0\n\
+         eg/c.log,eg/a.txt\n\
+         eg/a.txt,eg/a.txt,eg/b.md,eg/c.log,eg/sub\n\
+         eg/a.txt,eg/b.md,eg/c.log\n\
+         eg/zz,eg/a.txt\n\
+         4\n"
+    );
+}
+
+/// Verifies `eval()` refuses a glob flag php does not expose, exactly as the compiled path does.
+///
+/// 1024 is glibc's own `GLOB_BRACE`; php answers `false` to it on every platform because it is not
+/// one of php's bits. The two engines read those bits from the same table, so they cannot come to
+/// disagree about which values are valid.
+#[test]
+fn test_eval_glob_refuses_a_flag_php_does_not_expose() {
+    let out = compile_and_run_capture(
+        r#"<?php
+mkdir("er");
+file_put_contents("er/a.txt", "a");
+eval('var_dump(glob("er/*", 1024));');
+eval('var_dump(glob("er/*", -1));');
+eval('var_dump(count(glob("er/*", GLOB_AVAILABLE_FLAGS)));');
+unlink("er/a.txt");
+rmdir("er");
+"#,
+    );
+
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nint(0)\n");
+    let expected = "Warning: glob(): At least one of the passed flags is invalid or not \
+                    supported on this platform\n";
+    assert_eq!(out.diagnostics, expected.repeat(2));
+}
+
+/// Verifies a builtin the program names can be called through a variable.
+///
+/// Only 36 of 577 builtins could before: `$fn = "feof"; $fn($h);` was `Fatal error: Call to
+/// undefined function <dynamic>()` where php simply calls it. The 488 others shared one blanket
+/// refusal — "typed backend operation has no runtime-selected wrapper contract" — which is a
+/// policy default rather than a finding about any of them.
+///
+/// The resource argument is the point of the stream names here: the refusal was documented as
+/// covering resources, and it does not.
+#[test]
+fn test_a_named_builtin_is_callable_through_a_variable() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("dc.txt", "abc");
+$h = fopen("dc.txt", "r");
+$fn = "feof";
+echo var_export($fn($h), true), "|";
+foreach (["ftell", "feof"] as $each) {
+    echo var_export($each($h), true), "|";
+}
+$upper = "strtoupper";
+echo $upper("ab"), "|";
+$pick = time() > 0 ? "strrev" : "trim";
+echo $pick("abc");
+fclose($h);
+unlink("dc.txt");
+"#,
+    );
+    assert_eq!(out, "false|0|false|AB|cba");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies a builtin NAME is a valid callback for the higher-order array builtins.
+///
+/// `array_map("strtoupper", $a)` was `Undefined function: strtoupper` — a checker diagnostic — as
+/// were `array_filter` and `usort` with any builtin name, while `call_user_func("strtoupper", …)`
+/// worked. One lookup was the difference: the callback branch resolved through
+/// `check_function_call`, which knows USER functions only.
+#[test]
+fn test_a_builtin_name_is_a_valid_array_callback() {
+    let out = compile_and_run(
+        r#"<?php
+print_r(array_map("strtoupper", ["a", "b"]));
+$words = ["pear", "fig", "apple"];
+usort($words, "strcmp");
+print_r($words);
+echo call_user_func("strrev", "abc"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Array\n(\n    [0] => A\n    [1] => B\n)\n\
+         Array\n(\n    [0] => apple\n    [1] => fig\n    [2] => pear\n)\n\
+         cba\n"
     );
 }
 

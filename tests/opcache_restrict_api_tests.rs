@@ -39,8 +39,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
-/// The verbatim reference warning line elephc writes to STDERR (php-src emits the same text at
+/// The verbatim reference warning line elephc writes to STDOUT (php-src emits the same text at
 /// `E_WARNING`, followed by ` in <file> on line <n>`, which elephc does not synthesize).
+///
+/// STDOUT, not stderr. MEASURED on the same reference build this file pins everything else from,
+/// with stderr discarded — `php -d xdebug.mode=off -d opcache.enable=1 -d opcache.enable_cli=1
+/// -d opcache.restrict_api=/nonexistent probe.php 2>/dev/null` prints all five warnings, and
+/// `display_errors` is `STDOUT` there as it is by php CLI default. The pins below said otherwise
+/// for as long as elephc wrote them to the wrong stream: a program's own output and its
+/// diagnostics INTERLEAVE in php, which is what `DENIED_STDOUT` now carries.
 const RESTRICT_WARNING: &str =
     "Warning: Zend OPcache API is restricted by \"restrict_api\" configuration directive";
 
@@ -59,8 +66,20 @@ echo 'compile=', var_export(opcache_compile_file(__FILE__), true), "\n";
 
 /// Stdout of the probe when the API is DENIED. Matches reference PHP 8.5.6 exactly, including
 /// `compile=true`: `opcache_compile_file` carries no restriction guard in php-src.
-const DENIED_STDOUT: &str = "status=false\nconfig=false\nreset=false\ncached=false\n\
-                             invalidate=false\ncompile=true\n";
+///
+/// The five warnings are PART OF IT, in php's own places: a diagnostic is `\n` + the line, and it
+/// lands where the call happens. So `status` and `config`, whose calls precede their `echo`, get
+/// the warning first, while `reset`, `cached` and `invalidate` are echoed as `reset=` before the
+/// call runs — the label, then the warning, then the value. Reproduced byte for byte from the
+/// reference build (`2>/dev/null`), the only difference being php's ` in <file> on line <n>`
+/// tail, which elephc does not synthesize.
+fn denied_stdout() -> String {
+    format!(
+        "\n{w}\nstatus=false\n\n{w}\nconfig=false\nreset=\n{w}\nfalse\ncached=\n{w}\nfalse\n\
+         invalidate=\n{w}\nfalse\ncompile=true\n",
+        w = RESTRICT_WARNING
+    )
+}
 
 /// Stdout of the probe when the API is ALLOWED and the cache is enabled.
 ///
@@ -149,16 +168,13 @@ fn denied_prefix_warns_and_returns_false() {
     );
     let (out, err) = run_binary(&bin);
 
-    assert_eq!(out, DENIED_STDOUT, "denied return values must match reference PHP");
+    assert_eq!(out, denied_stdout(), "denied output must match reference PHP");
     assert_eq!(
-        err.matches(RESTRICT_WARNING).count(),
+        out.matches(RESTRICT_WARNING).count(),
         5,
-        "exactly five functions warn; opcache_compile_file must not: {err:?}"
+        "exactly five functions warn; opcache_compile_file must not: {out:?}"
     );
-    // The warning is a whole line of its own, verbatim.
-    for line in err.lines() {
-        assert_eq!(line, RESTRICT_WARNING, "unexpected stderr line: {line:?}");
-    }
+    assert!(err.is_empty(), "php writes its diagnostics to stdout: {err:?}");
 }
 
 /// A prefix that matches the entry script's directory ALLOWS every call: normal return values and
@@ -249,8 +265,8 @@ fn case_changed_prefix_denies() {
     );
     let (out, err) = run_binary(&bin);
 
-    assert_eq!(out, DENIED_STDOUT, "a case-changed prefix must DENY");
-    assert_eq!(err.matches(RESTRICT_WARNING).count(), 5);
+    assert_eq!(out, denied_stdout(), "a case-changed prefix must DENY");
+    assert!(err.is_empty(), "php writes its diagnostics to stdout: {err:?}");
 }
 
 /// A prefix LONGER than the entry path can never match (php-src's `strlen(path) < len` arm), and
@@ -267,8 +283,8 @@ fn prefix_longer_than_entry_denies_and_exact_path_allows() {
         ],
     );
     let (long_out, long_err) = run_binary(&long_bin);
-    assert_eq!(long_out, DENIED_STDOUT, "an over-long prefix must DENY");
-    assert_eq!(long_err.matches(RESTRICT_WARNING).count(), 5);
+    assert_eq!(long_out, denied_stdout(), "an over-long prefix must DENY");
+    assert!(long_err.is_empty(), "php writes its diagnostics to stdout: {long_err:?}");
 
     let exact_dir = make_test_dir("opcache_restrict_exact");
     let exact_bin = compile(
@@ -337,10 +353,11 @@ fn restriction_follows_the_entry_script_not_the_executing_file() {
     // Prefix = the EXECUTING file's directory → the entry is not under it → DENY.
     let (inc_out, inc_err) = build("by_includee", &incdir);
     assert_eq!(
-        inc_out, "reset=false\n",
+        inc_out,
+        format!("reset=\n{RESTRICT_WARNING}\nfalse\n"),
         "the executing file's directory must NOT satisfy the restriction"
     );
-    assert_eq!(inc_err.matches(RESTRICT_WARNING).count(), 1);
+    assert!(inc_err.is_empty(), "php writes its diagnostics to stdout: {inc_err:?}");
 
     // Prefix = the ENTRY script's directory → ALLOW, even though the call executes elsewhere.
     let (entry_out, entry_err) = build("by_entry", &entrydir);

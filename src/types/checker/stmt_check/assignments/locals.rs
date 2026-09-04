@@ -768,7 +768,11 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
 /// value is simply dropped — and it is only safe where the store definitely runs and no
 /// reference can still reach the old cell, which is exactly
 /// [`Checker::local_binding_is_killable`].
-fn merge_local_assignment_type(
+///
+/// `pub(crate)` rather than private: the builtin argument pass binds a write-only by-reference
+/// argument through here, so that a variable already holding an incompatible type reports this
+/// error rather than having the runtime write an int into, say, a string slot.
+pub(crate) fn merge_local_assignment_type(
     checker: &mut Checker,
     name: &str,
     ty: &PhpType,
@@ -835,6 +839,15 @@ fn merge_local_assignment_type(
     }
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty);
+        // A scalar reassignment widens the slot, and the slot type is a whole-frame property:
+        // the lowering has to know before it declares the local, not when the write happens.
+        if matches!(merged_ty, Some(crate::types::PhpType::Mixed))
+            && !matches!(existing, crate::types::PhpType::Mixed)
+            && !matches!(ty, crate::types::PhpType::Mixed)
+        {
+            let scope = checker.current_loop_storage_scope.clone();
+            checker.widened_scalar_locals.insert((scope, name.to_string()));
+        }
         if merged_ty.is_none() {
             if !checker.strict_locals && stmt_form && checker.local_binding_is_killable(name) {
                 let message = format!(
@@ -890,6 +903,42 @@ fn merge_local_assignment_type(
                 // NEW binding's metadata instead: `$f = 1; $f = function (int $a) {…};
                 // $f("s")` would lose the signature that reports the bad argument.
                 env.insert(name.to_string(), ty.clone());
+                return Ok(());
+            }
+            // The re-bind above could not take it, and php still runs the program: a variable
+            // holds whatever was last written to it, whatever KIND that is. `catch (Throwable $e)`
+            // followed by `$e = new A()` in the same scope is the shape that matters — ordinary
+            // code, and one the re-bind can never serve, because a catch variable is introduced by
+            // a conditional group and so carries no binding depth for
+            // `local_binding_is_killable` to approve.
+            //
+            // Widening is the OTHER mechanism, and it is second on purpose. The re-bind gives the
+            // name a fresh slot at its new type and says so out loud; this boxes the slot for the
+            // whole frame and says nothing, which is the right answer only where the first is
+            // unavailable. Putting it in `merged_assignment_type` instead — where a first attempt
+            // at this put it — preempted the re-bind for every killable name and took 86
+            // `error_tests` with it, all of them asserting the warning that then never came.
+            //
+            // And it is gated on the storage being this frame's ALONE, which is every clause of
+            // the killable rule except the one about binding DEPTH. That clause is what a catch
+            // variable trips, and it is about whether the binding definitely ran — a question a
+            // kill has to answer and a widening does not, since the slot survives either way. The
+            // rest are about who else reads the slot by name: a by-reference parameter's caller, a
+            // `global`, a `static`, an `eval` body. Skipping those refused nothing and widened 56
+            // programs whose storage was not ours to box.
+            // `--strict-locals` exists to make an incompatible retype an ERROR, and it means the
+            // widening as much as the re-bind: both let the program through.
+            if !checker.strict_locals
+                && !checker.unset_without_kill.contains(name)
+                && checker.local_binding_storage_is_private(name)
+                && reassignment_widens_to_mixed(existing)
+                && reassignment_widens_to_mixed(ty)
+            {
+                let scope = checker.current_loop_storage_scope.clone();
+                checker
+                    .widened_scalar_locals
+                    .insert((scope, name.to_string()));
+                env.insert(name.to_string(), PhpType::Mixed);
                 return Ok(());
             }
             return Err(CompileError::new(
@@ -1000,6 +1049,12 @@ pub(super) fn check_const_decl(
 /// Infers the right-hand side and accepts homogeneous indexed arrays or associative arrays.
 /// Indexed arrays propagate their element type, while associative values bind adaptively as
 /// `Mixed`. Returns an error for non-array types, including unresolved nullable unions.
+///
+/// A `mixed` right-hand side is accepted, because refusing it rejects programs php runs.
+/// `TypeSpec` has no array form, so every builtin that answers an ARRAY declares `mixed` —
+/// `[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);`, out of php's own
+/// manual, was refused outright. What the value turns out to be is php's question to answer at
+/// run time, exactly as it is for `[$a] = $untypedParameter`.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -1021,6 +1076,8 @@ pub(super) fn check_list_unpack(
         // Associative arrays can contain integer keys used by positional destructuring. Their
         // element type stays adaptive because hash values may be heterogeneous or absent.
         PhpType::AssocArray { .. } => PhpType::Mixed,
+        // A value whose type is not known until run time — see above.
+        PhpType::Mixed => PhpType::Mixed,
         _ => {
             for var in vars {
                 poison_unbound_local(env, var);
@@ -1159,4 +1216,24 @@ pub(super) fn check_static_var(
     checker.active_statics.insert(name.to_string());
     env.insert(name.to_string(), ty);
     Ok(())
+}
+
+/// Reports whether a type can live in a widened `mixed` slot after a reassignment.
+///
+/// Every VALUE shape can: a Mixed cell carries its own tag, so the slot holds whichever was
+/// written last. The exclusions are the shapes that are not php values at all — a raw pointer, a
+/// buffer, a packed struct, a callable descriptor — for which "box it and dispatch on the tag" has
+/// no meaning, and `Never`/`Void`, which the merge answers before ever reaching the refusal.
+fn reassignment_widens_to_mixed(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+    )
 }

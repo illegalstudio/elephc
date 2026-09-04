@@ -1405,9 +1405,8 @@ fn php_type_compatible(ir_type: IrType, php_type: &PhpType) -> bool {
 
 /// Returns true when ownership is coherent with storage and PHP type metadata.
 fn ownership_compatible(ir_type: IrType, php_type: &PhpType, ownership: Ownership) -> bool {
-    let php_type = php_type.codegen_repr();
     let tracks_lifetime =
-        ir_type.is_refcounted_storage() || Ownership::php_type_needs_lifetime_tracking(&php_type);
+        ir_type.is_refcounted_storage() || Ownership::php_type_needs_lifetime_tracking(php_type);
     if tracks_lifetime {
         !matches!(ownership, Ownership::NonHeap)
     } else {

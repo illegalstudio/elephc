@@ -291,12 +291,49 @@ pub(in crate::codegen) fn referenced_stream_registration_class_names(module: &Mo
             {
                 continue;
             }
-            if let Some(class_name) = const_string_value(module, function, inst.operands[1]) {
+            if let Some(class_name) = const_class_like_name(module, function, inst.operands[1]) {
                 names.insert(class_name.trim_start_matches('\\').to_string());
             }
         }
     }
     names
+}
+
+/// Returns a compile-time class NAME from either a string literal or a `Foo::class` constant.
+///
+/// `Foo::class` does not lower to `Op::ConstStr`: it is its own opcode whose immediate indexes
+/// `data.class_names`, so a reachability rule that only tests `ConstStr` cannot see it. That is
+/// what made `stream_wrapper_register('memw', MemWrapper::class)` register a scheme —
+/// `stream_get_wrappers()` listed it and the call answered `true` — whose class then carried no
+/// metadata, so every `fopen('memw://...')` afterwards failed with no diagnostic anywhere.
+/// `Foo::class` is the refactor-safe spelling the manual and php-src's own tests use, so it has
+/// to name a class here exactly as the literal does.
+///
+/// `objects/reflection/operand_extract.rs` reads the class-name table for the same reason.
+pub(in crate::codegen) fn const_class_like_name<'a>(
+    module: &'a Module,
+    function: &'a Function,
+    value: crate::ir::ValueId,
+) -> Option<&'a str> {
+    if let Some(name) = const_string_value(module, function, value) {
+        return Some(name);
+    }
+    let value_ref = function.value(value)?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return None;
+    };
+    let inst_ref = function.instruction(inst)?;
+    if inst_ref.op != Op::ConstClassName {
+        return None;
+    }
+    let Some(Immediate::Data(data)) = inst_ref.immediate else {
+        return None;
+    };
+    module
+        .data
+        .class_names
+        .get(data.as_raw() as usize)
+        .map(String::as_str)
 }
 
 /// Resolves a class name against module metadata using PHP case-insensitive class rules.

@@ -24,10 +24,13 @@ impl Checker {
     /// declarations across the entire program. Each statement is checked in a fresh `top_level_env`
     /// cloned from the current global state. Returns the final `TypeEnv` and a vector of error
     /// vectors (one per statement) for structured diagnostics.
+    /// The third member of the tuple marks, per statement, whether typing it reached THROUGH a
+    /// null receiver. In the initial pass that answer is provisional — see
+    /// `Checker::tolerated_null_receiver` — so the caller uses it to decide whose errors count.
     pub(super) fn check_top_level_program(
         &mut self,
         program: &Program,
-    ) -> (TypeEnv, Vec<Vec<CompileError>>) {
+    ) -> (TypeEnv, Vec<Vec<CompileError>>, Vec<bool>) {
         let saved_eval_barrier_active = self.eval_barrier_active;
         self.eval_barrier_active = false;
         let saved_null_probe_scope = self.null_probe_scope_is_top_level;
@@ -55,16 +58,19 @@ impl Checker {
         // marking off them outright.
         self.run_mixed_storage_scan(program, &std::collections::HashMap::new());
         let mut all_errors = Vec::with_capacity(program.len());
+        let mut through_null = Vec::with_capacity(program.len());
         // `(statement index, name, span)` for every null probe this pass tolerated, so the
         // deferred diagnostic lands on the statement that contains the probe.
         let mut probe_roots: Vec<(usize, String, Span)> = Vec::new();
         for (index, stmt) in program.iter().enumerate() {
             self.top_level_env = global_env.clone();
+            self.tolerated_null_receiver = false;
             let stmt_errors = self
                 .check_stmt(stmt, &mut global_env)
                 .err()
                 .map(|error| error.flatten())
                 .unwrap_or_default();
+            through_null.push(self.tolerated_null_receiver);
             probe_roots.extend(
                 self.pending_null_probe_roots
                     .drain(..)
@@ -78,7 +84,10 @@ impl Checker {
         self.null_probe_scope_is_top_level = saved_null_probe_scope;
         self.active_ref_params = saved_ref_params;
         self.exit_local_binding_scope(saved_local_binding_scope);
-        (global_env, all_errors)
+        // `resolve_null_probe_roots` can append to `all_errors` for statements the loop already
+        // visited, so the two vectors are aligned by padding rather than by construction.
+        through_null.resize(all_errors.len(), false);
+        (global_env, all_errors, through_null)
     }
 
     /// Decides, with the finished `global_env` in hand, whether each tolerated null-probe root
@@ -194,6 +203,7 @@ impl Checker {
         let mut global_env: TypeEnv = HashMap::new();
         global_env.insert("argc".to_string(), PhpType::Int);
         global_env.insert("argv".to_string(), PhpType::Array(Box::new(PhpType::Str)));
+        global_env.insert("http_response_header".to_string(), PhpType::Array(Box::new(PhpType::Str)));
         for name in crate::superglobals::SUPERGLOBALS {
             global_env.insert((*name).to_string(), crate::superglobals::superglobal_type());
         }

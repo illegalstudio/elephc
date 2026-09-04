@@ -65,13 +65,13 @@ pub(super) fn lower(
             crate::codegen::lower_inst::builtins::io::lower_stream_set_chunk_size(ctx, inst)
         }),
         RuntimeFnId::StreamSetReadBuffer => Some({
-            crate::codegen::lower_inst::builtins::io::lower_stream_set_buffer(ctx, inst)
+            crate::codegen::lower_inst::builtins::io::lower_stream_set_read_buffer(ctx, inst)
         }),
         RuntimeFnId::StreamSetTimeout => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_set_timeout(ctx, inst)
         }),
         RuntimeFnId::StreamSetWriteBuffer => Some({
-            crate::codegen::lower_inst::builtins::io::lower_stream_set_buffer(ctx, inst)
+            crate::codegen::lower_inst::builtins::io::lower_stream_set_write_buffer(ctx, inst)
         }),
         RuntimeFnId::StreamSocketAccept => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_socket_accept(ctx, inst)

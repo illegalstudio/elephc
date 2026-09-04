@@ -14,8 +14,8 @@
 //! Key details:
 //! - Same two-step hash walk as the string variant: wrapper key on the top
 //!   hash, option key on the sub-hash.
-//! - Bool values (tag 3) widen to 0/1; int values (tag 0) pass through;
-//!   any other tag misses.
+//! - Direct or Mixed-boxed bool values widen to 0/1 and integers pass through;
+//!   any other payload shape misses.
 //! - On hit, writes `out_int_addr` with the resolved value and returns 1.
 //!   On miss, leaves `*out_int_addr` untouched and returns 0 so callers
 //!   can pre-load a default.
@@ -61,6 +61,23 @@ pub fn emit_get_int_context_option(emitter: &mut Emitter) {
     // Load top-level options hash; bail when null.
     abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
     emitter.instruction("ldr x0, [x9]");                                        // top hash pointer (may be null)
+    // Outside an fopen scope the active bridge is empty, but the request default
+    // context still applies — stream_socket_client() + enable_crypto() reads its
+    // ssl options this way.
+    emitter.instruction("cbnz x0, __rt_gico_have_options");                     // an explicit scope wins
+    // An explicit but EMPTY context must mask the default, so the fallback only
+    // applies when no scope is active at all. The options pointer is null in both
+    // cases; the active-handle slot is what tells them apart.
+    abi::emit_symbol_address(emitter, "x9", "_stream_current_context_handle");
+    emitter.instruction("ldr x9, [x9]");                                        // handle of the active context scope
+    emitter.instruction(&format!("cbnz x9, __rt_gico_have_options"));           // a scope is active: its emptiness is meaningful
+    abi::emit_symbol_address(emitter, "x9", "_stream_default_context_handle");
+    emitter.instruction("ldr x0, [x9]");                                        // request-default context handle
+    emitter.instruction("cbz x0, __rt_gico_have_options");                      // no default context exists
+    emitter.instruction("bl __rt_context_state");                               // resolve its ContextState
+    emitter.instruction("cbz x0, __rt_gico_have_options");                      // a closed default context has no options
+    emitter.instruction("ldr x0, [x0, #0]");                                    // CONTEXT_OPTIONS_OFFSET
+    emitter.label("__rt_gico_have_options");
     emitter.instruction("cbz x0, __rt_gico_miss");                              // branch when the checked value is zero or equal
 
     // hash_get(top, wrapper) → x1 = value_lo (sub-hash ptr on hit).
@@ -80,7 +97,15 @@ pub fn emit_get_int_context_option(emitter: &mut Emitter) {
     emitter.instruction("cmp x3, #0");                                          // tag 0 = int
     emitter.instruction("b.eq __rt_gico_write");                                // branch when the checked value is zero or equal
     emitter.instruction("cmp x3, #3");                                          // tag 3 = bool
-    emitter.instruction("b.ne __rt_gico_miss");                                 // branch when the checked value is nonzero or different
+    emitter.instruction("b.eq __rt_gico_write");                                // direct booleans already carry their normalized payload
+    emitter.instruction("cmp x3, #7");                                          // is the option stored as a boxed Mixed cell?
+    emitter.instruction("b.ne __rt_gico_miss");                                 // every other option shape is non-numeric here
+    emitter.instruction("mov x0, x1");                                          // pass the boxed option cell to Mixed unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // recover the runtime tag and scalar payload
+    emitter.instruction("cmp x0, #0");                                          // did the Mixed cell contain an integer?
+    emitter.instruction("b.eq __rt_gico_write");                                // accept boxed integers
+    emitter.instruction("cmp x0, #3");                                          // did the Mixed cell contain a boolean?
+    emitter.instruction("b.ne __rt_gico_miss");                                 // boxed non-int/non-bool values miss
 
     emitter.label("__rt_gico_write");
     emitter.instruction("ldr x9, [sp, #32]");                                   // out_int_addr
@@ -119,6 +144,26 @@ fn emit_get_int_context_option_linux_x86_64(emitter: &mut Emitter) {
 
     // Load top-level options hash.
     abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_context_options", 0); // prepare SysV call argument
+    // See the AArch64 counterpart: the active bridge is only published inside an fopen scope, and
+    // outside one — `stream_socket_client()` then `stream_socket_enable_crypto()` — the request
+    // default context still applies. Without this fallback x86_64 reported every option missing,
+    // so `ssl.verify_peer` never reached the TLS attach and a self-signed peer was always refused.
+    emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
+    emitter.instruction("jnz __rt_gico_have_options_x86");                      // an explicit scope wins
+    // An explicit but EMPTY context must mask the default, so the fallback only applies when no
+    // scope is active at all. The options pointer is null in both cases; the active-handle slot is
+    // what tells them apart.
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stream_current_context_handle", 0);
+    emitter.instruction("test r10, r10");                                       // is a context scope active?
+    emitter.instruction("jnz __rt_gico_have_options_x86");                      // a scope is active: its emptiness is meaningful
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_default_context_handle", 0);
+    emitter.instruction("test rdi, rdi");                                       // was a request default context ever created?
+    emitter.instruction("jz __rt_gico_have_options_x86");                       // no default context exists
+    emitter.instruction("call __rt_context_state");                             // resolve its ContextState
+    emitter.instruction("test rax, rax");                                       // did the default context resolve?
+    emitter.instruction("jz __rt_gico_have_options_x86");                       // a closed default context has no options
+    emitter.instruction("mov rdi, QWORD PTR [rax]");                            // CONTEXT_OPTIONS_OFFSET
+    emitter.label("__rt_gico_have_options_x86");
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gico_miss_x86");                               // branch when the checked value is zero or equal
 
@@ -138,7 +183,15 @@ fn emit_get_int_context_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 0");                                          // int tag
     emitter.instruction("je __rt_gico_write_x86");                              // branch when the checked value is zero or equal
     emitter.instruction("cmp rcx, 3");                                          // bool tag
-    emitter.instruction("jne __rt_gico_miss_x86");                              // branch when the checked value is nonzero or different
+    emitter.instruction("je __rt_gico_write_x86");                              // direct booleans already carry their normalized payload
+    emitter.instruction("cmp rcx, 7");                                          // is the option stored as a boxed Mixed cell?
+    emitter.instruction("jne __rt_gico_miss_x86");                              // every other option shape is non-numeric here
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed option cell to Mixed unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // recover the runtime tag and scalar payload
+    emitter.instruction("cmp rax, 0");                                          // did the Mixed cell contain an integer?
+    emitter.instruction("je __rt_gico_write_x86");                              // accept boxed integers
+    emitter.instruction("cmp rax, 3");                                          // did the Mixed cell contain a boolean?
+    emitter.instruction("jne __rt_gico_miss_x86");                              // boxed non-int/non-bool values miss
 
     emitter.label("__rt_gico_write_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // out_int_addr

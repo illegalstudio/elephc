@@ -272,6 +272,10 @@ echo $padded[1][0] . "|" . $padded[2][0];
 }
 
 /// Verifies that an inner array in array_unique output survives unset of the original.
+/// Fixture: src contains inner array twice and a separate element, run array_unique, unset src and inner, verify count and read values.
+/// Regression: ensures array_unique preserves GC alias for deduplicated inner arrays.
+/// The survivors keep their SOURCE keys, as php does, so the second one is read at `[2]` — where
+/// the source held it — and not at the `[1]` a reindexed result used to put it at.
 /// Fixture: src holds the same inner array twice, run array_unique, unset src and inner, read
 /// the survivor through the deduplicated result.
 /// Regression: ensures array_unique preserves the GC alias for a deduplicated inner array.
@@ -294,6 +298,10 @@ unset($inner);
 echo count($uniq) . "|" . $uniq[0][0];
 "#,
     );
+    // MEASURED on `php -n` 8.5.6. The program used to read `$uniq[2][0]` too — an index
+    // `array_unique()` has just removed — so it asserted `1|3` against an output that was really
+    // `1|3|1|3` plus two warnings about the missing key. The borrowed inner array surviving both
+    // `unset()`s is what this test is for, and one read shows it.
     assert_eq!(out, "1|3");
 }
 
@@ -337,6 +345,8 @@ echo $diff[0][0];
 /// Verifies that an inner array in array_intersect output survives unset of the originals.
 /// Fixture: left contains inner array and another element, right contains inner array, intersect, unset all, read result.
 /// Regression: ensures array_intersect output preserves GC alias for nested inner arrays.
+/// The survivor keeps its SOURCE key, as php does: `$inner` sits at index 1 of `$left`, so the
+/// result is read at `[1]` and not at the `[0]` a reindexed result used to put it at.
 #[test]
 fn test_gc_array_intersect_borrowed_array_survives_unset() {
     let out = compile_and_run(
@@ -348,7 +358,7 @@ $both = array_intersect($left, $right);
 unset($left);
 unset($right);
 unset($inner);
-echo $both[0][0];
+echo $both[1][0];
 "#,
     );
     assert_eq!(out, "9");
@@ -367,9 +377,12 @@ $rows = [[1], $inner, [2, 3]];
 $filtered = array_filter($rows, "keep_pair");
 unset($rows);
 unset($inner);
-echo $filtered[0][1] . "|" . $filtered[1][0];
+echo ($filtered[1][1] ?? "-") . "|" . ($filtered[2][0] ?? "-");
 "#,
     );
+    // php's array_filter() PRESERVES keys, so the survivors of a three-element list are at 1 and
+    // 2, not 0 and 1. Measured: `php -n` prints the same `11|2` through those keys, and answers
+    // `array_keys()` = [1, 2].
     assert_eq!(out, "11|2");
 }
 

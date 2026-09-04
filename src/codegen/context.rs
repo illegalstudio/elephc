@@ -410,6 +410,51 @@ impl<'a> FunctionContext<'a> {
         self.current_inst_promoted_ref_cells.clear();
     }
 
+    /// The `(file, line)` php would name for a throwable raised while lowering this instruction.
+    ///
+    /// php reports the CALL SITE for a builtin's `TypeError`/`ValueError` — `fopen("", "r")` on
+    /// line 4 reports line 4 — because the builtin IS the frame; there is no internal one to name.
+    /// Codegen-raised throwables used to carry no location at all on the theory that php would
+    /// name something else, which measuring disproved.
+    ///
+    /// `None` when the module has no source path or the instruction carries no span, which keeps
+    /// the previous bare wording for anything genuinely unattributable.
+    pub(super) fn current_source_location(&self) -> Option<(String, u32)> {
+        let file = self.module.source_path.clone()?;
+        let inst = self.current_inst?;
+        let span = self.function.instruction(inst)?.span?;
+        Some((file, span.line))
+    }
+
+    /// Returns the builtin call being lowered, as php would name it in a stack-trace frame.
+    ///
+    /// A builtin that raises is a FRAME in php's trace — `#0 p.php(2): fopen('', 'r')` — and the
+    /// instruction being lowered is that very call, so its runtime target names it and its span
+    /// gives the call-site line php prints.
+    pub(super) fn current_builtin_frame(&self) -> Option<(&'static str, u32, Vec<ValueId>)> {
+        let inst = self.function.instruction(self.current_inst?)?;
+        let line = inst.span?.line;
+        let crate::ir::Immediate::RuntimeCall(target) = inst.immediate.as_ref()? else {
+            return None;
+        };
+        // Only a plain typed builtin names itself the way php does; the array/cell helpers are
+        // internal shapes php has never heard of, and a profiled call wraps one of the same.
+        let name = match target {
+            crate::ir::RuntimeCallTarget::Function(target)
+            | crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. } => {
+                // The argument lowering's own `array|false` unwrap is not a php function: naming
+                // it wrote `#0 expect_array_arg(false, 'array_keys(): A...')` where php writes
+                // `#0 array_keys(false)`. Its lowering opens the frame php would.
+                if matches!(target, crate::ir::RuntimeFnId::ExpectArrayArg) {
+                    return None;
+                }
+                target.as_eir()
+            }
+            _ => return None,
+        };
+        Some((name, line, inst.operands.clone()))
+    }
+
     /// Returns the frame flag that records whether this slot currently stores a cell pointer.
     pub(super) fn ref_cell_state_offset(&self, slot: LocalSlotId) -> Option<usize> {
         self.ref_cell_state_offsets.get(&slot).copied()
@@ -460,6 +505,42 @@ impl<'a> FunctionContext<'a> {
     /// Returns whether every path reaching this instruction stores a ref-cell pointer.
     pub(super) fn local_ref_cell_representation_is_definite(&self, slot: LocalSlotId) -> bool {
         self.local_slot_representation(slot) == LocalSlotRepresentation::RefCell
+    }
+
+    /// Returns whether the slot's storage is a function static's symbol rather than this frame.
+    fn local_is_static(&self, slot: LocalSlotId) -> bool {
+        self.function
+            .locals
+            .get(slot.as_raw() as usize)
+            .is_some_and(|local| local.kind == crate::ir::LocalKind::StaticLocal)
+    }
+
+    /// Republishes a container pointer into a function static's symbol.
+    ///
+    /// The plain-slot write-back this mirrors is a bare store: the slot already owned what it
+    /// held, and a helper that split or grew the container hands back the pointer that ownership
+    /// now attaches to, so no reference is created or dropped here. Only the ADDRESS the value is
+    /// written to differs, which is the whole reason a static needs its own arm.
+    fn store_value_to_static_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        let local = self
+            .function
+            .locals
+            .get(slot.as_raw() as usize)
+            .ok_or_else(|| CodegenIrError::missing_entry("local slot", slot.as_raw()))?;
+        let name = local.name.clone().ok_or_else(|| {
+            CodegenIrError::invalid_module("static local write-back is missing a source name")
+        })?;
+        let php_type = local.php_type.codegen_repr();
+        let symbol = crate::names::static_local_symbol(&self.function.name, &name);
+        self.data.add_comm(symbol.clone(), 16);
+        self.load_value_to_result(value)?;
+        // `release_previous: false`. This is a REPUBLISH, not a fresh store: the reference the
+        // symbol held is the one the helper just moved onto the pointer being written back, and
+        // when nothing was split or reallocated the two pointers are the SAME. Releasing first
+        // dropped that single reference to zero and freed the array the very next instruction
+        // stored — measured as a static that never grew past its first element.
+        abi::emit_store_result_to_symbol(self.emitter, &symbol, &php_type, false);
+        Ok(())
     }
 
     /// Classifies the slot as raw, definitely ref-cell, or path-dependent at this instruction.
@@ -657,8 +738,35 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Stores an SSA value into an addressable local slot, keeping the value's own reference.
+    ///
+    /// The ordinary store lets Mixed boxing CONSUME the source's owned reference, which is right
+    /// when the store is the value's last use. A mutating builtin whose receiver EIR still
+    /// releases after the call (the hash sort family: the receiver is loaded, published back, then
+    /// released) is not that case: consuming there releases the container twice and the write-back
+    /// leaves the slot pointing at freed storage.
+    pub(super) fn store_borrowed_value_to_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                self.store_value_to_raw_local_with_ownership(slot, value, false)
+            }
+            _ => self.store_value_to_local(slot, value),
+        }
+    }
+
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
+        // A function static does not live in this frame at all: its storage is a `.comm` symbol
+        // that outlives the call, so the representation dispatch below — raw offset, ref cell, or
+        // the runtime choice between them — has no answer for it and would write to a frame offset
+        // that belongs to something else.
+        if self.local_is_static(slot) {
+            return self.store_value_to_static_local(slot, value);
+        }
         match self.local_slot_representation(slot) {
             LocalSlotRepresentation::Raw => self.store_value_to_raw_local(slot, value),
             LocalSlotRepresentation::RefCell => self.store_value_to_ref_cell_local(slot, value),
@@ -722,10 +830,24 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
     ) -> Result<()> {
+        self.store_value_to_raw_local_with_ownership(slot, value, true)
+    }
+
+    /// Stores an SSA value into a raw local slot, choosing whether Mixed boxing may consume it.
+    ///
+    /// `may_consume_source` is what separates a final store (the value's last use, so the box may
+    /// take over its owned reference) from a republish (`store_borrowed_value_to_local`), where the
+    /// EIR still holds and releases the same reference afterwards.
+    fn store_value_to_raw_local_with_ownership(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+        may_consume_source: bool,
+    ) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
         if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-            if self.value_can_own_mixed_box_source(value)? {
+            if may_consume_source && self.value_can_own_mixed_box_source(value)? {
                 emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
             } else {
                 emit_box_current_value_as_mixed(self.emitter, &source_ty);

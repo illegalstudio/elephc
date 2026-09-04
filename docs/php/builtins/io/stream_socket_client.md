@@ -2,19 +2,24 @@
 title: "stream_socket_client()"
 description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 243
+  order: 269
 ---
 
 ## stream_socket_client()
 
 ```php
-function stream_socket_client(string $address): mixed
+function stream_socket_client(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 4, mixed $context = null): mixed
 ```
 
 Open Internet or Unix domain socket connection.
 
 **Parameters**:
 - `$address` (`string`)
+- `$error_code` (`mixed`), passed by reference, default `null`, optional
+- `$error_message` (`mixed`), passed by reference, default `null`, optional
+- `$timeout` (`mixed`), default `null`, optional
+- `$flags` (`int`), default `4`, optional
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 

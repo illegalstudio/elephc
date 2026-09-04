@@ -61,6 +61,7 @@ const HASH_INIT_PARAMS: &[ParamSpec] = &[ParamSpec {
     ty: TypeSpec::Str,
     default: None,
     by_ref: false,
+writes: None,
 }];
 
 #[cfg(test)]

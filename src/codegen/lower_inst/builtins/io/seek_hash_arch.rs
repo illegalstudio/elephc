@@ -20,31 +20,112 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction("mov x2, x0");                                      // move whence into the third lseek syscall argument
     abi::emit_pop_reg(ctx.emitter, "x1");
     abi::emit_pop_reg(ctx.emitter, "x0");
+    ctx.emitter.instruction("sub sp, sp, #32");                                 // preserve handle, offset, and whence across descriptor lookup
+    ctx.emitter.instruction("str x0, [sp, #0]");                                // save the opaque stream handle
+    ctx.emitter.instruction("str x1, [sp, #8]");                                // save the requested seek offset
+    ctx.emitter.instruction("str x2, [sp, #16]");                               // save the requested whence value
+
+    // -- SEEK_CUR counts from where the PROGRAM is, not from where the descriptor stopped --
+    //
+    // A buffered read leaves the descriptor ahead by whatever it kept, and the kernel's SEEK_CUR
+    // starts from there. MEASURED on `"ab\ncd"`: `rewind(); fread($h, 2); fseek($h, 1, SEEK_CUR);
+    // ftell($h)` answers 3 in php and answered 6 here — past the end of a five-byte file.
+    // `ftell()` already subtracts the held bytes; the seek has to as well, and then the clear
+    // that follows a successful seek throws the buffer away.
+    let adjusted_label = ctx.next_label("fseek_cur_adjusted");
+    ctx.emitter.instruction("ldr x9, [sp, #16]");
+    ctx.emitter.instruction("cmp x9, #1");                                      // SEEK_CUR
+    ctx.emitter.instruction(&format!("b.ne {}", adjusted_label));
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    abi::emit_call_label(ctx.emitter, "__rt_stream_pending_held");
+    ctx.emitter.instruction("ldr x1, [sp, #8]");
+    ctx.emitter.instruction("sub x1, x1, x0");                                  // rewind the offset by what is still held
+    ctx.emitter.instruction("str x1, [sp, #8]");
+    ctx.emitter.label(&adjusted_label);
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the handle the descriptor lookup takes
+    abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
+    ctx.emitter.instruction("ldr x1, [sp, #8]");                                // restore the requested seek offset
+    ctx.emitter.instruction("ldr x2, [sp, #16]");                               // restore the requested whence value
     ctx.emitter.instruction("mov w9, #0x4000");                                 // materialize the high half of USER_WRAPPER_FD_BASE
     ctx.emitter.instruction("lsl w9, w9, #16");                                 // form the synthetic wrapper fd base 0x40000000
     ctx.emitter.instruction("cmp x0, x9");                                      // test whether this stream is a userspace-wrapper handle
-    ctx.emitter.instruction(&format!("b.ge {}", wrapper_label));                // dispatch synthetic handles to stream_seek
-    abi::emit_push_reg(ctx.emitter, "x0");
+    ctx.emitter.instruction(&format!("b.lo {}", success_label));                // descriptors below the wrapper range use native lseek
+    crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "x10");
+    ctx.emitter.instruction("add x10, x9, x10");                                // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
+    ctx.emitter.instruction("cmp x0, x10");                                     // is the backend above the wrapper range?
+    ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));                // dispatch wrapper backends to stream_seek
+    ctx.emitter.label(success_label);
     ctx.emitter.syscall(199);
     if ctx.emitter.platform.needs_cmp_before_error_branch() {
         ctx.emitter.instruction("cmp x0, #0");                                  // Linux reports lseek failure as a negative result
     }
-    ctx.emitter.instruction(
-        &ctx.emitter.platform.branch_on_syscall_success(success_label)
-    );                                                                          // continue only when lseek succeeds
-    abi::emit_pop_reg(ctx.emitter, "x9");
+    ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(done_label)); // continue only when lseek succeeds
     ctx.emitter.instruction("mov x0, #-1");                                     // fseek returns -1 when lseek fails
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip EOF reset after a failed seek
-    ctx.emitter.label(success_label);
-    abi::emit_pop_reg(ctx.emitter, "x9");
-    abi::emit_symbol_address(ctx.emitter, "x10", "_eof_flags");
-    ctx.emitter.instruction("strb wzr, [x10, x9]");                             // clear EOF state for the successfully repositioned stream
-    ctx.emitter.instruction("mov x0, #0");                                      // fseek returns 0 after a successful seek
+    ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip EOF reset after a failed seek
     ctx.emitter.label(done_label);
+    // php's position restarts from wherever the seek landed: `fread($f,3)`, `fseek($f,10)`,
+    // `fread($f,4)` through a read filter answers 3, 10, 14. lseek's own result IS that offset,
+    // and the EOF clear below discards the bytes the filter had read ahead.
+    ctx.emitter.instruction("str x0, [sp, #24]");                               // the absolute offset lseek moved to
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the opaque stream handle
+    ctx.emitter.instruction("ldr x1, [sp, #24]");                               // the offset the filtered position restarts from
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");                                      // clear the EOF state after repositioning
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("mov x0, #0");                                      // fseek returns 0 after a successful seek
     ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip wrapper stream_seek after the native path
     ctx.emitter.label(&wrapper_label);
+    // php-src reconciles the position it keeps for a wrapper stream after a SUCCESSFUL seek — the
+    // ONE place `main/streams/userspace.c` calls `stream_tell`. It uses what that method reports,
+    // not the offset that was asked for, and a wrapper with no `stream_tell` cannot seek at all.
+    ctx.emitter.instruction("str x0, [sp, #24]");                               // the synthetic wrapper fd
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
+    ctx.emitter.instruction("cmp x0, #0");                                      // the wrapper's stream_seek reports 0 on success
+    ctx.emitter.instruction(&format!("b.ne {}", after_dispatch_label));         // it refused: keep -1 and leave the position alone
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    ctx.emitter.instruction("ldr x1, [sp, #24]");                               // the synthetic wrapper fd
+    emit_wrapper_seek_head_aarch64(ctx, false);
+    abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_seek_reconcile");      // 0, or -1 with php's warning
+    // A seek starts the reading again, so php discards the end-of-file answer the read left
+    // behind — the native path above has always done this, and the wrapper path never did.
+    // The verdict rides in the slot the descriptor used; x19/rbx hold live allocator state.
+    ctx.emitter.instruction("str x0, [sp, #24]");                               // the reconciliation verdict
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("ldr x0, [sp, #24]");
     ctx.emitter.label(&after_dispatch_label);
+    ctx.emitter.instruction("add sp, sp, #32");                                 // release seek scratch storage
+}
+
+/// Loads the head of php's `stream_tell is not implemented!` warning for the seek reconciliation.
+///
+/// php names the function the USER called — `fseek()` or `rewind()` — not the method it reached,
+/// so the caller supplies it and the shared composer prints `<head><Class><tail>`.
+fn emit_wrapper_seek_head_aarch64(ctx: &mut FunctionContext<'_>, rewind: bool) {
+    let (symbol, len) = wrapper_seek_head(rewind);
+    abi::emit_symbol_address(ctx.emitter, "x2", symbol);
+    ctx.emitter.instruction(&format!("mov x3, #{}", len));
+}
+
+/// The x86_64 half of [`emit_wrapper_seek_head_aarch64`].
+fn emit_wrapper_seek_head_x86_64(ctx: &mut FunctionContext<'_>, rewind: bool) {
+    let (symbol, len) = wrapper_seek_head(rewind);
+    abi::emit_symbol_address(ctx.emitter, "rdx", symbol);
+    ctx.emitter.instruction(&format!("mov rcx, {}", len));
+}
+
+/// The literal and length php's warning starts with, per caller.
+fn wrapper_seek_head(rewind: bool) -> (&'static str, usize) {
+    use crate::codegen_support::runtime::data::{
+        WRAPPER_MISSING_HOOK_HEAD_FSEEK, WRAPPER_MISSING_HOOK_HEAD_REWIND,
+    };
+    if rewind {
+        ("_uwmh_head_rewind", WRAPPER_MISSING_HOOK_HEAD_REWIND.len())
+    } else {
+        ("_uwmh_head_fseek", WRAPPER_MISSING_HOOK_HEAD_FSEEK.len())
+    }
 }
 
 /// Emits the Linux x86_64 `fseek()` libc path after fd, offset, and whence are staged.
@@ -58,26 +139,72 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction("mov rdx, rax");                                    // move whence into the third lseek argument
     abi::emit_pop_reg(ctx.emitter, "rsi");
     abi::emit_pop_reg(ctx.emitter, "rdi");
+    ctx.emitter.instruction("sub rsp, 32");                                     // preserve handle, offset, and whence across descriptor lookup
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rdi");                    // save the opaque stream handle
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rsi");                    // save the requested seek offset
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");                   // save the requested whence value
+
+    // See the AArch64 counterpart: SEEK_CUR counts from where the PROGRAM is, and a buffered
+    // read leaves the descriptor ahead by whatever it kept.
+    let adjusted_label = ctx.next_label("fseek_cur_adjusted");
+    ctx.emitter.instruction("cmp QWORD PTR [rsp + 16], 1");                     // SEEK_CUR
+    ctx.emitter.instruction(&format!("jne {}", adjusted_label));
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    abi::emit_call_label(ctx.emitter, "__rt_stream_pending_held");
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");
+    ctx.emitter.instruction("sub rsi, rax");                                    // rewind the offset by what is still held
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rsi");
+    ctx.emitter.label(&adjusted_label);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the handle the descriptor lookup takes
+    ctx.emitter.instruction("mov rax, rdi");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the resolved backend descriptor to lseek
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // restore the requested seek offset
+    ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");                   // restore the requested whence value
     ctx.emitter.instruction("mov r9d, 0x40000000");                             // materialize USER_WRAPPER_FD_BASE for synthetic handles
     ctx.emitter.instruction("cmp rdi, r9");                                     // test whether this stream is a userspace-wrapper handle
-    ctx.emitter.instruction(&format!("jge {}", wrapper_label));                 // dispatch synthetic handles to stream_seek
-    abi::emit_push_reg(ctx.emitter, "rdi");
+    ctx.emitter.instruction(&format!("jb {}", success_label));                  // descriptors below the wrapper range use native lseek
+    crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "r10");
+    ctx.emitter.instruction("add r10, r9");                                     // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
+    ctx.emitter.instruction("cmp rdi, r10");                                    // is the backend above the wrapper range?
+    ctx.emitter.instruction(&format!("jb {}", wrapper_label));                  // dispatch wrapper backends to stream_seek
+    ctx.emitter.label(success_label);
     ctx.emitter.instruction("call lseek");                                      // reposition the stream through libc lseek()
     ctx.emitter.instruction("cmp rax, 0");                                      // test whether lseek returned a non-negative offset
-    ctx.emitter.instruction(&format!("jge {}", success_label));                 // continue only when lseek succeeds
-    abi::emit_pop_reg(ctx.emitter, "r10");
+    ctx.emitter.instruction(&format!("jge {}", done_label));                    // continue only when lseek succeeds
     ctx.emitter.instruction("mov rax, -1");                                     // fseek returns -1 when lseek fails
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip EOF reset after a failed seek
-    ctx.emitter.label(success_label);
-    abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("lea r11, [rip + _eof_flags]");                     // materialize the EOF-flag table base
-    ctx.emitter.instruction("mov BYTE PTR [r11 + r10], 0");                     // clear EOF state for the successfully repositioned stream
-    ctx.emitter.instruction("xor eax, eax");                                    // fseek returns 0 after a successful seek
+    ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip EOF reset after a failed seek
     ctx.emitter.label(done_label);
+    // See the AArch64 counterpart: php's position restarts from the offset lseek landed on.
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // the absolute offset lseek moved to
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // reload the opaque stream handle
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");                   // the offset the filtered position restarts from
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // reload the opaque stream handle
+    ctx.emitter.instruction("xor esi, esi");                                    // clear the EOF state after repositioning
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("xor eax, eax");                                    // fseek returns 0 after a successful seek
     ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip wrapper stream_seek after the native path
     ctx.emitter.label(&wrapper_label);
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rdi");                   // the synthetic wrapper fd
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
+    // Mirrors the AArch64 reconciliation above, which this half was missing entirely.
+    ctx.emitter.instruction("cmp rax, 0");                                      // the wrapper's stream_seek reports 0 on success
+    ctx.emitter.instruction(&format!("jne {}", after_dispatch_label));          // it refused: keep -1 and leave the position alone
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");                   // the synthetic wrapper fd
+    emit_wrapper_seek_head_x86_64(ctx, false);
+    abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_seek_reconcile");      // 0, or -1 with php's warning
+    // A seek starts the reading again, so php discards the end-of-file answer the read left
+    // behind — the native path above has always done this, and the wrapper path never did.
+    // The verdict rides in the slot the descriptor used; x19/rbx hold live allocator state.
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // the reconciliation verdict
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    ctx.emitter.instruction("mov rsi, 0");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");
     ctx.emitter.label(&after_dispatch_label);
+    ctx.emitter.instruction("add rsp, 32");                                     // release seek scratch storage
 }
 
 /// Emits the ARM64 `rewind()` syscall path and boolean result.
@@ -88,37 +215,67 @@ pub(super) fn lower_rewind_aarch64(
 ) {
     let wrapper_label = ctx.next_label("rewind_user_wrapper");
     let after_dispatch_label = ctx.next_label("rewind_after_dispatch");
+    ctx.emitter.instruction("sub sp, sp, #16");                                 // preserve the opaque handle across descriptor lookup
+    ctx.emitter.instruction("str x0, [sp, #0]");                                // save the opaque stream handle
+    abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
     ctx.emitter.instruction("mov w9, #0x4000");                                 // materialize the high half of USER_WRAPPER_FD_BASE
     ctx.emitter.instruction("lsl w9, w9, #16");                                 // form the synthetic wrapper fd base 0x40000000
     ctx.emitter.instruction("cmp x0, x9");                                      // test whether this stream is a userspace-wrapper handle
-    ctx.emitter.instruction(&format!("b.ge {}", wrapper_label));                // dispatch synthetic handles to stream_seek
-    abi::emit_push_reg(ctx.emitter, "x0");
+    ctx.emitter.instruction(&format!("b.lo {}", success_label));                // descriptors below the wrapper range use native lseek
+    crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "x10");
+    ctx.emitter.instruction("add x10, x9, x10");                                // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
+    ctx.emitter.instruction("cmp x0, x10");                                     // is the backend above the wrapper range?
+    ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));                // dispatch wrapper backends to stream_seek
+    ctx.emitter.label(success_label);
     ctx.emitter.instruction("mov x1, #0");                                      // use offset 0 for rewind
     ctx.emitter.instruction("mov x2, #0");                                      // use SEEK_SET for rewind
     ctx.emitter.syscall(199);
     if ctx.emitter.platform.needs_cmp_before_error_branch() {
         ctx.emitter.instruction("cmp x0, #0");                                  // Linux reports lseek failure as a negative result
     }
-    ctx.emitter.instruction(
-        &ctx.emitter.platform.branch_on_syscall_success(success_label)
-    );                                                                          // continue only when rewind succeeds
-    abi::emit_pop_reg(ctx.emitter, "x9");
+    ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(done_label)); // continue only when rewind succeeds
     ctx.emitter.instruction("mov x0, #0");                                      // rewind returns false when lseek fails
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip EOF reset after a failed rewind
-    ctx.emitter.label(success_label);
-    abi::emit_pop_reg(ctx.emitter, "x9");
-    abi::emit_symbol_address(ctx.emitter, "x10", "_eof_flags");
-    ctx.emitter.instruction("strb wzr, [x10, x9]");                             // clear EOF state after rewinding the stream
-    ctx.emitter.instruction("mov x0, #1");                                      // rewind returns true after a successful seek
+    ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip EOF reset after a failed rewind
     ctx.emitter.label(done_label);
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");                                      // a rewind always lands at offset zero
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");          // php's position restarts from there too
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");                                      // clear the EOF state after rewinding
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("mov x0, #1");                                      // rewind returns true after a successful seek
     ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip wrapper stream_seek after the native path
     ctx.emitter.label(&wrapper_label);
     ctx.emitter.instruction("mov x1, #0");                                      // pass offset 0 to wrapper stream_seek
     ctx.emitter.instruction("mov x2, #0");                                      // pass SEEK_SET to wrapper stream_seek
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // the synthetic wrapper fd
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
+    // `rewind()` is `fseek($h, 0)` and needs the same reconciliation: php asks `stream_tell` where
+    // the wrapper landed, and refuses the rewind when the class defines no such method.
+    let refused_label = ctx.next_label("rewind_wrapper_refused");
     ctx.emitter.instruction("cmp x0, #0");                                      // wrapper fseek returns zero on success
-    ctx.emitter.instruction("cset x0, eq");                                     // rewind returns true only when wrapper seek succeeded
+    ctx.emitter.instruction(&format!("b.ne {}", refused_label));                // it refused: false, position untouched
+    ctx.emitter.instruction("ldr x1, [sp, #8]");                                // the synthetic wrapper fd
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    emit_wrapper_seek_head_aarch64(ctx, true);
+    abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_seek_reconcile");      // 0, or -1 with php's warning
+    // A seek starts the reading again, so php discards the end-of-file answer the read left
+    // behind — the native path above has always done this, and the wrapper path never did.
+    // The verdict rides in the slot the descriptor used; x19/rbx hold live allocator state.
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // the reconciliation verdict
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("ldr x0, [sp, #8]");
+    // Only THIS arm answers 0/-1; the native path above already produced the bool and jumps
+    // straight to the label below, so the conversion cannot live there.
+    ctx.emitter.instruction("cmp x0, #0");
+    ctx.emitter.instruction("cset x0, eq");                                     // rewind answers a bool
+    ctx.emitter.instruction(&format!("b {}", after_dispatch_label));
+    ctx.emitter.label(&refused_label);
+    ctx.emitter.instruction("mov x0, #0");                                      // the wrapper refused: rewind is false
     ctx.emitter.label(&after_dispatch_label);
+    ctx.emitter.instruction("add sp, sp, #16");                                 // release rewind scratch storage
 }
 
 /// Emits the Linux x86_64 `rewind()` libc path and boolean result.
@@ -127,36 +284,68 @@ pub(super) fn lower_rewind_x86_64(
     success_label: &str,
     done_label: &str,
 ) {
-    ctx.emitter.instruction("mov rdi, rax");                                    // pass the stream fd to libc lseek()
     let wrapper_label = ctx.next_label("rewind_user_wrapper");
     let after_dispatch_label = ctx.next_label("rewind_after_dispatch");
+    ctx.emitter.instruction("sub rsp, 16");                                     // preserve the opaque handle across descriptor lookup
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");                    // save the opaque stream handle
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the opaque handle to descriptor lookup
+    abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
+    ctx.emitter.instruction("mov rdi, rax");                                    // pass the resolved backend descriptor to lseek
     ctx.emitter.instruction("mov r9d, 0x40000000");                             // materialize USER_WRAPPER_FD_BASE for synthetic handles
     ctx.emitter.instruction("cmp rdi, r9");                                     // test whether this stream is a userspace-wrapper handle
-    ctx.emitter.instruction(&format!("jge {}", wrapper_label));                 // dispatch synthetic handles to stream_seek
-    abi::emit_push_reg(ctx.emitter, "rdi");
+    ctx.emitter.instruction(&format!("jb {}", success_label));                  // descriptors below the wrapper range use native lseek
+    crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "r10");
+    ctx.emitter.instruction("add r10, r9");                                     // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
+    ctx.emitter.instruction("cmp rdi, r10");                                    // is the backend above the wrapper range?
+    ctx.emitter.instruction(&format!("jb {}", wrapper_label));                  // dispatch wrapper backends to stream_seek
+    ctx.emitter.label(success_label);
     ctx.emitter.instruction("xor esi, esi");                                    // use offset 0 for rewind
     ctx.emitter.instruction("xor edx, edx");                                    // use SEEK_SET for rewind
     ctx.emitter.instruction("call lseek");                                      // rewind the stream through libc lseek()
     ctx.emitter.instruction("cmp rax, 0");                                      // test whether lseek returned a non-negative offset
-    ctx.emitter.instruction(&format!("jge {}", success_label));                 // continue only when rewind succeeds
-    abi::emit_pop_reg(ctx.emitter, "r10");
+    ctx.emitter.instruction(&format!("jge {}", done_label));                    // continue only when rewind succeeds
     ctx.emitter.instruction("xor eax, eax");                                    // rewind returns false when lseek fails
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip EOF reset after a failed rewind
-    ctx.emitter.label(success_label);
-    abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("lea r11, [rip + _eof_flags]");                     // materialize the EOF-flag table base
-    ctx.emitter.instruction("mov BYTE PTR [r11 + r10], 0");                     // clear EOF state after rewinding the stream
-    ctx.emitter.instruction("mov rax, 1");                                      // rewind returns true after a successful seek
+    ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip EOF reset after a failed rewind
     ctx.emitter.label(done_label);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // reload the opaque stream handle
+    ctx.emitter.instruction("xor esi, esi");                                    // a rewind always lands at offset zero
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");          // php's position restarts from there too
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // reload the opaque stream handle
+    ctx.emitter.instruction("xor esi, esi");                                    // clear the EOF state after rewinding
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("mov rax, 1");                                      // rewind returns true after a successful seek
     ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip wrapper stream_seek after the native path
     ctx.emitter.label(&wrapper_label);
     ctx.emitter.instruction("xor esi, esi");                                    // pass offset 0 to wrapper stream_seek
     ctx.emitter.instruction("xor edx, edx");                                    // pass SEEK_SET to wrapper stream_seek
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdi");                    // the synthetic wrapper fd
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
+    // See the AArch64 counterpart: `rewind()` needs the same position reconciliation `fseek()` does.
+    let refused_label = ctx.next_label("rewind_wrapper_refused");
     ctx.emitter.instruction("cmp rax, 0");                                      // wrapper fseek returns zero on success
-    ctx.emitter.instruction("sete al");                                         // mark wrapper seek success as true
-    ctx.emitter.instruction("movzx eax, al");                                   // widen rewind bool result
+    ctx.emitter.instruction(&format!("jne {}", refused_label));                 // it refused: false, position untouched
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // the synthetic wrapper fd
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    emit_wrapper_seek_head_x86_64(ctx, true);
+    abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_seek_reconcile");      // 0, or -1 with php's warning
+    // A seek starts the reading again, so php discards the end-of-file answer the read left
+    // behind — the native path above has always done this, and the wrapper path never did.
+    // The verdict rides in the slot the descriptor used; x19/rbx hold live allocator state.
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // the reconciliation verdict
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    ctx.emitter.instruction("mov rsi, 0");
+    abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");
+    // Only THIS arm answers 0/-1; the native path above already produced the bool and jumps
+    // straight to the label below, so the conversion cannot live there.
+    ctx.emitter.instruction("cmp rax, 0");
+    ctx.emitter.instruction("sete al");                                         // rewind answers a bool
+    ctx.emitter.instruction("movzx eax, al");
+    ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));
+    ctx.emitter.label(&refused_label);
+    ctx.emitter.instruction("xor eax, eax");                                    // the wrapper refused: rewind is false
     ctx.emitter.label(&after_dispatch_label);
+    ctx.emitter.instruction("add rsp, 16");                                     // release rewind scratch storage
 }
 
 /// Materializes `file_put_contents` arguments for the ARM64 runtime ABI.
@@ -164,14 +353,28 @@ pub(super) fn lower_file_put_contents_arm64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    flags: Option<ValueId>,
     helper: &str,
 ) -> Result<()> {
+    // $flags travels in x5, past the two string pairs. It was accepted and discarded before,
+    // so FILE_APPEND silently truncated the file it was meant to extend.
+    match flags {
+        Some(flags) => {
+            ctx.load_value_to_result(flags)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        }
+        None => {
+            ctx.emitter.instruction("mov x0, #0");                              // no flags: an ordinary truncating write
+            abi::emit_push_reg(ctx.emitter, "x0");
+        }
+    }
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-    load_string_to_result(ctx, data, "file_put_contents data")?;
+    super::phar_write::load_file_put_contents_payload(ctx, data)?;
     ctx.emitter.instruction("mov x3, x1");                                      // pass the data pointer in the runtime helper's second string slot
     ctx.emitter.instruction("mov x4, x2");                                      // pass the data length in the runtime helper's second string slot
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    abi::emit_pop_reg(ctx.emitter, "x5");                                       // the flags word
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
@@ -181,14 +384,27 @@ pub(super) fn lower_file_put_contents_x86_64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    flags: Option<ValueId>,
     helper: &str,
 ) -> Result<()> {
+    // See the AArch64 half: $flags travels in rcx, past both string pairs.
+    match flags {
+        Some(flags) => {
+            ctx.load_value_to_result(flags)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        }
+        None => {
+            ctx.emitter.instruction("xor eax, eax");                            // no flags: an ordinary truncating write
+            abi::emit_push_reg(ctx.emitter, "rax");
+        }
+    }
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-    load_string_to_result(ctx, data, "file_put_contents data")?;
+    super::phar_write::load_file_put_contents_payload(ctx, data)?;
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the data pointer while the filename remains on the temporary stack
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the data length while the filename remains on the temporary stack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    abi::emit_pop_reg(ctx.emitter, "rcx");                                      // the flags word
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }

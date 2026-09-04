@@ -2,7 +2,7 @@
 title: "curl_multi_remove_handle()"
 description: "Removes a multi handle from a set of cURL handles."
 sidebar:
-  order: 350
+  order: 376
 ---
 
 ## curl_multi_remove_handle()

@@ -37,15 +37,25 @@ pub(crate) struct RuntimeStaticMethodCallableCase {
     pub(crate) case: RuntimeCallableCase,
 }
 
+/// The blanket refusal `runtime_fn_semantics` attaches to every typed backend builtin.
+///
+/// It is a policy default rather than a finding about any particular builtin, which is why
+/// [`generic_wrapper_is_expressible`] may look past it. The four OTHER `StaticOnly` reasons name
+/// a real obstruction — a compiler primitive, the array-pointer cursor, `constant()`'s
+/// compile-time name, `fscanf`'s prelude — and are never looked past.
+const TYPED_BACKEND_REFUSAL: &str = "typed backend operation has no runtime-selected wrapper contract";
+
 /// Returns true for builtins supported by generic runtime string-callable dispatch.
 ///
-/// These names have stable fixed-arity EIR wrapper signatures and do not require literal,
-/// by-reference, resource, hidden runtime-state, or callback-adapter semantics. Other builtins
-/// remain available through direct calls or first-class callable lowering when that path supports
-/// them, but runtime string dispatch must not pre-emit wrappers it cannot prove safe.
+/// `narrowed` says whether the compiler knows which names this site can reach. It has to, because
+/// the ladder is inlined per call site and each case is the builtin's WHOLE lowering: measured at
+/// roughly 120 lines of assembly per eligible builtin per site. A site whose callee cannot be
+/// narrowed therefore keeps the small hand-declared set it has always had, and a site that knows
+/// its names pays only for those.
 pub(crate) fn runtime_builtin_wrapper_supported(
     name: &str,
     source_arg_ty: Option<&PhpType>,
+    narrowed: bool,
 ) -> bool {
     let name = crate::names::php_symbol_key(name.trim_start_matches('\\'));
     let Some(def) = crate::builtins::registry::lookup(&name) else {
@@ -58,8 +68,21 @@ pub(crate) fn runtime_builtin_wrapper_supported(
         crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) => {
             target.callable_accepts(source_arg_ty)
         }
-        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(_) => false,
+        crate::builtins::semantics::BuiltinCallablePolicy::StaticOnly(reason) => {
+            narrowed && reason == TYPED_BACKEND_REFUSAL && generic_wrapper_is_expressible(def)
+        }
     }
+}
+
+/// Returns whether the generic PHP-ABI wrapper can express this builtin's signature.
+///
+/// The wrapper receives its arguments by value and answers one result, so a by-reference
+/// parameter has nowhere to write back and a variadic tail has no fixed arity to declare. Those
+/// two are the whole obstruction; the caller still requires a first-class callable signature to
+/// exist, which is what rules out the shapes neither of these tests would catch.
+fn generic_wrapper_is_expressible(def: &crate::builtins::registry::BuiltinDef) -> bool {
+    def.spec.variadic.is_none()
+        && !def.spec.params.iter().any(|param| param.by_ref)
 }
 
 /// Builds a static-method runtime wrapper signature that can receive keyed variadic tails.

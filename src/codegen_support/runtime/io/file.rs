@@ -44,6 +44,16 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file ---");
     emitter.label_global("__rt_file");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_file",
+            name_len: 4,
+            directory: false,
+        },
+    );
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
@@ -52,9 +62,28 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #32]");                                   // save the PHP $flags bitmask across every helper call
 
     // -- read entire file contents --
-    emitter.instruction("bl __rt_file_get_contents");                           // read file, x1=ptr, x2=len
-    emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
+    emitter.instruction("bl __rt_file_get_contents_maybe_url");                 // read the file OR the wrapper URL, x1=ptr, x2=len
+    emitter.instruction("b __rt_file_split");                                   // and split whatever came back
+
+    // -- second entry: the caller already read the bytes (a php://filter chain read) --
+    // `file()` on a filter URL is "read through the chain, then split": the read half lives in
+    // the lowering's filter route, which cannot reach the split loop through `__rt_file`
+    // because that entry performs its own read. Same frame, same flags slot, same loop.
+    emitter.label_global("__rt_file_from_bytes");
+    emitter.instruction("sub sp, sp, #64");                                     // the same frame the ordinary entry builds
+    emitter.instruction("stp x29, x30, [sp, #48]");
+    emitter.instruction("add x29, sp, #48");
+    emitter.instruction("str x0, [sp, #32]");                                   // save the PHP $flags bitmask across every helper call
+
+    // A shared label, not a local one: the plain `b` above crosses from `__rt_file`'s atom into
+    // this one, and a local label would be dropped by macOS dead-stripping (`.alt_entry` keeps
+    // it addressable; the jump is an unconditional `b`, which is what `.alt_entry` supports).
+    emitter.label_shared("__rt_file_split");
+    // A null payload pointer is the reader's failure signal — php answers FALSE for a file it
+    // cannot read, and a null return is what the caller's boxing turns into that false. An
+    // EMPTY file arrives as a non-null pointer with length zero and still answers `[]`.
     emitter.instruction("cbz x1, __rt_file_failed");                            // a null payload is a FAILED read, which PHP reports as false
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
 
     // -- create a new string array (capacity = 256 lines) --
     emitter.instruction("mov x0, #256");                                        // initial capacity of 256 elements
@@ -112,14 +141,14 @@ pub fn emit_file(emitter: &mut Emitter) {
     // -- return array pointer --
     emitter.label("__rt_file_ret");
     emitter.instruction("ldr x0, [sp, #16]");                                   // return array pointer
-    emitter.instruction("b __rt_file_epilogue");                                // skip the failure result on the success path
+    emitter.instruction("b __rt_file_out");                                     // skip the failure result on the success path
 
     // -- a read that failed answers null, which the lowering boxes as PHP's false --
     emitter.label("__rt_file_failed");
     emitter.instruction("mov x0, #0");                                          // null result distinguishes a failed read from an EMPTY file
 
     // -- restore frame and return --
-    emitter.label("__rt_file_epilogue");
+    emitter.label("__rt_file_out");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -177,17 +206,40 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file ---");
     emitter.label_global("__rt_file");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled_saying(
+        emitter,
+        super::fopen::DisabledWrapperAnswer::Predicate(0),
+        super::fopen::DisabledWrapperNotice::FailedToOpen {
+            name_symbol: "_uww_name_file",
+            name_len: 4,
+            directory: false,
+        },
+    );
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while file() uses scan state and array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the file payload, scan cursors, and result array pointer
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the file payload, line scan cursors, and result array pointer
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the PHP $flags bitmask across every helper call
 
-    emitter.instruction("call __rt_file_get_contents");                         // read the full file payload into an owned elephc string before splitting it into lines
+    emitter.instruction("call __rt_file_get_contents_maybe_url");               // read the file OR the wrapper URL into an owned elephc string before splitting it into lines
+    emitter.instruction("jmp __rt_file_split_x");                               // and split whatever came back
+
+    // -- second entry: the caller already read the bytes; see the AArch64 counterpart --
+    emitter.label_global("__rt_file_from_bytes");
+    emitter.instruction("push rbp");                                            // the same frame the ordinary entry builds
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 64");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the PHP $flags bitmask across every helper call
+
+    // See the AArch64 counterpart: the `jmp` crosses into this entry's section, so the label
+    // must survive section-level garbage collection.
+    emitter.label_shared("__rt_file_split_x");
+    // See the AArch64 counterpart: a null payload pointer answers null, which boxes to false.
+    emitter.instruction("test rax, rax");                                       // a null payload is a FAILED read, which PHP reports as false
+    emitter.instruction("jz __rt_file_failed_x");                               // answer null rather than the empty array an EMPTY file produces
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned file payload pointer across the later array allocation and line pushes
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned file payload length across the later array allocation and scan loop
-    emitter.instruction("test rax, rax");                                       // a null payload is a FAILED read, which PHP reports as false
-    emitter.instruction("jz __rt_file_failed");                                 // answer null rather than the empty array an EMPTY file produces
 
     emitter.instruction("mov rdi, 256");                                        // request an initial array capacity of 256 line slots for the line-splitting helper
     emitter.instruction("mov rsi, 16");                                         // request 16-byte elements so each slot can hold a string pointer and string length pair
@@ -238,16 +290,14 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_file_cleanup");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the result array pointer in the canonical x86_64 integer result register
-    emitter.instruction("jmp __rt_file_epilogue");                              // skip the failure result on the success path
-
-    // -- a read that failed answers null, which the lowering boxes as PHP's false --
-    emitter.label("__rt_file_failed");
-    emitter.instruction("xor eax, eax");                                        // null result distinguishes a failed read from an EMPTY file
-
-    emitter.label("__rt_file_epilogue");
+    emitter.label("__rt_file_out_x");
     emitter.instruction("add rsp, 64");                                         // release the temporary file payload and scan-state spill slots used by file()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the line array
     emitter.instruction("ret");                                                 // return the array of file lines to the caller
+
+    emitter.label("__rt_file_failed_x");
+    emitter.instruction("xor eax, eax");                                        // the caller boxes the null as PHP false
+    emitter.instruction("jmp __rt_file_out_x");
 }
 
 /// Emits the x86_64 `$flags` handling applied to one complete `file()` line before it is pushed.
@@ -320,16 +370,28 @@ mod tests {
                 .find("__rt_file_scan:")
                 .expect("file() scans the payload for line terminators");
             let guard = &asm[read_at..scan_at];
-            let branches_away = guard.contains("cbz x1, __rt_file_failed")
-                || guard.contains("jz __rt_file_failed");
+            // The two emitters spell the failure label differently — the x86_64 one suffixes
+            // every local label with `_x` — so the target decides which name to look for. A
+            // single spelling passed on AArch64 and hid a branch to an undefined symbol on
+            // x86_64, which is the shape of bug this test exists to catch.
+            let failure_label = match arch {
+                Arch::AArch64 => "__rt_file_failed",
+                Arch::X86_64 => "__rt_file_failed_x",
+            };
+            let branches_away = guard.contains(&format!("cbz x1, {failure_label}"))
+                || guard.contains(&format!("jz {failure_label}"));
             assert!(
                 branches_away,
                 "{arch:?}: a null payload must skip the scan, or a failed read answers an \
                  empty array instead of false:\n{guard}"
             );
             assert!(
-                asm.contains("__rt_file_failed:"),
+                asm.contains(&format!("{failure_label}:")),
                 "{arch:?}: the failure path must be emitted"
+            );
+            assert!(
+                !asm.contains(&format!("jz __rt_file_failed\n")),
+                "{arch:?}: no branch may name the other target's failure label"
             );
         }
     }

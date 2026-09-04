@@ -67,7 +67,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             contract.name
         );
     }
-    assert_eq!(exceptional.len(), 13);
+    assert_eq!(exceptional.len(), 33);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -91,9 +91,36 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     assert_eq!(language_constructs, 5);
     assert_eq!(dedicated_syntax, 1);
     assert_eq!(unsupported, 3);
+    // The `gz*` family, the zlib string functions and `readgzfile` route through the injected
+    // elephc-PHP prelude rather than the registry, which is what puts them in this set.
     assert_eq!(
         preludes,
-        BTreeSet::from(["hash_copy", "hash_final", "hash_init", "hash_update"])
+        BTreeSet::from([
+            "dir",
+            "gzclose",
+            "gzdecode",
+            "gzencode",
+            "gzeof",
+            "gzfile",
+            "gzgetc",
+            "gzgets",
+            "gzopen",
+            "gzpassthru",
+            "gzputs",
+            "gzread",
+            "gzrewind",
+            "gzseek",
+            "gztell",
+            "gzwrite",
+            "hash_copy",
+            "hash_final",
+            "hash_init",
+            "hash_update",
+            "readgzfile",
+            "zlib_decode",
+            "zlib_encode",
+            "zlib_get_coding_type",
+        ])
     );
 
     let hash_init = contracts()

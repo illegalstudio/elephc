@@ -13,26 +13,32 @@
 ///
 /// `array_filter()` uses the `ARRAY_FILTER_*` constants to select which callback arguments
 /// are passed; `count()` uses the `COUNT_*` constants to select flat or recursive counting.
-pub(crate) const ARRAY_INT_CONSTANTS: &[(&str, i64)] = &[
-    ("ARRAY_FILTER_USE_VALUE", 0),
-    ("ARRAY_FILTER_USE_BOTH", 1),
-    ("ARRAY_FILTER_USE_KEY", 2),
-    ("COUNT_NORMAL", 0),
-    ("COUNT_RECURSIVE", 1),
-];
+pub(crate) use elephc_builtin_contract::php_constants::ARRAY_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Verifies PHP 8.6's value-mode constant is the default mode value.
+    /// Verifies `ARRAY_FILTER_USE_VALUE` is NOT declared, because php does not define it.
+    ///
+    /// Measured on `php -n` 8.5.6: `defined("ARRAY_FILTER_USE_VALUE")` is false, while
+    /// `ARRAY_FILTER_USE_KEY` and `ARRAY_FILTER_USE_BOTH` are both true. Mode 0 is still the
+    /// value mode, and php's own `ValueError` message spells the name — but spelling it in php
+    /// source is a fatal there, so declaring it here would let such a program compile.
     #[test]
-    fn array_filter_use_value_is_zero() {
-        let entry = ARRAY_INT_CONSTANTS
-            .iter()
-            .find(|(name, _)| *name == "ARRAY_FILTER_USE_VALUE")
-            .expect("ARRAY_FILTER_USE_VALUE defined");
-        assert_eq!(entry.1, 0);
+    fn array_filter_use_value_is_not_a_php_constant() {
+        assert!(
+            !ARRAY_INT_CONSTANTS
+                .iter()
+                .any(|(name, _)| *name == "ARRAY_FILTER_USE_VALUE"),
+            "php does not define ARRAY_FILTER_USE_VALUE"
+        );
+        for name in ["ARRAY_FILTER_USE_KEY", "ARRAY_FILTER_USE_BOTH"] {
+            assert!(
+                ARRAY_INT_CONSTANTS.iter().any(|(declared, _)| *declared == name),
+                "{name} is a php constant and must stay declared"
+            );
+        }
     }
 
     /// Verifies `count()`'s mode constants carry php-src's exact values.

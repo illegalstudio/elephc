@@ -8,11 +8,7 @@
 //! - Values match PHP's ext/openssl constants and the elephc-crypto bridge option bits.
 
 /// Tuple of `(name, value)` pairs for the supported OpenSSL cipher flags.
-pub(crate) const OPENSSL_INT_CONSTANTS: &[(&str, i64)] = &[
-    ("OPENSSL_RAW_DATA", 1),
-    ("OPENSSL_ZERO_PADDING", 2),
-    ("OPENSSL_DONT_ZERO_PAD_KEY", 4),
-];
+pub(crate) use elephc_builtin_contract::php_constants::OPENSSL_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {

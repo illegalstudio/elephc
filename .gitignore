@@ -18,3 +18,7 @@ docs/superpowers/
 /bundle.tar
 /bundle.tar.gz
 /bundle.tar.bz2
+
+# Agent tooling caches (kage / codebase-memory). Local scratch, never the project.
+.agent_memory/
+.codebase-memory/

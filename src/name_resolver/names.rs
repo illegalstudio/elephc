@@ -379,7 +379,6 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "FNM_PATHNAME"
                 | "FNM_PERIOD"
                 | "FNM_CASEFOLD"
-                | "ARRAY_FILTER_USE_VALUE"
                 | "ARRAY_FILTER_USE_BOTH"
                 | "ARRAY_FILTER_USE_KEY"
                 | "STR_PAD_LEFT"
@@ -404,6 +403,7 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "M_LOG10E"
                 | "PHP_EOL"
                 | "DIRECTORY_SEPARATOR"
+                | "PATH_SEPARATOR"
                 | "ICONV_IMPL"
                 | "ICONV_VERSION"
         ) {
@@ -422,6 +422,10 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
         .chain(crate::types::array_constants::ARRAY_INT_CONSTANTS.iter())
         .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
+        .chain(crate::types::zlib_constants::ZLIB_INT_CONSTANTS.iter())
+        .chain(
+            crate::types::output_handler_constants::OUTPUT_HANDLER_INT_CONSTANTS.iter(),
+        )
         .chain(crate::types::iconv_constants::ICONV_INT_CONSTANTS.iter())
         .chain(crate::types::curl_constants::CURL_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)

@@ -20,11 +20,13 @@ mod builtin_spl_exceptions;
 pub(crate) mod builtin_stdclass;
 mod builtin_types;
 mod builtin_user_filter;
+pub(crate) mod tentative_return_types;
 pub(crate) mod builtins;
 mod callables;
 mod driver;
 mod extern_decl;
 mod functions;
+pub(in crate::types) use functions::array_element_representation_widens;
 mod inference;
 mod loop_storage;
 mod method_pass;
@@ -73,6 +75,24 @@ pub(crate) struct Checker {
     pub function_variant_groups: HashMap<String, Vec<String>>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
+    /// Parameters a BODY widened, keyed by `(owner, parameter index)` — a function name, or
+    /// `Class::method`. A by-reference parameter recorded here holds boxed element slots because
+    /// its own body put them there, and no later call site may specialize it back to a narrow
+    /// element type: the caller's storage is what was widened. A parameter merely DECLARED
+    /// `array` is not in the set, which is how a `sort($a)` body keeps slots the backend sorts.
+    /// Names an `unset` reached whose binding it could NOT end.
+    ///
+    /// The kill needs the name to be killable; when it is not, the env keeps the old type while
+    /// the RUNTIME still released the slot and stored null. A later reassignment therefore looks
+    /// like an ordinary retype and is not one — and widening the slot for it LEAKS: measured, one
+    /// boxed cell per site, because the store into the widened slot has no owner to hand back to.
+    /// The widening declines for these names and the refusal stands.
+    pub unset_without_kill: HashSet<String>,
+    pub by_ref_widened_params: HashSet<(String, usize)>,
+    /// Functions whose signature is being re-resolved because their body widened a
+    /// by-reference array parameter. The set bounds that re-entry to one pass: `array<mixed>`
+    /// is the top of the element lattice, so a second pass cannot widen again.
+    pub resolving_by_ref_widening: HashSet<String>,
     /// Functions whose body is currently being checked.
     ///
     /// Recursive calls may use their provisional signature, but must not re-specialize the same
@@ -220,6 +240,15 @@ pub(crate) struct Checker {
     /// up with that assigned type and its slot is read before any store. `check_top_level_program`
     /// therefore defers the decision to the end of the pass, where `global_env` is authoritative.
     pub pending_null_probe_roots: Vec<(String, Span)>,
+    /// Whether typing the statement in progress reached THROUGH a null receiver.
+    ///
+    /// A property read or an array offset on `null` answers `null` in php rather than failing, so
+    /// the checker types it that way. In the INITIAL top-level pass that answer is not
+    /// trustworthy: the pass runs before method bodies are checked, so an untyped property has
+    /// not yet learned its type from a constructor assignment and reads as null for no better
+    /// reason than that. Whatever the rest of the expression then concludes is the final pass's
+    /// to judge — see `can_suppress_initial_top_level_errors`.
+    pub tolerated_null_receiver: bool,
     /// Nesting depth of null-probe operand inference (`isset`/`empty`/`unset` arguments and the
     /// left operand of `??`).
     ///
@@ -265,6 +294,11 @@ pub(crate) struct Checker {
     /// already visits every expression with a typed environment, so no second AST walk is
     /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// `(function-like scope, local name)` pairs for locals a reassignment widened across scalar
+    /// types, so EIR lowering gives them boxed storage from their first store.
+    pub widened_scalar_locals: HashSet<(String, String)>,
+    /// php's tentative-return deprecations, computed while linking and emitted at startup.
+    pub tentative_return_deprecations: Vec<(u32, String)>,
     /// Mirrors `CheckOptions::strict_locals` for the duration of the check. When set, the
     /// permissive local-retype path in `merge_local_assignment_type` and the branch-divergent
     /// `Mixed`-storage marking in `mixed_storage_scan::run_mixed_storage_scan` both step aside
@@ -453,6 +487,36 @@ impl Checker {
             // or more and `None` are indistinguishable HERE, and this is the only killable-relevant
             // reader of the map.
             && self.local_binding_depth.get(name).copied() == Some(0)
+            && !self.active_ref_params.contains(name)
+            && !self.ref_aliased_locals.contains(name)
+            && !self.active_globals.contains(name)
+            && !self.static_local_names.contains(name)
+            && !self.typed_local_names.contains(name)
+    }
+
+    /// Whether the name's storage is THIS frame's alone, whatever introduced the binding.
+    ///
+    /// `local_binding_is_killable` above answers a stronger question — may this binding be ENDED
+    /// and replaced by a fresh slot — and its `Some(0)` clause is what separates them. That clause
+    /// covers two different things at once: a name whose storage is not this frame's at all
+    /// (a superglobal, an extern global), and a name a CONDITIONAL group introduced without an
+    /// assignment (a `catch` variable, a `foreach` or `list()` target, a builtin out-parameter).
+    /// The first must never be re-bound. The second is ordinary frame storage; it is only the kill
+    /// that it cannot have, because nothing proves the binding ran.
+    ///
+    /// WIDENING has no such requirement: it keeps the one slot and boxes it, so a binding that may
+    /// not have run is no obstacle. What it does need is that no one ELSE reads the slot by name —
+    /// a by-reference parameter's caller, a `global`, a `static`, an `eval` body — which is every
+    /// other clause below, kept verbatim.
+    pub(crate) fn local_binding_storage_is_private(&self, name: &str) -> bool {
+        !self.body_contains_eval
+            // Depth 0, kept from the killable rule though a widening does not need it for its
+            // OWN sake: the marking machinery in `mixed_storage_scan` reads the same shape, and
+            // relaxing it here turned seven of its `error_tests` red — a name widened inside a
+            // branch is one that pass then declines to mark. The cost is one measured divergence,
+            // `$a = 1; try { unset($a); } finally {} if ($c) { $a = "s"; }`, which php runs.
+            && self.local_conditional_depth == 0
+            && !self.name_is_seeded_program_storage(name)
             && !self.active_ref_params.contains(name)
             && !self.ref_aliased_locals.contains(name)
             && !self.active_globals.contains(name)
@@ -812,6 +876,8 @@ pub fn check_types_with_options(
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
+        widened_scalar_locals: checker.widened_scalar_locals,
+        tentative_return_deprecations: checker.tentative_return_deprecations,
         local_bind_kill_sites: checker.local_bind_kill_sites,
         local_retype_sites: checker.local_retype_sites,
         mixed_storage_store_sites: checker.mixed_storage_store_sites,

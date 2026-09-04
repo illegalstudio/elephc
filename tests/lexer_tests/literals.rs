@@ -525,3 +525,80 @@ fn test_float_separator_signed_exp() {
     let t = tokens("<?php 1e+1_0;");
     assert_eq!(t[1], Token::FloatLiteral(1e10));
 }
+
+/// Verifies a numeric literal butted straight against a PHP reserved word ends at the
+/// keyword instead of being refused, the way PHP's own lexer terminates the number at
+/// the first character that cannot continue it.
+///
+/// Measured with `php -n` 8.5.6:
+///
+/// ```text
+/// $ php -n -r 'var_dump(1and 2);'   => bool(true)
+/// $ php -n -r 'var_dump(1or 2);'    => bool(true)
+/// $ php -n -r 'var_dump(1xor 2);'   => bool(false)
+/// $ php -n -r 'var_dump(1instanceof stdClass);' => bool(false)
+/// $ php -n -r 'echo 1and 2;'        => 1
+/// ```
+///
+/// Before this test elephc refused every one of them with
+/// `Unexpected character 'a' after decimal literal`.
+#[test]
+fn test_decimal_literal_ends_at_a_reserved_word() {
+    assert_eq!(
+        tokens("<?php 1and 2;")[1..4],
+        [Token::IntLiteral(1), Token::And, Token::IntLiteral(2)]
+    );
+    assert_eq!(
+        tokens("<?php 1or 2;")[1..4],
+        [Token::IntLiteral(1), Token::Or, Token::IntLiteral(2)]
+    );
+    assert_eq!(
+        tokens("<?php 1xor 2;")[1..4],
+        [Token::IntLiteral(1), Token::Xor, Token::IntLiteral(2)]
+    );
+    assert_eq!(
+        tokens("<?php 1instanceof stdClass;")[1..3],
+        [Token::IntLiteral(1), Token::InstanceOf]
+    );
+    assert_eq!(
+        tokens("<?php 1if;")[1..3],
+        [Token::IntLiteral(1), Token::If]
+    );
+}
+
+/// Verifies the same boundary rule for the non-decimal literal forms: floats,
+/// scientific notation, binary literals and underscore-separated decimals all end at a
+/// following reserved word.
+///
+/// Measured with `php -n` 8.5.6:
+///
+/// ```text
+/// $ php -n -r 'var_dump(1.5and 2);'     => bool(true)
+/// $ php -n -r 'var_dump(1e2and 2);'     => bool(true)
+/// $ php -n -r 'var_dump(0b11and 2);'    => bool(true)
+/// $ php -n -r 'var_dump(1_000and 2);'   => bool(true)
+/// $ php -n -r 'var_dump(1.5xor 0);'     => bool(true)
+/// ```
+#[test]
+fn test_float_and_radix_literals_end_at_a_reserved_word() {
+    assert_eq!(
+        tokens("<?php 1.5and 2;")[1..4],
+        [Token::FloatLiteral(1.5), Token::And, Token::IntLiteral(2)]
+    );
+    assert_eq!(
+        tokens("<?php 1e2and 2;")[1..4],
+        [Token::FloatLiteral(100.0), Token::And, Token::IntLiteral(2)]
+    );
+    assert_eq!(
+        tokens("<?php 0b11and 2;")[1..4],
+        [Token::IntLiteral(3), Token::And, Token::IntLiteral(2)]
+    );
+    assert_eq!(
+        tokens("<?php 1_000and 2;")[1..4],
+        [Token::IntLiteral(1000), Token::And, Token::IntLiteral(2)]
+    );
+    assert_eq!(
+        tokens("<?php 1.5xor 0;")[1..4],
+        [Token::FloatLiteral(1.5), Token::Xor, Token::IntLiteral(0)]
+    );
+}

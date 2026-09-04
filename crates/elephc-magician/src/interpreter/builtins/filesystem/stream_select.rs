@@ -87,10 +87,51 @@ pub(in crate::interpreter) fn eval_stream_select_result(
     if !(4..=5).contains(&evaluated_args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
+    // php-src rejects both negative timeout components before it builds a single fd set. Both
+    // are `?int`, and a null one means "no timeout component" rather than zero, so only a real
+    // integer is bounds-checked.
+    eval_stream_select_timeout_component(
+        evaluated_args[3],
+        STREAM_SELECT_NEGATIVE_SECONDS_MESSAGE,
+        context,
+        values,
+    )?;
+    if let Some(microseconds) = evaluated_args.get(4) {
+        eval_stream_select_timeout_component(
+            *microseconds,
+            STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE,
+            context,
+            values,
+        )?;
+    }
     for array in evaluated_args.iter().take(3) {
         eval_stream_select_cast_array(*array, context, values)?;
     }
     values.int(0)
+}
+
+/// php-src's verbatim `ValueError` wording for a negative `stream_select()` `$seconds`.
+const STREAM_SELECT_NEGATIVE_SECONDS_MESSAGE: &str =
+    "stream_select(): Argument #4 ($seconds) must be greater than or equal to 0";
+
+/// php-src's verbatim `ValueError` wording for a negative `stream_select()` `$microseconds`.
+const STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE: &str =
+    "stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0";
+
+/// Rejects a negative `stream_select()` timeout component, leaving a null one alone.
+fn eval_stream_select_timeout_component(
+    value: RuntimeCellHandle,
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(value)? == EVAL_TAG_NULL {
+        return Ok(());
+    }
+    if eval_int_value(value, values)? < 0 {
+        return eval_stream_value_error(message, context, values);
+    }
+    Ok(())
 }
 
 /// Emits PHP by-reference warnings for by-value `stream_select()` array outputs.

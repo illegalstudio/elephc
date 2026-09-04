@@ -2,13 +2,13 @@
 title: "fputcsv()"
 description: "Format line as CSV and write to file pointer."
 sidebar:
-  order: 181
+  order: 183
 ---
 
 ## fputcsv()
 
 ```php
-function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int
+function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int
 ```
 
 Format line as CSV and write to file pointer.
@@ -18,6 +18,8 @@ Format line as CSV and write to file pointer.
 - `$fields` (`array`)
 - `$separator` (`string`), default `','`, optional
 - `$enclosure` (`string`), default `'"'`, optional
+- `$escape` (`string`), default `'\\'`, optional
+- `$eol` (`string`), default `'\n'`, optional
 
 **Returns**: `int`
 

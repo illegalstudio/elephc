@@ -4,7 +4,9 @@
 // receives the datagram with stream_socket_recvfrom(), whose optional fourth
 // argument reports the address of whoever sent it.
 
-$server = stream_socket_server("udp://127.0.0.1:8755");
+// STREAM_SERVER_BIND, not the default flags: those also ask for listen(), which
+// a datagram transport cannot do, and PHP fails the call outright.
+$server = stream_socket_server("udp://127.0.0.1:8755", $errno, $errstr, STREAM_SERVER_BIND);
 $client = stream_socket_client("udp://127.0.0.1:8755");
 echo "udp sockets opened\n";
 

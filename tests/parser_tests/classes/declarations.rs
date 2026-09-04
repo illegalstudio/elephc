@@ -46,6 +46,60 @@ fn test_parse_class_decl() {
     }
 }
 
+/// One declaration can name SEVERAL properties, sharing the modifiers and the type.
+///
+/// `public $context, $d = 'abcdefghij', $p = 0;` is ordinary php and did not parse: the parser
+/// stopped at the comma and then met the class's closing brace at statement position, so one
+/// property line became four errors and a refused program. Three of an audit round's programs were
+/// exactly this — a stream wrapper declaring its state on one line.
+///
+/// MEASURED on `php -n` 8.5.6, one program per case because a parse error inside `eval()` is a
+/// fatal php does not let a caller catch: plain, with defaults, typed, static and readonly-typed
+/// lists are all accepted; `var $a, $b = 2;` too.
+#[test]
+fn test_parse_comma_separated_property_declaration() {
+    let stmts = parse_source(
+        "<?php class Bag { public $a, $b = 'x', $c = 0; private static int $s1 = 1, $s2 = 2; }",
+    );
+    match &stmts[0].kind {
+        StmtKind::ClassDecl { properties, .. } => {
+            assert_eq!(properties.len(), 5);
+            assert_eq!(properties[0].name, "a");
+            assert_eq!(properties[0].visibility, Visibility::Public);
+            assert!(properties[0].default.is_none());
+            assert_eq!(properties[1].name, "b");
+            assert_eq!(properties[1].visibility, Visibility::Public);
+            assert!(properties[1].default.is_some());
+            assert_eq!(properties[2].name, "c");
+            assert!(properties[2].default.is_some());
+            // The type and the modifiers belong to the whole list, not to its first element.
+            assert_eq!(properties[3].name, "s1");
+            assert_eq!(properties[4].name, "s2");
+            for property in &properties[3..5] {
+                assert_eq!(property.visibility, Visibility::Private);
+                assert!(property.is_static);
+                assert!(property.type_expr.is_some());
+                assert!(property.default.is_some());
+            }
+        }
+        _ => panic!("Expected ClassDecl"),
+    }
+}
+
+/// A trailing comma and a hook block after a comma are both parse errors, as they are in php.
+///
+/// php's own message for the second names what it wanted instead: `expecting "," or ";"` — hooks
+/// belong to a single property.
+#[test]
+fn test_comma_separated_properties_refuse_a_trailing_comma_and_hooks() {
+    for source in [
+        "<?php class Bad1 { public $a, $b, ; }",
+        "<?php class Bad2 { public $a, $b { get => 1; } }",
+    ] {
+        assert!(parse_fails(source), "expected a parse error for {source}");
+    }
+}
+
 /// Verifies PHP 8.3 class-constant types are retained in the parsed AST while
 /// a semi-reserved constant name followed by `=` remains untyped.
 #[test]

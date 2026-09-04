@@ -2,7 +2,7 @@
 title: "curl_multi_close()"
 description: "Closes a set of cURL handles."
 sidebar:
-  order: 343
+  order: 369
 ---
 
 ## curl_multi_close()

@@ -56,3 +56,69 @@ return true;"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval's `readdir`/`rewinddir`/`closedir` accept php's OPTIONAL `$dir_handle`.
+///
+/// php's `$dir_handle` is `= null`: with no argument, or with an explicit `null`, the call runs
+/// against the LAST directory stream `opendir()` produced. MEASURED on `php -n` 8.5.6 — the
+/// notice is `Deprecated: <fn>(): Passing null is deprecated, instead the last opened directory
+/// stream should be provided`, printed for the omitted form just as much as for the written
+/// `null`, and the refusal once nothing is open is the bare `No resource supplied`, with no
+/// function prefix at all.
+#[test]
+fn execute_program_reads_the_last_opened_directory_without_a_handle() {
+    let pid = std::process::id();
+    let dir = format!("elephc_magician_lastdir_{pid}");
+    let source = format!(
+        r#"mkdir("{dir}");
+file_put_contents("{dir}/a.txt", "a");
+$dh = opendir("{dir}");
+echo readdir() === "." ? "dot" : "bad"; echo ":";
+echo readdir(null) === ".." ? "dotdot" : "bad"; echo ":";
+rewinddir();
+echo readdir() === "." ? "rewind" : "bad"; echo ":";
+closedir();
+try {{ readdir(); echo "bad"; }} catch (Throwable $t) {{ echo get_class($t), "/", $t->getMessage(); }}
+echo ":";
+echo unlink("{dir}/a.txt") && rmdir("{dir}") ? "cleanup" : "bad";
+return true;"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        values.output,
+        "dot:dotdot:rewind:TypeError/No resource supplied:cleanup",
+        "the handle-less family follows the last opendir(), and refuses once it closed"
+    );
+    assert_eq!(
+        values.warnings,
+        vec![
+            "Deprecated: readdir(): Passing null is deprecated, instead the last opened \
+             directory stream should be provided\n"
+                .to_string(),
+            "Deprecated: readdir(): Passing null is deprecated, instead the last opened \
+             directory stream should be provided\n"
+                .to_string(),
+            "Deprecated: rewinddir(): Passing null is deprecated, instead the last opened \
+             directory stream should be provided\n"
+                .to_string(),
+            "Deprecated: readdir(): Passing null is deprecated, instead the last opened \
+             directory stream should be provided\n"
+                .to_string(),
+            "Deprecated: closedir(): Passing null is deprecated, instead the last opened \
+             directory stream should be provided\n"
+                .to_string(),
+            "Deprecated: readdir(): Passing null is deprecated, instead the last opened \
+             directory stream should be provided\n"
+                .to_string(),
+        ],
+        "every handle-less call prints the notice, including the one that then refuses"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

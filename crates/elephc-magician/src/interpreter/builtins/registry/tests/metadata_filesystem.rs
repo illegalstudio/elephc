@@ -41,7 +41,7 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("glob"),
-            Some(["pattern"].as_slice())
+            Some(["pattern", "flags"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("linkinfo"),
@@ -69,7 +69,7 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("file"),
-            Some(["filename", "flags"].as_slice())
+            Some(["filename", "flags", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("file_get_contents"),
@@ -77,11 +77,11 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("file_put_contents"),
-            Some(["filename", "data"].as_slice())
+            Some(["filename", "data", "flags", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("readfile"),
-            Some(["filename"].as_slice())
+            Some(["filename", "use_include_path", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("filemtime"),
@@ -133,7 +133,8 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("scandir"),
-            Some(["directory"].as_slice())
+            // php documents a third `$context`, accepted and ignored like `opendir()`'s.
+            Some(["directory", "sorting_order", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("tempnam"),

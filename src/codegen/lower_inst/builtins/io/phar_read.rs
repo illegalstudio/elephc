@@ -26,39 +26,107 @@ pub(crate) fn lower_file_get_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    ensure_arg_count_between(inst, "file_get_contents", 1, 5)?;
-    require_absent_stream_context(ctx, inst, 2, "file_get_contents")?;
+    // php names THIS builtin in the two lines a refused `php://` URL prints, and the
+    // run-time opener sees only a path; publish them before any open can reach it.
+    super::fopen_core::emit_publish_wrapper_open_callee(ctx, "file_get_contents");
+    super::super::ensure_arg_count_between(inst, "file_get_contents", 1, 5)?;
+    // php opens a stream internally for this call, so it consumes one PHP-visible resource
+    // id even though the caller never sees a handle. elephc uses raw syscalls and minted
+    // nothing, so every id AFTER such a call was one lower than php's — visible through
+    // `var_dump($handle)`, `(int) $handle` and `get_resource_id()`. The cursor is never
+    // reused, so advancing it is the whole of what php does here.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_burn");
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    if let Some(path) = inst.operands.first().copied() {
+        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    }
     let range = FileReadRange::from_operands(ctx, inst, 3, 4)?;
     range.emit_negative_length_guard(ctx, FILE_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE)?;
-    emit_file_get_contents_bytes(ctx, inst, range.is_active())?;
+    let context_scope = emit_file_get_contents_bytes(ctx, inst, range.is_active(), "file_get_contents")?;
     range.emit(ctx, "file_get_contents")?;
     box_owned_string_or_false_result(ctx, "fgc");
+    // The context scope closes AFTER the boxing, never before: its teardown reads the boxed
+    // result out of the integer result register and calls `__rt_resource_release`, which
+    // clobbers the string result pair the range trim and the boxing still need.
+    if context_scope {
+        finish_fopen_context_scope(ctx);
+    }
     store_if_result(ctx, inst)
 }
 
 /// Emits the unsliced `file_get_contents()` read, leaving the bytes in the string result registers.
 ///
+/// Returns whether a `$context` scope was opened and still has to be closed by the caller.
+///
 /// `persist_literal_bytes` is set when a `$offset`/`$length` window follows: the literal `phar://`
 /// shortcut answers with a pointer into read-only `.data`, which the in-place range trim must never
 /// move or free, so those bytes are copied into an owned string first.
-fn emit_file_get_contents_bytes(
+pub(super) fn emit_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     persist_literal_bytes: bool,
-) -> Result<()> {
+    callee: &str,
+) -> Result<bool> {
     let path = expect_operand(inst, 0)?;
     let path_literal = optional_const_string_operand(ctx, path)?;
     if let Some(path_literal) = path_literal.as_deref() {
         if path_literal.starts_with("phar://") {
             emit_literal_phar_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
-            return Ok(());
+            return Ok(false);
+        }
+        if path_literal.starts_with("php://filter/") {
+            emit_literal_php_filter_file_get_contents_bytes(ctx, path_literal, callee)?;
+            return Ok(false);
+        }
+        // `data:` is the whole scheme; RFC 2397 has no `//` and php makes it optional, so the
+        // canonical spelling is `data:,abc` / `data:text/plain;base64,...`. Testing `data://`
+        // matched only the rarer form, so `file_get_contents("data:,abc")` fell through to the
+        // FILE reader and answered false with "No such file or directory" — while `fopen()` on
+        // the same URL read it. `data://` still matches, since it starts with `data:`.
+        // The OPENER knows both compress schemes and decompresses through them; the plain byte
+        // reader below does not, and they are in `STREAM_WRAPPERS`, so they used to fall through
+        // to it and be opened as a FILENAME. `file_get_contents("compress.zlib://f.gz")` answered
+        // `Failed to open stream: No such file or directory` where `fopen()` on the same URL read
+        // it — measured against `php -n` 8.5.6, which decompresses.
+        //
+        // Delegating is what php-src does: `file_get_contents` is `php_stream_open_wrapper`
+        // followed by `_php_stream_copy_to_mem`, so every scheme the opener knows is readable by
+        // definition. This is the same route a user-registered wrapper already takes below.
+        if path_literal.starts_with("compress.zlib://")
+            || path_literal.starts_with("compress.bzip2://")
+        {
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal, callee)?;
+            return Ok(false);
+        }
+        if path_literal.starts_with("data:") {
+            emit_literal_data_uri_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
+            return Ok(false);
+        }
+        // `php://memory` and its siblings are what the OPENER serves; the one-shot reader below
+        // is `open(2)` and can only take them for filenames. `php://input` keeps its own reader
+        // just above, and `php://filter/` was handled before that.
+        if super::is_php_substream_uri(path_literal) && path_literal != "php://input" {
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal, callee)?;
+            return Ok(false);
+        }
+        if let Some(scheme_end) = path_literal.find("://") {
+            let scheme = &path_literal[..scheme_end];
+            let builtin = crate::types::stream_constants::STREAM_WRAPPERS
+                .iter()
+                .any(|known| *known == scheme)
+                || scheme == "compress.zlib"
+                || scheme == "compress.bzip2";
+            if !builtin {
+                super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal, callee)?;
+                return Ok(false);
+            }
         }
         if path_literal == "php://input" {
             // file_get_contents('php://input'): under --web `__rt_php_input` copies
             // the captured request body into an owned string; in a non-web build it
             // returns a null pointer so the result boxes to PHP false.
             abi::emit_call_label(ctx.emitter, "__rt_php_input");
-            return Ok(());
+            return Ok(false);
         }
     }
     // A literal with no `://` cannot name a stream wrapper: PHP's wrapper grammar requires the
@@ -74,10 +142,70 @@ fn emit_file_get_contents_bytes(
     let literal_cannot_be_a_wrapper = path_literal
         .as_deref()
         .is_some_and(|literal| !literal.contains("://"));
-    if path_literal.is_none() {
+    // A literal `zip://` URL reads its archive at RUN time (see the fopen lowering), so it needs
+    // the bridge published exactly like a filename that is only known then — but only the one
+    // entry point a zip read reaches.
+    if path_literal.as_deref().is_some_and(|p| p.starts_with("zip://")) {
+        publish_zip_bridge_function_pointer(ctx);
+    } else if path_literal.is_none() {
         publish_dynamic_phar_function_pointers(ctx);
     }
+    // Publish the `$context` argument for the duration of the read, exactly as fopen
+    // does. Without this the wrapper read whatever context was published last, so
+    // `file_get_contents($url, false, $postContext)` still issued a GET.
+    let explicit_context = inst.operands.get(2).copied();
+    begin_fopen_context_scope(ctx, explicit_context)?;
     load_string_to_result(ctx, path, "file_get_contents filename")?;
+    // A filename assembled at run time may be a `php://filter/...` URL. The plain byte reader
+    // below never creates a stream, so a filter chain would have nowhere to attach: the route
+    // parses first and reads through a real stream when the URL names a filter, and falls
+    // through with the path swapped to the RESOURCE when it names none the runtime knows.
+    // A filename assembled at run time may name a compression wrapper. `fopen()` resolves those
+    // at run time already; this reader only ever resolved the compile-time literal, so the two
+    // spellings of one read disagreed. Probed BEFORE the filter route, which may legitimately
+    // swap the staged registers to a RESOURCE for a `php://filter/...` URL — a compress URL is
+    // never one, and probing first keeps the two from having to reason about each other.
+    let compress_done = if path_literal.is_none() {
+        let landing = ctx.next_label("fgc_dyn_compress_bytes");
+        super::emit_dynamic_compress_read_route(
+            ctx,
+            path,
+            "file_get_contents filename",
+            &landing,
+        )?;
+        Some(landing)
+    } else {
+        None
+    };
+    let filter_done = if path_literal.is_none() {
+        Some(super::emit_dynamic_php_filter_read_route(
+            ctx,
+            "_diag_open_failed_fgc_prefix",
+            "Warning: file_get_contents(",
+            "file_get_contents",
+        )?)
+    } else {
+        None
+    };
+    // A filename assembled at run time may also be a bare `data:` URI. The filter route above
+    // only fires for a `php://filter/...` URL, and `__rt_file_get_contents_maybe_url` knows only
+    // http/https/ftp/ftps before falling back to a FILE read — so `file_get_contents("data:," .
+    // $payload)` looked for a file of that name and answered false, while the same URL written as
+    // a literal (decoded at compile time) and `fopen()` on it both worked.
+    // A filename assembled at run time may name one of php's OWN sub-streams. `fopen()` has
+    // resolved those through `__rt_php_wrapper_open` for a while; the reader below is `open(2)`
+    // and can only take `php://temp` for a filename — which is what `new SplFileObject($path)`
+    // hit, since the constructor's argument is never a literal by the time it reaches here.
+    let php_substream_done = if path_literal.is_none() {
+        Some(emit_dynamic_php_substream_read_route(ctx))
+    } else {
+        None
+    };
+    let data_done = if path_literal.is_none() {
+        Some(emit_dynamic_data_uri_read_route(ctx))
+    } else {
+        None
+    };
     abi::emit_call_label(
         ctx.emitter,
         if literal_cannot_be_a_wrapper {
@@ -86,54 +214,149 @@ fn emit_file_get_contents_bytes(
             "__rt_file_get_contents_maybe_url"
         },
     );
-    Ok(())
+    if let Some(done) = data_done {
+        ctx.emitter.label(&done);
+    }
+    if let Some(done) = php_substream_done {
+        ctx.emitter.label(&done);
+    }
+    if let Some(done) = filter_done {
+        ctx.emitter.label(&done);
+    }
+    if let Some(done) = compress_done {
+        ctx.emitter.label(&done);
+    }
+    Ok(true)
 }
 
-/// Rejects a non-null `$context` argument instead of silently ignoring the stream context.
+/// Reads a run-time `php://` sub-stream through the same opener `fopen()` uses.
 ///
-/// elephc has no stream-context plumbing on the read path, so honoring a real context is
-/// impossible. An omitted argument, a literal `null`, and the registry's `null` default all
-/// materialize a statically null operand and are accepted; anything else is a compile error
-/// naming the parameter rather than a read that quietly drops the caller's options.
-fn require_absent_stream_context(
-    ctx: &FunctionContext<'_>,
-    inst: &Instruction,
-    index: usize,
-    name: &str,
-) -> Result<()> {
-    let Some(context) = inst.operands.get(index).copied() else {
-        return Ok(());
-    };
-    if operand_is_statically_null(ctx, context)? {
-        return Ok(());
+/// Entry state: the filename is in the string result pair. On a `php://` URL that is not a filter
+/// URL the route opens the stream, reads it whole and branches to the returned label with the byte
+/// pair in place; anything else falls through untouched so the caller's ordinary reader still runs.
+///
+/// `php://filter/` is excluded because it has its own route ABOVE this one, and that route needs
+/// the chain it builds — a plain open would read the resource unfiltered.
+///
+/// "Untouched" has to hold on the path that declines LATE as well. Reaching the opener costs the
+/// filename pointer — it is moved aside to make the argument pair — and the opener is a call, so
+/// a URL it answers -1 for arrives at the next route with neither half of the pair intact. The
+/// route below it reads a byte through that register, which segfaulted 16 of the 25 ordered pairs
+/// of refused `php://` opens. The pair is therefore saved across the opener and put back before
+/// the fall-through.
+pub(super) fn emit_dynamic_php_substream_read_route(ctx: &mut FunctionContext<'_>) -> String {
+    let not_php = ctx.next_label("fgc_dyn_not_php");
+    let done = ctx.next_label("fgc_dyn_php_done");
+    let refused = ctx.next_label("fgc_dyn_php_refused");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #7");                              // `php://` plus the byte that names the sub-stream
+            ctx.emitter.instruction(&format!("b.lt {}", not_php));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", not_php));
+            }
+            ctx.emitter.instruction("ldrb w9, [x1, #6]");                       // the first byte of the sub-stream name
+            ctx.emitter.instruction("cmp w9, #0x66");                           // 'f' as in filter, which has its own route
+            ctx.emitter.instruction(&format!("b.eq {}", not_php));
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the filename, for the decline below
+            ctx.emitter.instruction("mov x0, x1");                              // the opener takes ptr/len in x0/x1
+            ctx.emitter.instruction("mov x1, x2");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");         // x0 = descriptor, or -1
+            ctx.emitter.instruction("cmn x0, #1");                              // a URL it does not know answers php false
+            ctx.emitter.instruction(&format!("b.eq {}", refused));
+            ctx.emitter.instruction("mov x1, #0");                              // let the state pick its chunk size
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // x1 = bytes, x2 = length
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the saved filename outlived its use
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&refused);
+            // The opener RECOGNISED the URL as php:// and refused it, warning as php does. php
+            // stops there and answers false; falling through to the readers below reached the FILE
+            // opener, which warned a THIRD time about a path nothing had looked for. The empty
+            // pair is the shape a failed read hands the tail.
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            ctx.emitter.instruction("mov x1, #0");
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction(&format!("b {}", done));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 7");                              // `php://` plus the naming byte
+            ctx.emitter.instruction(&format!("jl {}", not_php));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter
+                    .instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", not_php));
+            }
+            ctx.emitter.instruction("cmp BYTE PTR [rax + 6], 0x66");            // 'f' as in filter
+            ctx.emitter.instruction(&format!("je {}", not_php));
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // the filename, for the decline below
+            ctx.emitter.instruction("mov rdi, rax");                            // the opener takes ptr/len in rdi/rsi
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");         // rax = descriptor, or -1
+            ctx.emitter.instruction("cmp rax, -1");                             // a URL it does not know answers php false
+            ctx.emitter.instruction(&format!("je {}", refused));
+            ctx.emitter.instruction("mov rdi, rax");                            // the handle
+            ctx.emitter.instruction("xor esi, esi");                            // let the state pick its chunk size
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the saved filename outlived its use
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&refused);
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                  // hand the next route the pair it was promised
+            ctx.emitter.instruction(&format!("jmp {}", not_php));
+        }
     }
-    Err(CodegenIrError::unsupported(format!(
-        "{}() $context argument: elephc cannot honor a stream context on this read, pass null",
-        name
-    )))
+    ctx.emitter.label(&not_php);
+    done
 }
 
-/// Reports whether an operand is the PHP `null` value at compile time.
+/// Reads a run-time `data:` URI through the same opener `fopen()` uses, and answers its bytes.
 ///
-/// Covers both spellings the argument planner produces: a `ConstNull` instruction for a literal
-/// `null` argument or a filled-in `null` default, and a `Void`-typed value for an operand the
-/// planner materialized without a concrete constant.
-fn operand_is_statically_null(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
-    if matches!(ctx.value_php_type(value)?.codegen_repr(), PhpType::Void) {
-        return Ok(true);
+/// Entry state: the filename is in the string result pair. On a `data:` URI the route opens the
+/// stream, reads it whole and branches to the returned label with the byte pair in place; on any
+/// other filename it falls through untouched so the caller's ordinary reader still runs.
+fn emit_dynamic_data_uri_read_route(ctx: &mut FunctionContext<'_>) -> String {
+    let not_data = ctx.next_label("fgc_dyn_not_data");
+    let done = ctx.next_label("fgc_dyn_data_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #6");                              // `data:` plus at least a comma
+            ctx.emitter.instruction(&format!("b.lt {}", not_data));
+            for (offset, byte) in b"data:".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", not_data));
+            }
+            ctx.emitter.instruction("mov x0, x1");                              // the decoder takes ptr/len in x0/x1
+            ctx.emitter.instruction("mov x1, x2");
+            abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");      // x0 = descriptor, or -1
+            ctx.emitter.instruction("cmn x0, #1");                              // a refused URI answers php false
+            ctx.emitter.instruction(&format!("b.eq {}", not_data));
+            ctx.emitter.instruction("mov x1, #0");                              // let the state pick its chunk size
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // x1 = bytes, x2 = length
+            ctx.emitter.instruction(&format!("b {}", done));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 6");                              // `data:` plus at least a comma
+            ctx.emitter.instruction(&format!("jl {}", not_data));
+            for (offset, byte) in b"data:".iter().enumerate() {
+                ctx.emitter
+                    .instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", not_data));
+            }
+            ctx.emitter.instruction("mov rdi, rax");                            // the decoder takes ptr/len in rdi/rsi
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");      // rax = descriptor, or -1
+            ctx.emitter.instruction("cmp rax, -1");                             // a refused URI answers php false
+            ctx.emitter.instruction(&format!("je {}", not_data));
+            ctx.emitter.instruction("mov rdi, rax");                            // the handle
+            ctx.emitter.instruction("xor esi, esi");                            // let the state pick its chunk size
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+        }
     }
-    let value_ref = ctx
-        .function
-        .value(value)
-        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(false);
-    };
-    let inst_ref = ctx
-        .function
-        .instruction(inst)
-        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    Ok(inst_ref.op == Op::ConstNull)
+    ctx.emitter.label(&not_data);
+    done
 }
 
 /// The `$offset`/`$length` window a one-shot file read applies to the bytes it produced.
@@ -324,6 +547,18 @@ pub(super) fn publish_dynamic_phar_function_pointers(ctx: &mut FunctionContext<'
     }
 }
 
+/// Publishes the one bridge entry point a `zip://` read needs.
+///
+/// A ZIP entry's DEFLATE payload is inflated INSIDE the bridge, and the assembly
+/// fallback in `__rt_phar_read_entry` only knows the native PHAR manifest, so none
+/// of the four zlib/libbz2 entry points [`publish_dynamic_phar_function_pointers`]
+/// also publishes is reachable from a zip read. Publishing them anyway would drag
+/// `-lz` and `-lbz2` into the link of every program that reads one zip entry.
+pub(super) fn publish_zip_bridge_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[("elephc_phar_extract_url", "_elephc_phar_extract_url_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
 /// Publishes a list of elephc-phar bridge entry points into runtime slots.
 pub(super) fn publish_phar_bridge_entries(ctx: &mut FunctionContext<'_>, entries: &[(&str, &str)]) {
     match ctx.emitter.target.arch {
@@ -402,6 +637,15 @@ pub(super) fn publish_phar_list_entries_function_pointer(ctx: &mut FunctionConte
     const ENTRIES: &[(&str, &str)] = &[(
         "elephc_phar_list_entries",
         "_elephc_phar_list_entries_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
+/// Publishes the ZIP central-directory stat bridge used by `ZipArchive::open()`.
+pub(super) fn publish_zip_stat_entries_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_zip_stat_entries",
+        "_elephc_zip_stat_entries_fn",
     )];
     publish_phar_bridge_entries(ctx, ENTRIES);
 }
@@ -515,6 +759,10 @@ pub(super) fn publish_phar_get_signature_type_function_pointer(ctx: &mut Functio
 
 /// Lowers `hash_file(algo, filename, binary?)` by reading bytes then hashing them.
 pub(crate) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    if let Some(path) = inst.operands.get(1).copied() {
+        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    }
     ensure_arg_count_between(inst, "hash_file", 2, 3)?;
     let fail = ctx.next_label("hash_file_fail");
     let done = ctx.next_label("hash_file_box");
@@ -528,11 +776,98 @@ pub(crate) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `readfile(path)` and boxes the runtime byte-count-or-false result.
 pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "readfile", 1)?;
+    // php throws rather than warning for an empty filename — see `emit_empty_path_value_error`.
+    if let Some(path) = inst.operands.get(0).copied() {
+        super::emit_empty_path_value_error(ctx, path, super::EMPTY_PATH_MESSAGE)?;
+    }
+    super::super::ensure_arg_count_between(inst, "readfile", 1, 3)?;
+    // php names the function the USER called. `readfile()` reads through
+    // `__rt_file_get_contents`, and left to itself that helper names ITSELF — so a missing file
+    // reported `file_get_contents(x.txt)` where php reports `readfile(x.txt)`.
+    super::filesystem_ops::emit_open_diag_name(
+        ctx,
+        Some((
+            "_diag_open_failed_readfile_prefix",
+            "Warning: readfile(".len(),
+            "_uww_name_readfile",
+            "readfile".len(),
+        )),
+    );
+    let result = lower_readfile_named(ctx, inst);
+    // Unconditionally: the slots are global, and a name left behind would make the next
+    // `file_get_contents()` in the program call itself `readfile`.
+    super::filesystem_ops::emit_open_diag_name(ctx, None);
+    result
+}
+
+/// The body of `readfile()`, with its open-failure name already published.
+fn lower_readfile_named(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // php names THIS builtin in the two lines a refused `php://` URL prints, and the
+    // run-time opener sees only a path; publish them before any open can reach it.
+    super::fopen_core::emit_publish_wrapper_open_callee(ctx, "readfile");
     let path = expect_operand(inst, 0)?;
+    // Same reason as file_get_contents(): the wrapper reads its options from the
+    // published context, so a `$context` argument has to be published for this call.
+    let explicit_context = inst.operands.get(2).copied();
+    begin_fopen_context_scope(ctx, explicit_context)?;
+    // A literal URL whose scheme the dispatch below cannot serve is read through the SHARED
+    // opener, and its bytes go out through the same write-and-count tail the filter route uses.
+    // Without this the URL reached the plain dispatch as a filename: `readfile("data:,abc")` and
+    // `readfile("compress.zlib://f.gz")` both failed where php writes them.
+    if let Some(literal) = optional_const_string_operand(ctx, path)? {
+        // A `php://` URL no wrapper opens belongs here too: php answers it with the wrapper's
+        // own two lines — `readfile(): Invalid php:// URL specified` then the failed-open line —
+        // and reaching the plain dispatch instead sent it to the FILE opener, which reported
+        // `No such file or directory` about a path nothing had looked for, in one line.
+        if literal.starts_with("data:")
+            || literal.starts_with("compress.zlib://")
+            || literal.starts_with("compress.bzip2://")
+            || super::fopen_core::literal_wrapper_refusal_applies(&literal)
+        {
+            super::emit_literal_wrapper_file_get_contents_bytes(ctx, &literal, "readfile")?;
+            super::wrapper_dispatch::emit_readfile_bytes_tail(ctx, "readfile_literal_wrapper");
+            box_readfile_result(ctx);
+            finish_fopen_context_scope(ctx);
+            return store_if_result(ctx, inst);
+        }
+    }
     load_string_to_result(ctx, path, "readfile")?;
-    emit_readfile_wrapper_dispatch(ctx);
+    // A run-time compress URL reads through the shared opener; its bytes go out through the same
+    // write-and-count tail the filter route uses, placed AFTER the ordinary dispatch so the
+    // ordinary result jumps over it. Without this the URL reached the dispatch as a filename,
+    // where `fopen()` on the identical string decompresses.
+    let compress_bytes = if optional_const_string_operand(ctx, path)?.is_none() {
+        let landing = ctx.next_label("readfile_dyn_compress_bytes");
+        super::emit_dynamic_compress_read_route(ctx, path, "readfile", &landing)?;
+        Some(landing)
+    } else {
+        None
+    };
+    // A run-time `php://` URL, for the same reason and by the same shape: the dispatch below is
+    // the FILE opener, which answered `No such file or directory` about a path nothing had looked
+    // for, in one line, where php prints the wrapper's own two.
+    let php_substream_bytes = if optional_const_string_operand(ctx, path)?.is_none() {
+        Some(emit_dynamic_php_substream_read_route(ctx))
+    } else {
+        None
+    };
+    emit_readfile_wrapper_dispatch(ctx)?;
+    if let Some(landing) = php_substream_bytes {
+        let after = ctx.next_label("readfile_dyn_php_after");
+        abi::emit_jump(ctx.emitter, &after);
+        ctx.emitter.label(&landing);
+        super::wrapper_dispatch::emit_readfile_bytes_tail(ctx, "readfile_dyn_php");
+        ctx.emitter.label(&after);
+    }
+    if let Some(landing) = compress_bytes {
+        let after = ctx.next_label("readfile_dyn_compress_after");
+        abi::emit_jump(ctx.emitter, &after);
+        ctx.emitter.label(&landing);
+        super::wrapper_dispatch::emit_readfile_bytes_tail(ctx, "readfile_dyn_compress");
+        ctx.emitter.label(&after);
+    }
     box_readfile_result(ctx);
+    finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -556,9 +891,11 @@ pub(crate) fn lower_readline(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #0");                              // pass stdin fd 0 to the shared line-reader helper
+            ctx.emitter.instruction("mov x1, #0");                              // readline() has no length bound; zero is how the helper is told so
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("xor edi, edi");                            // pass stdin fd 0 to the shared line-reader helper
+            ctx.emitter.instruction("xor esi, esi");                            // readline() has no length bound; zero is how the helper is told so
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgets");

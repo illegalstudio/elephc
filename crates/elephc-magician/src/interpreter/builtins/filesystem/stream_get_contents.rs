@@ -17,6 +17,10 @@ eval_builtin! {
 use super::super::super::*;
 use super::*;
 
+/// php-src's verbatim `ValueError` wording for a `stream_get_contents()` `$length` below `-1`.
+const STREAM_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE: &str =
+    "stream_get_contents(): Argument #2 ($length) must be greater than or equal to -1";
+
 /// Dispatches direct eval calls for the `stream_get_contents` filesystem builtin through the area dispatcher.
 pub(in crate::interpreter) fn eval_stream_get_contents_declared_call(
     args: &[EvalExpr],
@@ -72,6 +76,18 @@ pub(in crate::interpreter) fn eval_stream_get_contents_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
+    // php-src accepts exactly one negative `$length`: `-1`, its "read to EOF" sentinel.
+    // Anything below that is a catchable ValueError raised before a byte is read — this used
+    // to reach `usize::try_from`, whose failure surfaced as an UNCATCHABLE runtime fatal.
+    if let Some(length) = length {
+        if values.type_tag(length)? != EVAL_TAG_NULL && eval_int_value(length, values)? < -1 {
+            return eval_stream_value_error(
+                STREAM_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE,
+                context,
+                values,
+            );
+        }
+    }
     let length = eval_optional_stream_length(length, values)?;
     let offset = eval_optional_stream_offset(offset, values)?;
     if let Some(result) =

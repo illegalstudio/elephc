@@ -1,0 +1,113 @@
+{
+  "case": {
+    "dependencies": [],
+    "description": "Captures process-group termination after a deterministic timeout.",
+    "id": "timeout",
+    "normalization": [],
+    "source": "tests/php_oracle/cases/streams/gate0/timeout",
+    "source_sha256": "e227125acf81a6602b31edb3b5a5818ecccadca44aab403a41184952e7543728"
+  },
+  "environment": {
+    "base": {
+      "LANG": "C",
+      "LC_ALL": "C",
+      "TZ": "UTC"
+    },
+    "case": {},
+    "ini": {
+      "date.timezone": "UTC",
+      "display_errors": "stderr",
+      "display_startup_errors": "1",
+      "error_reporting": "-1",
+      "html_errors": "0",
+      "log_errors": "0"
+    },
+    "stdin": null
+  },
+  "filesystem_diff": {
+    "created": {},
+    "deleted": {},
+    "modified": {}
+  },
+  "instrumented": {
+    "argv": [
+      "php",
+      "-n",
+      "-d",
+      "date.timezone=UTC",
+      "-d",
+      "display_errors=stderr",
+      "-d",
+      "display_startup_errors=1",
+      "-d",
+      "error_reporting=-1",
+      "-d",
+      "html_errors=0",
+      "-d",
+      "log_errors=0",
+      "tools/php_oracle/bootstrap.php",
+      "main.php"
+    ],
+    "exit": {
+      "code": null,
+      "signal": 9,
+      "timeout": true
+    },
+    "stderr": {
+      "base64": "",
+      "length": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stdout": {
+      "base64": "YmVmb3JlLXRpbWVvdXQK",
+      "length": 15,
+      "sha256": "a1e72e84ed3e2b0b8448096dd075ca1231356866e8f3f0005988c05ac2403394"
+    },
+    "telemetry": null
+  },
+  "kind": "php-src-stream-oracle-artifact",
+  "profile": {
+    "name": "streams-full",
+    "path": "tests/php_oracle/manifests/streams/php-8.5.6/linux-x86_64/streams-full.json",
+    "php_binary_sha256": "d3063339c8253c75a653b1f5484ea62fa473eaff1916e465a7f99fd024f3476b",
+    "php_release": "8.5.6",
+    "php_src_commit": "fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633",
+    "sha256": "199180ddccb8a55a6dadfb6e34fc5ddf7595eac5c4ee766e8dfc307e75a24c8c",
+    "target": "linux-x86_64"
+  },
+  "raw": {
+    "argv": [
+      "php",
+      "-n",
+      "-d",
+      "date.timezone=UTC",
+      "-d",
+      "display_errors=stderr",
+      "-d",
+      "display_startup_errors=1",
+      "-d",
+      "error_reporting=-1",
+      "-d",
+      "html_errors=0",
+      "-d",
+      "log_errors=0",
+      "main.php"
+    ],
+    "exit": {
+      "code": null,
+      "signal": 9,
+      "timeout": true
+    },
+    "stderr": {
+      "base64": "",
+      "length": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stdout": {
+      "base64": "YmVmb3JlLXRpbWVvdXQK",
+      "length": 15,
+      "sha256": "a1e72e84ed3e2b0b8448096dd075ca1231356866e8f3f0005988c05ac2403394"
+    }
+  },
+  "schema_version": 1
+}

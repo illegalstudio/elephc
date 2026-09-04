@@ -36,7 +36,16 @@ use super::super::{
 const EVAL_STATUS_PARSE_ERROR: i64 = 1;
 const EVAL_STATUS_UNCAUGHT_THROWABLE: i64 = 3;
 const EVAL_STATUS_UNSUPPORTED: i64 = 4;
-const EVAL_PARSE_ERROR_MESSAGE: &str = "Parse error: eval() fragment is invalid\n";
+/// Everything php prints before the location of an `eval()` fragment that does not parse.
+///
+/// php names the exact syntactic complaint and elephc cannot: the bridge answers a status code.
+/// See `eval::status::eval_parse_error_message` for the four wordings measured on `php -n` 8.5.6
+/// and why this one is the shape chosen.
+const EVAL_PARSE_ERROR_PREFIX: &str = "Parse error: syntax error, unexpected end of file";
+/// What php exits with after a `Parse error`. Measured on `php -n` 8.5.6: 255, not 1.
+const EVAL_PARSE_ERROR_EXIT_STATUS: u32 = 255;
+/// What elephc's own eval fatals — which have no php counterpart — exit with.
+const EVAL_FATAL_EXIT_STATUS: u32 = 1;
 const EVAL_UNSUPPORTED_MESSAGE: &str =
     "Fatal error: eval() fragment uses an unsupported construct\n";
 const EVAL_RUNTIME_FATAL_MESSAGE: &str = "Fatal error: eval() runtime failed\n";

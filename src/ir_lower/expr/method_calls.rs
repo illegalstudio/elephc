@@ -133,7 +133,14 @@ pub(super) fn lower_method_call(
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    // php names `Class::method()` in an argument TypeError, and falls back to the bare method
+    // name when the receiver's class is not singular here.
+    let callee = singular_object_class(&ctx.builder.value_php_type(object.value))
+        .map(|(class_name, _)| {
+            format!("{}::{dispatch_method}", class_name.trim_start_matches('\\'))
+        })
+        .unwrap_or_else(|| dispatch_method.to_string());
+    let arg_values = lower_args_with_signature_for(ctx, sig.as_ref(), args, Some(&callee));
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(

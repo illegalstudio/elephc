@@ -2,7 +2,7 @@
 title: "curl_multi_errno() — internals"
 description: "Compiler internals for curl_multi_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 344
+  order: 370
 ---
 
 ## `curl_multi_errno()` — internals

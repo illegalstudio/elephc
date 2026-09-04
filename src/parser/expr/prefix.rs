@@ -141,6 +141,14 @@ pub(super) fn parse_prefix(
             span,
             ExprKind::StringLiteral("/".to_string()),
         ),
+        // MEASURED on `php -n` 8.5.6: `":"`. Fixed for every target elephc emits, exactly like
+        // its neighbour, so it is folded here rather than resolved as a named constant.
+        Token::PathSeparator => parse_simple(
+            tokens,
+            pos,
+            span,
+            ExprKind::StringLiteral(":".to_string()),
+        ),
         Token::DunderLine => {
             parse_simple(tokens, pos, span, ExprKind::IntLiteral(span.line as i64))
         }

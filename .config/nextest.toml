@@ -150,52 +150,34 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(test_eval_rejects_invalid_property_and_parameter_type_atoms)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# The whole `test_eval_declared_*` family, not three of its members.
+#
+# Each one compiles, links and RUNS several complete programs through the eval declaration
+# machinery. MEASURED isolated on an M-series machine:
+# `test_eval_declared_enum_marker_interface_inheritance` takes 52.4s against the 60s guard — 87% of
+# the budget — so whether it survives is decided by what else its shard schedules beside it. The
+# same test was already recorded `TRY 1 TMT [60.026s]` / `TRY 2 PASS [51.709s]` (nextest's own
+# `FLAKY 2/2`) one run earlier, and five more members terminated across three runners the run
+# after. Three of them had picked up an individual override, each added after it tipped over;
+# naming the family ends that. The filter is ANCHORED to `codegen::eval::` on purpose: the same
+# prefix appears in `eval_callables`/`eval_constructors`, which are ordinary-speed tests and keep
+# the 60s guard. 212 tests are covered, and a hang in one still terminates — three minutes later.
 [[profile.default.overrides]]
-filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
+filter = 'test(/^codegen::eval::test_eval_declared_/)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'test(test_eval_declared_inherited_property_redeclaration_contracts)'
+filter = 'test(/^codegen::eval::test_eval_declared_/)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# Same shape, one test: it compiles the AOT callable-reference surface and every by-ref failure
+# path in it, and terminated on both tries of one run.
 [[profile.default.overrides]]
-filter = 'test(test_eval_declared_readonly_property_rules)'
+filter = 'test(test_eval_aot_static_method_callable_variants_by_ref_arg_prep_fatal_clean_up_stack)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'test(test_eval_declared_readonly_property_rules)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_interface_parameter_type_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_interface_parameter_type_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_abstract_interface_method_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_abstract_interface_method_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_interface_return_type_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_interface_return_type_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_interface_property_hook_contracts)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_interface_property_hook_contracts)'
+filter = 'test(test_eval_aot_static_method_callable_variants_by_ref_arg_prep_fatal_clean_up_stack)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.default.overrides]]
@@ -236,14 +218,6 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(test_eval_reflection_class_new_instance_without_constructor_rejects_aot_non_classes)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.default.overrides]]
-filter = 'test(test_eval_declared_method_return_type_values)'
-slow-timeout = { period = "180s", terminate-after = 1 }
-
-[[profile.ci.overrides]]
-filter = 'test(test_eval_declared_method_return_type_values)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # The profile-differential corpus compiles and runs each case once per maintained

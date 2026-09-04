@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Clone helpers duplicate container headers and child references without deep-copying unless the runtime contract requires it.
+//! - Runtime value_type 9 retains opaque handles through the resource registry.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -78,6 +79,8 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // nested refcounted payloads need retains
     emitter.instruction("cmp x9, #7");                                          // is this an array of boxed mixed values?
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // boxed mixed payloads also need retains
+    emitter.instruction("cmp x9, #9");                                          // is this an array of opaque resource handles?
+    emitter.instruction("b.eq __rt_array_clone_shallow_resources");             // resource slots retain through the registry
     emitter.instruction("cmp x9, #10");                                         // is this an array of callable descriptors?
     emitter.instruction("b.eq __rt_array_clone_shallow_refs");                  // callable descriptor slots need retains for the clone
     emitter.instruction("b __rt_array_clone_shallow_done");                     // scalar payloads are already correct after the byte copy
@@ -113,6 +116,17 @@ pub fn emit_array_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_incref");                                      // retain the shared child pointer for the cloned array owner
     emitter.instruction("add x23, x23, #1");                                    // advance to the next live child slot
     emitter.instruction("b __rt_array_clone_shallow_refs_loop");                // continue retaining shared child pointers
+
+    emitter.label("__rt_array_clone_shallow_resources");
+    emitter.instruction("mov x23, #0");                                         // start resource ownership repair at the first slot
+    emitter.instruction("add x24, x20, #24");                                   // point at the cloned resource payload region
+    emitter.label("__rt_array_clone_shallow_resources_loop");
+    emitter.instruction("cmp x23, x19");                                        // have all live resource slots been retained?
+    emitter.instruction("b.ge __rt_array_clone_shallow_done");                  // finish after retaining the complete clone
+    emitter.instruction("ldr x0, [x24, x23, lsl #3]");                          // load the copied opaque resource handle
+    emitter.instruction("bl __rt_resource_retain");                             // give the cloned array its own registry reference
+    emitter.instruction("add x23, x23, #1");                                    // advance to the next cloned resource slot
+    emitter.instruction("b __rt_array_clone_shallow_resources_loop");           // continue repairing resource ownership
 
     // -- restore callee-saved registers and return the cloned array --
     emitter.label("__rt_array_clone_shallow_done");
@@ -188,6 +202,8 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_clone_shallow_refs");                    // retain every live child pointer for object payloads
     emitter.instruction("cmp r9, 7");                                           // does the clone store boxed mixed child pointers that need a retain for the cloned owner?
     emitter.instruction("je __rt_array_clone_shallow_refs");                    // retain every live child pointer for boxed mixed payloads
+    emitter.instruction("cmp r9, 9");                                           // does the clone store opaque resource handles?
+    emitter.instruction("je __rt_array_clone_shallow_resources");               // retain resource slots through the registry
     emitter.instruction("cmp r9, 10");                                          // does the clone store callable descriptors that need a retain for the cloned owner?
     emitter.instruction("je __rt_array_clone_shallow_refs");                    // retain every callable descriptor for callable payloads
     emitter.instruction("jmp __rt_array_clone_shallow_done");                   // scalar and float payloads are already correct after the shallow byte copy
@@ -227,6 +243,19 @@ fn emit_array_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, 1");                                          // advance to the next live child-pointer slot in the cloned indexed-array payload
     emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // persist the next child slot index across the following retain call
     emitter.instruction("jmp __rt_array_clone_shallow_refs_loop");              // continue retaining live child pointers for the cloned indexed array
+    emitter.label("__rt_array_clone_shallow_resources");
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // start resource ownership repair at slot zero
+    emitter.label("__rt_array_clone_shallow_resources_loop");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // reload the current cloned resource slot index
+    emitter.instruction("cmp r10, r12");                                        // have all live resource slots been retained?
+    emitter.instruction("jae __rt_array_clone_shallow_done");                   // finish after retaining the complete clone
+    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload the cloned indexed-array pointer
+    emitter.instruction("mov rdi, QWORD PTR [r8 + r10 * 8 + 24]");              // pass the copied opaque handle to registry retain
+    emitter.instruction("call __rt_resource_retain");                           // give the cloned array its own registry reference
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // restore the resource slot index after the helper call
+    emitter.instruction("add r10, 1");                                          // advance to the next cloned resource slot
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // persist the next index across registry retain
+    emitter.instruction("jmp __rt_array_clone_shallow_resources_loop");         // continue repairing resource ownership
     emitter.label("__rt_array_clone_shallow_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the cloned indexed-array pointer in the x86_64 integer result register
     emitter.instruction("add rsp, 32");                                         // release the spill slots used below the saved callee-saved registers

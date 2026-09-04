@@ -390,11 +390,11 @@ fn multi_setopt_pushfunction_warns_and_returns_false() {
     );
     assert_eq!(output.stdout, "F\n");
     assert!(
-        output.stderr.contains(
+        output.diagnostics.contains(
             "Warning: curl_multi_setopt(): Option 20014 is not supported by this build"
         ),
-        "the refusal must say so through PHP's warning channel; stderr was: {}",
-        output.stderr
+        "the refusal must say so through PHP's warning channel; diagnostics were: {}",
+        output.diagnostics
     );
 }
 
@@ -440,11 +440,11 @@ fn multi_setopt_classifies_the_option_before_type_checking_the_value() {
     );
     assert_eq!(output.stdout, "F\nValueError\nTypeError\n");
     assert!(
-        output.stderr.contains(
+        output.diagnostics.contains(
             "Warning: curl_multi_setopt(): Option 20014 is not supported by this build"
         ),
-        "the closure must reach the unsupported-option warning, not a type error; stderr was: {}",
-        output.stderr
+        "the closure must reach the unsupported-option warning, not a type error; diagnostics were: {}",
+        output.diagnostics
     );
 }
 

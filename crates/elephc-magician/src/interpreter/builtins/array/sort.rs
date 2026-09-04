@@ -18,22 +18,26 @@ eval_builtin! {
 /// Dispatches by-value callable eval calls for the `sort` array mutator.
 pub(in crate::interpreter) fn eval_sort_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
     super::array_pop::eval_warn_array_by_value("sort", values)?;
-    eval_array_sort_value_result(*array, values)
+    eval_array_sort_value_result("sort", *array, context, values)
 }
 
 /// Returns the dynamic callable result for by-value array ordering calls.
+///
+/// php warns about the by-value receiver and then STILL type-checks it, so a non-array
+/// leaves through the same catchable TypeError the by-reference spelling raises —
+/// measured through `call_user_func('sort', false)`.
 pub(in crate::interpreter) fn eval_array_sort_value_result(
+    name: &str,
     array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        return Err(EvalStatus::RuntimeFatal);
-    }
+    super::array_arg_check::eval_expect_sort_array_arg(array, name, context, values)?;
     values.bool_value(true)
 }
 
@@ -394,7 +398,9 @@ pub(in crate::interpreter) fn eval_array_sort_declared_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (array, target) = eval_array_sort_direct_arg(args, context, scope, values)?;
+    // The by-reference receiver still type-checks: `sort($d)` on a `false` throws php's
+    // TypeError from the shared lvalue binding, before anything is written back.
+    let (array, target) = eval_array_sort_direct_arg(name, args, context, scope, values)?;
 
     let replacement = eval_array_sort_replacement(name, array, values)?;
     let result = values.bool_value(true)?;
@@ -404,6 +410,7 @@ pub(in crate::interpreter) fn eval_array_sort_declared_call(
 
 /// Extracts the writable array lvalue accepted by eval array ordering builtins.
 pub(in crate::interpreter) fn eval_array_sort_direct_arg(
+    name: &str,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
@@ -412,5 +419,5 @@ pub(in crate::interpreter) fn eval_array_sort_direct_arg(
     let [arg] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values)
+    super::mutation::eval_array_mutation_lvalue_arg(name, arg, context, scope, values)
 }

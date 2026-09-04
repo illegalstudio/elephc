@@ -47,7 +47,7 @@ if (is_null($v)) { echo "null"; } else { echo "not null"; }
     );
     assert!(out.success);
     assert_eq!(out.stdout, "null");
-    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 5"));
 }
 
 /// Verifies missing indexed-array reads emit PHP's undefined-key warning.
@@ -65,7 +65,7 @@ echo "i=$i\n";
     );
     assert!(out.success);
     assert_eq!(out.stdout, "NULL\ni=1\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 1"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 1"));
 }
 
 /// Verifies that valid integer indices still work correctly after the null-bounds check.
@@ -1354,9 +1354,9 @@ var_dump(isset_of($a, "absent"));
     assert!(quiet.success, "program failed: {}", quiet.stderr);
     assert_eq!(quiet.stdout, "bool(false)\n");
     assert!(
-        !quiet.stderr.contains("Undefined array key"),
+        !quiet.diagnostics.contains("Undefined array key"),
         "isset() must never emit an undefined-array-key warning, got: {}",
-        quiet.stderr
+        quiet.diagnostics
     );
 
     let noisy = compile_and_run_capture(
@@ -1374,9 +1374,9 @@ var_dump(read_of($a, "absent"));
     );
     assert!(noisy.success, "program failed: {}", noisy.stderr);
     assert!(
-        noisy.stderr.contains("Undefined array key"),
+        noisy.diagnostics.contains("Undefined array key"),
         "a plain read of a missing key must still warn, got: {}",
-        noisy.stderr
+        noisy.diagnostics
     );
 }
 
@@ -1780,7 +1780,7 @@ echo 'done' . "\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "x=\ndone\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Guard for issue #526: the already-working second-index-miss path keeps its
@@ -1798,7 +1798,7 @@ echo 'done' . "\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "x=\ndone\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Regression for issue #526: the crashing chained miss must leave the heap
@@ -2742,6 +2742,7 @@ echo isset($a[7][1]) ? 'yes' : 'no';
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "no");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for issue #526: `??` over a chained subscript whose first index
@@ -2757,6 +2758,7 @@ echo 'A' . ($a[7][1] ?? '') . 'B';
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "AB");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for issue #526: a string-keyed chained miss on an assoc-of-assoc
@@ -2788,7 +2790,7 @@ echo is_null($a[0][0][9]) ? 'n' : 'v';
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "nnn");
-    assert!(out.stderr.contains("Warning: Undefined array key 9"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 9"));
 }
 
 /// Regression for issue #526: foreach over a missed element with a `?? []`
@@ -2805,6 +2807,7 @@ echo 'done';
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for issue #526: foreach directly over a missed element warns for
@@ -2820,7 +2823,7 @@ echo 'done';
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Guard for issue #526: heterogeneous (Mixed-element) arrays already routed
@@ -2836,7 +2839,7 @@ echo is_null($x) ? 'null' : 'notnull';
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "null");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Regression for issue #526: header-reading predicates handle a null-container
@@ -2853,7 +2856,7 @@ echo ":" . (empty($a[7]) ? "empty" : "bad");
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "false:false:empty");
-    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 2);
+    assert_eq!(out.diagnostics.matches("Warning: Undefined array key 7").count(), 2);
 }
 
 /// Regression for issue #526: `count()` and array spread turn a missed nested
@@ -2873,7 +2876,7 @@ try { $copy = [...$a[7]]; } catch (Error $e) { echo $e->getMessage() . "\n"; }
         "count(): Argument #1 ($value) must be of type Countable|array, null given\n\
 Only arrays and Traversables can be unpacked, null given\n"
     );
-    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 2);
+    assert_eq!(out.diagnostics.matches("Warning: Undefined array key 7").count(), 2);
 }
 
 /// Regression for issue #526: property and method consumers recognize the raw
@@ -2918,9 +2921,9 @@ echo ":" . $objects[0]->{$method}(3);
 Call to a member function take() on null:\
 Call to a member function take() on null:3"
     );
-    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 7);
+    assert_eq!(out.diagnostics.matches("Warning: Undefined array key 7").count(), 7);
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches("Warning: Attempt to read property \"value\" on null")
             .count(),
         4
@@ -2941,13 +2944,13 @@ echo $map["missing"]["leaf"] ?? 42;
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "NULL\n42");
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches("Warning: Undefined array key \"missing\"")
             .count(),
         1
     );
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches("Warning: Trying to access array offset on null")
             .count(),
         1
@@ -2970,6 +2973,7 @@ echo "[" . (str_repeat("x", 0) ?? "bad") . "]";
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "[fallback][][]");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 // --- Issue #556: by-reference foreach over a missing array element ---
@@ -2988,7 +2992,7 @@ echo 'done';
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Guard for issue #556: the `?? []` by-reference form iterates the empty
@@ -3006,6 +3010,7 @@ echo 'done';
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for issue #556: a string-keyed miss feeding a by-reference foreach
@@ -3021,7 +3026,7 @@ echo 'done';
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
-    assert!(out.stderr.contains("Warning: Undefined array key \"nope\""));
+    assert!(out.diagnostics.contains("Warning: Undefined array key \"nope\""));
 }
 
 /// Control for issue #556: the null-source guards must not disturb ordinary
@@ -3039,6 +3044,7 @@ echo implode(',', $ok);
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "A,B");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for issue #556: the skipped by-reference loop must leave the heap
@@ -3168,7 +3174,7 @@ echo '|done';
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "was-null|done");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Regression for issue #556: the keyed by-reference form over a missed element
@@ -3184,7 +3190,7 @@ echo 'done';
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Guard for issue #556: by-reference foreach still reads the live array length,
@@ -3204,6 +3210,7 @@ echo 'done';
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "10,20,30,done");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 // --- Issue #585: missed array read forwarded through a ternary merge into the boxed
@@ -3227,7 +3234,7 @@ echo "done", "\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "none\ndone\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 5"));
 }
 
 /// Guard for issue #585: the present ternary arm (taken when `$argc != 1` is false)
@@ -3246,6 +3253,7 @@ echo "done", "\n";
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "a\ndone\n");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Ordinary reads from a valid indexed array boxed behind Mixed diagnose missing
@@ -3264,15 +3272,15 @@ echo ($r["quiet"] ?? "quiet-string"), "\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "NULL\nquiet-int\nNULL\nquiet-string\n");
-    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 1);
+    assert_eq!(out.diagnostics.matches("Warning: Undefined array key 7").count(), 1);
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches("Warning: Undefined array key \"missing\"")
             .count(),
         1
     );
-    assert!(!out.stderr.contains("Undefined array key 8"));
-    assert!(!out.stderr.contains("Undefined array key \"quiet\""));
+    assert!(!out.diagnostics.contains("Undefined array key 8"));
+    assert!(!out.diagnostics.contains("Undefined array key \"quiet\""));
 }
 
 /// Regression for issue #585: the previously crashing read path must leave the heap
@@ -3312,7 +3320,7 @@ echo "done", "\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "z\ndone\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 5"));
 }
 
 /// Regression for issue #585 (sibling writer): the autovivified keyed write
@@ -3353,21 +3361,25 @@ echo ($r[0] ?? "quiet"), "\n";
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "null\nstrict-null\nNULL\nquiet\n");
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches("Warning: Trying to access array offset on null")
             .count(),
         1
     );
     assert_eq!(
-        out.stderr.matches("Warning: Undefined array key 5").count(),
+        out.diagnostics.matches("Warning: Undefined array key 5").count(),
         1
     );
 }
 
 /// Sentinel-derived nulls stay canonical across non-indexing Mixed consumers:
-/// count/casts/empty, JSON encoding, and serialization must not dereference a
+/// casts/empty, JSON encoding, and serialization must not dereference a
 /// container-shaped payload or observe it as an array.
 ///
+/// `count()` is the one that raises rather than answering: php reports
+/// `TypeError: count(): … null given` for this exact program, so it is caught here to keep the
+/// remaining consumers under test. The old expectation of `0` recorded elephc's own silent
+/// answer, which is what made a null read as an empty collection.
 /// `count()` asserted a quiet `0` here until it learned to raise PHP's TypeError. Reference
 /// PHP fatals on this exact program, so the old assertion recorded the divergence; caught,
 /// the message is a STRONGER witness for what this test is about than the zero was, because
@@ -3379,6 +3391,7 @@ fn test_ternary_missed_read_structural_mixed_consumers_observe_null() {
         r#"<?php
 $rows = [[1, 2]];
 $r = $argc == 1 ? $rows[5] : ["fallback"];
+try { echo count($r), "\n"; } catch (\TypeError $e) { echo "count-raises\n"; }
 try {
     echo count($r), "\n";
 } catch (TypeError $e) {
@@ -3392,13 +3405,19 @@ echo zval_type(zval_pack($r)), "\n";
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
+    // Both try blocks run, so the output carries BOTH lines. This used to be two assertions on
+    // the same `out.stdout`, each holding one of them — the first left over from when the program
+    // had a single `try` — which meant the test could not pass whatever the compiler did.
+    // MEASURED on `php -n` 8.5.6: php prints exactly this, `zval_type` aside, which is elephc's
+    // own builtin and has no php counterpart.
     assert_eq!(
         out.stdout,
-        "count(): Argument #1 ($value) must be of type Countable|array, null given\nempty\n0\n\
-         null\nN;\n1\n"
+        "count-raises\n\
+         count(): Argument #1 ($value) must be of type Countable|array, null given\n\
+         empty\n0\nnull\nN;\n1\n"
     );
     assert_eq!(
-        out.stderr.matches("Warning: Undefined array key 5").count(),
+        out.diagnostics.matches("Warning: Undefined array key 5").count(),
         1
     );
 }
@@ -3425,17 +3444,19 @@ echo is_null($assigned[0]) && $assigned[0] === null ? "assigned-null\n" : "assig
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "indexed-null\nassoc-null\nassigned-null\n");
     assert_eq!(
-        out.stderr.matches("Warning: Undefined array key 5").count(),
+        out.diagnostics.matches("Warning: Undefined array key 5").count(),
         1
     );
     assert_eq!(
-        out.stderr.matches("Warning: Undefined array key 6").count(),
+        out.diagnostics.matches("Warning: Undefined array key 6").count(),
         1
     );
     assert_eq!(
-        out.stderr.matches("Warning: Undefined array key 7").count(),
+        out.diagnostics.matches("Warning: Undefined array key 7").count(),
         1
     );
+    // The heap debugger writes to stderr and did NOT move with php's diagnostics: it is elephc's
+    // own instrumentation, not something php emits.
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
@@ -3462,7 +3483,7 @@ echo $a[0], "|", $b[-1], "|", $c["name"], "\n";
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "zero|negative|string\n");
     assert_eq!(
-        out.stderr.matches("Warning: Undefined array key 5").count(),
+        out.diagnostics.matches("Warning: Undefined array key 5").count(),
         3
     );
 }
@@ -3505,7 +3526,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "NULL\ndone\n");
-    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+    assert!(out.diagnostics.contains("Warning: Undefined array key 7"));
 }
 
 /// Regression for issue #581: the same miss taken from a hash source, whose value
@@ -3522,7 +3543,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "NULL\ndone\n");
-    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+    assert!(out.diagnostics.contains(r#"Warning: Undefined array key "zz""#));
 }
 
 /// Regression for issue #581: a hash source whose value type is itself a hash takes
@@ -3539,7 +3560,7 @@ echo "done\n";
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "NULL\ndone\n");
-    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+    assert!(out.diagnostics.contains(r#"Warning: Undefined array key "zz""#));
 }
 
 /// Regression for issue #581: a miss forwarded through `?? null` keeps the sentinel
@@ -3557,6 +3578,7 @@ echo "done\n";
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(out.stdout, "NULL\ndone\n");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Guard for issue #581: a genuine null local and a present array keep their existing
@@ -3581,6 +3603,7 @@ echo "done\n";
 array(1) {\n  [\"k\"]=>\n  string(1) \"v\"\n}\ndone\n"
     );
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Regression for issue #581: the null-container sentinel must be recognized before the

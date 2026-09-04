@@ -199,6 +199,27 @@ impl Checker {
         self.current_by_ref_return = prev_by_ref_return;
         self.callable_param_names = saved_callable_param_names;
         body_check_result?;
+        if let Some((widened, widened_indexes)) =
+            self.by_ref_array_params_widened_by_body(decl, &param_types, &local_env)
+        {
+            // The body widened a BY-REFERENCE array parameter — a loop storage contract, an
+            // element write of a `Mixed` value, an `$a[] =` of a wider one. That widening
+            // rewrites the CALLER's storage to boxed slots, so the parameter type the caller
+            // sees has to say so, and the body has to be compiled against it rather than
+            // against the narrow type it started from. Re-resolving with the widened types is
+            // a FIXED POINT, not a loop: `array<mixed>` is the top of this lattice, so the
+            // second pass cannot widen again, and `resolving_by_ref_widening` makes that a
+            // guarantee rather than a hope.
+            if self.resolving_by_ref_widening.insert(function_key.clone()) {
+                for index in widened_indexes {
+                    self.by_ref_widened_params
+                        .insert((function_key.clone(), index));
+                }
+                let resolved = self.resolve_function_signature(name, decl, widened);
+                self.resolving_by_ref_widening.remove(&function_key);
+                return resolved;
+            }
+        }
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
                 self.callable_param_sigs
@@ -334,6 +355,50 @@ impl Checker {
         Ok(return_type)
     }
 
+    /// Returns the parameter list re-typed for a body that WIDENED a by-reference array
+    /// parameter, or `None` when none did.
+    ///
+    /// A by-reference parameter is compiled against the CALLER's storage. When the body ends up
+    /// holding boxed element slots — `foreach ($a as $k => $v) { $a[$k] = $v * 2; }` does, through
+    /// the loop storage contract — the caller's array is rewritten to boxed slots too, and a
+    /// caller still typed `array<int>` reads those boxes back as ADDRESSES. Reporting the exit
+    /// type here is what lets the call site convert its own local and re-type it.
+    ///
+    /// Only a WIDENING is reported. A body that merely reads the parameter, or one that sorts it
+    /// in place, keeps its narrow element type — which is what keeps `sort($a)` compiling, since
+    /// the backend has no Mixed-element sort.
+    fn by_ref_array_params_widened_by_body(
+        &self,
+        decl: &FnDecl,
+        param_types: &[(String, PhpType)],
+        local_env: &TypeEnv,
+    ) -> Option<(Vec<(String, PhpType)>, Vec<usize>)> {
+        let mut widened = param_types.to_vec();
+        let mut widened_indexes = Vec::new();
+        let mut any = false;
+        for (index, (pname, entry_ty)) in param_types.iter().enumerate() {
+            if !decl.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(exit_ty) = local_env.get(pname) else {
+                continue;
+            };
+            if let Some(widened_ty) = null_entry_by_ref_param_widens(entry_ty, exit_ty) {
+                widened[index].1 = widened_ty;
+                widened_indexes.push(index);
+                any = true;
+                continue;
+            }
+            if !array_element_representation_widens(entry_ty, exit_ty) {
+                continue;
+            }
+            widened[index].1 = exit_ty.clone();
+            widened_indexes.push(index);
+            any = true;
+        }
+        any.then(|| (widened, widened_indexes))
+    }
+
     /// Picks the return type for the *provisional* signature published before a free
     /// function's body is walked.
     ///
@@ -387,6 +452,54 @@ impl Checker {
 /// shapes). An empty indexed array is neutral because it can be materialized in
 /// either concrete storage family at the return boundary. Returns `None` if
 /// non-empty returns differ, include non-array types, or are all `void`.
+/// Returns whether an array-ish type's ELEMENT representation WIDENED from `entry` to `exit`.
+///
+/// Two widenings matter, and only those two. An element representation that became `Mixed` means
+/// boxed slots where there were raw ones. An empty `array<never>` that gained an element type
+/// means slots where there were none. The direction is load-bearing: a callee compiled for
+/// `array<int>` must never re-type a caller holding `array<mixed>`, because it cannot unbox
+/// storage it does not own.
+///
+/// A change of container KIND counts too when the body turned a list into a hash — writing a
+/// string key into an empty `array<never>` does exactly that, and the caller reading it back as
+/// a packed list is the same defect one layer out: `$h = []; fill_keyed($h);` printed `[10, 13]`
+/// where php printed `{"k":1,"j":2}`.
+pub(in crate::types) fn array_element_representation_widens(entry: &PhpType, exit: &PhpType) -> bool {
+    match (entry.codegen_repr(), exit.codegen_repr()) {
+        (PhpType::Array(entry_elem), PhpType::Array(exit_elem)) => {
+            element_representation_widens(&entry_elem, &exit_elem)
+        }
+        (
+            PhpType::AssocArray {
+                value: entry_value, ..
+            },
+            PhpType::AssocArray {
+                value: exit_value, ..
+            },
+        ) => element_representation_widens(&entry_value, &exit_value),
+        (PhpType::Array(entry_elem), PhpType::AssocArray { .. }) => {
+            entry_elem.codegen_repr() == PhpType::Void || matches!(*entry_elem, PhpType::Never)
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether one array element representation is wider than another.
+///
+/// `never` is compared on the RAW type, not on `codegen_repr()`: an empty array's element type
+/// normalizes to `Void`, so asking `codegen_repr() == Never` is always false and the empty-array
+/// case silently never fired.
+fn element_representation_widens(entry: &PhpType, exit: &PhpType) -> bool {
+    let entry_repr = entry.codegen_repr();
+    let exit_repr = exit.codegen_repr();
+    if entry_repr == exit_repr {
+        return false;
+    }
+    matches!(entry, PhpType::Never)
+        || entry_repr == PhpType::Void
+        || exit_repr == PhpType::Mixed
+}
+
 fn inferred_specific_array_type_from_infos(
     return_types: &[super::super::returns::ReturnInfo],
 ) -> Option<PhpType> {
@@ -442,4 +555,35 @@ fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
         }
     }
     sig
+}
+
+/// Widens a by-reference parameter whose caller passed NULL and whose body writes something else.
+///
+/// `function f(&$a) { $a = 5; }` called as `$x = null; f($x);` is php's out-parameter idiom, and
+/// the whole point of it is that `$x` is `int(5)` afterwards. elephc typed the parameter from the
+/// caller — `null` — and left it there, so the body's write went through the pointer while the
+/// CALLER kept reading its slot as null-typed. Every later read constant-folded to `NULL`:
+/// `var_dump($x)` printed NULL and `if ($x === null)` took the wrong branch, with no diagnostic
+/// anywhere. The call site's EIR was byte-identical to the case that works, because the
+/// difference was never in the EIR.
+///
+/// The widened type is `mixed`, not the narrower `<written>|null` union it might look like it
+/// should be. Both are boxed, but a nullable SCALAR union has its own inline representation — a
+/// payload word plus a tag word, sixteen bytes — while the caller's slot was laid out for the
+/// eight-byte null it was holding, so the callee's write ran past the end of it and the program
+/// segfaulted. `mixed` is one pointer whatever the payload, which is the only representation
+/// both sides of the boundary agree on here.
+///
+/// Only a `null` entry widens. A parameter the caller passed a real value to keeps elephc's
+/// monomorphized contract: `$x = 1; f($x)` with an `$a = "s"` body is still the reassignment
+/// error it has always been, because widening THAT silently would change what the backend
+/// compiles for every existing by-reference call.
+fn null_entry_by_ref_param_widens(entry_ty: &PhpType, exit_ty: &PhpType) -> Option<PhpType> {
+    if !matches!(entry_ty, PhpType::Void) {
+        return None;
+    }
+    if matches!(exit_ty, PhpType::Void | PhpType::Never) {
+        return None;
+    }
+    Some(PhpType::Mixed)
 }

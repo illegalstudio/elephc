@@ -180,11 +180,11 @@ fn eval_rejects_the_stream_options_with_a_warning_not_a_fatal() {
     // papered over.
     for option in ["10001", "10029", "10009", "10037"] {
         assert!(
-            output.stderr.contains(&format!(
+            output.diagnostics.contains(&format!(
                 "curl_setopt(): Option {option} is not supported by this build"
             )),
-            "each stream option must warn in eval(); stderr was: {}",
-            output.stderr
+            "each stream option must warn in eval(); diagnostics were: {}",
+            output.diagnostics
         );
     }
 }

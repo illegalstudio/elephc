@@ -118,7 +118,7 @@ var_dump($len);');
 /// (`ob_get_contents`/`ob_get_clean` stay silent, the rest raise E_NOTICE).
 #[test]
 fn test_no_buffer_operations_return_false() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 var_dump(ob_get_contents());
 var_dump(ob_get_clean());
@@ -129,21 +129,18 @@ var_dump(ob_clean());
 var_dump(ob_get_flush());
 "#,
     );
+    assert!(out.success, "program failed: {}", out.stderr);
+    // Seven calls, seven `false`s: the notices below are the only thing that tells the two silent
+    // failures apart from the five noisy ones.
+    assert_eq!(out.stdout, "bool(false)\n".repeat(7));
     assert_eq!(
-        out,
+        out.diagnostics,
         concat!(
-            "bool(false)\n",
-            "bool(false)\n",
             "Notice: ob_end_clean(): Failed to delete buffer. No buffer to delete\n",
-            "bool(false)\n",
             "Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n",
-            "bool(false)\n",
             "Notice: ob_flush(): Failed to flush buffer. No buffer to flush\n",
-            "bool(false)\n",
             "Notice: ob_clean(): Failed to delete buffer. No buffer to delete\n",
-            "bool(false)\n",
             "Notice: ob_get_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n",
-            "bool(false)\n",
         )
     );
 }
@@ -625,7 +622,7 @@ echo $size;
 /// the named notices, and everything still flushes at script end.
 #[test]
 fn test_flags_gate_operations_with_notices() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 ob_start(null, 0, 0);
 echo "locked;";
@@ -633,14 +630,13 @@ var_dump(ob_clean());
 var_dump(ob_end_flush());
 "#,
     );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "locked;bool(false)\nbool(false)\n");
     assert_eq!(
-        out,
+        out.diagnostics,
         concat!(
-            "locked;",
             "Notice: ob_clean(): Failed to delete buffer of default output handler (0)\n",
-            "bool(false)\n",
             "Notice: ob_end_flush(): Failed to send buffer of default output handler (0)\n",
-            "bool(false)\n",
         )
     );
 }
@@ -666,19 +662,22 @@ var_dump(ob_get_clean());
 /// leaves the stack unchanged.
 #[test]
 fn test_ob_start_unknown_function_name_rejected() {
-    let out = compile_and_run(
+    let out = compile_and_run_capture(
         r#"<?php
 $r = ob_start('no_such_handler_fn');
 echo $r === false ? "rejected" : "started";
 echo "|", ob_get_level();
 "#,
     );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "rejected|0");
+    // TWO diagnostics, and the order is the contract: PHP names the bad callback first and only
+    // then reports that the buffer could not be created.
     assert_eq!(
-        out,
+        out.diagnostics,
         concat!(
             "Warning: ob_start(): function \"no_such_handler_fn\" not found or invalid function name\n",
             "Notice: ob_start(): Failed to create buffer\n",
-            "rejected|0",
         )
     );
 }

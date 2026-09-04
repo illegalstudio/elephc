@@ -31,6 +31,17 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Void => PhpType::Void,
         TypeSpec::Ptr => PhpType::Pointer(None),
         TypeSpec::Callable => PhpType::Callable,
+        // php's `?T` is `T|null`, and elephc spells php's null `Void`. Rendering it as a union
+        // rather than as the bare inner type is what keeps a written `null` from being coerced to
+        // the scalar's zero, and what lets the checker accept it.
+        TypeSpec::Nullable(inner) => {
+            PhpType::Union(vec![type_spec_to_php(inner), PhpType::Void])
+        }
+        // php's own `A|B`, in DECLARED order — the same shape `Nullable` builds, and the same
+        // one the checker's own union normalization consumes.
+        TypeSpec::Union(members) => {
+            PhpType::Union(members.iter().map(type_spec_to_php).collect())
+        }
     }
 }
 

@@ -904,6 +904,18 @@ fn check_callback_builtin_call_in_engine_frame(
             let _ = checker.check_function_call(cb_name, callback_args, span, env);
             return Ok(PhpType::Int);
         }
+        // A builtin named as a string is a defined function. `check_function_call` resolves USER
+        // functions only, so without this `array_map("strtoupper", $a)` — and `array_filter`,
+        // `usort`, `array_walk` with any builtin name — were `Undefined function: strtoupper`,
+        // while `call_user_func("strtoupper", …)` worked because its own path resolves builtins.
+        if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
+            if let Some(ret_ty) = checker.check_builtin(&builtin_name, callback_args, span, env)? {
+                return Ok(ret_ty);
+            }
+            if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
+                return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+            }
+        }
         return checker.check_function_call(cb_name, callback_args, span, env);
     }
 

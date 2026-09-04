@@ -141,15 +141,20 @@ foreach ($b as $value) { echo $value; }
 /// Verifies explicit `ARRAY_FILTER_USE_VALUE` keeps the default value-only callback shape.
 #[test]
 fn test_array_filter_explicit_use_value_mode() {
+    // php has no `ARRAY_FILTER_USE_VALUE` constant — `defined()` is false on 8.5.6 — so the value
+    // mode is written as the literal 0 or left out entirely. Both reach the same runtime path.
     let out = compile_and_run(
         r#"<?php
 function positive_value($value) { return $value > 0; }
-$filtered = array_filter([-1, 2, 0, 3], "positive_value", ARRAY_FILTER_USE_VALUE);
+$filtered = array_filter([-1, 2, 0, 3], "positive_value", 0);
 echo count($filtered);
 foreach ($filtered as $value) { echo $value; }
+$defaulted = array_filter([-1, 2, 0, 3], "positive_value");
+echo count($defaulted);
+foreach ($defaulted as $value) { echo $value; }
 "#,
     );
-    assert_eq!(out, "223");
+    assert_eq!(out, "223223");
 }
 
 /// Verifies `ARRAY_FILTER_USE_BOTH` passes value and key to the callback.
@@ -217,20 +222,24 @@ try {
 
 /// Verifies PHP 8.6 array_filter mode constants resolve in namespaces and through `defined()`.
 #[test]
-fn test_array_filter_use_value_constant_defined_and_namespaced() {
+fn test_array_filter_mode_constants_are_the_two_php_defines() {
+    // MEASURED on `php -n` 8.5.6: `ARRAY_FILTER_USE_KEY` and `ARRAY_FILTER_USE_BOTH` are defined,
+    // `ARRAY_FILTER_USE_VALUE` is NOT. This test used to assert the opposite for the third name,
+    // which is how a constant php has never had came to be declared — and how the repo's own
+    // `examples/callbacks/main.php` came to fatal under php.
     let out = compile_and_run(
         r#"<?php
 namespace Demo;
 echo defined("ARRAY_FILTER_USE_VALUE") ? "Y" : "N";
 echo ":";
-echo ARRAY_FILTER_USE_VALUE;
+echo defined("ARRAY_FILTER_USE_BOTH") ? "Y" : "N";
 echo ":";
 echo ARRAY_FILTER_USE_BOTH;
 echo ":";
 echo \ARRAY_FILTER_USE_KEY;
 "#,
     );
-    assert_eq!(out, "Y:0:1:2");
+    assert_eq!(out, "N:Y:1:2");
 }
 
 /// Verifies array callback runtimes accept callback names selected through string variables.

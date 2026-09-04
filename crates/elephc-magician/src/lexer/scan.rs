@@ -15,6 +15,29 @@
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalMagicConst;
+use std::num::IntErrorKind;
+
+/// Every word PHP's grammar reserves. A numeric literal butted straight against one of
+/// them ends at the keyword, because PHP's own lexer stops a number at the first
+/// character that cannot continue it and hands the rest to the parser:
+///
+/// ```text
+/// $ php -n -r 'var_dump(1and 2);'  => bool(true)
+/// $ php -n -r 'var_dump(1xor 2);'  => bool(false)
+/// ```
+///
+/// Mirrors `elephc::lexer::literals::numbers::RESERVED_WORDS_AFTER_NUMBER` so a literal
+/// means the same thing compiled ahead of time and evaluated inside `eval()`.
+const RESERVED_WORDS_AFTER_NUMBER: &[&str] = &[
+    "abstract", "and", "array", "as", "break", "callable", "case", "catch", "class", "clone",
+    "const", "continue", "declare", "default", "die", "do", "echo", "else", "elseif", "empty",
+    "enddeclare", "endfor", "endforeach", "endif", "endswitch", "endwhile", "enum", "eval",
+    "exit", "extends", "final", "finally", "fn", "for", "foreach", "function", "global", "goto",
+    "if", "implements", "include", "include_once", "instanceof", "insteadof", "interface",
+    "isset", "list", "match", "namespace", "new", "or", "print", "private", "protected",
+    "public", "readonly", "require", "require_once", "return", "static", "switch", "throw",
+    "trait", "try", "unset", "use", "var", "while", "xor", "yield",
+];
 
 /// Tokenizes a complete source fragment and appends an EOF sentinel.
 pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
@@ -312,6 +335,10 @@ impl<'a> Lexer<'a> {
                 self.bump_char();
                 Ok(TokenKind::Backslash)
             }
+            '@' => {
+                self.bump_char();
+                Ok(TokenKind::At)
+            }
             '#' if self.peek_next_char() == Some('[') => {
                 self.bump_char();
                 self.bump_char();
@@ -353,29 +380,149 @@ impl<'a> Lexer<'a> {
         ident
     }
 
-    /// Reads an integer or float literal.
-    fn lex_number(&mut self) -> Result<TokenKind, EvalParseError> {
-        let start = self.pos;
-        while matches!(self.peek_char(), Some('0'..='9')) {
-            self.bump_char();
-        }
-        let mut is_float = false;
-        if self.peek_char() == Some('.') && matches!(self.peek_next_char(), Some('0'..='9')) {
-            is_float = true;
-            self.bump_char();
-            while matches!(self.peek_char(), Some('0'..='9')) {
+    /// Collects digits accepted by `is_digit`, allowing a single `_` BETWEEN two of them
+    /// (PHP 7.4+ numeric separator). A leading, trailing or doubled `_` is left on the
+    /// cursor so [`Self::reject_trailing_alnum`] can refuse it. Returns the digits with
+    /// the separators stripped.
+    fn scan_radix_digits<F: Fn(char) -> bool>(&mut self, is_digit: F) -> String {
+        let mut digits = String::new();
+        while let Some(ch) = self.peek_char() {
+            if is_digit(ch) {
+                digits.push(ch);
                 self.bump_char();
+            } else if ch == '_'
+                && !digits.is_empty()
+                && self.peek_next_char().is_some_and(&is_digit)
+            {
+                self.bump_char();
+            } else {
+                break;
             }
         }
-        let raw = &self.source[start..self.pos];
-        if is_float {
-            raw.parse::<f64>()
+        digits
+    }
+
+    /// Refuses a numeric literal followed immediately by an alphanumeric or `_`.
+    ///
+    /// This is what turns `0o78`, `0xfg`, `0b12`, `1_` and `1__0` into refusals instead
+    /// of silently truncating the literal at the first out-of-range character and lexing
+    /// the remainder as a separate token.
+    ///
+    /// A following PHP reserved word is the one case that is NOT malformed: PHP's lexer
+    /// stops a number at the first character that cannot continue it, so `1and 2` is the
+    /// expression `1 and 2` and `php -n -r 'var_dump(1and 2);'` prints `bool(true)`.
+    fn reject_trailing_alnum(&self) -> Result<(), EvalParseError> {
+        match self.peek_char() {
+            Some(ch) if (ch.is_ascii_alphanumeric() || ch == '_') && !self.next_word_is_reserved() => {
+                Err(EvalParseError::InvalidNumber)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Returns true when the identifier starting at the cursor is a PHP reserved word, so
+    /// the numeric literal just scanned ends here rather than being refused.
+    fn next_word_is_reserved(&self) -> bool {
+        let word: String = self.source[self.pos..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .collect();
+        RESERVED_WORDS_AFTER_NUMBER
+            .iter()
+            .any(|keyword| word.eq_ignore_ascii_case(keyword))
+    }
+
+    /// Converts `digits` to an `i64`, promoting to a float on positive overflow the way
+    /// PHP does (`echo 9223372036854775808;` prints `9.2233720368548E+18`).
+    fn radix_int_or_float(digits: &str, radix: u32) -> Result<TokenKind, EvalParseError> {
+        match i64::from_str_radix(digits, radix) {
+            Ok(value) => Ok(TokenKind::Int(value)),
+            Err(err) if *err.kind() == IntErrorKind::PosOverflow => {
+                let radix_float = f64::from(radix);
+                let value = digits.chars().fold(0.0_f64, |acc, ch| {
+                    let digit = ch
+                        .to_digit(radix)
+                        .expect("scanner only collects valid radix digits");
+                    acc * radix_float + f64::from(digit)
+                });
+                Ok(TokenKind::Float(value))
+            }
+            Err(_) => Err(EvalParseError::InvalidNumber),
+        }
+    }
+
+    /// Reads an integer or float literal.
+    ///
+    /// Mirrors `crate::lexer::literals::numbers::scan_number` in the AOT compiler so a
+    /// literal means the same thing whether it is compiled ahead of time or evaluated in
+    /// an `eval()` fragment: hex `0x`/`0X`, explicit octal `0o`/`0O`, binary `0b`/`0B`,
+    /// legacy leading-`0` octal, `_` separators, scientific notation, and
+    /// overflow-promotes-to-float.
+    fn lex_number(&mut self) -> Result<TokenKind, EvalParseError> {
+        if self.peek_char() == Some('0') {
+            if let Some(prefix) = self.peek_next_char() {
+                let radix_scan = match prefix {
+                    'x' | 'X' => Some((16_u32, (|c: char| c.is_ascii_hexdigit()) as fn(char) -> bool)),
+                    'o' | 'O' => Some((8, (|c: char| c.is_ascii_digit() && c < '8') as fn(char) -> bool)),
+                    'b' | 'B' => Some((2, (|c: char| c == '0' || c == '1') as fn(char) -> bool)),
+                    _ => None,
+                };
+                if let Some((radix, is_digit)) = radix_scan {
+                    self.bump_char();
+                    self.bump_char();
+                    let digits = self.scan_radix_digits(is_digit);
+                    if digits.is_empty() {
+                        return Err(EvalParseError::InvalidNumber);
+                    }
+                    self.reject_trailing_alnum()?;
+                    return Self::radix_int_or_float(&digits, radix);
+                }
+            }
+        }
+
+        let mut raw = self.scan_radix_digits(|c| c.is_ascii_digit());
+
+        let has_fraction = self.peek_char() == Some('.')
+            && self.peek_next_char().is_some_and(|c| c.is_ascii_digit());
+        let has_exponent = matches!(self.peek_char(), Some('e' | 'E'));
+
+        if has_fraction || has_exponent {
+            if has_fraction {
+                raw.push('.');
+                self.bump_char();
+                raw.push_str(&self.scan_radix_digits(|c| c.is_ascii_digit()));
+            }
+            if matches!(self.peek_char(), Some('e' | 'E')) {
+                raw.push('e');
+                self.bump_char();
+                if let Some(sign @ ('+' | '-')) = self.peek_char() {
+                    raw.push(sign);
+                    self.bump_char();
+                }
+                raw.push_str(&self.scan_radix_digits(|c| c.is_ascii_digit()));
+            }
+            self.reject_trailing_alnum()?;
+            return raw
+                .parse::<f64>()
                 .map(TokenKind::Float)
-                .map_err(|_| EvalParseError::InvalidNumber)
-        } else {
-            raw.parse::<i64>()
-                .map(TokenKind::Int)
-                .map_err(|_| EvalParseError::InvalidNumber)
+                .map_err(|_| EvalParseError::InvalidNumber);
+        }
+
+        self.reject_trailing_alnum()?;
+
+        // A leading `0` on a multi-digit literal is PHP's legacy octal form, so `0700`
+        // is 448 and `08` is refused rather than read as decimal.
+        if raw.len() > 1 && raw.starts_with('0') {
+            return Self::radix_int_or_float(&raw, 8);
+        }
+
+        match raw.parse::<i64>() {
+            Ok(value) => Ok(TokenKind::Int(value)),
+            Err(err) if *err.kind() == IntErrorKind::PosOverflow => raw
+                .parse::<f64>()
+                .map(TokenKind::Float)
+                .map_err(|_| EvalParseError::InvalidNumber),
+            Err(_) => Err(EvalParseError::InvalidNumber),
         }
     }
 

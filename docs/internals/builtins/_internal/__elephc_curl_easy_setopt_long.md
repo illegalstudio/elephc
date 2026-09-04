@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_setopt_long() — internals"
 description: "Compiler internals for __elephc_curl_easy_setopt_long(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 566
+  order: 599
 ---
 
 ## `__elephc_curl_easy_setopt_long()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_setopt_long.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_setopt_long.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:560](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L560) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

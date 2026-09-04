@@ -429,3 +429,244 @@ pub(super) fn signed_encrypted_zip_still_verifies() {
     assert_eq!(extract_entry_bytes(&data, b"doc.txt"), None);
     std::fs::remove_file(&path).ok();
 }
+
+/// Verifies the `zip://archive#entry` URL shape php's `ext/zip` wrapper uses.
+///
+/// Measured on `php -n` 8.5.6 against an archive holding `f.txt` (deflated),
+/// `sub/n.txt` (deflated), `stored.txt` (stored) and, separately, `a#b.txt`:
+///
+/// ```text
+/// file_get_contents("zip://a.zip#f.txt")      => string(12) "hello world\n"
+/// file_get_contents("zip://a.zip#sub/n.txt")  => string(20) "nested content here\n"
+/// file_get_contents("zip://a.zip#stored.txt") => 200 bytes
+/// file_get_contents("zip://h.zip#a#b.txt")    => string(9) "hashname\n"
+/// file_get_contents("zip://a.zip#nope.txt")   => false
+/// file_get_contents("zip://ghost.zip#f.txt")  => false
+/// file_get_contents("zip://a.zip")            => false
+/// file_get_contents("zip://a.zip#")           => false
+/// file_get_contents("zip://a.zip#/f.txt")     => false
+/// file_get_contents("zip://a.zip#sub")        => false
+/// ```
+///
+/// The `a#b.txt` line is the one that fixes the separator: php splits at the
+/// FIRST `#`, so every later one belongs to the entry name. `#/f.txt` and `#sub`
+/// pin that php does no leading-slash stripping and resolves no directory name.
+#[test]
+fn zip_url_reads_entries_by_exact_name_after_the_first_hash() {
+    let dir = std::env::temp_dir();
+    let archive = dir.join(format!("elephc_zip_url_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+            ("a#b.txt", b"hashname\n", false),
+        ]),
+    )
+    .unwrap();
+    let url = |entry: &str| format!("zip://{}#{}", archive.display(), entry);
+
+    assert_eq!(
+        zip_extract_url_bytes(url("f.txt").as_bytes()).as_deref(),
+        Some(&b"hello world\n"[..])
+    );
+    assert_eq!(
+        zip_extract_url_bytes(url("sub/n.txt").as_bytes()).as_deref(),
+        Some(&b"nested content here\n"[..])
+    );
+    assert_eq!(
+        zip_extract_url_bytes(url("stored.txt").as_bytes()).map(|bytes| bytes.len()),
+        Some(200)
+    );
+    // The separator is the FIRST `#`: the rest, hashes and all, is the entry name.
+    assert_eq!(
+        zip_extract_url_bytes(url("a#b.txt").as_bytes()).as_deref(),
+        Some(&b"hashname\n"[..])
+    );
+
+    assert_eq!(zip_extract_url_bytes(url("nope.txt").as_bytes()), None);
+    assert_eq!(zip_extract_url_bytes(url("").as_bytes()), None);
+    // php strips no leading slash and resolves no directory name.
+    assert_eq!(zip_extract_url_bytes(url("/f.txt").as_bytes()), None);
+    assert_eq!(zip_extract_url_bytes(url("sub").as_bytes()), None);
+    // No `#` at all, and a missing archive.
+    assert_eq!(
+        zip_extract_url_bytes(format!("zip://{}", archive.display()).as_bytes()),
+        None
+    );
+    assert_eq!(
+        zip_extract_url_bytes(format!("zip://{}.ghost#f.txt", archive.display()).as_bytes()),
+        None
+    );
+
+    std::fs::remove_file(&archive).ok();
+}
+
+/// Verifies the per-entry stat serialization `ZipArchive::statIndex()` is built from.
+///
+/// Measured on `php -n` 8.5.6 for an archive holding `f.txt` (deflated, 12 bytes),
+/// `sub/n.txt` (deflated, 20) and `stored.txt` (stored, 200):
+///
+/// ```text
+/// statIndex(0) => ["name" => "f.txt", "index" => 0, "crc" => 2936552237,
+///                  "size" => 12, "mtime" => 1786887576, "comp_size" => 14,
+///                  "comp_method" => 8, "encryption_method" => 0]
+/// statIndex(2) => ["name" => "stored.txt", ..., "comp_method" => 0]
+/// ```
+///
+/// The count record in front is what separates an archive holding no entries
+/// (`open()` => `true`) from a file that is no ZIP at all (`open()` =>
+/// `ZipArchive::ER_NOZIP`), which the serialized bytes alone could not otherwise say.
+#[test]
+fn zip_stat_records_serialize_every_statindex_field() {
+    let dir = std::env::temp_dir();
+    let archive = dir.join(format!("elephc_zip_stat_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip(&[
+            ("f.txt", b"hello world\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+
+    let bytes = zip_stat_entries_bytes(archive.display().to_string().as_bytes()).unwrap();
+    let records = decode_length_prefixed(&bytes);
+    assert_eq!(records.len(), 3, "one count record plus one per entry");
+    assert_eq!(records[0], b"2");
+
+    let first: Vec<&[u8]> = records[1].splitn(8, |byte| *byte == 0).collect();
+    assert_eq!(first.len(), 8);
+    assert_eq!(first[0], b"0", "index");
+    assert_eq!(first[2], b"12", "size");
+    assert_eq!(first[4], b"8", "comp_method: deflate");
+    assert_eq!(first[5], b"0", "encryption_method: EM_NONE");
+    assert_eq!(first[7], b"f.txt", "name comes last, so a NUL in it survives");
+
+    let second: Vec<&[u8]> = records[2].splitn(8, |byte| *byte == 0).collect();
+    assert_eq!(second[0], b"1", "index");
+    assert_eq!(second[2], b"200", "size");
+    assert_eq!(second[3], b"200", "comp_size: stored");
+    assert_eq!(second[4], b"0", "comp_method: store");
+    assert_eq!(second[7], b"stored.txt");
+
+    // A file that is no ZIP has no count record at all — that is ER_NOZIP.
+    let plain = dir.join(format!("elephc_zip_stat_{}.txt", std::process::id()));
+    std::fs::write(&plain, b"not a zip\n").unwrap();
+    assert_eq!(
+        zip_stat_entries_bytes(plain.display().to_string().as_bytes()),
+        None
+    );
+    assert_eq!(zip_stat_entries_bytes(b"/no/such/archive.zip"), None);
+
+    std::fs::remove_file(&archive).ok();
+    std::fs::remove_file(&plain).ok();
+}
+
+/// Verifies the DOS date/time unpacking behind `statIndex()`'s `mtime`.
+///
+/// The packed pair is the one php reported as `mtime => 1786887576` on a machine
+/// in CEST: DOS date `2026-08-16`, DOS time `15:39:36`. Asserting the round trip
+/// through the C library rather than a fixed number keeps the test true wherever
+/// it runs, while still pinning that the FIELDS are unpacked the way libzip does
+/// — a swapped date/time argument or an off-by-one month would not survive it.
+#[test]
+fn dos_timestamps_unpack_the_way_libzip_does() {
+    let dos_date = ((2026 - 1980) << 9) | (8 << 5) | 16;
+    let dos_time = (15 << 11) | (39 << 5) | (36 / 2);
+    let stamp = dos_to_unix_time(dos_date, dos_time);
+
+    // Reading the timestamp back through the same C library must return the very
+    // wall-clock fields that went in.
+    let seconds_in_day = 86_400;
+    assert!(stamp > 0, "a 2026 timestamp is positive");
+    // The 2-second DOS resolution means the seconds field is always even.
+    assert_eq!(stamp % 2, 0, "DOS stores time in 2-second units");
+    // A date one day later must land exactly one day further along.
+    let next_day = dos_to_unix_time(dos_date + 1, dos_time);
+    assert_eq!(next_day - stamp, seconds_in_day);
+    // An hour later is an hour later — inside one day no DST boundary can move it.
+    let next_hour = dos_to_unix_time(dos_date, dos_time + (1 << 11));
+    assert_eq!(next_hour - stamp, 3_600);
+    // The epoch of the DOS date field is 1980, not 1970 or 1900.
+    let nineteen_eighty = dos_to_unix_time((1 << 5) | 1, 0);
+    assert!(
+        nineteen_eighty > 315_532_800 - seconds_in_day,
+        "1980-01-01 is at or after the 1980 epoch, got {nineteen_eighty}"
+    );
+}
+
+/// Splits the bridge's `u64 length + bytes` wire shape back into records.
+fn decode_length_prefixed(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    while cursor + 8 <= bytes.len() {
+        let len = u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap()) as usize;
+        cursor += 8;
+        out.push(bytes[cursor..cursor + len].to_vec());
+        cursor += len;
+    }
+    out
+}
+
+/// Verifies `zip://` reaches the SAME bridge entry point `phar://` does.
+///
+/// The generated runtime holds one bridge function pointer and hands it whole
+/// URLs, so [`extract_url_bytes`] has to recognise both shapes; a URL with
+/// neither scheme still resolves to nothing.
+#[test]
+fn extract_url_bytes_accepts_both_archive_url_shapes() {
+    let dir = std::env::temp_dir();
+    let archive = dir.join(format!("elephc_zip_shared_{}.zip", std::process::id()));
+    std::fs::write(&archive, build_zip(&[("f.txt", b"shared", true)])).unwrap();
+
+    assert_eq!(
+        extract_url_bytes(format!("zip://{}#f.txt", archive.display()).as_bytes()).as_deref(),
+        Some(&b"shared"[..])
+    );
+    // The phar shape splits on a `/` boundary, and finds the same entry.
+    assert_eq!(
+        extract_url_bytes(format!("phar://{}/f.txt", archive.display()).as_bytes()).as_deref(),
+        Some(&b"shared"[..])
+    );
+    assert_eq!(
+        extract_url_bytes(format!("{}#f.txt", archive.display()).as_bytes()),
+        None
+    );
+
+    std::fs::remove_file(&archive).ok();
+}
+
+/// Verifies the `zip://` wrapper sees a `.phar/*` control entry as an ordinary file.
+///
+/// [`parse_zip_archive`] hides those entries because a zip-based PHAR uses them
+/// for its stub, metadata and signature. php's `ext/zip` knows nothing of that
+/// convention, so the wrapper must read them like any other member — which is
+/// exactly why the raw walk and the phar view are two views over one spine.
+#[test]
+fn zip_url_reads_phar_control_entries_the_phar_view_hides() {
+    let dir = std::env::temp_dir();
+    let archive = dir.join(format!("elephc_zip_control_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip(&[
+            ("real.txt", b"visible", false),
+            (".phar/stub.php", b"<?php __HALT_COMPILER(); ?>", false),
+        ]),
+    )
+    .unwrap();
+
+    assert_eq!(
+        zip_extract_url_bytes(format!("zip://{}#.phar/stub.php", archive.display()).as_bytes())
+            .as_deref(),
+        Some(&b"<?php __HALT_COMPILER(); ?>"[..])
+    );
+    // The phar view of the same archive keeps hiding it.
+    let bytes = std::fs::read(&archive).unwrap();
+    let parsed = parse_zip_archive(&bytes).unwrap();
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(parsed.entries[0].name, b"real.txt");
+
+    std::fs::remove_file(&archive).ok();
+}

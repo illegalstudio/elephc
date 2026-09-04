@@ -137,14 +137,18 @@ def _check_backend_contracts(
     expected_counts = {
         "language-construct": 5,
         "dedicated-syntax": 1,
-        # Four hash_* plus the 34 PHP-visible curl_*, all injected-prelude routes.
-        # The curl half exists only because the canonical documentation
-        # configuration is `--features curl` (see elephc_builtins/extract.py).
-        "prelude": 38,
+        # MEASURED on the merged catalogue against a base of 4 prelude routes / 13 non-registry
+        # contracts: neither side's own number survives. This branch adds `dir()`, the 14 `gz*`
+        # stream functions, `zlib_get_coding_type` and `similar_text` as elephc-PHP preludes;
+        # main adds the four hash_* and the 34 PHP-visible curl_*, the curl half existing only
+        # because the canonical documentation configuration is `--features curl` (see
+        # elephc_builtins/extract.py). Main also promoted get_object_vars out of the external
+        # surface.
+        "prelude": 58,
         "none": 3,
     }
-    if len(non_registry) != 47:
-        errors.append(f"expected 47 non-registry contracts, found {len(non_registry)}")
+    if len(non_registry) != 67:
+        errors.append(f"expected 67 non-registry contracts, found {len(non_registry)}")
     if dict(route_counts) != expected_counts:
         errors.append(
             f"non-registry AOT route counts differ: expected {expected_counts}, "

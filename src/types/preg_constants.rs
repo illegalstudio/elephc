@@ -10,15 +10,7 @@
 //! - Values match PHP's ext/pcre constants for RegexIterator and preg_split flag parity.
 
 /// PHP preg integer constants used by regex builtins and SPL regex iterators.
-pub(crate) const PREG_INT_CONSTANTS: &[(&str, i64)] = &[
-    ("PREG_PATTERN_ORDER", 1),
-    ("PREG_SET_ORDER", 2),
-    ("PREG_OFFSET_CAPTURE", 256),
-    ("PREG_UNMATCHED_AS_NULL", 512),
-    ("PREG_SPLIT_NO_EMPTY", 1),
-    ("PREG_SPLIT_DELIM_CAPTURE", 2),
-    ("PREG_SPLIT_OFFSET_CAPTURE", 4),
-];
+pub(crate) use elephc_builtin_contract::php_constants::PREG_INT_CONSTANTS;
 
 #[cfg(test)]
 mod tests {

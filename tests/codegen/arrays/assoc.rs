@@ -733,3 +733,119 @@ echo $a[null] ?? "miss";
     );
     assert_eq!(out, "miss");
 }
+
+// --- array_sum()/array_product() over hash storage ---
+//
+// php's `array_sum()`/`array_product()` walk `Z_ARRVAL_P(input)` with
+// `ZEND_HASH_FOREACH_VAL` (ext/standard/array.c) and never read a key, so hash storage
+// aggregates exactly like the indexed array of its values. The packed forms have always
+// compiled; the hash forms were refused by the EIR backend even though the checker accepted
+// them (`src/builtins/array/array_sum.rs` already returns `Int` for an `AssocArray`), which
+// made `key_preserving_sort_promotes` unable to promote an `asort()` receiver — see
+// `crate::types::key_preserving_sort_promotes`.
+
+/// `array_sum()`/`array_product()` over an INT-VALUED hash, the refusal that blocked promoting
+/// an `asort()` receiver.
+///
+/// Measured with `php -n`: `[5=>3,2=>10,9=>7]` sums to `20` and multiplies to `210`;
+/// `["x"=>3,"y"=>10]` gives `13`/`30`; a single entry `[7=>5]` gives `5`/`5`; a zero among
+/// negatives `[5=>-2,2=>0,9=>3]` gives `1`/`0`; a table grown by explicit int-key stores
+/// (`$h[10]=4; $h[3]=6;`) gives `10`/`24`; and `[5=>1000000,2=>2000000]` gives
+/// `3000000`/`2000000000000`.
+///
+/// RED before this change: `unsupported EIR backend feature: array_sum for PHP type
+/// AssocArray { key: Int, value: Int }` — the receiver never reached a runtime helper.
+#[test]
+fn test_array_sum_and_product_over_an_int_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [5 => 3, 2 => 10, 9 => 7];
+echo array_sum($a), "|", array_product($a), ";";
+$b = ["x" => 3, "y" => 10];
+echo array_sum($b), "|", array_product($b), ";";
+$c = [7 => 5];
+echo array_sum($c), "|", array_product($c), ";";
+$e = [5 => -2, 2 => 0, 9 => 3];
+echo array_sum($e), "|", array_product($e), ";";
+$h = [];
+$h[10] = 4;
+$h[3] = 6;
+echo array_sum($h), "|", array_product($h), ";";
+$i = [5 => 1000000, 2 => 2000000];
+echo array_sum($i), "|", array_product($i);
+"#,
+    );
+    assert_eq!(out, "20|210;13|30;5|5;1|0;10|24;3000000|2000000000000");
+}
+
+/// An EMPTIED int-valued hash aggregates to php's identity elements.
+///
+/// Measured with `php -n`: `$g=[5=>1]; unset($g[5]);` leaves an empty hash whose
+/// `array_sum()` is `0` and whose `array_product()` is `1` — and `var_dump(array_product([]))`
+/// prints `int(1)`, so the product of nothing is an INT one, not a float.
+///
+/// A BOOL-valued receiver is deliberately absent: `[5=>true,2=>false]` infers
+/// `AssocArray { value: Mixed }`, and `array_product()` over Mixed is refused for PACKED
+/// storage too (`array_product for PHP type Array(Mixed)`, measured on `[true,false]` and on
+/// `[1,"2",3]`). That is a pre-existing gap in both storage shapes, not one the hash receiver
+/// introduces, so it stays out of this change.
+///
+/// RED before this change: the same `array_sum for PHP type AssocArray { key: Int, value: Int }`
+/// refusal.
+#[test]
+fn test_array_sum_and_product_over_an_emptied_int_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$g = [5 => 1];
+unset($g[5]);
+echo array_sum($g), "|", array_product($g), "|", count($g);
+"#,
+    );
+    assert_eq!(out, "0|1|0");
+}
+
+/// A hash left behind by `unset()` on a packed receiver aggregates over the SURVIVING values.
+///
+/// Measured with `php -n`: `$d=[1,2,3,4]; unset($d[1]);` leaves `{"0":1,"2":3,"3":4}`, which
+/// sums to `8` and multiplies to `12` — the removed element contributes to neither.
+#[test]
+fn test_array_sum_and_product_over_a_hash_left_by_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$d = [1, 2, 3, 4];
+unset($d[1]);
+echo array_sum($d), "|", array_product($d), "|", json_encode($d);
+"#,
+    );
+    assert_eq!(out, "8|12|{\"0\":1,\"2\":3,\"3\":4}");
+}
+
+/// The hash aggregates own a TEMPORARY values array, so a loop must not leak it.
+///
+/// `array_sum()`/`array_product()` reach hash storage by materializing the values into a
+/// fresh indexed array and reusing the packed helper — the same route `implode()` takes — so
+/// the temporary has to be deep-freed around the result. Running it in a loop is what makes a
+/// single leaked block visible.
+#[test]
+fn test_hash_aggregates_leave_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    $a = [5 => 3, 2 => 10, 9 => 7];
+    $b = ["x" => 2, "y" => 4];
+    echo array_sum($a), array_product($a), array_sum($b), array_product($b);
+}
+"#,
+    );
+    assert!(
+        out.stdout.ends_with("2021068"),
+        "stdout: {} stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}

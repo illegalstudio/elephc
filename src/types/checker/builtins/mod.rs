@@ -13,6 +13,7 @@ mod callables;
 pub(crate) mod catalog;
 pub(crate) mod io;
 mod language_constructs;
+pub(crate) mod out_params;
 pub(crate) mod spl;
 
 use crate::errors::CompileError;
@@ -114,18 +115,25 @@ impl Checker {
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         let normalized_args;
+        // Which slots the NORMALIZER filled rather than the program. Empty when nothing was
+        // normalized, which reads as "the program wrote all of them" — the safe direction, since
+        // an unmarked slot is CHECKED rather than skipped.
+        let defaulted_slots;
         let args = if let Some(sig) =
             (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
-            normalized_args = self.normalize_builtin_call_args(
+            let (normalized, defaulted) = self.normalize_builtin_call_args_with_defaults(
                 &sig,
                 args,
                 span,
                 &format!("Builtin '{}'", name),
                 env,
             )?;
+            normalized_args = normalized;
+            defaulted_slots = defaulted;
             normalized_args.as_slice()
         } else {
+            defaulted_slots = Vec::new();
             args
         };
 
@@ -153,6 +161,16 @@ impl Checker {
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
             for (index, arg) in args.iter().enumerate() {
                 if !def.ref_params.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                // A slot normalization filled is a parameter the call OMITTED, which php accepts
+                // — `f(error_message: $why)` skips `$error_code` and is not an error. Only what
+                // the program actually wrote is checked, so an explicit `null` there is still
+                // refused, exactly as php refuses it.
+                //
+                // Ahead of the alias record below: a slot the caller never wrote names no local,
+                // so there is nothing there to alias.
+                if defaulted_slots.get(index).copied().unwrap_or(false) {
                     continue;
                 }
                 // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
@@ -184,6 +202,9 @@ impl Checker {
                     ),
                 ));
             }
+            // A by-reference output needs storage to write back into. Derived from the `ref(T)`
+            // declaration so the rule holds for every such builtin without being restated.
+            out_params::check_write_only_args(name, args)?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };
@@ -211,9 +232,18 @@ impl Checker {
                 def.spec.semantics.validation,
                 crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
             ) {
+                // A write-only by-ref argument is a definition, not a use, so it is not read
+                // here; its type comes from the parameter's declaration. `Mixed` stands in for
+                // the argument type the shared validators see, matching PHP's pre-call `null`.
+                let write_only = out_params::write_only_variable_args(name, args);
                 let mut arg_types = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_types.push(self.infer_type(arg, env)?);
+                for (idx, arg) in args.iter().enumerate() {
+                    if write_only.iter().any(|out| out.index == idx) {
+                        arg_types.push(PhpType::Mixed);
+                        continue;
+                    }
+                    let inferred = self.infer_type(arg, env)?;
+                    arg_types.push(null_coerced_builtin_arg_type(def, idx, inferred));
                 }
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
                     name: &builtin_key,
@@ -265,8 +295,11 @@ impl Checker {
                 // before checking its body. Pre-inferring it here would check that body
                 // once against the unhinted parameter fallback and reject valid PHP.
                 let contextual = contextual_callback_arg_positions(name);
+                // Likewise for a write-only by-ref position: reading it would reject the
+                // undeclared variable PHP's own out-parameter idiom passes there.
+                let write_only = out_params::write_only_variable_args(name, args);
                 for (idx, arg) in args.iter().enumerate() {
-                    if contextual.contains(&idx) {
+                    if contextual.contains(&idx) || write_only.iter().any(|out| out.index == idx) {
                         continue;
                     }
                     self.infer_type(arg, env)?;
@@ -287,5 +320,42 @@ impl Checker {
             return language_constructs::check(self, &builtin_key, args, span, env).map(Some);
         }
         Ok(None)
+    }
+}
+
+/// Applies php's null-to-scalar coercion to ONE builtin argument type, for validation.
+///
+/// php coerces a written `null` into a non-nullable scalar parameter of an INTERNAL function
+/// rather than refusing: `strlen(null)` and `strlen($x)` with `$x = null` both answer `int(0)`,
+/// after a `Passing null to parameter #1 ($string) of type string is deprecated` notice.
+/// MEASURED on `php -n` 8.5.6.
+///
+/// The LOWERING already knows this — `coerce_null_operands_to_builtin_params` replaces the
+/// operand with the parameter's zero value — but the checker ran first and saw a bare `Void`,
+/// so the shared validators refused the program before the coercion could happen:
+/// `error: strlen() argument must be string`. The two layers now read the same rule.
+///
+/// The conditions are the lowering's, for the same reasons it states them: a BY-REFERENCE
+/// parameter receives storage rather than a value, and a parameter php spells `?T $x = null`
+/// accepts null as a VALUE of its own rather than coercing it.
+fn null_coerced_builtin_arg_type(
+    def: &crate::builtins::registry::BuiltinDef,
+    index: usize,
+    inferred: PhpType,
+) -> PhpType {
+    if !matches!(inferred, PhpType::Void) {
+        return inferred;
+    }
+    let Some(param) = def.spec.params.get(index) else {
+        return inferred;
+    };
+    if param.by_ref
+        || matches!(param.default, Some(crate::builtins::spec::DefaultSpec::Null))
+    {
+        return inferred;
+    }
+    match crate::builtins::convert::type_spec_to_php(&param.ty) {
+        scalar @ (PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool) => scalar,
+        _ => inferred,
     }
 }

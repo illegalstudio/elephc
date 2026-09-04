@@ -134,16 +134,25 @@ fn test_error_mixed_rejected_at_array_return_boundary() {
     );
 }
 
-/// Verifies that referencing an undefined variable produces an "Undefined variable" error.
+/// Verifies that referencing an undefined variable is not a COMPILE error.
+///
+/// MEASURED on `php -n` 8.5.6: `<?php echo $x;` warns and continues, exit 0 — it has never
+/// been fatal in php 8. This asserted a refusal instead, which is what elephc used to do.
+/// The runtime half (the warning text, and the null the read yields) is
+/// `codegen::undefined_variables::test_undefined_variable_read_warns_and_yields_null`.
 #[test]
 fn test_error_undefined_variable() {
-    expect_error("<?php echo $x;", "Undefined variable: $x");
+    expect_no_error("<?php echo $x;");
 }
 
 /// Verifies that a plain self-referential assignment is not mistaken for `+=`.
+///
+/// MEASURED on `php -n` 8.5.6: `<?php $x = $x + 1;` warns once and leaves `int(1)`. The read
+/// is still an undefined one — that is what the warning says — but it is not fatal, and the
+/// runtime half is `codegen::undefined_variables::test_self_read_assignment_warns_once_and_starts_from_null`.
 #[test]
 fn test_error_plain_self_read_assignment_remains_undefined() {
-    expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
+    expect_no_error("<?php $x = $x + 1;");
 }
 
 /// Verifies that reassigning an inferred local to an incompatible type is diagnosed.
@@ -295,17 +304,6 @@ fn test_error_word_logical_missing_rhs() {
 #[test]
 fn test_error_assignment_expression_rejects_non_lvalue() {
     expect_error("<?php echo 1 = 2;", "Invalid assignment target");
-}
-
-/// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
-/// when referenced after the `&&` expression that did not execute.
-/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
-#[test]
-fn test_error_short_circuit_assignment_effect_is_not_definite() {
-    expect_error(
-        "<?php echo false && ($x = 1); echo $x;",
-        "Undefined variable: $x",
-    );
 }
 
 /// Verifies that the short ternary (`?:`) with no default expression produces an error.
@@ -824,17 +822,6 @@ fn test_error_log_too_many_args() {
     expect_error("<?php log(1, 2, 3);", "log() takes 1 or 2 arguments");
 }
 
-/// Verifies that a closure `use()` clause referencing an undefined variable is rejected.
-#[test]
-fn test_error_closure_use_undefined_variable() {
-    expect_error(
-        r#"<?php
-$fn = function() use ($undefined) { echo $undefined; };
-"#,
-        "Undefined variable in use(): $undefined",
-    );
-}
-
 // --- Pointer error tests ---
 
 /// Verifies that loose pointer comparison (`==` or `!=`) is rejected; only `===`/`!==` are allowed.
@@ -1029,20 +1016,6 @@ fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
         "<?php $r = match($argc) { 1 => 1, default => \"a\" }; echo array_sum($r);",
         "array_sum() argument must be array",
     );
-}
-
-/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
-/// tolerance is scoped to `isset`/`empty`/`unset`/`??` and nothing else.
-#[test]
-fn test_undefined_variable_read_is_still_rejected() {
-    expect_error("<?php echo $neverDefined;", "Undefined variable: $neverDefined");
-}
-
-/// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])`
-/// but not about `$a`, so the index subexpression keeps the diagnostic.
-#[test]
-fn test_null_probe_index_subexpression_still_requires_a_defined_variable() {
-    expect_error("<?php var_dump(isset($a[$b]));", "Undefined variable: $b");
 }
 
 /// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is
@@ -1274,10 +1247,16 @@ fn test_unset_then_retype_is_accepted() {
     expect_no_error("<?php $a = 1; unset($a); $a = \"ciao\"; echo $a;");
 }
 
-/// `unset` at top level kills the binding: a later read is an undefined variable.
+/// `unset` at top level kills the binding: a later read is an undefined variable — which php
+/// reports by WARNING, not by refusing the program.
+///
+/// MEASURED on `php -n` 8.5.6: `<?php $a = 1; unset($a); echo $a;` prints
+/// `Warning: Undefined variable $a` and exits 0. The kill is still real; what changed is that
+/// elephc no longer answers it with a compile error. The runtime half — the warning and the
+/// null — is `codegen::locals_retype::test_read_after_unset_warns_and_yields_null`.
 #[test]
 fn test_read_after_unset_is_undefined() {
-    expect_error("<?php $a = 1; unset($a); echo $a;", "Undefined variable");
+    expect_no_error("<?php $a = 1; unset($a); echo $a;");
 }
 
 /// Multi-arg unset kills every plain-variable binding.
@@ -1812,11 +1791,15 @@ fn test_unset_then_incompatible_assign_is_accepted_under_strict_locals() {
 }
 
 /// The other half of the same contract: the kill really did end the binding under
-/// `--strict-locals` too, so a read with no intervening assignment is the ordinary undefined-name
-/// diagnostic rather than a silently surviving `int`.
+/// `--strict-locals` too.
+///
+/// `--strict-locals` governs incompatible local RETYPES, not undefined reads, so it does not
+/// turn php's warning back into an error — `test_unset_then_incompatible_assign_is_accepted_under_strict_locals`
+/// is what the flag has to say about a killed binding. Kept as the strict-mode companion so a
+/// future change that made the flag refuse this read would be caught here.
 #[test]
 fn test_read_after_unset_still_errors_under_strict_locals() {
-    expect_error_strict("<?php $a = 1; unset($a); echo $a;", "Undefined variable");
+    expect_no_error_strict("<?php $a = 1; unset($a); echo $a;");
 }
 
 /// A compatible reassignment stays silent.

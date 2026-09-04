@@ -45,12 +45,14 @@ fn test_parser_block_recovery_collects_multiple_errors() {
     );
 }
 
-/// Verifies the type checker collects multiple errors when referencing undefined
-/// variables across consecutive `echo` statements. Uses `check_source_full` to confirm
-/// at least 2 checker errors are reported with their messages.
+/// Verifies the type checker collects multiple errors instead of stopping at the first.
+///
+/// The witness is two undefined CONSTANTS across consecutive `echo` statements. It used to be
+/// two undefined variables, which stopped being checker errors when elephc adopted PHP's
+/// semantics for them. Recovery is the property under test, not which construct fails.
 #[test]
 fn test_type_checker_recovery_collects_multiple_errors() {
-    let error = check_source_full("<?php echo $missing; echo $also_missing;").unwrap_err();
+    let error = check_source_full("<?php echo UNDEF_A; echo UNDEF_B;").unwrap_err();
     let all = error.flatten();
     assert!(
         all.len() >= 2,
@@ -142,17 +144,22 @@ fn test_failed_assignment_many_uses_single_error() {
 }
 
 /// Regression for #597: recovering a failed-assignment target must not suppress a genuinely
-/// undefined variable used later. The spread error and the real `$undefined_for_real` error
-/// are both reported, while the assigned `$s` produces no `Undefined variable` noise.
+/// broken name used later. Both the spread error and the later one are reported, while the
+/// assigned `$s` produces no diagnostic of its own.
+///
+/// The later name is an undefined CONSTANT. It used to be an undefined variable, which stopped
+/// being a checker error when elephc adopted PHP's semantics for those: a read of a name that
+/// was never assigned warns at run time and answers null. The property under test is that
+/// recovery does not swallow what follows it, so it moved to a diagnostic that still exists.
 #[test]
 fn test_failed_assignment_preserves_later_real_undefined() {
     let messages = checker_error_messages(
-        "<?php $x = 5; $s = [...$x]; echo count($s); echo $undefined_for_real;",
+        "<?php $x = 5; $s = [...$x]; echo count($s); echo UNDEFINED_FOR_REAL;",
     );
     assert_eq!(
         messages.len(),
         2,
-        "expected the spread error plus the genuine undefined-variable error, got {:?}",
+        "expected the spread error plus the genuine undefined-constant error, got {:?}",
         messages,
     );
     assert!(
@@ -161,13 +168,13 @@ fn test_failed_assignment_preserves_later_real_undefined() {
         messages,
     );
     assert!(
-        messages.iter().any(|message| message.contains("Undefined variable: $undefined_for_real")),
-        "a genuinely undefined variable must still be diagnosed, got {:?}",
+        messages.iter().any(|message| message.contains("Undefined constant: UNDEFINED_FOR_REAL")),
+        "a genuinely undefined name must still be diagnosed, got {:?}",
         messages,
     );
     assert!(
-        !messages.iter().any(|message| message.contains("Undefined variable: $s")),
-        "the recovered target must not be reported as undefined, got {:?}",
+        !messages.iter().any(|message| message.contains("$s")),
+        "the recovered target must not be reported at all, got {:?}",
         messages,
     );
 }
@@ -231,14 +238,23 @@ fn test_failed_list_unpack_targets_no_undefined_cascade() {
 }
 
 /// Regression for #597: if list destructuring cannot infer its RHS at all, all targets are still
-/// bound for recovery and only the genuinely undefined source variable is diagnosed.
+/// bound for recovery, so exactly one diagnostic comes out of the whole snippet.
+///
+/// The source is now an undefined variable that types as null rather than one that fails to
+/// type at all, so the single diagnostic is the RHS-shape one — the same one its `= 42` twin
+/// above reports. Which of the two it is does not matter to this test; that it is ONE, with no
+/// cascade from `$a` or `$b`, is the property.
+///
+/// DIVERGENCE, deliberately not asserted here: `php -n` 8.5.6 accepts this program outright,
+/// warning `Undefined variable $missing` and binding both targets to NULL. elephc refuses
+/// list unpacking from a non-array at compile time, for `null` and for `42` alike.
 #[test]
 fn test_failed_list_unpack_inference_targets_no_undefined_cascade() {
     let messages =
         checker_error_messages("<?php [$a, $b] = $missing; echo count($a); echo $b;");
     assert_eq!(
         messages,
-        vec!["Undefined variable: $missing".to_string()],
+        vec!["List unpacking requires an array on the right-hand side".to_string()],
         "failed list-unpack inference must not leave either target undefined",
     );
 }
@@ -317,22 +333,6 @@ fn test_top_level_local_does_not_seed_method_scope() {
         )
         .is_ok(),
         "ordinary top-level locals must not participate in method-local type merging",
-    );
-}
-
-/// Verifies PHP's scope boundary directly: a method cannot read an ordinary top-level local unless
-/// it declares that name global, so the checker must report the method-local read as undefined.
-#[test]
-fn test_method_cannot_read_top_level_local_without_global() {
-    let messages = checker_error_messages(
-        "<?php $value = 5; class C { public function f(): int { return $value; } }",
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("Undefined variable: $value")),
-        "method reads must not resolve ordinary top-level locals, got {:?}",
-        messages,
     );
 }
 

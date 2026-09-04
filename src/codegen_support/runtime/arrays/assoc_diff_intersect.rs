@@ -220,7 +220,7 @@ fn emit_assoc_diff_intersect_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_assoc_diff_intersect_insert");                 // scalar values need no retain
     emitter.instruction("cmp r10, 7");                                          // is the value above the heap-backed tag range?
     emitter.instruction("jg __rt_assoc_diff_intersect_insert");                 // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // load the kept heap-backed value low word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the kept heap-backed value low word where __rt_incref reads it on x86_64
     emitter.instruction("call __rt_incref");                                    // retain the kept heap-backed value for the result owner
     emitter.instruction("jmp __rt_assoc_diff_intersect_insert");                // continue to the insertion
     emitter.label("__rt_assoc_diff_intersect_persist");

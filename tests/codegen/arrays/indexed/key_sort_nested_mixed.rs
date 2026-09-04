@@ -128,12 +128,15 @@ ksort($grid[1]);
 "#,
     );
     assert!(!out.success, "scalar nested value should fail");
+    // The fatal travels on the DIAGNOSTIC stream, which is php's stdout: the harness splits
+    // that one stream into the program's own output and the diagnostics, and a program whose
+    // only output is the fatal has an EMPTY `stdout`.
     assert!(
-        out.stdout.contains("ksort()")
-            && out.stdout.contains("Argument #1")
-            && out.stdout.contains("array"),
+        out.diagnostics.contains("ksort()")
+            && out.diagnostics.contains("Argument #1")
+            && out.diagnostics.contains("array"),
         "expected a controlled ksort array TypeError, got: {}",
-        out.stdout,
+        out.diagnostics,
     );
 }
 
@@ -147,11 +150,14 @@ ksort($grid[9]);
 "#,
     );
     assert!(!out.success, "missing nested value should fail");
+    // The fatal travels on the DIAGNOSTIC stream, which is php's stdout: the harness splits
+    // that one stream into the program's own output and the diagnostics, and a program whose
+    // only output is the fatal has an EMPTY `stdout`.
     assert!(
-        out.stdout.contains("ksort()")
-            && out.stdout.contains("Argument #1")
-            && out.stdout.contains("array"),
+        out.diagnostics.contains("ksort()")
+            && out.diagnostics.contains("Argument #1")
+            && out.diagnostics.contains("array"),
         "expected a controlled ksort array TypeError, got: {}",
-        out.stdout,
+        out.diagnostics,
     );
 }

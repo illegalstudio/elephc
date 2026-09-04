@@ -689,6 +689,19 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
+    // php's STRING form prints the value and exits 0; the int form is a status and prints
+    // nothing. MEASURED on `php -n` 8.5.6.
+    if ctx.value_php_type(status)?.codegen_repr() == PhpType::Str {
+        ctx.load_string_value_to_regs(status, abi::string_result_regs(ctx.emitter).0,
+                                      abi::string_result_regs(ctx.emitter).1)?;
+        abi::emit_call_label(ctx.emitter, "__rt_vd_write");                     // the ob/web-aware sink
+        if ctx.shared.instrument.is_on() {
+            abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+            crate::codegen::frame::emit_instr_terminate(ctx);
+        }
+        abi::emit_exit(ctx.emitter, 0);
+        return Ok(());
+    }
     require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
     emit_dynamic_exit(ctx);
     Ok(())
@@ -786,6 +799,12 @@ fn lower_shell_exec_like(
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let command = expect_operand(inst, 0)?;
+    // Spawning a process empties php's stat cache. MEASURED on `php -n` 8.5.6: `shell_exec()`,
+    // `exec()`, `system()` and `passthru()` all make the next stat ask again — a `popen()`/
+    // `pclose()` pair does NOT. Anything the command did to the filesystem is invisible otherwise.
+    // Emitted BEFORE the command is materialized: the helper clobbers the result register, which
+    // by then holds the command string.
+    abi::emit_call_label(ctx.emitter, "__rt_clear_stat_cache");
     require_string(ctx.load_value_to_result(command)?.codegen_repr(), "shell command")?;
     abi::emit_call_label(ctx.emitter, "__rt_shell_exec");
     store_if_result(ctx, inst)
@@ -800,6 +819,12 @@ fn lower_direct_system_call(
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let command = expect_operand(inst, 0)?;
+    // Spawning a process empties php's stat cache. MEASURED on `php -n` 8.5.6: `shell_exec()`,
+    // `exec()`, `system()` and `passthru()` all make the next stat ask again — a `popen()`/
+    // `pclose()` pair does NOT. Anything the command did to the filesystem is invisible otherwise.
+    // Emitted BEFORE the command is materialized: the helper clobbers the result register, which
+    // by then holds the command string.
+    abi::emit_call_label(ctx.emitter, "__rt_clear_stat_cache");
     require_string(ctx.load_value_to_result(command)?.codegen_repr(), "system command")?;
     abi::emit_call_label(ctx.emitter, "__rt_cstr");
     if ctx.emitter.target.arch == Arch::X86_64 {

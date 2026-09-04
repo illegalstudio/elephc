@@ -2,7 +2,7 @@
 title: "curl_share_close()"
 description: "Closes a cURL share handle."
 sidebar:
-  order: 358
+  order: 384
 ---
 
 ## curl_share_close()

@@ -101,7 +101,7 @@ pub(super) fn static_receiver_class_name(
 }
 
 /// Resolves the declared PHP type of an object property for statement lowering.
-pub(super) fn object_property_type(
+pub(crate) fn object_property_type(
     ctx: &LoweringContext<'_, '_>,
     object: crate::ir::ValueId,
     property: &str,

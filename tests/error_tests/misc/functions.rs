@@ -574,22 +574,3 @@ fn test_error_static_closure_isset_this_property_still_rejected() {
     );
 }
 
-/// Verifies that a by-value self-capture (`use($f)`) is still rejected as
-/// undefined because the variable is not yet assigned (issue #382 guard).
-#[test]
-fn test_error_by_value_self_capture_still_undefined() {
-    expect_error(
-        "<?php $f = function() use($f) { return $f; };",
-        "Undefined variable in use()",
-    );
-}
-
-/// Verifies that a by-ref capture of a variable that is NOT the assignment
-/// target is still rejected as undefined (issue #382 guard).
-#[test]
-fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
-    expect_error(
-        "<?php $g = function() use(&$h) { return $h; };",
-        "Undefined variable in use()",
-    );
-}

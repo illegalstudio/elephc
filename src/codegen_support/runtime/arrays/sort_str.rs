@@ -17,12 +17,32 @@ use crate::codegen_support::platform::Arch;
 /// sort_str / rsort_str: insertion sort on an indexed string array (in-place).
 /// Input: AArch64 x0 / x86_64 rdi = array pointer
 pub fn emit_sort_str(emitter: &mut Emitter, reverse: bool) {
+    let label = if reverse { "__rt_rsort_str" } else { "__rt_sort_str" };
+    emit_sort_str_with(emitter, label, "__rt_strcmp", reverse);
+}
+
+/// natsort_str / natcasesort_str: the same insertion sort ordered by php's natural
+/// comparison (`__rt_natcmp` / `__rt_natcasecmp`) instead of plain byte order.
+///
+/// These permute the slots of an INDEXED array, whose keys are the slot positions
+/// `0..n-1` themselves, so the result is reindexed where php preserves keys — the sort
+/// family's tracked divergence. A hash receiver has separate key storage and is routed
+/// to `__rt_hash_natsort` / `__rt_hash_natcasesort` instead, which relink the iteration
+/// chain and reproduce php's `renumber = 0` exactly.
+pub fn emit_natsort_str(emitter: &mut Emitter) {
+    emit_sort_str_with(emitter, "__rt_natsort_str", "__rt_natcmp", false);
+    emit_sort_str_with(emitter, "__rt_natcasesort_str", "__rt_natcasecmp", false);
+}
+
+/// Emits one string insertion sort under the given label, ordered by `cmp_label`, a
+/// comparator with `__rt_strcmp`'s ABI (a ptr/len, b ptr/len in x1-x4 / rdi-rcx, signed
+/// -1/0/+1 out in x0 / rax).
+fn emit_sort_str_with(emitter: &mut Emitter, label: &str, cmp_label: &str, reverse: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_sort_str_linux_x86_64(emitter, reverse);
+        emit_sort_str_linux_x86_64(emitter, label, cmp_label, reverse);
         return;
     }
 
-    let label = if reverse { "__rt_rsort_str" } else { "__rt_sort_str" };
     let cmp_branch = if reverse { "b.ge" } else { "b.le" };
     let outer = format!("{}_outer", label);
     let inner = format!("{}_inner", label);
@@ -69,7 +89,7 @@ pub fn emit_sort_str(emitter: &mut Emitter, reverse: bool) {
     emitter.instruction("ldr x2, [x9, #8]");                                    // strcmp arg a: data[j] length
     emitter.instruction("ldr x3, [sp, #24]");                                   // strcmp arg b: keyptr
     emitter.instruction("ldr x4, [sp, #32]");                                   // strcmp arg b: keylen
-    emitter.instruction("bl __rt_strcmp");                                      // x0 = strcmp(data[j], key)
+    emitter.instruction(&format!("bl {}", cmp_label));                          // x0 = compare(data[j], key)
     emitter.instruction("cmp x0, #0");                                          // is data[j] already ordered against the key?
     emitter.instruction(&format!("{} {}", cmp_branch, insert));                 // ordered: insert the key here
     emitter.instruction("ldr x6, [sp, #40]");                                   // reload j for the shift
@@ -106,8 +126,7 @@ pub fn emit_sort_str(emitter: &mut Emitter, reverse: bool) {
 }
 
 /// Emits the Linux x86_64 array runtime helper for sort str.
-fn emit_sort_str_linux_x86_64(emitter: &mut Emitter, reverse: bool) {
-    let label = if reverse { "__rt_rsort_str" } else { "__rt_sort_str" };
+fn emit_sort_str_linux_x86_64(emitter: &mut Emitter, label: &str, cmp_label: &str, reverse: bool) {
     let cmp_jump = if reverse { "jge" } else { "jle" };
     let outer = format!("{}_outer", label);
     let inner = format!("{}_inner", label);
@@ -157,7 +176,7 @@ fn emit_sort_str_linux_x86_64(emitter: &mut Emitter, reverse: bool) {
     emitter.instruction("mov rsi, QWORD PTR [r9 + 8]");                         // strcmp arg a: data[j] length
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // strcmp arg b: keyptr
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // strcmp arg b: keylen
-    emitter.instruction("call __rt_strcmp");                                    // rax = strcmp(data[j], key)
+    emitter.instruction(&format!("call {}", cmp_label));                        // rax = compare(data[j], key)
     emitter.instruction("cmp rax, 0");                                          // is data[j] already ordered against the key?
     emitter.instruction(&format!("{} {}", cmp_jump, insert));                   // ordered: insert the key here
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload j for the shift

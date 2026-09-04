@@ -100,8 +100,7 @@ pub(super) fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
 
     emitter.label("__elephc_eval_value_object_clone_shallow_retain_x86");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // preserve property index across the retain helper
-    emitter.instruction("mov rdi, rax");                                        // pass the copied heap payload to the retain helper
-    emitter.instruction("call __rt_incref");                                    // retain the shared property payload for the cloned object
+    emitter.instruction("call __rt_incref");                                    // retain the shared property payload for the cloned object, which the copy above already left in rax where the helper reads it
 
     emitter.label("__elephc_eval_value_object_clone_shallow_next_x86");
     emitter.instruction("add QWORD PTR [rbp - 40], 1");                         // advance to the next declared-property slot

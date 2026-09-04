@@ -531,17 +531,29 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
-PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
+#
+# An area maps to a LIST because an area does not own a prelude: `Area::Io` is `dir()` in
+# dir_prelude.rs and the `gz*` family in gz_prelude.rs, and `Area::String` is the four `hash_*`,
+# `gzdecode`/`gzencode`/`zlib_*` and `similar_text` in three different ones. Candidates are tried
+# in order and the first one that DECLARES the name wins, so adding a prelude to an existing area
+# is an append here, not a rewrite.
+SURFACES = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
+PRELUDE_SOURCES: dict[str, tuple[tuple[str, str, str], ...]] = {
     "curl": (
-        "curl_prelude.rs",
-        "curl",
-        "crates/elephc-builtin-contract/src/catalog_curl.rs",
+        (
+            "curl_prelude.rs",
+            "curl",
+            "crates/elephc-builtin-contract/src/catalog_curl.rs",
+        ),
     ),
-    # The four hash_* contracts (`Area::String`).
     "string": (
-        "hash_prelude.rs",
-        "hash",
-        "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+        ("hash_prelude.rs", "hash", SURFACES),
+        ("gz_prelude.rs", "gz", SURFACES),
+        ("similar_text_prelude.rs", "similar_text", SURFACES),
+    ),
+    "io": (
+        ("gz_prelude.rs", "gz", SURFACES),
+        ("dir_prelude.rs", "dir", SURFACES),
     ),
 }
 
@@ -592,27 +604,34 @@ def resolve_non_registry_lowering(
     lowering = LoweringInfo(sig_file=contract_file)
     kind = aot_support.get("kind")
     if kind == "prelude":
-        try:
-            source, label, sig_file = PRELUDE_SOURCES[area]
-        except KeyError:
+        candidates = PRELUDE_SOURCES.get(area)
+        if candidates is None:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
                 f"PRELUDE_SOURCES does not map to a prelude. Add the area (see the constant's "
                 f"comment) — falling back to another area's prelude would publish a page "
                 f"pointing at the wrong file with the wrong prose."
-            ) from None
-        lowering.sig_file = sig_file
-        prelude = repo / "src" / source
-        match = find_prelude_declaration(read(prelude), canonical)
-        if match is None:
+            )
+        found = None
+        for source, label, sig_file in candidates:
+            prelude = repo / "src" / source
+            body = read(prelude)
+            match = find_prelude_declaration(body, canonical)
+            if match is not None:
+                found = (prelude, label, sig_file, body[: match.start()].count("\n") + 1)
+                break
+        if found is None:
+            named = ", ".join(f"src/{source}" for source, _, _ in candidates)
             raise ValueError(
-                f"prelude-provided builtin {canonical!r} is not declared by src/{source}. "
-                f"Its contract area {area!r} maps there, so either the contract's area or "
+                f"prelude-provided builtin {canonical!r} is declared by none of {named}. "
+                f"Its contract area {area!r} maps to those, so either the contract's area or "
                 f"PRELUDE_SOURCES is wrong; a line-1 fallback would ship a page linking to "
                 f"an unrelated place in the file."
             )
+        prelude, label, sig_file, line = found
+        lowering.sig_file = sig_file
         lowering.codegen_file = str(prelude.relative_to(repo))
-        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1
+        lowering.codegen_line = line
         lowering.codegen_function = canonical
         lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
     elif kind == "language-construct":

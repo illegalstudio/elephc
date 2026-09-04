@@ -8,15 +8,16 @@ sidebar:
 ## glob()
 
 ```php
-function glob(string $pattern): array
+function glob(string $pattern, int $flags = 0): mixed
 ```
 
 Finds pathnames matching a pattern.
 
 **Parameters**:
 - `$pattern` (`string`)
+- `$flags` (`int`), default `0`, optional
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 

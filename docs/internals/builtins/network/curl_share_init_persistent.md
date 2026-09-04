@@ -2,7 +2,7 @@
 title: "curl_share_init_persistent() — internals"
 description: "Compiler internals for curl_share_init_persistent(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 361
+  order: 387
 ---
 
 ## `curl_share_init_persistent()` — internals

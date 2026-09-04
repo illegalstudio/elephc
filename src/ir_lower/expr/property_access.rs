@@ -109,6 +109,23 @@ pub(super) fn lower_property_get_from_value(
     if op == Op::NullsafePropGet && value_is_definitely_null(ctx, object.value) {
         return lower_boxed_null(ctx, expr);
     }
+    // An ORDINARY read through a null receiver is not an error in PHP: it raises
+    // `Attempt to read property "p" on null` and answers NULL — MEASURED on `php -n` 8.5.6,
+    // where `$o = null; var_dump($o->name);` prints the warning and then `NULL`. elephc refused
+    // the program with `Property access requires an object or typed pointer`.
+    //
+    // `?->` is the construct for reaching through a null in silence and is handled above;
+    // `isset()`, `empty()` and `??` are the other silent ones, and they lower their chain inside
+    // a probe spine, which is what `in_null_probe` reads.
+    if op == Op::PropGet && value_is_definitely_null(ctx, object.value) {
+        // Inside a probe PHP answers the same null and raises NOTHING, so the read must not
+        // reach `prop_get` either — the backend has no null-receiver form and refuses it.
+        if ctx.in_null_probe() {
+            return lower_boxed_null(ctx, expr);
+        }
+        let message = format!("Warning: Attempt to read property \"{property}\" on null\n");
+        return ctx.emit_warned_null(&message, Some(expr.span));
+    }
     // Route a read of a get-hooked property to its synthetic accessor, except inside that property's
     // own accessor, where `$this->prop` must read the raw backing slot to avoid infinite recursion.
     // A nullsafe read (`$obj?->prop`) routes to a nullsafe call so the null short-circuit is kept.

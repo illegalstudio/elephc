@@ -41,15 +41,6 @@ fn test_eval_barrier_allows_dynamic_function_call() {
         .expect("eval-declared function calls after the barrier should type-check");
 }
 
-/// Verifies eval does not hide undefined-variable reads that happen before the barrier.
-#[test]
-fn test_eval_barrier_does_not_hide_prior_undefined_variable() {
-    expect_error(
-        "<?php echo $created; eval('$created = 1;');",
-        "Undefined variable: $created",
-    );
-}
-
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
 #[test]
 fn test_error_undefined_constant() {

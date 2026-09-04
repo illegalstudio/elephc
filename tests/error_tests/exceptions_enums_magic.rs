@@ -544,12 +544,3 @@ fn test_error_enum_method_return_type_mismatch() {
     );
 }
 
-/// Verifies that an undefined variable referenced inside an enum method body is reported.
-/// Regression test — enum method bodies previously skipped name/variable checking.
-#[test]
-fn test_error_enum_method_undefined_variable() {
-    expect_error(
-        "<?php enum E { case A; public function f(): int { return $missing; } }",
-        "Undefined variable: $missing",
-    );
-}

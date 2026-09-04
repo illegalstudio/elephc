@@ -223,14 +223,48 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decbin",
     "dechex",
     "decoct",
+    // The compiler serves `dir()` through the `Directory` class prelude, which eval does not
+    // parse: the interpreter would need a Directory cell kind with property reads and method
+    // dispatch of its own, the way `hash_init()` needed one for `HashContext`.
+    "dir",
+    // The `gz*` stream surface is a compiler-injected prelude, so `eval()` has no binding for
+    // it: MEASURED, `eval('gzopen(...)')` in a program that never calls one itself reports
+    // "eval() fragment uses an unsupported construct". `dir` above is the same case.
+    "gzclose",
+    "gzdecode",
+    "gzencode",
+    "gzeof",
+    "gzfile",
+    "gzgetc",
+    "gzgets",
+    "gzopen",
+    "gzpassthru",
+    "gzputs",
+    "gzread",
+    "gzrewind",
+    "gzseek",
+    "gztell",
+    "gzwrite",
     "hexdec",
+    // php 8.4's response-header pair reads engine state the interpreter does not own: the
+    // compiler answers both from `_http_resp_header_end` / `_http_resp_buf`, which are
+    // host-runtime symbols the eval value model has no cell kind for.
+    "http_clear_last_response_headers",
+    "http_get_last_response_headers",
     "join",
     "octdec",
+    "readgzfile",
     "serialize",
+    // The AOT engine is an injected elephc-PHP prelude, not a runtime helper, so there is nothing
+    // for a Magician binding to route to until it grows its own copy of php's recursion.
+    "similar_text",
     "strncasecmp",
     "strncmp",
     "substr_count",
     "unserialize",
+    "zlib_decode",
+    "zlib_encode",
+    "zlib_get_coding_type",
     "zval_free",
     "zval_pack",
     "zval_type",
@@ -277,18 +311,20 @@ mod tests {
             }
         }
 
+        // ⚠️ Every number below is a COUNT of the merged catalogue against a base of
+        // 484/39/31/541/10: NEITHER side's own totals survive, so each one is MEASURED on the
+        // merge result rather than carried over. This branch added the 14 `gz*` contracts,
+        // `zlib_get_coding_type`, `similar_text` and the internal `__elephc_deprecated`; main
+        // added BCMath, the ten iconv contracts, the forty-three internal `__elephc_curl_*`
+        // entry points, and PROMOTES get_object_vars out of the external surface.
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(eval_registry, 484 + curl_surface);
-        assert_eq!(eval_internal, 82);
-        assert_eq!(eval_pending, 31);
-        // Main's BCMath registry adds fourteen AOT contracts; this branch also
-        // promotes get_object_vars from an external surface into the registry and
-        // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
-        // entry points.
-        assert_eq!(aot_registry, 584);
-        assert_eq!(aot_external, 10 + curl_surface);
+        assert_eq!(eval_registry, 494 + curl_surface);
+        assert_eq!(eval_internal, 84);
+        assert_eq!(eval_pending, 54);
+        assert_eq!(aot_registry, 599);
+        assert_eq!(aot_external, 30 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -336,8 +372,10 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 463 + curl_surface);
-        assert_eq!(unsupported, 113);
+        assert_eq!(interpreter_adapter, 473 + curl_surface);
+        // +1 of this branch's share: the internal `__elephc_deprecated`, which the interpreter
+        // does not bind.
+        assert_eq!(unsupported, 138);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

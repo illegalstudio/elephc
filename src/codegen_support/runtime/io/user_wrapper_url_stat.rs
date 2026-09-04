@@ -25,6 +25,7 @@
 //!   regular elephc method ABI (`$this`, then a string pair, then the int flag).
 
 use super::MIN_WRAPPER_SCHEME_LEN;
+use crate::codegen_support::runtime::data::US_CACHE_PATH_CAP;
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Byte offset of the url_stat method pointer in the per-class user-wrapper
@@ -46,6 +47,82 @@ pub fn emit_user_wrapper_url_stat(emitter: &mut Emitter) {
     emit_user_wrapper_url_stat_aarch64(emitter);
 }
 
+/// Emits `__rt_clear_stat_cache`: empties both stat slots, releasing what they held.
+///
+/// This is the ONLY thing that empties them. MEASURED on `php -n` 8.5.6: `unlink()`, `rename()`,
+/// `touch()`, `chmod()`, `mkdir()` and a write through `fopen()` all leave the cached answer
+/// standing, and `clearstatcache()` clears it whatever its arguments say — a targeted path does
+/// not spare an unrelated one.
+pub fn emit_clear_stat_cache(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: clear_stat_cache ---");
+    emitter.label_global("__rt_clear_stat_cache");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");
+            emitter.instruction("stp x29, x30, [sp, #0]");
+            emitter.instruction("mov x29, sp");
+            for (len_sym, box_sym, label) in [
+                ("_us_cache_stat_len", "_us_cache_stat_box", "__rt_csc_stat_done"),
+                ("_us_cache_lstat_len", "_us_cache_lstat_box", "__rt_csc_lstat_done"),
+            ] {
+                abi::emit_symbol_address(emitter, "x9", len_sym);
+                emitter.instruction("str xzr, [x9]");                           // the slot answers for nothing
+                abi::emit_symbol_address(emitter, "x9", box_sym);
+                emitter.instruction("ldr x0, [x9]");
+                emitter.instruction(&format!("cbz x0, {}", label));
+                emitter.instruction("str xzr, [x9]");                           // cleared BEFORE the release, so nothing can see a freed box
+                emitter.instruction("bl __rt_decref_any");                      // the reference the slot itself held
+                emitter.label(label);
+            }
+            emitter.instruction("ldp x29, x30, [sp, #0]");
+            emitter.instruction("add sp, sp, #16");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            for (len_sym, box_sym, label) in [
+                ("_us_cache_stat_len", "_us_cache_stat_box", "__rt_csc_stat_done_x86"),
+                ("_us_cache_lstat_len", "_us_cache_lstat_box", "__rt_csc_lstat_done_x86"),
+            ] {
+                abi::emit_symbol_address(emitter, "r10", len_sym);
+                emitter.instruction("mov QWORD PTR [r10], 0");                  // the slot answers for nothing
+                abi::emit_symbol_address(emitter, "r10", box_sym);
+                emitter.instruction("mov rax, QWORD PTR [r10]");
+                emitter.instruction("test rax, rax");
+                emitter.instruction(&format!("jz {}", label));
+                emitter.instruction("mov QWORD PTR [r10], 0");                  // cleared BEFORE the release
+                emitter.instruction("call __rt_decref_any");                    // the reference the slot itself held
+                emitter.label(label);
+            }
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
+/// Picks the stat-cache slot a query belongs to, leaving its three symbols in x13/x14/x15.
+///
+/// The slot is three INDEPENDENT `.comm` symbols — length, path buffer, box — and nothing orders
+/// them in memory, so each is addressed by name rather than by an offset from the first. Both the
+/// lookup and the fill call this, with their own label names, because the fill runs after calls
+/// that clobber every scratch register.
+fn emit_select_stat_slot(emitter: &mut Emitter, link_label: &str, chosen_label: &str) {
+    emitter.instruction("ldr x9, [sp, #32]");                                   // the flags this query asked with
+    emitter.instruction("and x9, x9, #1");                                      // bit 0 is php's STREAM_URL_STAT_LINK
+    emitter.instruction(&format!("cbnz x9, {}", link_label));                   // is_link()/lstat() keep their own slot
+    abi::emit_symbol_address(emitter, "x13", "_us_cache_stat_len");
+    abi::emit_symbol_address(emitter, "x14", "_us_cache_stat_path");
+    abi::emit_symbol_address(emitter, "x15", "_us_cache_stat_box");
+    emitter.instruction(&format!("b {}", chosen_label));
+    emitter.label(link_label);
+    abi::emit_symbol_address(emitter, "x13", "_us_cache_lstat_len");
+    abi::emit_symbol_address(emitter, "x14", "_us_cache_lstat_path");
+    abi::emit_symbol_address(emitter, "x15", "_us_cache_lstat_box");
+    emitter.label(chosen_label);
+}
+
 /// AArch64 implementation of `__rt_user_wrapper_url_stat`.
 ///
 /// Inputs: x0 = path pointer, x1 = path length, x2 = `url_stat` flags.
@@ -63,6 +140,51 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #16]");                                   // save the path pointer across the helper calls
     emitter.instruction("str x1, [sp, #24]");                                   // save the path length across the helper calls
     emitter.instruction("str x2, [sp, #32]");                                   // save the url_stat flags across the helper calls
+
+    // -- php's stat cache: one slot for LINK queries, one for the rest --
+    //
+    // MEASURED on `php -n` 8.5.6: `filesize()`, `file_exists()`, `is_dir()`, `is_file()` and
+    // `filemtime()` on one path call `url_stat()` ONCE between them. `is_link()`/`lstat()` do not
+    // share that slot — `filesize()` then `is_link()` calls it twice. Nothing but
+    // `clearstatcache()` empties either: not `unlink()`, `rename()`, `touch()`, `chmod()`, or a
+    // write through `fopen()` — all measured, all leave the cached answer standing.
+    //
+    // A cached path was a wrapper path when it went in, so a hit skips the scheme scan entirely.
+    emit_select_stat_slot(emitter, "__rt_uus_cache_link", "__rt_uus_cache_chosen");
+    emitter.instruction("ldr x9, [x13]");                                       // the length it currently answers for
+    emitter.instruction("cbz x9, __rt_uus_scan_start");                         // empty slot
+    emitter.instruction("cmp x9, x1");                                          // same length as the path asked about?
+    emitter.instruction("b.ne __rt_uus_evict");
+    emitter.instruction("mov x10, #0");                                         // compare the bytes themselves
+    emitter.label("__rt_uus_cache_cmp");
+    emitter.instruction("cmp x10, x9");
+    emitter.instruction("b.hs __rt_uus_cache_hit");                             // every byte matched
+    emitter.instruction("ldrb w11, [x0, x10]");
+    emitter.instruction("ldrb w12, [x14, x10]");
+    emitter.instruction("cmp w11, w12");
+    emitter.instruction("b.ne __rt_uus_evict");                                 // a different path replaces this one
+    emitter.instruction("add x10, x10, #1");
+    emitter.instruction("b __rt_uus_cache_cmp");
+
+    // A miss is just a miss. Emptying the slot belongs to the moment ANOTHER stat takes it, which
+    // is not here: a wrapper path that resolves fills the slot itself, one that answers FALSE puts
+    // nothing there, and a plain path is handled at the no-match exit below.
+    emitter.label("__rt_uus_evict");
+    emitter.instruction("b __rt_uus_scan_start");
+
+    emitter.label("__rt_uus_cache_hit");
+    abi::emit_symbol_address(emitter, "x10", "_url_stat_matched");
+    emitter.instruction("mov w9, #1");
+    emitter.instruction("strb w9, [x10]");                                      // a cached path matched a wrapper when it went in
+    emitter.instruction("ldr x0, [x15]");                                       // the box the slot owns
+    emitter.instruction("str x0, [sp, #56]");
+    emitter.instruction("bl __rt_incref");                                      // every caller releases what it gets its own
+    emitter.instruction("ldr x0, [sp, #56]");
+    emitter.instruction("b __rt_uus_ret");
+
+    emitter.label("__rt_uus_scan_start");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the probe above walked the path pointer
+    emitter.instruction("ldr x1, [sp, #24]");
 
     // -- scan the path for the "://" scheme separator (x0=ptr, x1=len) --
     emitter.instruction(&format!("mov x9, #{}", MIN_WRAPPER_SCHEME_LEN));       // scheme scan index: a one-letter scheme is never a wrapper
@@ -88,10 +210,11 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uus_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x10");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uus_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "x12");
+    emitter.instruction("cmp x11, x12");                                        // checked every allocated wrapper slot?
     emitter.instruction("b.ge __rt_uus_nomatch");                               // no registered wrapper matched the scheme
     emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
@@ -121,8 +244,13 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #16]");                                  // wrapper class name pointer from the registry slot
     emitter.instruction("ldr x2, [x12, #24]");                                  // wrapper class name length from the registry slot
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the wrapper class → x0 = obj, or 0 when unknown
+    emitter.instruction("bl __rt_user_wrapper_construct");                      // php constructs before it asks
     emitter.instruction("cbz x0, __rt_uus_false");                              // unknown class → boxed false
     emitter.instruction("str x0, [sp, #48]");                                   // save the throwaway wrapper instance
+    // php assigns `$context` to this instance too, so a class that declares no such property is
+    // deprecated here exactly as it is for `fopen()` — MEASURED, once per instantiation.
+    emitter.instruction("bl __rt_wrapper_context_notice");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the notice clobbers nothing it needs back
 
     // -- look up url_stat in the per-class user-wrapper vtable (slot 9) --
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
@@ -142,9 +270,105 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the throwaway wrapper object
     emitter.instruction("bl __rt_decref_any");                                  // free the throwaway wrapper instance
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload the boxed result for return
+
+    // -- fill the slot this query belongs to --
+    // A wrapper that reports the path ABSENT is not cached: measured, php asks again every time.
+    emitter.instruction("ldr x9, [x0]");                                        // the boxed runtime tag
+    emitter.instruction("cmp x9, #3");                                          // php false: the path is not there
+    emitter.instruction("b.eq __rt_uus_ret");
+    emitter.instruction("ldr x1, [sp, #24]");                                   // the path length
+    emitter.instruction(&format!("cmp x1, #{}", US_CACHE_PATH_CAP));
+    emitter.instruction("b.hi __rt_uus_ret");                                   // too long for the slot: correct, only slower
+    emit_select_stat_slot(emitter, "__rt_uus_fill_link", "__rt_uus_fill_chosen");
+    emitter.instruction("str xzr, [x13]");                                      // the slot answers for nothing while it is rebuilt
+    emitter.instruction("ldr x9, [x15]");                                       // whatever it answered with before
+    emitter.instruction("cbz x9, __rt_uus_cache_fill");
+    emitter.instruction("mov x0, x9");
+    emitter.instruction("bl __rt_decref_any");                                  // the slot's own reference goes with it
+    emitter.instruction("ldr x0, [sp, #56]");                                   // the new box, saved across that release
+    emitter.label("__rt_uus_cache_fill");
+    emitter.instruction("bl __rt_incref");                                      // the slot holds one reference of its own
+    emitter.instruction("ldr x0, [sp, #56]");
+    emit_select_stat_slot(emitter, "__rt_uus_fill2_link", "__rt_uus_fill2_chosen");
+    emitter.instruction("str x0, [x15]");                                       // the box the slot now answers with
+    emitter.instruction("ldr x1, [sp, #16]");                                   // copy the path in: the caller's may be freed
+    emitter.instruction("ldr x2, [sp, #24]");
+    emitter.instruction("mov x10, #0");
+    emitter.label("__rt_uus_cache_copy");
+    emitter.instruction("cmp x10, x2");
+    emitter.instruction("b.hs __rt_uus_cache_copied");
+    emitter.instruction("ldrb w11, [x1, x10]");
+    emitter.instruction("strb w11, [x14, x10]");
+    emitter.instruction("add x10, x10, #1");
+    emitter.instruction("b __rt_uus_cache_copy");
+    emitter.label("__rt_uus_cache_copied");
+    emitter.instruction("str x2, [x13]");                                       // published LAST: a length is what makes the slot live
+
+    // -- a LINK query that found something that is NOT a link fills the ordinary slot too --
+    //
+    // MEASURED: `lstat()` then `stat()` on the same path calls `url_stat` ONCE, but `is_link()`
+    // then `filesize()` on a REAL symlink calls it TWICE. php can answer an ordinary stat from an
+    // lstat result exactly when the thing is not a link. Filling both slots here reproduces that
+    // from the fill side alone, so the lookup stays one probe.
+    emitter.instruction("ldr x9, [sp, #32]");                                   // the flags this query asked with
+    emitter.instruction("and x9, x9, #1");
+    emitter.instruction("cbz x9, __rt_uus_cache_done");                         // an ordinary query already filled its own slot
+    emitter.instruction("ldr x0, [sp, #56]");                                   // the boxed stat array, borrowed
+    abi::emit_symbol_address(emitter, "x1", "_stat_key_mode");
+    emitter.instruction("mov x2, #4");                                          // strlen("mode")
+    emitter.instruction("bl __rt_uusf_read");                                   // x0 = mode, x1 = was it there and an int
+    emitter.instruction("cbz x1, __rt_uus_cache_done");                         // no mode: cannot tell, so do not share
+    // Hex, not a leading zero: an assembler is free to read `0170000` as decimal, and S_IFMT
+    // silently becoming 120000 would make every entry look like a non-link.
+    emitter.instruction("and x0, x0, #0xF000");                                 // S_IFMT
+    emitter.instruction("mov x9, #0xA000");                                     // S_IFLNK
+    emitter.instruction("cmp x0, x9");
+    emitter.instruction("b.eq __rt_uus_cache_done");                            // a real link: the ordinary slot must ask again
+    emitter.label("__rt_uus_fill_both");
+    emitter.instruction("ldr x0, [sp, #56]");
+    emitter.instruction("bl __rt_incref");                                      // the second slot holds a reference of its own
+    abi::emit_symbol_address(emitter, "x13", "_us_cache_stat_len");
+    emitter.instruction("str xzr, [x13]");                                      // it answers for nothing while it is rebuilt
+    abi::emit_symbol_address(emitter, "x15", "_us_cache_stat_box");
+    emitter.instruction("ldr x9, [x15]");                                       // whatever it answered with before
+    emitter.instruction("cbz x9, __rt_uus_both_fill");
+    emitter.instruction("mov x0, x9");
+    emitter.instruction("bl __rt_decref_any");
+    emitter.label("__rt_uus_both_fill");
+    emitter.instruction("ldr x0, [sp, #56]");
+    abi::emit_symbol_address(emitter, "x13", "_us_cache_stat_len");
+    abi::emit_symbol_address(emitter, "x14", "_us_cache_stat_path");
+    abi::emit_symbol_address(emitter, "x15", "_us_cache_stat_box");
+    emitter.instruction("str x0, [x15]");
+    emitter.instruction("ldr x1, [sp, #16]");
+    emitter.instruction("ldr x2, [sp, #24]");
+    emitter.instruction("mov x10, #0");
+    emitter.label("__rt_uus_both_copy");
+    emitter.instruction("cmp x10, x2");
+    emitter.instruction("b.hs __rt_uus_both_copied");
+    emitter.instruction("ldrb w11, [x1, x10]");
+    emitter.instruction("strb w11, [x14, x10]");
+    emitter.instruction("add x10, x10, #1");
+    emitter.instruction("b __rt_uus_both_copy");
+    emitter.label("__rt_uus_both_copied");
+    emitter.instruction("str x2, [x13]");                                       // published LAST, as above
+
+    // Every exit from the fill comes through here: the mode read above left the MODE in x0, and
+    // the common return path hands back whatever x0 holds.
+    emitter.label("__rt_uus_cache_done");
+    emitter.instruction("ldr x0, [sp, #56]");                                   // the caller's own reference
     emitter.instruction("b __rt_uus_ret");                                      // share the common return path
 
+    // -- the class does not implement url_stat: warn the way php does, then box false --
+    // The caller's name was published by the lowering; every stat builtin reaches this one helper.
     emitter.label("__rt_uus_false_obj");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the wrapper object
+    emitter.instruction("ldr x0, [x0]");                                        // class_id stored at its head
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_head");
+    emitter.instruction("ldp x1, x2, [x9]");                                    // the caller's half
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_tail");
+    emitter.instruction("ldp x3, x4, [x9]");                                    // the method's half
+    emitter.instruction("bl __rt_wrapper_missing_hook_warning");
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the throwaway wrapper object
     emitter.instruction("bl __rt_decref_any");                                  // free it before falling through to boxed false
     emitter.label("__rt_uus_false");
@@ -153,6 +377,29 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_uus_ret");                                      // share the common return path
 
     emitter.label("__rt_uus_nomatch");
+
+    // -- a PLAIN path takes php's one slot, unless it is a query that never fills it --
+    //
+    // php holds ONE entry for the whole process: MEASURED, `filesize()` on a real file makes the
+    // next wrapper query ask again. `file_exists()` and the access predicates do NOT — they answer
+    // from `access(2)` and put nothing in the slot, so they empty nothing either. `_us_gentle`
+    // says which kind this is; see `emit_publish_missing_hook_message`.
+    //
+    // A plain stat that FAILS also leaves php's slot alone, and this cannot see that — the
+    // filesystem call happens in the caller. So a failing plain stat still evicts here: one extra
+    // question, never a stale answer.
+    abi::emit_symbol_address(emitter, "x9", "_us_gentle");
+    emitter.instruction("ldr x9, [x9]");
+    emitter.instruction("cbnz x9, __rt_uus_plain_kept");                        // it fills nothing, so it empties nothing
+    emit_select_stat_slot(emitter, "__rt_uus_plain_link", "__rt_uus_plain_chosen");
+    emitter.label("__rt_uus_plain_evict");
+    emitter.instruction("str xzr, [x13]");                                      // the slot answers for nothing
+    emitter.instruction("ldr x0, [x15]");
+    emitter.instruction("cbz x0, __rt_uus_plain_kept");
+    emitter.instruction("str xzr, [x15]");                                      // cleared BEFORE the release
+    emitter.instruction("bl __rt_decref_any");                                  // the reference the slot held
+    emitter.label("__rt_uus_plain_kept");
+
     abi::emit_symbol_address(emitter, "x10", "_url_stat_matched");
     emitter.instruction("strb wzr, [x10]");                                     // _url_stat_matched = 0 — caller falls back to the real filesystem
     emitter.instruction("mov x0, #0");                                          // return 0; the caller ignores it when the flag is 0
@@ -161,6 +408,22 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the boxed Mixed result (or 0 on no match)
+}
+
+/// x86_64 twin of [`emit_select_stat_slot`]; the three symbols land in r13/r14/r15.
+fn emit_select_stat_slot_x86(emitter: &mut Emitter, link_label: &str, chosen_label: &str) {
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // the flags this query asked with
+    emitter.instruction("and r9, 1");                                           // bit 0 is php's STREAM_URL_STAT_LINK
+    emitter.instruction(&format!("jnz {}", link_label));                        // is_link()/lstat() keep their own slot
+    abi::emit_symbol_address(emitter, "r13", "_us_cache_stat_len");
+    abi::emit_symbol_address(emitter, "r14", "_us_cache_stat_path");
+    abi::emit_symbol_address(emitter, "r15", "_us_cache_stat_box");
+    emitter.instruction(&format!("jmp {}", chosen_label));
+    emitter.label(link_label);
+    abi::emit_symbol_address(emitter, "r13", "_us_cache_lstat_len");
+    abi::emit_symbol_address(emitter, "r14", "_us_cache_lstat_path");
+    abi::emit_symbol_address(emitter, "r15", "_us_cache_lstat_box");
+    emitter.label(chosen_label);
 }
 
 /// x86_64 implementation of `__rt_user_wrapper_url_stat`.
@@ -180,6 +443,41 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the path pointer across the helper calls
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the path length across the helper calls
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the url_stat flags across the helper calls
+
+    // -- php's stat cache; see the AArch64 twin for the whole measured rule --
+    emit_select_stat_slot_x86(emitter, "__rt_uus_cache_link_x86", "__rt_uus_cache_chosen_x86");
+    emitter.instruction("mov r9, QWORD PTR [r13]");                             // the length it currently answers for
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_uus_scan_start_x86");                          // empty slot
+    emitter.instruction("cmp r9, rsi");                                         // same length as the path asked about?
+    emitter.instruction("jne __rt_uus_evict_x86");
+    emitter.instruction("xor r10, r10");                                        // compare the bytes themselves
+    emitter.label("__rt_uus_cache_cmp_x86");
+    emitter.instruction("cmp r10, r9");
+    emitter.instruction("jae __rt_uus_cache_hit_x86");                          // every byte matched
+    emitter.instruction("movzx r11d, BYTE PTR [rdi + r10]");
+    emitter.instruction("movzx r12d, BYTE PTR [r14 + r10]");
+    emitter.instruction("cmp r11b, r12b");
+    emitter.instruction("jne __rt_uus_evict_x86");                              // a different path replaces this one
+    emitter.instruction("inc r10");
+    emitter.instruction("jmp __rt_uus_cache_cmp_x86");
+
+    // See the AArch64 twin: a miss is just a miss.
+    emitter.label("__rt_uus_evict_x86");
+    emitter.instruction("jmp __rt_uus_scan_start_x86");
+
+    emitter.label("__rt_uus_cache_hit_x86");
+    abi::emit_symbol_address(emitter, "r10", "_url_stat_matched");
+    emitter.instruction("mov BYTE PTR [r10], 1");                               // a cached path matched a wrapper when it went in
+    emitter.instruction("mov rax, QWORD PTR [r15]");                            // the box the slot owns
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");
+    emitter.instruction("call __rt_incref");                                    // every caller releases what it gets its own
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
+    emitter.instruction("jmp __rt_uus_ret_x86");
+
+    emitter.label("__rt_uus_scan_start_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the probe above walked these
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
     emitter.instruction("mov rax, rdi");                                        // path pointer → scan base register
     emitter.instruction("mov rdx, rsi");                                        // path length → scan bound register
 
@@ -207,10 +505,11 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uus_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
+    super::emit_load_table_base(emitter, "r10");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uus_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "r12");
+    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_uus_nomatch_x86");                            // no registered wrapper matched the scheme
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
@@ -242,9 +541,15 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r12 + 16]");                       // wrapper class name pointer from the registry slot
     emitter.instruction("mov rdx, QWORD PTR [r12 + 24]");                       // wrapper class name length (new_by_name reads rax/rdx)
     emitter.instruction("call __rt_new_by_name");                               // instantiate the wrapper class → rax = obj, or 0 when unknown
+    emitter.instruction("call __rt_user_wrapper_construct");                    // php constructs before it asks
     emitter.instruction("test rax, rax");                                       // unknown class?
     emitter.instruction("jz __rt_uus_false_x86");                               // unknown class → boxed false
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the throwaway wrapper instance
+    // php assigns `$context` to this instance too, so a class that declares no such property is
+    // deprecated here exactly as it is for `fopen()` — MEASURED, once per instantiation.
+    emitter.instruction("mov rdi, rax");
+    emitter.instruction("call __rt_wrapper_context_notice");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the instance the lookup below reads
 
     // -- look up url_stat in the per-class user-wrapper vtable (slot 9) --
     emitter.instruction("mov r9, QWORD PTR [rax]");                             // class_id stored at the head of every wrapper object
@@ -265,9 +570,97 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free the throwaway wrapper instance
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed result for return
+
+    // -- fill the slot this query belongs to; see the AArch64 twin --
+    emitter.instruction("mov r9, QWORD PTR [rax]");                             // the boxed runtime tag
+    emitter.instruction("cmp r9, 3");                                           // php false: the path is not there
+    emitter.instruction("je __rt_uus_ret_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the path length
+    emitter.instruction(&format!("cmp rsi, {}", US_CACHE_PATH_CAP));
+    emitter.instruction("ja __rt_uus_ret_x86");                                 // too long for the slot
+    emit_select_stat_slot_x86(emitter, "__rt_uus_fill_link_x86", "__rt_uus_fill_chosen_x86");
+    emitter.instruction("mov QWORD PTR [r13], 0");                              // answers for nothing while it is rebuilt
+    emitter.instruction("mov r9, QWORD PTR [r15]");                             // whatever it answered with before
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_uus_cache_fill_x86");
+    emitter.instruction("mov rax, r9");
+    emitter.instruction("call __rt_decref_any");                                // the slot's own reference goes with it
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
+    emitter.label("__rt_uus_cache_fill_x86");
+    emitter.instruction("call __rt_incref");                                    // the slot holds one reference of its own
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
+    emit_select_stat_slot_x86(emitter, "__rt_uus_fill2_link_x86", "__rt_uus_fill2_chosen_x86");
+    emitter.instruction("mov QWORD PTR [r15], rax");                            // the box the slot now answers with
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // copy the path in
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
+    emitter.instruction("xor r10, r10");
+    emitter.label("__rt_uus_cache_copy_x86");
+    emitter.instruction("cmp r10, rdx");
+    emitter.instruction("jae __rt_uus_cache_copied_x86");
+    emitter.instruction("movzx r11d, BYTE PTR [rsi + r10]");
+    emitter.instruction("mov BYTE PTR [r14 + r10], r11b");
+    emitter.instruction("inc r10");
+    emitter.instruction("jmp __rt_uus_cache_copy_x86");
+    emitter.label("__rt_uus_cache_copied_x86");
+    emitter.instruction("mov QWORD PTR [r13], rdx");                            // published LAST
+
+    // -- a LINK query that found a NON-link fills the ordinary slot too; see the AArch64 twin --
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");
+    emitter.instruction("and r9, 1");
+    emitter.instruction("jz __rt_uus_cache_done_x86");                          // an ordinary query already filled its own
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // the reader takes the array in rdi
+    abi::emit_symbol_address(emitter, "rax", "_stat_key_mode");                 // and the key in rax/rdx
+    emitter.instruction("mov rdx, 4");                                          // strlen("mode")
+    emitter.instruction("call __rt_uusf_read_x86");                             // rax = mode, rdx = present-and-an-int
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jz __rt_uus_cache_done_x86");                          // no mode: cannot tell, so do not share
+    emitter.instruction("and rax, 0xF000");                                     // S_IFMT, in hex for the reason the twin gives
+    emitter.instruction("cmp rax, 0xA000");                                     // S_IFLNK
+    emitter.instruction("je __rt_uus_cache_done_x86");                          // a real link: the ordinary slot must ask again
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
+    emitter.instruction("call __rt_incref");                                    // the second slot holds a reference of its own
+    abi::emit_symbol_address(emitter, "r13", "_us_cache_stat_len");
+    emitter.instruction("mov QWORD PTR [r13], 0");
+    abi::emit_symbol_address(emitter, "r15", "_us_cache_stat_box");
+    emitter.instruction("mov r9, QWORD PTR [r15]");
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_uus_both_fill_x86");
+    emitter.instruction("mov rax, r9");
+    emitter.instruction("call __rt_decref_any");
+    emitter.label("__rt_uus_both_fill_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
+    abi::emit_symbol_address(emitter, "r13", "_us_cache_stat_len");
+    abi::emit_symbol_address(emitter, "r14", "_us_cache_stat_path");
+    abi::emit_symbol_address(emitter, "r15", "_us_cache_stat_box");
+    emitter.instruction("mov QWORD PTR [r15], rax");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
+    emitter.instruction("xor r10, r10");
+    emitter.label("__rt_uus_both_copy_x86");
+    emitter.instruction("cmp r10, rdx");
+    emitter.instruction("jae __rt_uus_both_copied_x86");
+    emitter.instruction("movzx r11d, BYTE PTR [rsi + r10]");
+    emitter.instruction("mov BYTE PTR [r14 + r10], r11b");
+    emitter.instruction("inc r10");
+    emitter.instruction("jmp __rt_uus_both_copy_x86");
+    emitter.label("__rt_uus_both_copied_x86");
+    emitter.instruction("mov QWORD PTR [r13], rdx");                            // published LAST
+
+    emitter.label("__rt_uus_cache_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the caller's own reference
     emitter.instruction("jmp __rt_uus_ret_x86");                                // share the common return path
 
+    // -- the class does not implement url_stat: warn the way php does, then box false --
     emitter.label("__rt_uus_false_obj_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the wrapper object
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // class_id stored at its head
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_head");
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // the caller's half
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_tail");
+    emitter.instruction("mov rcx, QWORD PTR [r10]");                            // the method's half
+    emitter.instruction("mov r8, QWORD PTR [r10 + 8]");
+    emitter.instruction("call __rt_wrapper_missing_hook_warning");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free it before falling through to boxed false
     emitter.label("__rt_uus_false_x86");
@@ -276,6 +669,21 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_uus_ret_x86");                                // share the common return path
 
     emitter.label("__rt_uus_nomatch_x86");
+
+    // See the AArch64 twin: a plain path takes php's one slot unless it never fills it.
+    abi::emit_symbol_address(emitter, "r9", "_us_gentle");
+    emitter.instruction("mov r9, QWORD PTR [r9]");
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jnz __rt_uus_plain_kept_x86");                         // it fills nothing, so it empties nothing
+    emit_select_stat_slot_x86(emitter, "__rt_uus_plain_link_x86", "__rt_uus_plain_chosen_x86");
+    emitter.instruction("mov QWORD PTR [r13], 0");                              // the slot answers for nothing
+    emitter.instruction("mov rax, QWORD PTR [r15]");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uus_plain_kept_x86");
+    emitter.instruction("mov QWORD PTR [r15], 0");                              // cleared BEFORE the release
+    emitter.instruction("call __rt_decref_any");                                // the reference the slot held
+    emitter.label("__rt_uus_plain_kept_x86");
+
     abi::emit_symbol_address(emitter, "r10", "_url_stat_matched");              // out-flag address
     emitter.instruction("mov BYTE PTR [r10], 0");                               // _url_stat_matched = 0 — caller falls back to the real filesystem
     emitter.instruction("xor eax, eax");                                        // return 0; the caller ignores it when the flag is 0
@@ -433,7 +841,7 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     // how the release of the value box drifts from the release of the array.
     emitter.blank();
     emitter.comment("--- runtime: user_wrapper_url_stat_field (field reader) ---");
-    emitter.label("__rt_uusf_read");
+    emitter.label_global("__rt_uusf_read");
     emitter.instruction("sub sp, sp, #48");                                     // reader frame
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the reader frame pointer
@@ -571,7 +979,7 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     // was present AND an integer.
     emitter.blank();
     emitter.comment("--- runtime: user_wrapper_url_stat_field (field reader) ---");
-    emitter.label("__rt_uusf_read_x86");
+    emitter.label_global("__rt_uusf_read_x86");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the reader frame pointer
     emitter.instruction("sub rsp, 48");                                         // spill slots for the array, the tag and the payload

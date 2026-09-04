@@ -119,6 +119,20 @@ impl Platform {
         }
     }
 
+    /// `O_CLOEXEC` open flag bit — the value differs between macOS and Linux.
+    ///
+    /// php-src's plain-files wrapper sets it for an `fopen()` mode carrying an `e`
+    /// (`ext/standard/plain_wrapper.c`), which is the only way PHP code can ask for a descriptor
+    /// that does NOT survive `exec`. Nothing inside the process can observe the bit — it changes
+    /// only what a child sees — so the flag is pinned by asserting on the emitted assembly.
+    pub fn o_cloexec(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0100_0000,
+            Platform::Linux => 0x0008_0000,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `ioctl` request that reads terminal attributes — `TIOCGETA` on macOS,
     /// `TCGETS` on Linux. `stream_isatty()` issues it to detect a terminal.
     pub fn tty_get_request(&self) -> u32 {
@@ -182,6 +196,17 @@ impl Platform {
         }
     }
 
+    /// `SO_REUSEADDR` setsockopt option name. Differs between BSD (macOS) and
+    /// Linux: macOS uses 0x0004, Linux uses 2. php-src sets this on every socket
+    /// it binds, so a server that restarts can rebind a port still in TIME_WAIT.
+    pub fn so_reuseaddr(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0004,
+            Platform::Linux => 2,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `SO_BROADCAST` setsockopt option name. Differs between BSD (macOS) and
     /// Linux: macOS uses 0x0020, Linux uses 6. Enables sending to broadcast
     /// addresses on a UDP socket.
@@ -207,16 +232,6 @@ impl Platform {
         match self {
             Platform::MacOS => 27,
             Platform::Linux => 26,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-        }
-    }
-
-    /// `ECONNREFUSED` error number — 61 on macOS, 111 on Linux. `fsockopen()`
-    /// reports it generically when a connection cannot be established.
-    pub fn econnrefused(&self) -> i64 {
-        match self {
-            Platform::MacOS => 61,
-            Platform::Linux => 111,
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
@@ -253,6 +268,31 @@ impl Platform {
         match self {
             Platform::MacOS => 0x201,
             Platform::Linux => 0x41,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// Returns the `O_WRONLY | O_CREAT | O_EXCL` flag combination for `open()`.
+    ///
+    /// Creates a new file for writing and fails when one already exists, which is what PHP's
+    /// `x` fopen mode asks for.
+    pub fn o_wronly_creat_excl(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0xA01,
+            Platform::Linux => 0xC1,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// Returns the bare `O_APPEND` descriptor flag.
+    ///
+    /// Used to turn an already-open descriptor into an appending one through `fcntl(F_SETFL)`,
+    /// which is how a `php://memory` or `php://temp` stream opened with an `a` mode gets php's
+    /// "every write goes to the end" behaviour from the same code path a real file uses.
+    pub fn o_append(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0008,
+            Platform::Linux => 0x0400,
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
@@ -300,23 +340,36 @@ impl Platform {
         }
     }
 
-    /// Returns the size of `struct stat` for this platform in bytes.
+    /// Returns the size of `struct stat` for this platform and ARCH in bytes.
     ///
-    /// Used when allocating the stat buffer passed to `*at()` syscalls.
-    pub fn stat_buf_size(&self) -> usize {
-        match self {
-            Platform::MacOS => 144,
-            Platform::Linux => 128,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    /// Used when allocating the stat buffer passed to `stat()`/`fstat()`. Linux does not have one
+    /// layout: the x86_64 struct is 144 bytes where the aarch64 one is 128, because x86_64 widens
+    /// `st_nlink` to 8 bytes and adds a `__pad0`. Reserving the smaller size on x86_64 lets the
+    /// call write 16 bytes PAST the buffer, over whatever the frame put below it.
+    pub fn stat_buf_size(&self, arch: Arch) -> usize {
+        match (self, arch) {
+            (Platform::MacOS, _) => 144,
+            (Platform::Linux, Arch::X86_64) => 144,
+            (Platform::Linux, Arch::AArch64) => 128,
+            (Platform::Windows, _) => {
+                panic!("Windows target is not yet supported (see issue #379)")
+            }
         }
     }
 
     /// Returns the byte offset of `st_mode` within `struct stat`.
-    pub fn stat_mode_offset(&self) -> usize {
-        match self {
-            Platform::MacOS => 4,
-            Platform::Linux => 16,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    ///
+    /// x86_64 Linux puts an 8-byte `st_nlink` before it and lands `st_mode` at 24; aarch64 Linux
+    /// puts `st_mode` first, at 16. Reading 16 on x86_64 reads `st_nlink`, which is 1 for an
+    /// ordinary file and so never matched `S_IFDIR`.
+    pub fn stat_mode_offset(&self, arch: Arch) -> usize {
+        match (self, arch) {
+            (Platform::MacOS, _) => 4,
+            (Platform::Linux, Arch::X86_64) => 24,
+            (Platform::Linux, Arch::AArch64) => 16,
+            (Platform::Windows, _) => {
+                panic!("Windows target is not yet supported (see issue #379)")
+            }
         }
     }
 
@@ -414,20 +467,26 @@ impl Platform {
     }
 
     /// Returns the byte offset of `st_uid` within `struct stat`.
-    pub fn stat_uid_offset(&self) -> usize {
-        match self {
-            Platform::MacOS => 16,
-            Platform::Linux => 24,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    pub fn stat_uid_offset(&self, arch: Arch) -> usize {
+        match (self, arch) {
+            (Platform::MacOS, _) => 16,
+            (Platform::Linux, Arch::X86_64) => 28,
+            (Platform::Linux, Arch::AArch64) => 24,
+            (Platform::Windows, _) => {
+                panic!("Windows target is not yet supported (see issue #379)")
+            }
         }
     }
 
     /// Returns the byte offset of `st_gid` within `struct stat`.
-    pub fn stat_gid_offset(&self) -> usize {
-        match self {
-            Platform::MacOS => 20,
-            Platform::Linux => 28,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    pub fn stat_gid_offset(&self, arch: Arch) -> usize {
+        match (self, arch) {
+            (Platform::MacOS, _) => 20,
+            (Platform::Linux, Arch::X86_64) => 32,
+            (Platform::Linux, Arch::AArch64) => 28,
+            (Platform::Windows, _) => {
+                panic!("Windows target is not yet supported (see issue #379)")
+            }
         }
     }
 
@@ -439,6 +498,18 @@ impl Platform {
         match self {
             Platform::MacOS => 0,
             Platform::Linux => 0,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// Whether this platform's `st_dev` occupies only the low 32 bits of its slot.
+    ///
+    /// Darwin's `dev_t` is `int32_t`; Linux's is 64 bits. A comparison that reads eight bytes on
+    /// Darwin reads `st_mode` and `st_nlink` along with it.
+    pub fn stat_dev_is_narrow(&self) -> bool {
+        match self {
+            Platform::MacOS => true,
+            Platform::Linux => false,
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
@@ -555,6 +626,40 @@ impl Platform {
         }
     }
 
+    /// Returns the host libc's `glob()` flag bits, which are NOT php's.
+    ///
+    /// php 8.5 ships its own glob implementation, so `GLOB_ERR` and friends carry php's numbering
+    /// on every platform. `__rt_glob` calls the system `glob()`, so each php bit has to be
+    /// translated to the bit the local libc gives that meaning. The two differ almost everywhere:
+    /// php's `GLOB_NOESCAPE` is 4096, which macOS's glob.h defines as `GLOB_LIMIT`, and glibc
+    /// agrees with php on `GLOB_NOCHECK` alone.
+    ///
+    /// `GLOB_ONLYDIR` is absent on purpose: macOS has no such flag, and glibc documents its own as
+    /// a hint that may still return non-directories. php filters, so `__rt_glob` filters.
+    pub fn glob_libc_flags(&self) -> GlobLibcFlags {
+        match self {
+            // /usr/include/glob.h in the macOS SDK.
+            Platform::MacOS => GlobLibcFlags {
+                err: 0x0004,
+                mark: 0x0008,
+                nocheck: 0x0010,
+                nosort: 0x0020,
+                brace: 0x0080,
+                noescape: 0x2000,
+            },
+            // glibc's bits/glob.h, as mirrored by the `libc` crate.
+            Platform::Linux => GlobLibcFlags {
+                err: 1 << 0,
+                mark: 1 << 1,
+                nosort: 1 << 2,
+                nocheck: 1 << 4,
+                noescape: 1 << 6,
+                brace: 1 << 10,
+            },
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// Returns the value of `LC_CTYPE` for `setlocale()`.
     pub fn lc_ctype(&self) -> u32 {
         match self {
@@ -564,6 +669,25 @@ impl Platform {
         }
     }
 
+}
+
+/// The host libc's `glob()` flag bits, one field per flag php exposes and libc implements.
+///
+/// php's `GLOB_ONLYDIR` has no field: no libc bit means what php means by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlobLibcFlags {
+    /// libc `GLOB_ERR`.
+    pub err: i64,
+    /// libc `GLOB_MARK`.
+    pub mark: i64,
+    /// libc `GLOB_NOCHECK`.
+    pub nocheck: i64,
+    /// libc `GLOB_NOSORT`.
+    pub nosort: i64,
+    /// libc `GLOB_BRACE`.
+    pub brace: i64,
+    /// libc `GLOB_NOESCAPE`.
+    pub noescape: i64,
 }
 
 impl Arch {

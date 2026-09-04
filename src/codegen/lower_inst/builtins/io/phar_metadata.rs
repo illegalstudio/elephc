@@ -217,41 +217,93 @@ pub(crate) fn lower_elephc_phar_list_entries(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, "__elephc_phar_list_entries", 1)?;
+    lower_serialized_string_array_bridge(
+        ctx,
+        inst,
+        &SerializedArrayBridge {
+            builtin: "__elephc_phar_list_entries",
+            publish: publish_phar_list_entries_function_pointer,
+            slot: "_elephc_phar_list_entries_fn",
+            len_symbol: "_phar_list_len",
+            label_prefix: "phar_list_entries",
+        },
+    )
+}
+
+/// Lowers the compiler-internal ZIP stat-record helper into a PHP string array.
+///
+/// The bridge speaks the same `u64 length + bytes` wire shape the PHAR entry list
+/// does, so this differs from it only in which pointer is published and which
+/// scratch word holds the buffer length.
+pub(crate) fn lower_elephc_zip_stat_entries(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_serialized_string_array_bridge(
+        ctx,
+        inst,
+        &SerializedArrayBridge {
+            builtin: "__elephc_zip_stat_entries",
+            publish: publish_zip_stat_entries_function_pointer,
+            slot: "_elephc_zip_stat_entries_fn",
+            len_symbol: "_zip_stat_len",
+            label_prefix: "zip_stat_entries",
+        },
+    )
+}
+
+/// Everything that separates one `u64 length + bytes` bridge reader from another.
+pub(super) struct SerializedArrayBridge {
+    /// The internal builtin's name, for the arity diagnostic.
+    builtin: &'static str,
+    /// Publishes the bridge entry point into its runtime slot.
+    publish: fn(&mut FunctionContext<'_>),
+    /// The runtime slot holding the published bridge pointer.
+    slot: &'static str,
+    /// The scratch word the bridge writes the serialized buffer's byte length into.
+    len_symbol: &'static str,
+    /// Distinguishes this reader's labels from the other's.
+    label_prefix: &'static str,
+}
+
+/// Calls a bridge that serializes records as `u64 length + bytes` and expands them
+/// into a PHP string array, answering an EMPTY array when the bridge is absent or
+/// declines. Every caller's PHP-level body reads that empty array as "no archive".
+fn lower_serialized_string_array_bridge(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    bridge: &SerializedArrayBridge,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, bridge.builtin, 1)?;
     let path = expect_operand(inst, 0)?;
-    let empty = ctx.next_label("phar_list_entries_empty");
-    let done = ctx.next_label("phar_list_entries_done");
-    publish_phar_list_entries_function_pointer(ctx);
-    load_string_to_result(ctx, path, "__elephc_phar_list_entries path")?;
+    let empty = ctx.next_label(&format!("{}_empty", bridge.label_prefix));
+    let done = ctx.next_label(&format!("{}_done", bridge.label_prefix));
+    (bridge.publish)(ctx);
+    load_string_to_result(ctx, path, &format!("{} path", bridge.builtin))?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // bridge arg 0 = archive path pointer
             ctx.emitter.instruction("mov x1, x2");                              // bridge arg 1 = archive path length
-            abi::emit_symbol_address(ctx.emitter, "x2", "_phar_list_len");
-            abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_phar_list_entries_fn");
-            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional PHAR list bridge pointer
+            abi::emit_symbol_address(ctx.emitter, "x2", bridge.len_symbol);
+            abi::emit_symbol_address(ctx.emitter, "x9", bridge.slot);
+            ctx.emitter.instruction("ldr x9, [x9]");                            // load the optional archive bridge pointer
             ctx.emitter.instruction(&format!("cbz x9, {}", empty));             // missing bridge yields an empty entry list
-            ctx.emitter.instruction("blr x9");                                  // serialize archive entry names into the bridge buffer
+            ctx.emitter.instruction("blr x9");                                  // serialize the archive records into the bridge buffer
             ctx.emitter.instruction(&format!("cbz x0, {}", empty));             // unreadable archives yield an empty entry list
-            emit_phar_list_entries_buffer_to_array_aarch64(ctx);
+            emit_phar_list_entries_buffer_to_array_aarch64(ctx, bridge.len_symbol);
             ctx.emitter.instruction(&format!("b {}", done));                    // skip the empty-array fallback after successful expansion
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // bridge arg 0 = archive path pointer
             ctx.emitter.instruction("mov rsi, rdx");                            // bridge arg 1 = archive path length
-            abi::emit_symbol_address(ctx.emitter, "rdx", "_phar_list_len");
-            abi::emit_load_symbol_to_reg(
-                ctx.emitter,
-                "r10",
-                "_elephc_phar_list_entries_fn",
-                0,
-            );
-            ctx.emitter.instruction("test r10, r10");                           // test whether the PHAR list bridge was published
+            abi::emit_symbol_address(ctx.emitter, "rdx", bridge.len_symbol);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", bridge.slot, 0);
+            ctx.emitter.instruction("test r10, r10");                           // test whether the archive bridge was published
             ctx.emitter.instruction(&format!("jz {}", empty));                  // missing bridge yields an empty entry list
-            ctx.emitter.instruction("call r10");                                // serialize archive entry names into the bridge buffer
+            ctx.emitter.instruction("call r10");                                // serialize the archive records into the bridge buffer
             ctx.emitter.instruction("test rax, rax");                           // test whether the bridge returned a serialized buffer
             ctx.emitter.instruction(&format!("jz {}", empty));                  // unreadable archives yield an empty entry list
-            emit_phar_list_entries_buffer_to_array_x86_64(ctx);
+            emit_phar_list_entries_buffer_to_array_x86_64(ctx, bridge.len_symbol);
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the empty-array fallback after successful expansion
         }
     }
@@ -261,13 +313,20 @@ pub(crate) fn lower_elephc_phar_list_entries(
     store_if_result(ctx, inst)
 }
 
-/// Expands the serialized PHAR entry-name buffer in `x0` into a string array.
-pub(super) fn emit_phar_list_entries_buffer_to_array_aarch64(ctx: &mut FunctionContext<'_>) {
+/// Expands a serialized `u64 length + bytes` bridge buffer in `x0` into a string array.
+///
+/// `len_symbol` names the scratch word the bridge wrote the buffer's total byte length
+/// into; everything else about the walk is identical for every bridge that speaks this
+/// wire shape, which is why the ZIP stat records reuse it verbatim.
+pub(super) fn emit_phar_list_entries_buffer_to_array_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    len_symbol: &str,
+) {
     let loop_label = ctx.next_label("phar_list_entries_loop");
     let done_label = ctx.next_label("phar_list_entries_expand_done");
     ctx.emitter.instruction("sub sp, sp, #32");                                 // reserve cursor, end, and array spill slots
     ctx.emitter.instruction("str x0, [sp, #0]");                                // seed the serialized-buffer cursor
-    abi::emit_symbol_address(ctx.emitter, "x10", "_phar_list_len");
+    abi::emit_symbol_address(ctx.emitter, "x10", len_symbol);
     ctx.emitter.instruction("ldr x11, [x10]");                                  // load the serialized entry-name byte length
     ctx.emitter.instruction("add x11, x0, x11");                                // compute the end pointer for the serialized buffer
     ctx.emitter.instruction("str x11, [sp, #8]");                               // save the end pointer across array helper calls
@@ -298,13 +357,18 @@ pub(super) fn emit_phar_list_entries_buffer_to_array_aarch64(ctx: &mut FunctionC
     ctx.emitter.instruction("add sp, sp, #32");                                 // release serialized-buffer expansion spill slots
 }
 
-/// Expands the serialized PHAR entry-name buffer in `rax` into a string array.
-pub(super) fn emit_phar_list_entries_buffer_to_array_x86_64(ctx: &mut FunctionContext<'_>) {
+/// Expands a serialized `u64 length + bytes` bridge buffer in `rax` into a string array.
+///
+/// See the AArch64 counterpart on `len_symbol`.
+pub(super) fn emit_phar_list_entries_buffer_to_array_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    len_symbol: &str,
+) {
     let loop_label = ctx.next_label("phar_list_entries_loop");
     let done_label = ctx.next_label("phar_list_entries_expand_done");
     ctx.emitter.instruction("sub rsp, 48");                                     // reserve aligned cursor, end, and array spill slots
     ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // seed the serialized-buffer cursor
-    abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_phar_list_len", 0);
+    abi::emit_load_symbol_to_reg(ctx.emitter, "r10", len_symbol, 0);
     ctx.emitter.instruction("add r10, rax");                                    // compute the end pointer for the serialized buffer
     ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r10");                    // save the end pointer across array helper calls
     ctx.emitter.instruction("mov edi, 1");                                      // allocate at least one slot for the entry-name array

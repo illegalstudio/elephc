@@ -24,5 +24,11 @@ builtin! {
 /// Returns `Array<Str>` reflecting that `glob` yields the matched pathnames.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(PhpType::Array(Box::new(PhpType::Str)))
+    // php's signature is array|false; False (not Bool) is the member a !== false narrowing
+    // removes, following fgetcsv and scandir. The array-taking family accepts the union
+    // through the argument lowering's unbox-or-throw.
+    Ok(PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Str)),
+        PhpType::False,
+    ]))
 }

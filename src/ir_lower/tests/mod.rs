@@ -68,7 +68,18 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::dir_prelude::inject_if_used(ast);
+    let ast = crate::gz_prelude::inject_if_used(ast);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::scanf_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::similar_text_prelude::inject_if_used(ast, &mut prelude_inventory);
+    // `zend_version()`, `php_sapi_name()` and `ini_restore()` are ordinary php-visible functions;
+    // the default profile is what a lowering test compiles against.
+    let ast = crate::version_prelude::inject_if_used(
+        ast,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(

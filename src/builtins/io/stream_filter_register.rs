@@ -5,7 +5,7 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates that the class argument names a declared class and returns `Bool`.
+//! - `check` returns `Bool` and validates nothing: php REGISTERS a class it cannot find.
 //! - Arguments are pre-inferred by the registry before the hook runs; the hook does NOT
 //!   re-infer them.
 
@@ -21,16 +21,13 @@ builtin! {
     ),
 }
 
-/// Validates the class argument names a declared class and returns `Bool`.
+/// Returns `Bool`, without asking whether the class exists.
 ///
-/// Arguments are pre-inferred by the registry; this hook validates the class
-/// registration using the shared `validate_registered_stream_class` helper.
-fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    crate::builtins::io::stream_support::validate_registered_stream_class(
-        cx.checker,
-        cx.name,
-        &cx.args[1],
-        cx.span,
-    )?;
+/// A class nobody declared is NOT a registration error in php: MEASURED on `php -n` 8.5.6,
+/// `stream_filter_register("ghost", "NoSuchClass")` answers `true`, and the failure surfaces at
+/// the ATTACH, which warns `User-filter "ghost" requires class "NoSuchClass", but that class is
+/// not defined` and returns false. Refusing the program here made a php script that RUNS
+/// uncompilable — and a filter registered but never attached is ordinary defensive code.
+fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Bool)
 }

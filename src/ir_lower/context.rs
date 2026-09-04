@@ -105,6 +105,7 @@ pub(crate) struct LoweringSnapshot {
     initialized_slots: HashSet<LocalSlotId>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
+    loop_edge_depth: u32,
     finally_stack: Vec<FinallyFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
@@ -181,6 +182,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub local_kinds: HashMap<String, LocalKind>,
     pub local_types: TypeEnv,
     initialized_slots: HashSet<LocalSlotId>,
+    /// Depth of the null-probe SPINE currently being lowered.
+    ///
+    /// `isset($a[$b])` reads `$b` but only PROBES `$a`, and PHP warns about the first and
+    /// not the second. A counter rather than a flag because spines nest: `isset($a[$b][$c])`
+    /// enters one inside another, and a bool would let the inner exit re-arm the warning for
+    /// the rest of the outer spine.
+    probe_spine_depth: usize,
     pub functions: &'m HashMap<String, FunctionSig>,
     pub extern_functions: &'m HashMap<String, ExternFunctionSig>,
     pub extern_globals: &'m HashMap<String, PhpType>,
@@ -202,6 +210,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// target. Those locals get boxed `Mixed` frame storage from their first store, so
     /// every read of the slot is already a boxed load instead of an owned string detach.
     pub string_incdec_locals: &'m HashSet<(String, String)>,
+    /// Locals a scalar reassignment widened, which need boxed storage from their first store.
+    pub widened_scalar_locals: &'m HashSet<(String, String)>,
     /// Spans of the `unset()` ARGUMENTS whose local binding the CHECKER decided to kill
     /// (`CheckResult::local_bind_kill_sites`), each mapped to the SET of locals killed at that
     /// position. At one of these spans `unset_local` abandons the frame slot after releasing its
@@ -228,6 +238,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
+    /// Depth of loop-carried expressions being lowered OUTSIDE the loop body: a `while`/`for`
+    /// condition, a `do while` condition, and a `for` update. The loop's back edge re-executes
+    /// them exactly as it re-executes the body, so every store they emit must release the
+    /// previous occupant of its slot — but none of them is lowered with a `LoopFrame` pushed,
+    /// because `break`/`continue` cannot appear there.
+    loop_edge_depth: u32,
     pub finally_stack: Vec<FinallyFrame>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
     reflection_class_locals: HashMap<String, String>,
@@ -305,6 +321,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
+        widened_scalar_locals: &'m HashSet<(String, String)>,
         bind_kill_sites: &'m HashMap<Span, HashSet<String>>,
         retype_sites: &'m HashMap<Span, HashSet<String>>,
         mixed_storage_store_sites: &'m HashMap<Span, HashSet<String>>,
@@ -345,6 +362,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             local_kinds: HashMap::new(),
             local_types: env,
             initialized_slots: HashSet::new(),
+            probe_spine_depth: 0,
             functions,
             extern_functions,
             extern_globals,
@@ -359,6 +377,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             builtin_call_types,
             loop_storage_types,
             string_incdec_locals,
+            widened_scalar_locals,
             bind_kill_sites,
             retype_sites,
             mixed_storage_store_sites,
@@ -367,6 +386,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
+            loop_edge_depth: 0,
             finally_stack: Vec::new(),
             static_callable_locals: HashMap::new(),
             reflection_class_locals: HashMap::new(),
@@ -415,6 +435,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             initialized_slots: self.initialized_slots.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
+            loop_edge_depth: self.loop_edge_depth,
             finally_stack: self.finally_stack.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
             reflection_class_locals: self.reflection_class_locals.clone(),
@@ -452,6 +473,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots = snapshot.initialized_slots;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
+        self.loop_edge_depth = snapshot.loop_edge_depth;
         self.finally_stack = snapshot.finally_stack;
         self.static_callable_locals = snapshot.static_callable_locals;
         self.reflection_class_locals = snapshot.reflection_class_locals;
@@ -724,10 +746,22 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// first store — including the incoming-parameter store — keeps every access on the
     /// ordinary boxed-Mixed path instead.
     fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
-        if !matches!(php_type.codegen_repr(), PhpType::Str) {
+        let repr = php_type.codegen_repr();
+        let key = (self.loop_storage_scope.clone(), name.to_string());
+        // A local the checker widened across scalar types needs the same treatment for the same
+        // reason, and from any scalar rather than only from `Str`: an int written into a string
+        // slot overwrites its pointer half, and a by-reference out-parameter writes without ever
+        // emitting a store for a lazy widening to hook onto.
+        if matches!(
+            repr,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
+        ) && self.widened_scalar_locals.contains(&key)
+        {
+            return PhpType::Mixed;
+        }
+        if !matches!(repr, PhpType::Str) {
             return php_type;
         }
-        let key = (self.loop_storage_scope.clone(), name.to_string());
         if self.string_incdec_locals.contains(&key) {
             return PhpType::Mixed;
         }
@@ -800,10 +834,40 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.store_local(name, borrowed, php_type.clone(), span);
     }
 
+    /// Enters a null-probe spine: reads inside it answer `null` without PHP's warning.
+    pub(crate) fn enter_probe_spine(&mut self) {
+        self.probe_spine_depth += 1;
+    }
+
+    /// Leaves one null-probe spine.
+    pub(crate) fn leave_probe_spine(&mut self) {
+        self.probe_spine_depth = self.probe_spine_depth.saturating_sub(1);
+    }
+
+    /// Returns true while lowering the chain a null probe examines.
+    ///
+    /// PHP raises nothing for anything on that chain — not the undefined variable at its root,
+    /// and not a property or offset read through a null further along it.
+    pub(crate) const fn in_null_probe(&self) -> bool {
+        self.probe_spine_depth > 0
+    }
+
     /// Marks a local slot as initialized by caller or synthetic setup.
     pub(crate) fn mark_local_initialized(&mut self, name: &str) {
         if let Some(slot) = self.local_slots.get(name) {
             self.initialized_slots.insert(*slot);
+        }
+    }
+
+    /// Returns a local slot to PHP's undefined state, as `unset()` does.
+    ///
+    /// `unset($x); echo $x;` warns in PHP exactly as a read before any assignment does — the
+    /// name is gone, not set to null. The EIR store that clears the slot marks it initialized
+    /// on the way through, so the bit has to be taken back off afterwards or the read that
+    /// follows an `unset()` stays silent.
+    pub(crate) fn mark_local_uninitialized(&mut self, name: &str) {
+        if let Some(slot) = self.local_slots.get(name) {
+            self.initialized_slots.remove(slot);
         }
     }
 
@@ -815,6 +879,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns whether a local slot is definitely initialized at this point.
     pub(crate) fn slot_is_initialized(&self, slot: LocalSlotId) -> bool {
         self.initialized_slots.contains(&slot)
+    }
+
+    /// Returns true when this NAME has no slot yet, or one no store definitely reached.
+    ///
+    /// The name-level twin of `read_is_of_an_undefined_local`, for the callers that decide
+    /// something about a variable BEFORE loading it — a by-reference binding creates the
+    /// variable rather than reading it, so it has to know first.
+    pub(crate) fn local_name_is_undefined(&self, name: &str) -> bool {
+        self.local_slots
+            .get(name)
+            .is_none_or(|slot| !self.slot_is_initialized(*slot))
     }
 
     /// Replaces the definitely-initialized local set after branch lowering or merge analysis.
@@ -833,6 +908,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// storage widening must survive while each branch gets its own logical type environment.
     pub(crate) fn restore_local_types(&mut self, types: TypeEnv) {
         self.local_types = types;
+    }
+
+    /// Returns whether this name is an ORDINARY frame local, not a static or a global alias.
+    ///
+    /// `local_uses_global_storage` answers a narrower question: a `static` local's storage is a
+    /// program-global symbol but it is not a global ALIAS, so it answers false for one. A caller
+    /// that must not touch storage outliving the frame — anything that would re-initialize a
+    /// `static` on every call — has to ask this instead.
+    pub(crate) fn local_is_plain_frame_local(&self, name: &str) -> bool {
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        kind == LocalKind::PhpLocal && !self.uses_global_storage(name, kind)
     }
 
     /// Returns whether a local is backed by program-global storage.
@@ -1177,6 +1267,92 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.pending_static_callable_result = None;
     }
 
+    /// Returns true when a read of `slot` is PHP's "undefined variable" case.
+    ///
+    /// `slot_is_initialized` is flow-sensitive — it is snapshotted and merged across branches — so
+    /// it answers the question PHP asks at run time rather than "does this name appear anywhere in
+    /// the scope". That is what makes `echo $x; $x = 1;` warn on the first line but not the third,
+    /// and what keeps a `false && $x = 1;` from defining anything.
+    ///
+    /// Everything a frame RECEIVES rather than stores is excluded: globals resolve through their
+    /// own symbol, a static local keeps its value across calls, a by-reference binding reads the
+    /// caller's cell, and parameters are marked initialized by the prologue. Missing one of those
+    /// would not crash — it would warn about a variable that is perfectly well defined.
+    ///
+    /// `$argc` and `$argv` in `main` belong to that list too, and are the one entry EIR cannot
+    /// see: no instruction stores them, because the codegen PROLOGUE writes them into their
+    /// slots from the OS arguments (`store_argc_local_if_present`). They are not superglobals —
+    /// in a function body PHP does warn about them — so only the main frame is exempt.
+    ///
+    /// An `eval()` already lowered in this scope closes the question for everything after it: the
+    /// fragment can bind any name, so no later read is DEFINITELY of an undefined variable. Both
+    /// flags are consulted because the barrier-free AOT path records only `eval_executed`, and
+    /// `eval('$c = 1;'); echo $c;` went through it — printing the warning and nothing else where
+    /// PHP prints `1`. Position still decides: the flags are set as lowering reaches the `eval()`,
+    /// so a read written BEFORE it still warns, exactly as PHP does.
+    fn read_is_of_an_undefined_local(
+        &self,
+        name: &str,
+        slot: LocalSlotId,
+        kind: LocalKind,
+        uses_global: bool,
+        is_ref_bound: bool,
+    ) -> bool {
+        self.probe_spine_depth == 0
+            && !self.eval_barrier_active
+            && !self.eval_executed
+            && !uses_global
+            && !is_ref_bound
+            && !self.is_prologue_seeded_main_local(name)
+            && kind == LocalKind::PhpLocal
+            && !self.slot_is_initialized(slot)
+    }
+
+    /// Returns true for the main-frame locals the codegen prologue fills in, not EIR.
+    ///
+    /// `$argc` and `$argv` reach `main` from the OS arguments through
+    /// `store_argc_local_if_present` / `store_argv_local_if_present`, so no EIR store ever
+    /// marks their slots and a flow-sensitive answer alone reports them undefined. It did:
+    /// `str_repeat("v", $argc)` warned and answered `""`.
+    fn is_prologue_seeded_main_local(&self, name: &str) -> bool {
+        self.in_main && (name == EVAL_ARGC_LOCAL_NAME || name == EVAL_ARGV_LOCAL_NAME)
+    }
+
+    /// Emits a warning PHP raises for a read that answers `null`, and answers `null`.
+    ///
+    /// The message is composed by the CALLER because every half of it is known at compile time;
+    /// the backend receives a finished string and needs no run-time formatting. The instruction
+    /// carries `MAY_WARN`, which is what makes the shared publisher stamp it with this line.
+    ///
+    /// Three reads share it, because PHP gives all three the same shape — a warning and a null
+    /// result: a variable that was never assigned, a property read on null, and an array offset
+    /// on null.
+    pub(crate) fn emit_warned_null(&mut self, message: &str, span: Option<Span>) -> LoweredValue {
+        let data = self.intern_string(message);
+        let value = self
+            .builder
+            .emit_with_effects(
+                Op::WarnedNull,
+                Vec::new(),
+                Some(Immediate::Data(data)),
+                IrType::I64,
+                PhpType::Void,
+                Ownership::NonHeap,
+                Op::WarnedNull.default_effects(),
+                span,
+            )
+            .expect("warned_null produces a value");
+        LoweredValue {
+            value,
+            ir_type: IrType::I64,
+        }
+    }
+
+    /// Emits the warning PHP raises for a read of a variable that was never assigned.
+    fn emit_undefined_local_read(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
+        self.emit_warned_null(&format!("Warning: Undefined variable ${name}\n"), span)
+    }
+
     /// Emits a load from a PHP local slot.
     pub(crate) fn load_local(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
         if let Some(php_type) = self.extern_global_type(name) {
@@ -1195,9 +1371,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.local_type(name)
         };
         let slot = self.declare_local(name, php_type.clone());
+        let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
+        // PHP answers a read no store definitely reached with a warning and `null`, and keeps
+        // running. Emitting an ordinary load here reads the slot's uninitialized stack bytes —
+        // for a `Mixed` local, as a boxed-cell POINTER, which segfaults on first use.
+        if self.read_is_of_an_undefined_local(name, slot, kind, uses_global, is_ref_bound) {
+            return self.emit_undefined_local_read(name, span);
+        }
         let ir_type = value_ir_type(&php_type);
         let ownership = Ownership::for_php_type(&php_type);
-        let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
         let op = match (is_ref_bound, uses_global, kind) {
             (true, _, _) => Op::LoadRefCell,
             (false, true, _) => Op::LoadGlobal,
@@ -1263,6 +1445,26 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
+    /// Returns whether the code being lowered can be re-executed by a loop's back edge.
+    ///
+    /// A store that a back edge repeats overwrites a slot that already holds a live value, so it
+    /// must release that occupant first. The loop BODY is recognised by its `LoopFrame`, but a
+    /// `while`/`for` condition, a `do while` condition and a `for` update are lowered without one
+    /// (`break`/`continue` cannot appear there) while the back edge runs them just the same.
+    pub(crate) fn inside_loop_back_edge(&self) -> bool {
+        !self.loop_stack.is_empty() || self.loop_edge_depth > 0
+    }
+
+    /// Marks the start of a loop-carried expression lowered outside the loop body.
+    pub(crate) fn enter_loop_back_edge_expression(&mut self) {
+        self.loop_edge_depth += 1;
+    }
+
+    /// Marks the end of a loop-carried expression lowered outside the loop body.
+    pub(crate) fn leave_loop_back_edge_expression(&mut self) {
+        self.loop_edge_depth = self.loop_edge_depth.saturating_sub(1);
+    }
+
     /// Returns true when a variable write should be stored into the eval scope handle.
     fn should_store_to_eval_scope(&self, name: &str) -> bool {
         let Some(scope_param) = &self.eval_scope_read_param else {
@@ -1310,7 +1512,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value(name, slot, span);
         }
@@ -1414,7 +1616,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.release_stored_local_value(name, slot, span);
             return;
         }
-        if self.loop_stack.is_empty() {
+        if !self.inside_loop_back_edge() {
             // Outside loops no back-edge can execute a later widening store before
             // this one, so the untracked storage type is final for this path.
             return;
@@ -1565,7 +1767,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
@@ -1579,7 +1781,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !uses_global
             && local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
@@ -1697,13 +1899,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_some_and(|slot| !self.initialized_slots.contains(&slot))
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value(name, slot, span);
         }
         if local_kind_uses_plain_store_cleanup(previous_kind)
             && previous_slot.is_none()
-            && !self.loop_stack.is_empty()
+            && self.inside_loop_back_edge()
         {
             self.release_stored_local_value(name, slot, span);
         }
@@ -1895,6 +2097,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Emits `unset($local)`, breaking by-reference aliases without writing through them.
     ///
+    /// Both paths leave the slot holding null and the NAME undefined. Those are two different
+    /// facts and PHP needs both: the storage must be safe to read (an unwritten slot read as a
+    /// boxed pointer segfaults), and the name must be gone, because `unset($x); echo $x;` warns
+    /// in PHP exactly as a read before any assignment does. Only the first was true here, and
+    /// the `examples/type-ops` sweep caught the missing warning.
     /// At a span the CHECKER recorded in `bind_kill_sites` the binding is also ABANDONED: the
     /// name loses its slot mapping, so the next `declare_local` mints a FRESH slot at whatever
     /// type the checker approved for the re-binding assignment. Only the checker decides
@@ -1942,7 +2149,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 self.release_and_abandon_local_binding(name, span);
                 return null;
             }
-            return self.store_local(name, null, PhpType::Void, span);
+            // The NAME has to go too, not just the storage. Those are two different facts and php
+            // needs both: `unset($x); echo $x;` warns exactly as a read before any assignment
+            // does, and clearing the slot alone left the name defined and the warning missing —
+            // the `examples/type-ops` sweep caught it. The abandoning branch above needs no mark:
+            // it drops the name's slot mapping outright.
+            let stored = self.store_local(name, null, PhpType::Void, span);
+            self.mark_local_uninitialized(name);
+            return stored;
         }
         // The ref-bound arm. `abandons_binding` is structurally FALSE here and needs no test:
         // `local_binding_slot_is_abandonable` refuses `is_ref_bound_local(name)` outright, which
@@ -1967,7 +2181,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         self.unmark_ref_bound_local(name);
         self.set_local_type(name, PhpType::Void);
-        self.initialized_slots.insert(slot);
+        self.initialized_slots.remove(&slot);
         null
     }
 
@@ -2631,13 +2845,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         argument: ValueId,
         result: ValueId,
     ) -> bool {
-        let argument_type = self.builder.value_php_type(argument).codegen_repr();
-        let result_type = self.builder.value_php_type(result).codegen_repr();
+        let argument_type = self.builder.value_php_type(argument);
+        let result_type = self.builder.value_php_type(result);
         if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
             || !Ownership::php_type_needs_lifetime_tracking(&result_type)
         {
             return false;
         }
+        if matches!(
+            (&argument_type, &result_type),
+            (PhpType::Resource(_), PhpType::Resource(_))
+        ) {
+            return true;
+        }
+        let argument_type = argument_type.codegen_repr();
+        let result_type = result_type.codegen_repr();
         match (&argument_type, &result_type) {
             (PhpType::Mixed | PhpType::Union(_), _)
             | (_, PhpType::Mixed | PhpType::Union(_)) => true,
@@ -3014,6 +3236,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
         kind == LocalKind::GlobalAlias
             || crate::superglobals::is_superglobal(name)
+            || name == "http_response_header"
             || (self.in_main && self.all_global_var_names.contains(name))
     }
 
@@ -3248,6 +3471,11 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         crate::builtins::semantics::LoweredBuiltinValue {
             value: lowered.value,
         }
+    }
+
+    /// Interns a PHP function name so a builtin lowering can emit `Op::Call` against it.
+    fn intern_function_name(&mut self, name: &str) -> crate::ir::DataId {
+        LoweringContext::intern_function_name(self, name)
     }
 
     /// Emits a typed runtime call whose helper symbol and physical ABI remain backend-owned.

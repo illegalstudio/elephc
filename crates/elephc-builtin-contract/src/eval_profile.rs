@@ -120,12 +120,14 @@ const IMPLODE_PARAMS: &[ParamSpec] = &[
         ty: TypeSpec::Str,
         default: Some(DefaultSpec::Null),
         by_ref: false,
+writes: None,
     },
     ParamSpec {
         name: "array",
         ty: TypeSpec::Mixed,
         default: None,
         by_ref: false,
+writes: None,
     },
 ];
 
@@ -135,18 +137,21 @@ const IS_CALLABLE_PARAMS: &[ParamSpec] = &[
         ty: TypeSpec::Mixed,
         default: None,
         by_ref: false,
+writes: None,
     },
     ParamSpec {
         name: "syntax_only",
         ty: TypeSpec::Bool,
         default: Some(DefaultSpec::Bool(false)),
         by_ref: false,
+writes: None,
     },
     ParamSpec {
         name: "callable_name",
         ty: TypeSpec::Mixed,
         default: Some(DefaultSpec::Null),
         by_ref: true,
+writes: None,
     },
 ];
 
@@ -156,12 +161,14 @@ const LOCALTIME_PARAMS: &[ParamSpec] = &[
         ty: TypeSpec::Mixed,
         default: Some(DefaultSpec::Null),
         by_ref: false,
+writes: None,
     },
     ParamSpec {
         name: "associative",
         ty: TypeSpec::Bool,
         default: Some(DefaultSpec::Bool(false)),
         by_ref: false,
+writes: None,
     },
 ];
 
@@ -171,12 +178,14 @@ const NL2BR_PARAMS: &[ParamSpec] = &[
         ty: TypeSpec::Str,
         default: None,
         by_ref: false,
+writes: None,
     },
     ParamSpec {
         name: "use_xhtml",
         ty: TypeSpec::Bool,
         default: Some(DefaultSpec::Bool(true)),
         by_ref: false,
+writes: None,
     },
 ];
 
@@ -186,24 +195,28 @@ const PREG_MATCH_PARAMS: &[ParamSpec] = &[
         ty: TypeSpec::Str,
         default: None,
         by_ref: false,
+writes: None,
     },
     ParamSpec {
         name: "subject",
         ty: TypeSpec::Str,
         default: None,
         by_ref: false,
+writes: None,
     },
     ParamSpec {
         name: "matches",
         ty: TypeSpec::Mixed,
         default: Some(DefaultSpec::EmptyArray),
         by_ref: true,
+writes: None,
     },
     ParamSpec {
         name: "flags",
         ty: TypeSpec::Int,
         default: Some(DefaultSpec::Int(0)),
         by_ref: false,
+writes: None,
     },
 ];
 

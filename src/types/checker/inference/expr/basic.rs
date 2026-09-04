@@ -323,9 +323,25 @@ impl Checker {
                     // "undefined index" warning behavior for this very
                     // common idiom (e.g. `json_decode($json, true)["k"]`).
                     PhpType::Mixed => Ok(PhpType::Mixed),
-                    // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
-                    // answer `false` / the default; only a probe context may do so.
-                    PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
+                    // A null base is not an error in PHP: `$n = null; $n['k']` raises
+                    // `Trying to access array offset on null` and answers NULL. Inside a probe
+                    // — `isset($n['k'])`, `$n['k'] ?? $d` — it raises nothing and answers the
+                    // same null. The twin of the property-access arm; which spelling WARNS is
+                    // decided by EIR lowering.
+                    PhpType::Void => {
+                        self.tolerated_null_receiver = true;
+                        Ok(PhpType::Void)
+                    }
+                    // A SCALAR base is not an error either: php raises `Trying to access array
+                    // offset on <type>` and answers NULL — measured on `php -n` 8.5.6 for
+                    // `false`, `true`, `int` and `float`. Refusing the program was the worst
+                    // possible answer to what is, in php, a warning about a bug the program
+                    // survives. A STRING base is excluded on purpose: `"abc"[1]` is a legal read
+                    // handled by the `PhpType::Str` arm above.
+                    PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Float => {
+                        self.tolerated_null_receiver = true;
+                        Ok(PhpType::Void)
+                    }
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }

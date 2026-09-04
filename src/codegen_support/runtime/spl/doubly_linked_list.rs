@@ -2507,6 +2507,10 @@ fn emit_throw_exception_aarch64(
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
     emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
+    // The creation line was the one field this sequence never wrote, so `getLine()` answered
+    // whatever the allocator had left there — zero, which php never prints. php names the CALL
+    // the program made into the builtin: `new SplFixedArray(-1)` reports the line of the `new`.
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
@@ -2538,6 +2542,8 @@ fn emit_throw_exception_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static exception message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
+    // See the AArch64 counterpart.
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing

@@ -709,6 +709,21 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
     }
 }
 
+/// Collects every string literal in the module, keyed the way builtin names are keyed.
+///
+/// This is deliberately the WHOLE string pool rather than a flow-sensitive result: it answers
+/// "could a literal in this program spell that name", which is the question that bounds the
+/// ladder. Being an over-approximation is the point — it covers a name travelling through an
+/// array, a ternary or a default, none of which the value-level analysis follows.
+fn mentioned_literal_names(module: &crate::ir::Module) -> std::collections::HashSet<String> {
+    module
+        .data
+        .strings
+        .iter()
+        .map(|literal| php_symbol_key(literal.trim_start_matches('\\')))
+        .collect()
+}
+
 /// Builds runtime descriptor cases for PHP builtins that support callable dispatch.
 fn runtime_builtin_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
@@ -717,11 +732,18 @@ fn runtime_builtin_descriptor_cases(
     strict_php: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut cases = Vec::new();
+    // The names this program writes down as string literals. A builtin that appears nowhere as a
+    // literal cannot be reached through one, so it stays out of the ladder — which is what keeps
+    // the widened eligibility from putting every expressible builtin at every call site whose
+    // callee the reachability analysis could not narrow.
+    let mentioned = mentioned_literal_names(ctx.module);
     for name in crate::types::checker::builtins::supported_builtin_function_names_for_profile(
         strict_php,
     ) {
+        let bounded = candidate_names.is_some()
+            || mentioned.contains(&php_symbol_key(name.trim_start_matches('\\')));
         if !runtime_callable_name_is_reachable(name, candidate_names)
-            || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
+            || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty, bounded)
             || ctx
                 .module
                 .extern_decls

@@ -33,6 +33,8 @@ pub mod func_args;
 pub(crate) mod global_decls;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+pub mod dir_prelude;
+pub mod gz_prelude;
 pub mod hash_prelude;
 pub mod image_prelude;
 /// Intrinsic call handling.
@@ -80,6 +82,9 @@ pub mod php_profile;
 pub(crate) mod prelude_prune;
 /// Resolution of includes.
 pub mod resolver;
+/// PHP `sscanf`/`fscanf` engine prelude injection.
+pub mod similar_text_prelude;
+pub mod scanf_prelude;
 /// Physical source-file classification and per-file language profiles.
 pub mod source;
 /// Source span tracking.
@@ -94,6 +99,7 @@ pub mod synthetic_class;
 /// Termination and exit handling.
 pub mod termination;
 /// Type system and checking.
+pub mod stream_compliance;
 pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;

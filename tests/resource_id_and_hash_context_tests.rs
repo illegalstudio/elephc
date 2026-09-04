@@ -320,6 +320,31 @@ fn standard_streams_keep_their_php_resource_ids() {
     );
 }
 
+/// Verifies a resource survives a by-value `foreach` well enough to be passed to a
+/// builtin that demands a stream.
+///
+/// The element type of `[STDIN, STDOUT, STDERR]` used to be run through
+/// `PhpType::codegen_repr()` before the foreach local was typed, and a resource's
+/// codegen representation is an integer. The loop variable therefore came out as `Int`
+/// and `stream_get_meta_data($s)` was REFUSED at compile time with "stream argument PHP
+/// type Int" — the program never ran at all, so this test asserts output rather than a
+/// diagnostic. Reference PHP 8.5.6 prints `1|2|3 res meta`; only environment-independent
+/// facts are asserted here because the host's `stream_type` for STDIN is `tcp_socket`
+/// under a piped stdin and `STDIO` otherwise.
+#[test]
+fn a_foreach_over_standard_streams_still_yields_resources() {
+    assert_program_output(
+        "resid_foreach_streams",
+        r#"<?php
+foreach ([STDIN, STDOUT, STDERR] as $s) {
+    $meta = stream_get_meta_data($s);
+    echo get_resource_id($s), " ", (is_resource($s) ? "res" : "not"), " ", (count($meta) > 0 ? "meta" : "empty"), "\n";
+}
+"#,
+        "1 res meta\n2 res meta\n3 res meta\n",
+    );
+}
+
 /// Verifies an alias shares its resource's id while a descriptor REUSED after `fclose()`
 /// gets a fresh one, byte-for-byte against reference PHP 8.5.6.
 ///

@@ -129,8 +129,56 @@ echo $v->d();
 "#,
     );
     assert!(!out.success);
-    // STDOUT: the uncaught report follows PHP's stream.
-    assert!(out.stdout.contains("Call to a member function d()"), "{}", out.stdout);
+    // The harness splits by KIND PREFIX: a `Fatal error:` line is a diagnostic, and the trace
+    // lines after it — which carry no prefix — are stdout. The message lives in the first half.
+    //
+    // php names the receiver's TYPE, and for a bool it names the VALUE: MEASURED on `php -n`
+    // 8.5.6, `on false`, never `on bool` and never `on null`.
+    assert!(
+        out.diagnostics
+            .contains("Call to a member function d() on false"),
+        "{}",
+        out.diagnostics
+    );
+}
+
+/// php names what the receiver actually was, and `zend_zval_value_name` names a bool by VALUE.
+///
+/// MEASURED on `php -n` 8.5.6 over the seven shapes below. elephc said `on null` for all of them:
+/// the site that refuses a non-object receiver had the runtime tag in hand — the unbox leaves it
+/// there and the object guard only compares it — and threw away the answer.
+#[test]
+fn test_a_non_object_receiver_is_named_by_what_it_is() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $x): mixed
+{
+    return match ($x) {
+        0 => null,
+        1 => false,
+        2 => true,
+        3 => 42,
+        4 => 1.5,
+        5 => "s",
+        default => [1],
+    };
+}
+for ($i = 0; $i < 7; $i++) {
+    $v = pick($i);
+    try { $v->d(); } catch (Throwable $t) { echo $t->getMessage(), "|"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Call to a member function d() on null|\
+         Call to a member function d() on false|\
+         Call to a member function d() on true|\
+         Call to a member function d() on int|\
+         Call to a member function d() on float|\
+         Call to a member function d() on string|\
+         Call to a member function d() on array|"
+    );
 }
 
 /// Regression: a user method whose name collides with a builtin method of a different arity (here

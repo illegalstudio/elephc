@@ -106,9 +106,14 @@ impl Checker {
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
-        // `isset($n->p)` / `$n->p ?? $d` reach through a null receiver in PHP and answer
-        // `false` / the default; only a probe context may do so.
-        if matches!(obj_ty, PhpType::Void) && self.null_probe_depth > 0 {
+        // A null receiver is not an error in PHP: `$o = null; $o->name` raises
+        // `Attempt to read property "name" on null` and the read answers NULL. Inside a probe
+        // — `isset($n->p)`, `$n->p ?? $d` — it raises nothing and answers the same null. Both
+        // spellings type as null here; which of them WARNS is decided by EIR lowering, because
+        // whether the receiver is null is a run-time fact and the probe depth it consults is
+        // the lowering's own.
+        if matches!(obj_ty, PhpType::Void) {
+            self.tolerated_null_receiver = true;
             return Ok(PhpType::Void);
         }
         Err(CompileError::new(

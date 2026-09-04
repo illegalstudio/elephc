@@ -65,6 +65,9 @@ pub(super) fn lower(
         RuntimeFnId::CtypeSpace => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_space(ctx, inst)
         }),
+        RuntimeFnId::ExpectArrayArg => Some({
+            crate::codegen::lower_inst::builtins::lower_expect_array_arg(ctx, inst)
+        }),
         RuntimeFnId::Explode => Some({
             crate::codegen::lower_inst::builtins::strings::lower_explode(ctx, inst)
         }),

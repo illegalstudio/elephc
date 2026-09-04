@@ -96,6 +96,139 @@ pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, s
     abi::emit_call_reg(ctx.emitter, dispatch_reg);
 }
 
+/// Publishes the line of a call INTO a synthesized builtin class, for the exceptions it raises.
+///
+/// php reports the CALL SITE for an exception an internal method throws, because the `new` lives
+/// in php-src and has no php line of its own. The synthesized bodies here are in exactly that
+/// position: their `new` carries no span, so `getLine()` answered 0 and the uncaught report
+/// dropped both its ` in FILE:LINE` suffix and its `thrown in` tail — MEASURED against
+/// `(new SplFileInfo("nope"))->getSize()`, which php reports at the line of the call.
+///
+/// Only calls into a class the PROGRAM DID NOT DECLARE publish anything, so an ordinary method
+/// call costs nothing. The predicate is the declaration's own span: a compiler-injected class
+/// carries `Span::dummy()`. Reading whether the emitted BODIES were synthetic answered the same
+/// question for the classes built from a synthesized AST and the wrong one for the rest —
+/// `SplFixedArray` has no PHP body at all, its `new` and its throws are runtime helpers, and it
+/// reported `line=0` where php reports the line of the `new`.
+///
+/// NOT the primary scratch: `emit_store_reg_to_symbol` resolves the symbol's own address through
+/// it, which would overwrite the value before the store.
+pub(super) fn publish_internal_call_line(
+    ctx: &mut FunctionContext<'_>,
+    inst: &crate::ir::Instruction,
+    class_name: &str,
+) {
+    let Some(span) = inst.span else {
+        return;
+    };
+    if span.line == 0 || !class_is_compiler_injected(ctx, class_name) {
+        return;
+    }
+    publish_internal_call_trace_frame(ctx, inst, class_name);
+    let reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(span.line));
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_internal_call_line", 0);
+    // The same line, in the form a WARNING wants. `publish_diagnostic_location` only fires for an
+    // instruction whose effects admit `MAY_WARN`, and a call into one of these classes may not:
+    // the refinement pass unions the summaries of every class the receiver could hold and drops
+    // the whole answer when one of them has none, leaving the lowering's own effects — which do
+    // not mention warnings. MEASURED, `(new ArrayIterator([1]))->offsetGet(7)` raised
+    // `Undefined array key 7` with NO ` in FILE on line N` at all, while the `ArrayObject`
+    // spelling of the same call, whose summary did resolve, named its line correctly.
+    crate::codegen::lower_inst::publish_diagnostic_line(ctx, span.line);
+}
+
+/// Records php's frame for this call, and publishes whether the chain it belongs to is COMPLETE.
+///
+/// An exception raised inside a builtin class is reported with the CALL as its frame `#0` —
+/// `#0 p.php(13): SplFileInfo->getSize()` — and the arguments are the ones passed HERE, not the
+/// synthesized body's own parameters, so the frame has to be recorded at the call.
+///
+/// `main` is the one caller this lowering can prove nothing hides. Anywhere else the chain would
+/// need the enclosing function's frame and its callers, so the site publishes zero and the report
+/// stays silent rather than printing a trace that is short — `#0 {main}` where php names a
+/// function is a wrong answer, not a missing one.
+///
+/// The recording is skipped entirely off `main`, which is also what keeps it off hot paths: a
+/// method called in a loop inside a user function pays two stores, not a frame render.
+fn publish_internal_call_trace_frame(
+    ctx: &mut FunctionContext<'_>,
+    inst: &crate::ir::Instruction,
+    class_name: &str,
+) {
+    let reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(ctx.is_main));
+    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_trace_site_exact", 0);
+    if !ctx.is_main {
+        return;
+    }
+    let Some((frame_name, arguments)) = internal_call_frame_shape(ctx, inst, class_name) else {
+        return;
+    };
+    super::exceptions::emit_builtin_class_call_trace_frame(ctx, inst, &frame_name, &arguments);
+}
+
+/// Names the frame php would print for this call, and the operands it renders as its arguments.
+///
+/// A `new` is php's `Class->__construct(…)` — measured, `new DirectoryIterator("dtest")` reports
+/// `DirectoryIterator->__construct('dtest')`. An instance call is `Class->method(…)`, and its
+/// first operand is the RECEIVER rather than an argument.
+fn internal_call_frame_shape(
+    ctx: &FunctionContext<'_>,
+    inst: &crate::ir::Instruction,
+    class_name: &str,
+) -> Option<(String, Vec<crate::ir::ValueId>)> {
+    match inst.op {
+        crate::ir::Op::ObjectNew => Some((
+            format!("{class_name}->__construct"),
+            inst.operands.clone(),
+        )),
+        crate::ir::Op::MethodCall | crate::ir::Op::NullsafeMethodCall => {
+            let method = method_name_data(ctx, inst).ok()?;
+            // ASKING an exception about itself is not a frame in anyone's trace. The buffer holds
+            // one trace at a time, so recording here replaced the frames `getTraceAsString()` was
+            // being asked to render with a frame for the question — and left them replaced for
+            // whatever was reported next.
+            if super::throwable_methods::is_throwable_standard_method_key(&php_symbol_key(method)) {
+                return None;
+            }
+            Some((
+                format!("{}->{method}", frame_class_for_method(ctx, class_name, method)),
+                inst.operands.iter().skip(1).copied().collect(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Names the class php puts in a trace frame: the one that DECLARES the method.
+///
+/// php prints the declaring class, not the receiver's. MEASURED on `php -n` 8.5.6 with a plain
+/// user hierarchy — `(new Derived())->boom()` reports `#0 …: Base->boom()` — and the SPL surface
+/// is the same rule: `(new SplTempFileObject())->getSize()` reports `SplFileInfo->getSize()`,
+/// because `getSize()` is declared there and neither `SplFileObject` nor `SplTempFileObject`
+/// overrides it. elephc named the RECEIVER, which is right only when the two coincide.
+///
+/// `method_declaring_classes` is the checker's own answer and already accounts for overrides;
+/// falling back to the receiver keeps a class with no schema entry naming something rather than
+/// nothing.
+fn frame_class_for_method(ctx: &FunctionContext<'_>, class_name: &str, method: &str) -> String {
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .and_then(|class| class.method_declaring_classes.get(&php_symbol_key(method)))
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string())
+}
+
+/// Reports whether this class came from the compiler rather than from the program's source.
+fn class_is_compiler_injected(ctx: &FunctionContext<'_>, class_name: &str) -> bool {
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|class_info| class_info.declaration_span.line == 0)
+}
+
 /// Returns true when the current EIR module includes the target class method body.
 pub(super) fn class_method_already_emitted(
     ctx: &FunctionContext<'_>,

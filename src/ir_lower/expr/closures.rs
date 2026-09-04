@@ -129,6 +129,22 @@ pub(super) fn lower_closure_with_context(
             // runtime against the bound object's class.
             (lower_null(ctx, expr), PhpType::Mixed)
         } else {
+            // Binding a name by reference CREATES it, so there is no read to warn about and
+            // nothing uninitialized to load: `$f = function () use (&$x) { ... };` leaves `$x`
+            // as NULL with no diagnostic at all — MEASURED on `php -n` 8.5.6, against the
+            // by-VALUE spelling one line above it, which does warn. Without the store the
+            // capture reached the backend as an `warned_null`, which has no
+            // by-reference form and refused the program.
+            //
+            // It runs BEFORE the widening below for the same reason a hand-written `$x = null;`
+            // does: the store is what an unwritten name's creation looks like, and the widening
+            // is the separate rule about what the closure may put back through the reference.
+            // Boxing it into a Mixed slot instead left `var_dump($x)` printing the raw null
+            // sentinel as `int(9223372036854775806)`.
+            if by_ref && ctx.local_name_is_undefined(capture) {
+                let null = lower_null(ctx, expr);
+                ctx.store_local(capture, null, PhpType::Void, Some(expr.span));
+            }
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
             } else if by_ref && body_contains_eval {

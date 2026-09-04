@@ -183,10 +183,109 @@ pub(super) fn lower_array_access_with_missing_warning(
     } else {
         lower_subscript_receiver_silently(ctx, array)
     };
+    // The twin of the property-access arm: PHP reads an offset through a null base rather than
+    // refusing, raising `Trying to access array offset on null` and answering NULL — MEASURED on
+    // `php -n` 8.5.6. `warn_on_missing` is false exactly in the probe constructs, which is what
+    // keeps `isset($n['k'])` silent. The INDEX is still lowered, because PHP evaluates it.
+    if warn_on_missing
+        && !ctx.in_null_probe()
+        && value_is_definitely_null(ctx, array_value.value)
+    {
+        lower_expr(ctx, index);
+        return ctx.emit_warned_null(
+            "Warning: Trying to access array offset on null\n",
+            Some(expr.span),
+        );
+    }
+    // A SCALAR base is the same php event with a different word: `Trying to access array offset
+    // on false / true / int / float`, answering NULL. elephc refused the whole program with
+    // `Cannot index non-array` — the worst possible response to a warning php survives.
+    if let Some(base) = scalar_offset_base(ctx, array_value.value) {
+        // php reads the index either way: it is an ordinary expression that happens to sit
+        // inside a probe, and only the CHAIN ROOT is what `isset()` tolerates.
+        lower_expr(ctx, index);
+        // Inside `isset()` / `??` php raises NOTHING and answers the same null — the probe
+        // constructs exist to name storage that may not be there. Indexing the scalar anyway
+        // answered `true` for `isset(false['k'])` and then crashed.
+        if warn_on_missing && !ctx.in_null_probe() {
+            return emit_scalar_offset_warning(ctx, array_value, base, expr);
+        }
+        return lower_null(ctx, expr);
+    }
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_array_access(ctx, array_value, index, expr, warn_on_missing);
     }
     lower_array_access_from_value(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Which scalar php names in `Trying to access array offset on <word>`.
+#[derive(Clone, Copy)]
+enum ScalarOffsetBase {
+    /// The word is settled while lowering: `false`, `int`, `float`.
+    Known(&'static str),
+    /// A `bool` whose VALUE decides the word. php names what the variable actually holds, and a
+    /// literal `true` types as plain `bool` here, so this is the ordinary spelling of `true`.
+    BoolAtRuntime,
+}
+
+/// Returns the scalar php would name for an offset read through `value`, if any.
+///
+/// A STRING base is not one — `"abc"[1]` is a legal read handled elsewhere — and neither is
+/// `Mixed`, which carries its type at run time and is dispatched by the runtime helpers.
+fn scalar_offset_base(
+    ctx: &LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+) -> Option<ScalarOffsetBase> {
+    match ctx.builder.value_php_type(value) {
+        PhpType::False => Some(ScalarOffsetBase::Known("false")),
+        PhpType::Int => Some(ScalarOffsetBase::Known("int")),
+        PhpType::Float => Some(ScalarOffsetBase::Known("float")),
+        PhpType::Bool => Some(ScalarOffsetBase::BoolAtRuntime),
+        _ => None,
+    }
+}
+
+/// Emits php's offset-on-scalar warning and its NULL answer.
+///
+/// The `bool` case is a two-armed branch rather than one message, because php names the VALUE:
+/// one site produces different text for a variable holding `true` and one holding `false`. Both
+/// arms answer null, so nothing needs merging — the value is produced after the join.
+fn emit_scalar_offset_warning(
+    ctx: &mut LoweringContext<'_, '_>,
+    array_value: LoweredValue,
+    base: ScalarOffsetBase,
+    expr: &Expr,
+) -> LoweredValue {
+    if let ScalarOffsetBase::Known(word) = base {
+        return ctx.emit_warned_null(
+            &format!("Warning: Trying to access array offset on {word}\n"),
+            Some(expr.span),
+        );
+    }
+    let true_block = ctx.builder.create_named_block("offset_on_true", Vec::new());
+    let false_block = ctx.builder.create_named_block("offset_on_false", Vec::new());
+    let merge = ctx.builder.create_named_block("offset_on_bool_done", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: array_value.value,
+        then_target: true_block,
+        then_args: Vec::new(),
+        else_target: false_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(true_block);
+    ctx.emit_warned_null(
+        "Warning: Trying to access array offset on true\n",
+        Some(expr.span),
+    );
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(false_block);
+    ctx.emit_warned_null(
+        "Warning: Trying to access array offset on false\n",
+        Some(expr.span),
+    );
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(merge);
+    lower_null(ctx, expr)
 }
 
 /// Lowers a subscript-chain receiver with undefined-offset warnings suppressed on
@@ -198,7 +297,34 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
-    lower_expr(ctx, array)
+    // "Silently" reaches the undefined-variable warning too: `isset($a[$b])` PROBES `$a` and
+    // READS `$b`, and PHP warns about `$b` alone. Without this the probe's own spine raised the
+    // warning the construct exists to avoid.
+    lower_null_probe_chain(ctx, array)
+}
+
+/// Lowers the CHAIN a null probe examines, without PHP's undefined-variable warning.
+///
+/// `isset($x)`, `empty($x)` and `$x ?? "d"` exist to ask whether storage was ever named, so PHP
+/// raises nothing for the chain itself — MEASURED on `php -n` 8.5.6, which prints only the
+/// result for all three. What sits INSIDE the chain stays an ordinary read: the same PHP warns
+/// about `$b` in `isset($a[$b])`, and about `$y` in `$x ?? $y`. Array operands reach here
+/// through `lower_subscript_receiver_silently`, which descends the chain and leaves the index
+/// outside the spine — that split is what keeps the two halves of the rule apart.
+pub(super) fn lower_null_probe_chain(
+    ctx: &mut LoweringContext<'_, '_>,
+    chain: &Expr,
+) -> LoweredValue {
+    // A subscript link DESCENDS rather than being silenced whole: its own receiver continues
+    // the chain while its index steps back out and is read normally. Silencing the link
+    // outright would take the index with it, and `isset($a[$b]->p)` warns about `$b` in PHP.
+    if let ExprKind::ArrayAccess { array, index } = &chain.kind {
+        return lower_array_access_with_missing_warning(ctx, array, index, chain, false);
+    }
+    ctx.enter_probe_spine();
+    let value = lower_expr(ctx, chain);
+    ctx.leave_probe_spine();
+    value
 }
 
 /// Lowers array access once the receiver is already evaluated.

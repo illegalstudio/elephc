@@ -117,7 +117,9 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // release the unused owned name
     abi::emit_symbol_address(emitter, "x0", "_ob_ntc_create_fail");             // load the failed-create notice line
     emitter.instruction(&format!("mov x1, #{}", OB_NTC_CREATE_FAIL.len()));     // notice byte length
-    emitter.instruction("bl __rt_stdout_write");                                // write the notice through the funnel
+    emitter.instruction("mov x2, x1");                                          // diag ABI: length in x2
+    emitter.instruction("mov x1, x0");                                          // diag ABI: pointer in x1
+    emitter.instruction("bl __rt_diag_warning");                                // php routes notices through the diagnostic funnel
     emitter.instruction("mov x0, #0");                                          // report failure
     emitter.instruction("b __rt_ob_start_done");                                // finish
     // -- PHP-shaped capacity: 16384 default, page-aligned chunk+1 otherwise --
@@ -177,7 +179,10 @@ pub fn emit_ob_start(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // no handler stub (default handler)
     emitter.instruction("mov x1, #0");                                          // no handler env word
     emitter.instruction("mov x2, #0");                                          // no chunk size
-    emitter.instruction("mov x3, #112");                                        // PHP_OUTPUT_HANDLER_STDFLAGS
+    emitter.instruction(&format!(
+        "mov x3, #{}",
+        elephc_builtin_contract::php_constants::OUTPUT_HANDLER_STDFLAGS
+    ));                                                                         // PHP_OUTPUT_HANDLER_STDFLAGS, from the table that publishes its name
     abi::emit_symbol_address(emitter, "x4", "_ob_handler_name");                // default display name pointer
     emitter.instruction(&format!("mov x5, #{}", OB_DEFAULT_HANDLER_NAME.len())); // default display name length
     emitter.instruction("b __rt_ob_start_ex");                                  // tail-call the full entry point
@@ -226,7 +231,7 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // release the unused owned name
     abi::emit_symbol_address(emitter, "rdi", "_ob_ntc_create_fail");            // load the failed-create notice line
     emitter.instruction(&format!("mov esi, {}", OB_NTC_CREATE_FAIL.len()));     // notice byte length
-    emitter.instruction("call __rt_stdout_write");                              // write the notice through the funnel
+    emitter.instruction("call __rt_diag_warning");                              // php routes notices through the diagnostic funnel
     emitter.instruction("xor eax, eax");                                        // report failure
     emitter.instruction("jmp __rt_ob_start_done_x86");                          // finish
     // -- PHP-shaped capacity: 16384 default, page-aligned chunk+1 otherwise --
@@ -288,7 +293,10 @@ fn emit_ob_start_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edi, edi");                                        // no handler stub (default handler)
     emitter.instruction("xor esi, esi");                                        // no handler env word
     emitter.instruction("xor edx, edx");                                        // no chunk size
-    emitter.instruction("mov ecx, 112");                                        // PHP_OUTPUT_HANDLER_STDFLAGS
+    emitter.instruction(&format!(
+        "mov ecx, {}",
+        elephc_builtin_contract::php_constants::OUTPUT_HANDLER_STDFLAGS
+    ));                                                                         // PHP_OUTPUT_HANDLER_STDFLAGS, from the table that publishes its name
     abi::emit_symbol_address(emitter, "r8", "_ob_handler_name");                // default display name pointer
     emitter.instruction(&format!("mov r9, {}", OB_DEFAULT_HANDLER_NAME.len())); // default display name length
     emitter.instruction("jmp __rt_ob_start_ex");                                // tail-call the full entry point
@@ -874,7 +882,9 @@ fn emit_gated_op(
     emitter.label(&fail);
     abi::emit_symbol_address(emitter, "x0", no_buffer_msg.0);                   // load the no-buffer notice line
     emitter.instruction(&format!("mov x1, #{}", no_buffer_msg.1));              // notice byte length
-    emitter.instruction("bl __rt_stdout_write");                                // write the notice through the funnel
+    emitter.instruction("mov x2, x1");                                          // diag ABI: length in x2
+    emitter.instruction("mov x1, x0");                                          // diag ABI: pointer in x1
+    emitter.instruction("bl __rt_diag_warning");                                // php routes notices through the diagnostic funnel
     emitter.instruction("mov x0, #0");                                          // report failure
     emitter.instruction(&format!("b {done}"));                                  // finish
     emitter.label(&gated);
@@ -936,7 +946,7 @@ fn emit_gated_op_x86_64(
     emitter.label(&fail);
     abi::emit_symbol_address(emitter, "rdi", no_buffer_msg.0);                  // load the no-buffer notice line
     emitter.instruction(&format!("mov esi, {}", no_buffer_msg.1));              // notice byte length
-    emitter.instruction("call __rt_stdout_write");                              // write the notice through the funnel
+    emitter.instruction("call __rt_diag_warning");                              // php routes notices through the diagnostic funnel
     emitter.instruction("xor eax, eax");                                        // report failure
     emitter.instruction(&format!("jmp {done}"));                                // finish
     emitter.label(&gated);
@@ -1060,7 +1070,9 @@ fn emit_get_pop_op(
     if let Some((msg_sym, msg_len)) = no_buffer_msg {
         abi::emit_symbol_address(emitter, "x0", msg_sym);                       // load the no-buffer notice line
         emitter.instruction(&format!("mov x1, #{}", msg_len));                  // notice byte length
-        emitter.instruction("bl __rt_stdout_write");                            // write the notice through the funnel
+        emitter.instruction("mov x2, x1");                                          // diag ABI: length in x2
+        emitter.instruction("mov x1, x0");                                          // diag ABI: pointer in x1
+        emitter.instruction("bl __rt_diag_warning");                                // php routes notices through the diagnostic funnel
     }
     emitter.instruction(&format!("b {none}"));                                  // return the null failure pair
     emitter.label(&gated);
@@ -1132,7 +1144,7 @@ fn emit_get_pop_op_x86_64(
     if let Some((msg_sym, msg_len)) = no_buffer_msg {
         abi::emit_symbol_address(emitter, "rdi", msg_sym);                      // load the no-buffer notice line
         emitter.instruction(&format!("mov esi, {}", msg_len));                  // notice byte length
-        emitter.instruction("call __rt_stdout_write");                          // write the notice through the funnel
+        emitter.instruction("call __rt_diag_warning");                              // php routes notices through the diagnostic funnel
     }
     emitter.instruction(&format!("jmp {none}"));                                // return the null failure pair
     emitter.label(&gated);
@@ -1318,10 +1330,10 @@ mod tests {
     #[test]
     fn flush_paths_run_handler_and_route_through_stdout_write() {
         let mac = render(Platform::MacOS, Arch::AArch64);
-        assert!(mac.contains("bl __rt_stdout_write"));
+        assert!(mac.contains("bl __rt_diag_warning"));
         assert!(mac.contains("bl __rt_ob_apply_handler"));
         let linux_x86 = render(Platform::Linux, Arch::X86_64);
-        assert!(linux_x86.contains("call __rt_stdout_write"));
+        assert!(linux_x86.contains("call __rt_diag_warning"));
         assert!(linux_x86.contains("call __rt_ob_apply_handler"));
     }
 

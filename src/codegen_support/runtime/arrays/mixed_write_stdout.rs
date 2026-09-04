@@ -10,8 +10,10 @@
 //! - Every scalar branch routes its terminal write through `__rt_stdout_write` (not a raw `write` syscall) so `--web`
 //!   output capture applies: echoing a boxed `Mixed` value reaches the response body instead of the worker's stdout.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::data::ARRAY_TO_STRING_MSG;
 
 /// Emits the `__rt_mixed_write_stdout` runtime helper for the active target.
 ///
@@ -45,11 +47,24 @@ pub fn emit_mixed_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_write_stdout_resource");               // resources print with PHP's Resource id marker
     emitter.instruction("cmp x9, #2");                                          // is the boxed value a float?
     emitter.instruction("b.eq __rt_mixed_write_stdout_float");                  // floats print via ftoa
+    emitter.instruction("cmp x9, #4");                                          // is the boxed value an indexed array?
+    emitter.instruction("b.eq __rt_mixed_write_stdout_array");                  // php echoes any array as the literal "Array"
+    emitter.instruction("cmp x9, #5");                                          // is the boxed value a hash?
+    emitter.instruction("b.eq __rt_mixed_write_stdout_array");                  // a hash echoes identically to an indexed array
     emitter.instruction("cmp x9, #1");                                          // is the boxed value a string?
-    emitter.instruction("b.ne __rt_mixed_write_stdout_done");                   // non-scalar boxed payloads print nothing for echo
+    emitter.instruction("b.ne __rt_mixed_write_stdout_done");                   // the remaining boxed payloads print nothing for echo
     emitter.instruction("ldr x1, [x0, #8]");                                    // load the boxed string pointer
     emitter.instruction("ldr x2, [x0, #16]");                                   // load the boxed string length
     emitter.instruction("b __rt_mixed_write_stdout_emit");                      // emit the boxed string through the capture-aware tail
+
+    // `echo $v` where `$v` is a boxed array printed NOTHING; php warns and prints `Array`.
+    emitter.label("__rt_mixed_write_stdout_array");
+    abi::emit_symbol_address(emitter, "x1", "_array_to_string_msg");
+    emitter.instruction(&format!("mov x2, #{}", ARRAY_TO_STRING_MSG.len()));    // the warning's byte length
+    emitter.instruction("bl __rt_diag_warning");                                // php warns at every array-to-string conversion
+    abi::emit_symbol_address(emitter, "x1", "_iterable_array_str");             // the literal php prints
+    emitter.instruction("mov x2, #5");                                          // 5-byte length of "Array"
+    emitter.instruction("b __rt_mixed_write_stdout_emit");                      // share the capture-aware write tail
 
     emitter.label("__rt_mixed_write_stdout_bool");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the boxed bool payload
@@ -110,11 +125,24 @@ fn emit_mixed_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_write_stdout_resource");                 // resources print with PHP's Resource id marker
     emitter.instruction("cmp r10, 2");                                          // is the boxed value a float?
     emitter.instruction("je __rt_mixed_write_stdout_float");                    // floats print through the shared float-to-string helper
+    emitter.instruction("cmp r10, 4");                                          // is the boxed value an indexed array?
+    emitter.instruction("je __rt_mixed_write_stdout_array");                    // php echoes any array as the literal "Array"
+    emitter.instruction("cmp r10, 5");                                          // is the boxed value a hash?
+    emitter.instruction("je __rt_mixed_write_stdout_array");                    // a hash echoes identically to an indexed array
     emitter.instruction("cmp r10, 1");                                          // is the boxed value a string?
-    emitter.instruction("jne __rt_mixed_write_stdout_done");                    // non-scalar boxed payloads print nothing for echo
+    emitter.instruction("jne __rt_mixed_write_stdout_done");                    // the remaining boxed payloads print nothing for echo
     emitter.instruction("mov rdx, QWORD PTR [rax + 16]");                       // load the boxed string length into the length register
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed string pointer into the pointer register
     emitter.instruction("jmp __rt_mixed_write_stdout_emit");                    // emit the boxed string through the capture-aware tail
+
+    // `echo $v` where `$v` is a boxed array printed NOTHING; php warns and prints `Array`.
+    emitter.label("__rt_mixed_write_stdout_array");
+    abi::emit_symbol_address(emitter, "rdi", "_array_to_string_msg");
+    emitter.instruction(&format!("mov rsi, {}", ARRAY_TO_STRING_MSG.len()));    // the warning's byte length
+    emitter.instruction("call __rt_diag_warning");                              // php warns at every array-to-string conversion
+    abi::emit_symbol_address(emitter, "rax", "_iterable_array_str");            // the literal php prints
+    emitter.instruction("mov rdx, 5");                                          // 5-byte length of "Array"
+    emitter.instruction("jmp __rt_mixed_write_stdout_emit");                    // share the capture-aware write tail
 
     emitter.label("__rt_mixed_write_stdout_bool");
     emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // load the boxed bool payload into the integer conversion register

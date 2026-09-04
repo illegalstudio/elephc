@@ -2,13 +2,13 @@
 title: "fscanf()"
 description: "Parses input from a file according to a format."
 sidebar:
-  order: 183
+  order: 186
 ---
 
 ## fscanf()
 
 ```php
-function fscanf(resource $stream, string $format, ...$vars): array
+function fscanf(resource $stream, string $format, ...$vars): mixed
 ```
 
 Parses input from a file according to a format.
@@ -18,7 +18,7 @@ Parses input from a file according to a format.
 - `$format` (`string`)
 - `...$vars` — variadic: collects excess arguments into `$vars`.
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 

@@ -171,7 +171,23 @@ impl DataSection {
 
     /// Looks up `label` in the common-symbol deduplication map; if found, returns the existing label.
     /// Otherwise inserts `label` into `comm_entries` with the given `size` and returns `label` unchanged.
+    ///
+    /// # Panics
+    ///
+    /// When `label` is an assembler-LOCAL name. A `.comm` declares a real symbol, so a local name
+    /// makes the directive itself invalid (`non-local symbol required`) and then leaves every
+    /// address-taking reference to it dangling (`assembler local symbol '…' not defined`). Neither
+    /// message names the `add_comm` call that caused them — they name the `adrp`/`lea` line and a
+    /// line number in the assembler's stdin — which is how six `io::streams` filter tests sat
+    /// unable to ASSEMBLE without it being obvious what to look at. `FunctionContext` has
+    /// `next_global_label` for exactly this; `next_label` is for branch targets.
     pub fn add_comm(&mut self, label: String, size: usize) -> String {
+        // Both spellings: a macOS local begins `L`, an ELF one `.L`.
+        assert!(
+            !label.starts_with('L') && !label.starts_with(".L"),
+            "`.comm` needs a non-local symbol, got the assembler-local name `{label}` — \
+             use `next_global_label` rather than `next_label` for a common-storage slot"
+        );
         if let Some(existing) = self.comm_dedup.get(&label) {
             return existing.clone();
         }

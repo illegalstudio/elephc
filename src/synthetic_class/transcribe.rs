@@ -1198,6 +1198,26 @@ fn bin_op(op: &BinOp) -> &'static str {
     }
 }
 
+/// Removes span payloads so a synthetic node and a parsed node compare on structure.
+///
+/// At module level, not inside `tests`, because every converted prelude's oracle needs exactly
+/// this rule and a private test module cannot be named from a sibling. Two constructions of the
+/// same AST cannot agree on source positions and never needed to.
+#[cfg(test)]
+pub(crate) fn strip_spans(rendered: &str) -> String {
+    let mut cleaned = String::with_capacity(rendered.len());
+    let mut rest = rendered;
+    while let Some(at) = rest.find("Span {") {
+        cleaned.push_str(&rest[..at]);
+        cleaned.push_str("Span");
+        let after = &rest[at..];
+        let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
+        rest = &after[close..];
+    }
+    cleaned.push_str(rest);
+    cleaned
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1217,6 +1237,8 @@ mod tests {
                 crate::pdo_prelude::OptionalDrivers::from_build_environment(),
             ),
             "image" => crate::image_prelude::image_declarations(),
+            "gz" => crate::gz_prelude::build::gz_declarations(),
+            "scanf" => crate::scanf_prelude::build::scanf_declarations(),
             other => panic!("unknown prelude {other}"),
         };
         let php = std::fs::read_to_string(&php_path).expect("must read the PHP fixture");
@@ -1245,20 +1267,6 @@ mod tests {
         }
     }
 
-    /// Removes span payloads so a synthetic node and a parsed node compare on structure.
-    fn strip_spans(rendered: &str) -> String {
-        let mut cleaned = String::with_capacity(rendered.len());
-        let mut rest = rendered;
-        while let Some(at) = rest.find("Span {") {
-            cleaned.push_str(&rest[..at]);
-            cleaned.push_str("Span");
-            let after = &rest[at..];
-            let close = after.find('}').map(|end| end + 1).unwrap_or(after.len());
-            rest = &after[close..];
-        }
-        cleaned.push_str(rest);
-        cleaned
-    }
 
     /// MIGRATION DRIVER — run with `ELEPHC_TRANSCRIBE_OUT=<path>` to dump the builder calls
     /// for a prelude still held as PHP text. Does nothing without the variable, so it is inert

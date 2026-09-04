@@ -14,6 +14,7 @@ mod array_literals;
 mod builtins_arrays_core;
 mod builtins_arrays_iterators;
 mod builtins_arrays_sets;
+mod builtins_arrays_type_errors;
 mod builtins_bcmath;
 mod builtins_class_metadata;
 #[cfg(feature = "curl")]

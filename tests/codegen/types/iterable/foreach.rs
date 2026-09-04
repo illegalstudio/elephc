@@ -302,10 +302,10 @@ fn test_mixed_foreach_over_non_iterable_warns_and_preserves_prior_side_effects()
     assert!(out.success, "program unexpectedly failed: {}", out.stderr);
     assert_eq!(out.stdout, "S");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: foreach() argument must be of type array|object, int given\n",
         "{}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -854,9 +854,9 @@ echo 'after:', implode(',', $a[0]);
     );
     assert_eq!(out.stdout, "after:1,2");
     assert!(
-        out.stderr.contains("Undefined array key 7"),
+        out.diagnostics.contains("Undefined array key 7"),
         "expected the missing-index warning to survive the fetch-for-write read, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("leak summary: clean"),
@@ -960,9 +960,9 @@ echo 'after:', implode(',', $h['a']);
     );
     assert_eq!(out.stdout, "after:1,2");
     assert!(
-        out.stderr.contains("Undefined array key \"zz\""),
+        out.diagnostics.contains("Undefined array key \"zz\""),
         "expected the missing-key warning to survive the fetch-for-write read, got: {}",
-        out.stderr
+        out.diagnostics
     );
     assert!(
         out.stderr.contains("leak summary: clean"),

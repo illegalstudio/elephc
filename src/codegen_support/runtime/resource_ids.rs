@@ -126,6 +126,54 @@ pub(crate) fn emit_resource_ids(emitter: &mut Emitter) {
             emit_resource_id_of_x86_64(emitter);
         }
     }
+    emit_resource_id_burn(emitter);
+}
+
+/// Emits `__rt_resource_id_burn_if_pending()`, which consumes one php resource id.
+///
+/// php's `php://temp` is a temporary-file stream WRAPPING a memory stream, and php registers
+/// BOTH — so the next id after a `php://temp` open is two higher, not one. Measured on `php -n`
+/// 8.5.6: three `php://memory` opens number `5, 6, 7`, while memory-temp-memory numbers
+/// `5, 6, 8`. Closing a stream does not give its id back on either side.
+///
+/// The burn happens AFTER the stream has taken its own id, which is why it is a separate step
+/// rather than a second allocation inside the open: the temp stream keeps the FIRST id.
+///
+/// Reads and clears `_php_temp_id_pending`, so an open that did not set it costs one load.
+fn emit_resource_id_burn(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: resource_id_burn_if_pending ---");
+            emitter.label_global("__rt_resource_id_burn_if_pending");
+            abi::emit_symbol_address(emitter, "x9", "_php_temp_id_pending");
+            emitter.instruction("ldr x10, [x9]");                               // did an open ask for the second id?
+            emitter.instruction("cbz x10, __rt_ridb_done");                     // the common case: nothing to burn
+            emitter.instruction("str xzr, [x9]");                               // one open, one burn
+            abi::emit_symbol_address(emitter, "x9", "_resource_id_next");
+            emitter.instruction("ldr x10, [x9]");
+            emitter.instruction("add x10, x10, #1");                            // the inner stream php also registers
+            emitter.instruction("str x10, [x9]");
+            emitter.label("__rt_ridb_done");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.blank();
+            emitter.comment("--- runtime: resource_id_burn_if_pending ---");
+            emitter.label_global("__rt_resource_id_burn_if_pending");
+            abi::emit_symbol_address(emitter, "r9", "_php_temp_id_pending");
+            emitter.instruction("mov r10, QWORD PTR [r9]");                     // did an open ask for the second id?
+            emitter.instruction("test r10, r10");
+            emitter.instruction("jz __rt_ridb_done_x86");                       // the common case: nothing to burn
+            emitter.instruction("mov QWORD PTR [r9], 0");                       // one open, one burn
+            abi::emit_symbol_address(emitter, "r9", "_resource_id_next");
+            emitter.instruction("mov r10, QWORD PTR [r9]");
+            emitter.instruction("add r10, 1");                                  // the inner stream php also registers
+            emitter.instruction("mov QWORD PTR [r9], r10");
+            emitter.label("__rt_ridb_done_x86");
+            emitter.instruction("ret");
+        }
+    }
 }
 
 /// Emits the AArch64 `__rt_resource_id_mint`.
@@ -185,14 +233,23 @@ fn emit_resource_id_mint_aarch64(emitter: &mut Emitter) {
 
 /// Emits the AArch64 `__rt_resource_id_of`.
 ///
-/// Input: `x0` = native resource payload. Output: `x0` = the PHP resource id.
-/// A payload with no binding is bound to a fresh id here rather than reported as
-/// zero: this is the last line of defence that keeps a native address from ever
-/// reaching program output. Contains no nested `bl`, so it returns with `ret`.
+/// Input: `x0` = opaque registry handle or legacy native payload.
+/// Output: `x0` = the PHP resource id. Registry-owned resources carry the id in
+/// their authoritative slot; only legacy non-stream payloads fall back to the
+/// compatibility map below.
 fn emit_resource_id_of_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: resource_id_of (display id for a resource payload) ---");
     emitter.label_global("__rt_resource_id_of");
+
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the candidate handle and return address across registry lookup
+    emitter.instruction("bl __rt_resource_id_of_registry");                     // ask the authoritative dynamic registry first
+    emitter.instruction("cbz x0, __rt_resource_id_of_legacy");                  // zero means this is a legacy non-registry payload
+    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller return address on the registry hit path
+    emitter.instruction("add sp, sp, #16");                                     // release the saved candidate handle
+    emitter.instruction("ret");                                                 // return the PHP id stored in the registry slot
+    emitter.label("__rt_resource_id_of_legacy");
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the legacy payload and caller return address
 
     emitter.instruction("stp x9, x10, [sp, #-48]!");                            // preserve the hash and probe scratch pair
     emitter.instruction("stp x11, x12, [sp, #16]");                             // preserve the table-address scratch pair
@@ -329,12 +386,23 @@ fn emit_resource_id_mint_x86_64(emitter: &mut Emitter) {
 
 /// Emits the x86_64 `__rt_resource_id_of`.
 ///
-/// Input: `rax` = native resource payload. Output: `rax` = the PHP resource id,
-/// minting one on a miss so no display path can print a native address.
+/// Input: `rax` = opaque registry handle or legacy native payload.
+/// Output: `rax` = the PHP resource id, consulting the authoritative dynamic
+/// registry before the legacy compatibility map.
 fn emit_resource_id_of_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: resource_id_of (display id for a resource payload) ---");
     emitter.label_global("__rt_resource_id_of");
+
+    emitter.instruction("push rax");                                            // preserve the candidate handle and align the stack for the helper call
+    emitter.instruction("mov rdi, rax");                                        // pass the candidate opaque handle in the SysV argument register
+    emitter.instruction("call __rt_resource_id_of_registry");                   // ask the authoritative dynamic registry first
+    emitter.instruction("test rax, rax");                                       // did the registry recognize this handle generation?
+    emitter.instruction("jz __rt_resource_id_of_legacy_x86");                   // zero means this is a legacy non-registry payload
+    emitter.instruction("add rsp, 8");                                          // discard the saved candidate after a registry hit
+    emitter.instruction("ret");                                                 // return the PHP id stored in the registry slot
+    emitter.label("__rt_resource_id_of_legacy_x86");
+    emitter.instruction("pop rax");                                             // restore the legacy payload for compatibility lookup
 
     emitter.instruction("push rcx");                                            // preserve the hash scratch
     emitter.instruction("push rdx");                                            // preserve the probe-counter scratch
@@ -510,14 +578,38 @@ mod tests {
         }
     }
 
-    /// The AArch64 helpers must never end a body with `ret` after an internal `bl`,
-    /// and in fact contain no `bl` at all: they are leaf helpers so the call sites
-    /// (including `__rt_mixed_from_value`, mid-allocation) cannot lose `x30`.
+    /// These stopped being leaf helpers when `__rt_resource_id_of` began asking the
+    /// authoritative registry first, so the property that actually protects the call
+    /// sites (including `__rt_mixed_from_value`, mid-allocation) is no longer "contains
+    /// no `bl`" but "never loses `x30` across the one it does contain".
+    ///
+    /// The save is the `stp x0, x30` that also preserves the candidate handle, and BOTH
+    /// paths out of the lookup must undo it: the registry hit reloads `x30` and drops the
+    /// slot, the legacy miss pops the pair back.
     #[test]
-    fn aarch64_helpers_are_leaf_helpers() {
+    fn aarch64_helpers_preserve_the_link_register_across_the_registry_lookup() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
         emit_resource_ids(&mut emitter);
         let asm = emitter.output();
-        assert!(!asm.contains("    bl "), "resource-id helpers must stay leaf helpers:\n{asm}");
+        assert_eq!(
+            asm.matches("    bl ").count(),
+            1,
+            "only the registry lookup may be called:\n{asm}"
+        );
+        let (before, after) = asm
+            .split_once("    bl __rt_resource_id_of_registry\n")
+            .expect("the registry lookup must be emitted");
+        assert!(
+            before.contains("    stp x0, x30, [sp, #-16]!\n"),
+            "the link register must be saved BEFORE the lookup:\n{asm}"
+        );
+        assert!(
+            after.contains("    ldr x30, [sp, #8]\n"),
+            "the registry-hit path must restore the link register:\n{asm}"
+        );
+        assert!(
+            after.contains("    ldp x0, x30, [sp], #16\n"),
+            "the legacy path must restore the link register:\n{asm}"
+        );
     }
 }

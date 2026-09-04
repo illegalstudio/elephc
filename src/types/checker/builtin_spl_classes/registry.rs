@@ -59,6 +59,13 @@ pub(super) const SPL_CLASS_NAMES: &[&str] = &[
 
 const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo"];
 
+/// The ZIP classes the registration inserts.
+///
+/// Its own list rather than an entry in `SPL_CLASS_NAMES`, because it is not SPL — but it has to
+/// be in the SCAN, or the registration that inserts `ZipArchive` never runs and the class exists
+/// without being nameable.
+pub(super) const ZIP_CLASS_NAMES: &[&str] = &["ZipArchive"];
+
 /// Returns whether `program` can reach any of the builtin SPL or Phar classes.
 ///
 /// WHY THIS GATE EXISTS, measured rather than assumed. Registering these 40 classes costs
@@ -86,8 +93,11 @@ const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo"];
 /// later, but this predicate matches on the written name and registers the builtin surface
 /// anyway. That over-registers, which costs time and breaks nothing.
 ///
-/// The set is `SPL_CLASS_NAMES` plus `PHAR_CLASS_NAMES`; they are not split because
-/// `PharFileInfo extends SplFileInfo`, so gating Phar separately would imply the SPL gate anyway.
+/// The set is `SPL_CLASS_NAMES` plus `PHAR_CLASS_NAMES` plus `ZIP_CLASS_NAMES`; the first two are
+/// not split because `PharFileInfo extends SplFileInfo`, so gating Phar separately would imply the
+/// SPL gate anyway. `ZipArchive` is here because the same registration inserts it: a name missing
+/// from this scan is a class the compiler HAS and no program can reach, which is what
+/// `every_registered_class_is_reachable_by_the_gate` now refuses.
 pub(crate) fn program_may_reference_spl(program: &[crate::parser::ast::Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
     if usage.introspects {
@@ -111,6 +121,7 @@ pub(crate) fn program_may_reference_spl(program: &[crate::parser::ast::Stmt]) ->
     SPL_CLASS_NAMES
         .iter()
         .chain(PHAR_CLASS_NAMES.iter())
+        .chain(ZIP_CLASS_NAMES.iter())
         .any(|name| {
             let key = php_symbol_key(name);
             usage.classes.contains(&key) || usage.literals.contains(&key)
@@ -172,6 +183,39 @@ fn ensure_no_class_redeclarations(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies every class the registration inserts can be REACHED by the scan that gates it.
+    ///
+    /// The two sides are separate lists: one decides what gets registered, the other whether to
+    /// register at all. `ZipArchive` was in the first and neither of the others, so the compiler
+    /// carried a class no program could name — "Undefined class: ZipArchive" from a build that
+    /// defines it. Reading both sides here is what makes the next omission a red test.
+    #[test]
+    fn every_registered_class_is_reachable_by_the_gate() {
+        let mut interfaces = HashMap::new();
+        let mut classes = HashMap::new();
+        super::super::inject_builtin_spl_classes(&mut interfaces, &mut classes, true)
+            .expect("the builtin classes must register");
+        let reachable: std::collections::HashSet<String> = SPL_CLASS_NAMES
+            .iter()
+            .chain(PHAR_CLASS_NAMES.iter())
+            .chain(ZIP_CLASS_NAMES.iter())
+            .map(|name| php_symbol_key(name))
+            .collect();
+        let unreachable: Vec<&String> = classes
+            .keys()
+            // A `__Elephc`-prefixed class is SYNTHETIC: the prefix cannot appear in PHP source, so
+            // no program names it and none needs to — it is registered alongside the class that
+            // uses it, and reached through that one.
+            .filter(|name| !name.starts_with("__Elephc"))
+            .filter(|name| !reachable.contains(&php_symbol_key(name)))
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "these classes are registered but no program can name them, because the gate that \
+             decides whether to register does not list them: {unreachable:?}"
+        );
+    }
 
     /// Parses user-facing PHP the way the checker driver receives it.
     fn parse(source: &str) -> Vec<crate::parser::ast::Stmt> {

@@ -117,6 +117,22 @@ impl CallArgPlan {
             .any(|arg| matches!(arg.kind, ExprKind::Spread(_)))
     }
 
+    /// Reports, per normalized slot, whether the NORMALIZER filled it rather than the program.
+    ///
+    /// A by-reference parameter the call omitted still occupies a slot once normalization has
+    /// materialised its default, and by then the expression sitting there is indistinguishable
+    /// from one the program wrote — php refuses a literal `null` in a by-ref slot and accepts the
+    /// same parameter omitted, so only provenance separates them.
+    pub(crate) fn slots_filled_by_default(&self) -> Vec<bool> {
+        if self.passthrough_args.is_some() {
+            return Vec::new();
+        }
+        self.regular_args
+            .iter()
+            .map(|arg| matches!(arg, PlannedRegularArg::Default(_)))
+            .collect()
+    }
+
     /// Returns a flat list of expressions in parameter order suitable for codegen
     /// materialization. Preserves spread expressions for static-array spreads that
     /// were resolved in place; applies default guards for optional slots when the

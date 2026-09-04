@@ -60,31 +60,60 @@ pub(super) fn parse_zip_entry_with_public_key(
     None
 }
 
-/// Parses a zip-based phar into entries plus its global metadata and stub.
+/// One decoded ZIP central-directory record, with its payload still in `data`.
 ///
-/// Global metadata is read from the EOCD archive comment; the reserved
-/// `.phar/stub.php` entry becomes the stub and other `.phar/*` control entries are
-/// hidden from the entry listing.
-#[cfg(test)]
-pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {
-    parse_zip_archive_with_public_key(data, None)
+/// Borrowing the name and comment out of the archive buffer keeps the walk
+/// allocation-free: only the entry a caller actually asks for is decoded.
+pub(super) struct ZipCentralRecord<'a> {
+    /// The entry name exactly as stored — no separator or leading-slash rewriting.
+    pub(super) name: &'a [u8],
+    /// ZIP compression method (`ZIP_METHOD_STORE` / `ZIP_METHOD_DEFLATE`).
+    pub(super) method: u16,
+    /// Stored (post-compression, post-encryption) byte length.
+    pub(super) compressed_size: usize,
+    /// Original byte length.
+    pub(super) uncompressed_size: usize,
+    /// Offset of the entry's local file header inside the archive.
+    pub(super) local_offset: usize,
+    /// CRC-32 of the original bytes, as recorded in the central directory.
+    pub(super) crc: u32,
+    /// MS-DOS packed modification time (hours 11..15, minutes 5..10, 2-second units 0..4).
+    pub(super) dos_time: u16,
+    /// MS-DOS packed modification date (years-since-1980 9..15, month 5..8, day 0..4).
+    pub(super) dos_date: u16,
+    /// Whether the entry is ZipCrypto encrypted (general-purpose flag bit 0).
+    pub(super) encrypted: bool,
+    /// The ZipCrypto password check byte for this entry.
+    pub(super) check_byte: u8,
+    /// The central-directory file comment (phar per-file metadata rides here).
+    pub(super) comment: &'a [u8],
 }
 
-/// Parses a zip-based PHAR and authenticates an OpenSSL signature with `public_key`.
-pub(super) fn parse_zip_archive_with_public_key(
-    data: &[u8],
-    public_key: Option<&rsa::RsaPublicKey>,
-) -> Option<Archive> {
-    verify_zip_phar_signature(data, public_key)?;
-    let eocd = find_zip_eocd(data)?;
+impl ZipCentralRecord<'_> {
+    /// Decodes this record's payload out of the archive it was walked from.
+    pub(super) fn decode(&self, data: &[u8]) -> Option<Vec<u8>> {
+        decode_zip_local_entry(
+            data,
+            self.local_offset,
+            self.method,
+            self.compressed_size,
+            self.uncompressed_size,
+            self.encrypted,
+            self.check_byte,
+        )
+    }
+}
+
+/// Walks a ZIP central directory and returns every record, undecoded.
+///
+/// This is the shared spine under both the phar view of a ZIP container
+/// ([`parse_zip_archive`], which hides `.phar/*` control entries) and the raw
+/// `zip://` wrapper view ([`zip_entry_payload`], which hides nothing). Walking
+/// without decoding also means one entry stored with a method the bridge cannot
+/// inflate no longer makes the whole archive unreadable.
+pub(super) fn zip_central_records(data: &[u8]) -> Option<Vec<ZipCentralRecord<'_>>> {
     let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
-    let comment_len = le16(data, eocd + 20)? as usize;
-    let comment_start = eocd.checked_add(22)?;
-    let metadata = data
-        .get(comment_start..comment_start.checked_add(comment_len)?)?
-        .to_vec();
-    let mut entries = Vec::with_capacity(entry_count.min(1 << 16));
-    let mut stub = Vec::new();
+    let mut records = Vec::with_capacity(entry_count.min(1 << 16));
     let mut p = central_dir_offset;
     for _ in 0..entry_count {
         if le32(data, p)? != 0x0201_4b50 {
@@ -95,6 +124,9 @@ pub(super) fn parse_zip_archive_with_public_key(
         // directory we are already reading here, so it needs no special handling
         // beyond trusting these central-directory sizes.
         let method = le16(data, p + 10)?;
+        let dos_time = le16(data, p + 12)?;
+        let dos_date = le16(data, p + 14)?;
+        let crc = le32(data, p + 16)?;
         let mut compressed_size = le32(data, p + 20)? as usize;
         let mut uncompressed_size = le32(data, p + 24)? as usize;
         let name_len = le16(data, p + 28)? as usize;
@@ -113,32 +145,182 @@ pub(super) fn parse_zip_archive_with_public_key(
             &mut local_offset,
         )?;
         let (encrypted, check_byte) = zip_entry_crypto(data, p)?;
-        let payload = decode_zip_local_entry(
-            data,
-            local_offset,
+        let comment_start = name_start.checked_add(name_len)?.checked_add(extra_len)?;
+        let comment = data.get(comment_start..comment_start.checked_add(entry_comment_len)?)?;
+        records.push(ZipCentralRecord {
+            name,
             method,
             compressed_size,
             uncompressed_size,
+            local_offset,
+            crc,
+            dos_time,
+            dos_date,
             encrypted,
             check_byte,
-        )?;
-        let comment_start = name_start.checked_add(name_len)?.checked_add(extra_len)?;
-        if name == PHAR_STUB_ENTRY {
+            comment,
+        });
+        p = comment_start.checked_add(entry_comment_len)?;
+    }
+    Some(records)
+}
+
+/// Returns the bytes of `entry` from a plain ZIP archive, by EXACT stored name.
+///
+/// This is the `zip://` stream wrapper's view of an archive, which php's
+/// `ext/zip` gives no phar meaning: a `.phar/*` control entry is a readable file
+/// like any other, no leading slash is stripped, and no directory name resolves.
+pub(super) fn zip_entry_payload(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
+    let records = zip_central_records(data)?;
+    let record = records.iter().find(|record| record.name == entry)?;
+    record.decode(data)
+}
+
+/// `ZipArchive::EM_NONE` — the entry is stored in the clear.
+const ZIP_EM_NONE: u32 = 0;
+/// `ZipArchive::EM_TRAD_PKWARE` — traditional PKWARE (ZipCrypto) encryption.
+///
+/// Measured on `php -n` 8.5.6: `statIndex()` on an entry written by
+/// `zip -P pass` reports `encryption_method => int(1)`. The bridge reads no AES
+/// entry, so the AE-x methods (257/258/259) never arise here.
+const ZIP_EM_TRAD_PKWARE: u32 = 1;
+
+/// Converts an MS-DOS date/time pair into the unix timestamp php reports.
+///
+/// libzip's `_zip_d2u_time` unpacks the fields into a `struct tm` with
+/// `tm_isdst = -1` and hands it to `mktime()`, so the stored wall-clock reading
+/// is interpreted in the PROCESS timezone. Measured on `php -n` 8.5.6: an entry
+/// whose DOS fields read 2026-08-16 15:39:36 stats as `mtime => 1786887576`,
+/// which is that reading in local time (CEST), not in UTC. Calling libc's own
+/// `mktime` is what keeps the two answers the same on any machine, and it is why
+/// this cannot be done with php-level `mktime()`, which uses php's timezone.
+pub(super) fn dos_to_unix_time(dos_date: u16, dos_time: u16) -> i64 {
+    // The C89 prefix of `struct tm` is identical on every platform elephc targets;
+    // the two trailing GNU/BSD fields are declared so the struct is the size the
+    // platform's `mktime` expects to write back into.
+    #[repr(C)]
+    struct CTm {
+        tm_sec: i32,
+        tm_min: i32,
+        tm_hour: i32,
+        tm_mday: i32,
+        tm_mon: i32,
+        tm_year: i32,
+        tm_wday: i32,
+        tm_yday: i32,
+        tm_isdst: i32,
+        tm_gmtoff: i64,
+        tm_zone: *const u8,
+    }
+    extern "C" {
+        fn mktime(tm: *mut CTm) -> i64;
+    }
+    let mut tm = CTm {
+        tm_sec: i32::from((dos_time << 1) & 62),
+        tm_min: i32::from((dos_time >> 5) & 63),
+        tm_hour: i32::from((dos_time >> 11) & 31),
+        tm_mday: i32::from(dos_date & 31),
+        tm_mon: i32::from((dos_date >> 5) & 15) - 1,
+        tm_year: i32::from((dos_date >> 9) & 127) + 80,
+        tm_wday: 0,
+        tm_yday: 0,
+        // -1 asks the C library to work out whether DST was in force, exactly as
+        // libzip does; a hardcoded 0 would shift every summer timestamp by an hour.
+        tm_isdst: -1,
+        tm_gmtoff: 0,
+        tm_zone: std::ptr::null(),
+    };
+    // SAFETY: `tm` is a live, fully initialized `struct tm` with the platform's own
+    // field layout, and `mktime` only reads and writes through the pointer it is given.
+    unsafe { mktime(&mut tm) }
+}
+
+/// Serializes every ZIP entry's `ZipArchive::statIndex()` fields for one archive.
+///
+/// The wire shape is the one the generated array builder already understands —
+/// `u64 little-endian length` followed by that many bytes, repeated. The FIRST
+/// record is the decimal entry count, which is what tells an archive that holds
+/// no entries apart from a file that is no ZIP at all: the count record is absent
+/// only in the second case, and php answers those two with `true` and
+/// `ZipArchive::ER_NOZIP` respectively.
+///
+/// Every later record is one entry, NUL-joined in this order:
+/// `index`, `crc`, `size`, `comp_size`, `comp_method`, `encryption_method`,
+/// `mtime`, `name`. The name comes LAST so a name holding a NUL still survives a
+/// bounded split, and every other field is decimal ASCII.
+pub(super) fn zip_stat_records(data: &[u8]) -> Option<Vec<u8>> {
+    let records = zip_central_records(data)?;
+    let mut out = Vec::new();
+    let push = |record: &[u8], out: &mut Vec<u8>| {
+        out.extend_from_slice(&(record.len() as u64).to_le_bytes());
+        out.extend_from_slice(record);
+    };
+    push(records.len().to_string().as_bytes(), &mut out);
+    for (index, record) in records.iter().enumerate() {
+        let encryption = if record.encrypted {
+            ZIP_EM_TRAD_PKWARE
+        } else {
+            ZIP_EM_NONE
+        };
+        let mut serialized = format!(
+            "{}\0{}\0{}\0{}\0{}\0{}\0{}\0",
+            index,
+            record.crc,
+            record.uncompressed_size,
+            record.compressed_size,
+            record.method,
+            encryption,
+            dos_to_unix_time(record.dos_date, record.dos_time),
+        )
+        .into_bytes();
+        serialized.extend_from_slice(record.name);
+        push(&serialized, &mut out);
+    }
+    Some(out)
+}
+
+/// Parses a zip-based phar into entries plus its global metadata and stub.
+///
+/// Global metadata is read from the EOCD archive comment; the reserved
+/// `.phar/stub.php` entry becomes the stub and other `.phar/*` control entries are
+/// hidden from the entry listing.
+#[cfg(test)]
+pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {
+    parse_zip_archive_with_public_key(data, None)
+}
+
+/// Parses a zip-based phar and authenticates an OpenSSL signature with `public_key`.
+///
+/// The signature is checked BEFORE anything is decoded, which is the point: an archive that
+/// fails authentication must not have its entries read at all.
+pub(super) fn parse_zip_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Archive> {
+    verify_zip_phar_signature(data, public_key)?;
+    let eocd = find_zip_eocd(data)?;
+    let comment_len = le16(data, eocd + 20)? as usize;
+    let comment_start = eocd.checked_add(22)?;
+    let metadata = data
+        .get(comment_start..comment_start.checked_add(comment_len)?)?
+        .to_vec();
+    let records = zip_central_records(data)?;
+    let mut entries = Vec::with_capacity(records.len());
+    let mut stub = Vec::new();
+    for record in records {
+        let payload = record.decode(data)?;
+        if record.name == PHAR_STUB_ENTRY {
             stub = payload;
-        } else if !is_phar_control_entry(name) {
-            let compression = zip_compression_from_method(method)?;
-            // Per-file metadata rides in the central-directory file comment.
-            let entry_metadata = data
-                .get(comment_start..comment_start.checked_add(entry_comment_len)?)?
-                .to_vec();
+        } else if !is_phar_control_entry(record.name) {
+            let compression = zip_compression_from_method(record.method)?;
             entries.push(ArchiveEntry {
-                name: name.to_vec(),
+                name: record.name.to_vec(),
                 payload,
+                // Per-file metadata rides in the central-directory file comment.
+                metadata: record.comment.to_vec(),
                 compression,
-                metadata: entry_metadata,
             });
         }
-        p = comment_start.checked_add(entry_comment_len)?;
     }
     Some(Archive {
         entries,

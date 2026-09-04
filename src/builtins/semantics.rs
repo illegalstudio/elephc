@@ -14,7 +14,7 @@ use std::fmt;
 
 use crate::errors::CompileError;
 use crate::ir::{
-    Effects, Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, ValueId,
+    DataId, Effects, Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, ValueId,
 };
 use crate::parser::ast::Expr;
 use crate::span::Span;
@@ -290,6 +290,13 @@ pub trait BuiltinLoweringContext {
         effects: Effects,
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
+
+    /// Interns a PHP function name so a lowering can emit `Op::Call` against it.
+    ///
+    /// Needed by builtins whose implementation is an injected elephc-PHP prelude function
+    /// rather than a runtime helper — `sscanf()`/`fscanf()` call `__elephc_scanf` this way, so
+    /// one engine serves every target instead of two hand-written assembly bodies.
+    fn intern_function_name(&mut self, name: &str) -> DataId;
 }
 
 /// Normalized builtin call consumed by backend-neutral EIR lowering.
@@ -648,4 +655,20 @@ fn lower_test_probe(
         "test-only builtin {} cannot be lowered",
         call.name,
     )))
+}
+
+/// The [`runtime_fn_semantics`] descriptor with a per-CALL-SITE effect summary.
+///
+/// A builtin whose OPTIONAL argument is by-reference is pure at one call site and not at the
+/// next, and the effects table is keyed by `RuntimeFnId`, which cannot say that. Declaring the
+/// pessimistic answer for every call would keep dead `str_replace()` statements alive; declaring
+/// the optimistic one deleted the call that fills `$count`.
+pub const fn runtime_fn_semantics_with_effects(
+    target: RuntimeFnId,
+    effects: EffectsFn,
+) -> BuiltinSemantics {
+    BuiltinSemantics {
+        effects: BuiltinEffects::Shared(effects),
+        ..runtime_fn_semantics(target)
+    }
 }

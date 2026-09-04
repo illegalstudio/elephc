@@ -1268,8 +1268,12 @@ fn is_reflection_owner_class(class_name: &str) -> bool {
 }
 
 /// Returns `true` if `class_name` is backed by the PHAR bridge.
+///
+/// `ZipArchive` belongs here too: its generated bodies reach the very same
+/// `elephc-phar` staticlib, through `__elephc_zip_stat_entries` for the central
+/// directory and through the `zip://` wrapper for entry bytes.
 fn is_phar_archive_class(class_name: &str) -> bool {
-    matches!(class_name, "Phar" | "PharData")
+    matches!(class_name, "Phar" | "PharData" | "ZipArchive")
 }
 
 /// Returns `true` if the attribute name/arg slices are mismatched or any

@@ -270,6 +270,18 @@ pub enum Op {
     LoadCalledClassId,
     DataAddr,
     LoadLocal,
+    /// Reads a local that no store definitely reached: warns and answers `null`.
+    ///
+    /// PHP does not refuse these programs. `zval_undefined_cv` (php-src
+    /// `Zend/zend_execute.c:280`) raises `Warning: Undefined variable $name` and returns
+    /// `&EG(uninitialized_zval)`, so the read IS null and execution continues. Lowering a read of
+    /// a never-stored slot as an ordinary `LoadLocal` reads uninitialized stack instead, which
+    /// segfaults the moment the value is dereferenced.
+    ///
+    /// The immediate is the variable NAME; the whole diagnostic is composed at compile time from
+    /// it. `MAY_WARN` is what gives the instruction its source line, through the same publisher
+    /// every other warning uses.
+    WarnedNull,
     StoreLocal,
     UnsetLocal,
     ZeroLocalSlot,
@@ -661,6 +673,9 @@ impl Op {
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
+            // Reads nothing — the point is that there is nothing to read — but it WARNS, and
+            // `MAY_WARN` is the gate the per-instruction location publisher runs on.
+            WarnedNull => E::MAY_WARN,
             StoreLocal | UnsetLocal | ZeroLocalSlot | StoreRefCell | ListUnpack | FinallyEnter
             | FinallyExit => E::WRITES_LOCAL,
             PromoteLocalRefCell => {
@@ -692,8 +707,19 @@ impl Op {
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
-            | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            IToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate | VarDump | PrintR => {
+                E::ALLOC_CONCAT
+            }
+            // A float reaching a string coercion can be NaN, and PHP warns when it is
+            // (`unexpected NAN value was coerced to string`, MEASURED on `php -n` 8.5.6 — with the
+            // ` in FILE on line N` tail every diagnostic carries). `__rt_ftoa` raises it from the
+            // runtime, so the only thing that can supply the line is this instruction declaring
+            // that it may warn. Without it the warning still printed, and printed WITHOUT a
+            // location — which read as program output rather than as a diagnostic.
+            //
+            // Deliberately NOT extended to `StrConcat`: it joins strings that are already
+            // formatted, so no NaN can reach it, and `MAY_WARN` costs four stores at every site.
+            FToStr | MixedCastString => E::ALLOC_CONCAT | E::MAY_WARN,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
@@ -835,7 +861,16 @@ impl Op {
     pub fn allows_effect_refinement(self) -> bool {
         matches!(
             self,
-            Op::IDiv
+            // Whether an echo can warn depends on WHAT is echoed, not on the opcode: a float
+            // reaching the formatter can be NaN, which PHP warns about, and an array prints
+            // `Array` with a conversion warning, while a string literal cannot warn at all.
+            // Declaring `MAY_WARN` unconditionally would make every `echo "..."` in every program
+            // pay for the location stores; refining it per site keeps that pay-for-use, which is
+            // the same reason the call opcodes below refine theirs. `print` renders through the
+            // same path and refines for the same reason.
+            Op::EchoValue
+                | Op::PrintValue
+                | Op::IDiv
                 | Op::ISDiv
                 | Op::ISMod
                 | Op::FDiv
@@ -881,6 +916,7 @@ impl Op {
             LoadCalledClassId => "load_called_class_id",
             DataAddr => "data_addr",
             LoadLocal => "load_local",
+            WarnedNull => "warned_null",
             StoreLocal => "store_local",
             UnsetLocal => "unset_local",
             ZeroLocalSlot => "zero_local_slot",

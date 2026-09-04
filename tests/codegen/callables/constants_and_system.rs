@@ -106,6 +106,7 @@ fn test_error_control_suppresses_duplicate_define_warning() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ok1");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 // Tests that a duplicate `define()` call without `@` emits a PHP warning at runtime.
@@ -120,9 +121,9 @@ fn test_duplicate_define_emits_runtime_warning() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ok1");
     assert!(
-        out.stderr.contains("Warning: define()"),
-        "expected duplicate define warning, got stderr={}",
-        out.stderr
+        out.diagnostics.contains("Warning: define()"),
+        "expected duplicate define warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -138,6 +139,7 @@ fn test_define_duplicate_is_checked_at_runtime() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "TF1");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 // Tests that two `const` declarations can be used together in an expression:
@@ -2215,6 +2217,20 @@ fn test_php_os() {
 fn test_directory_separator() {
     let out = compile_and_run("<?php echo DIRECTORY_SEPARATOR;");
     assert_eq!(out, "/");
+}
+
+/// `PATH_SEPARATOR` separates ENTRIES in a path LIST, and is not its neighbour above.
+///
+/// MEASURED on `php -n` 8.5.6: `":"` while `DIRECTORY_SEPARATOR` is `"/"`. Without it
+/// `set_include_path("." . PATH_SEPARATOR . "inc")` — the spelling every program with more than
+/// one include directory uses — failed to compile with `Undefined constant: PATH_SEPARATOR`.
+#[test]
+fn test_path_separator_is_a_list_separator_not_a_directory_one() {
+    let out = compile_and_run(
+        "<?php echo PATH_SEPARATOR, '|', DIRECTORY_SEPARATOR, '|', strlen(PATH_SEPARATOR), '|',
+        implode(',', explode(PATH_SEPARATOR, 'a:b:c'));",
+    );
+    assert_eq!(out, ":|/|1|a,b,c");
 }
 
 // -- v0.8 time / microtime --

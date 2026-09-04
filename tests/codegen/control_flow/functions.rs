@@ -145,10 +145,10 @@ echo $missing === null ? 'null' : $missing;
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "woof|null");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: Undefined property: MeowCat::$bark"),
         "missing PHP-style undefined-property warning: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -178,10 +178,10 @@ echo $missing === null ? 'null' : $missing;
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "woof|null");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: Undefined property: ShortCat::$bark"),
         "missing PHP-style undefined-property warning: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 

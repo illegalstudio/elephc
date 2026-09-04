@@ -255,7 +255,23 @@ pub(super) fn plan_ref_arg_writebacks(
 
 /// Rejects scalar-to-Mixed temporary ref cells whose writeback shape is not supported yet.
 pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {
-    if matches!(source_ty.codegen_repr(), PhpType::Int | PhpType::Bool) {
+    // `Void` is php's out-parameter idiom: `$x = null; f($x);` where the callee writes. The null
+    // boxes into the temporary cell like any other scalar, and the caller's local is re-typed to
+    // the parameter's widened `<written>|null` by then, so the unboxed value stores back into
+    // storage that can hold it.
+    //
+    // `Float` is admitted on exactly the same terms as `Int`: a Mixed float carries the raw
+    // double BITS in its low payload word, which is the one word the writeback moves and the one
+    // word a float slot holds. The idiom it unblocks is php's, not elephc's — `$p = 0.0;
+    // similar_text($a, $b, $p);` writes a float through a `mixed` reference into a float local,
+    // and the backend refused a program `php -n` 8.5.6 runs.
+    //
+    // A STRING source stays out, and not for lack of interest: a string local is a POINTER AND A
+    // LENGTH, two words, where this writeback moves one.
+    if matches!(
+        source_ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float
+    ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(

@@ -65,13 +65,27 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "ftruncate"
                 | "ftell"
                 | "fseek"
+                // Declared beside the three above and omitted here, so each answered a null
+                // vtable slot: MEASURED, `$f->flock(LOCK_SH)` and `$f->fflush()` both exit 139
+                // with `lldb` stopped at `frame #0: 0x0000000000000000`.
+                | "flock"
+                | "fflush"
+                | "fstat"
                 | "getflags"
                 | "setflags"
                 | "getmaxlinelen"
                 | "setmaxlinelen"
                 | "setcsvcontrol"
+                | "getcsvcontrol"
                 | "fgetcsv"
                 | "fputcsv"
+                | "fscanf"
+                // The READ_CSV record builder. A prelude body that is DECLARED but missing
+                // from this list is never lowered, and its vtable slot stays null: the call
+                // branches to address 0 rather than failing to compile, so an omission here
+                // shows up as a segfault at the first call and nowhere earlier.
+                | "__elephccsvbuild"
+                | "__elephccsvskipblank"
         ),
         "SplTempFileObject" => matches!(
             method_key,
@@ -86,6 +100,9 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "ftell"
                 | "fseek"
                 | "ftruncate"
+                // See the parent's list: declared in `spl_temp_file_object_stream_methods` and
+                // missing here, which is the same null slot.
+                | "flock"
                 | "rewind"
                 | "__elephcspilltofile"
         ),
@@ -302,6 +319,25 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "getsignature"
                 | "setzippassword"
                 | "delete"
+        ),
+        "ZipArchive" => matches!(
+            method_key,
+            "open"
+                | "close"
+                | "count"
+                | "getnameindex"
+                | "locatename"
+                | "statindex"
+                | "statname"
+                | "getfromindex"
+                | "getfromname"
+                | "getstream"
+                | "getstreamname"
+                | "getstreamindex"
+                | "setpassword"
+                | "getstatusstring"
+                | "extractto"
+                | "__elephczipcleanpath"
         ),
         "PharFileInfo" => matches!(
             method_key,

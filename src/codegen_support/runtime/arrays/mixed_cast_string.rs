@@ -23,7 +23,9 @@
 //!   consequently render through one formatter with one ownership contract.
 
 use crate::codegen_support::emit::Emitter;
+use crate::codegen_support::abi;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::data::ARRAY_TO_STRING_MSG;
 
 /// Converts a boxed Mixed value to a string by dispatching on the unboxed tag.
 /// Input: x0 = boxed mixed pointer. Output: x1 = string pointer, x2 = string length (ARM64).
@@ -55,9 +57,24 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_string_from_bool");               // bools cast to "1" or ""
     emitter.instruction("cmp x0, #9");                                          // does the mixed payload hold a resource?
     emitter.instruction("b.eq __rt_mixed_cast_string_from_resource");           // resources render as PHP's "Resource id #N"
+    emitter.instruction("cmp x0, #4");                                          // does the mixed payload hold an indexed array?
+    emitter.instruction("b.eq __rt_mixed_cast_string_from_array");              // php renders any array as the literal "Array"
+    emitter.instruction("cmp x0, #5");                                          // does the mixed payload hold a hash?
+    emitter.instruction("b.eq __rt_mixed_cast_string_from_array");              // a hash renders identically to an indexed array
     emitter.instruction("mov x1, xzr");                                         // unsupported and null payloads produce an empty string pointer
     emitter.instruction("mov x2, xzr");                                         // unsupported and null payloads produce an empty string length
     emitter.instruction("b __rt_mixed_cast_string_done");                       // return the normalized empty-string result
+
+    // A BOXED array reaching a string context is the same php event as a statically typed one:
+    // the warning, then the literal `Array`. Returning the empty string here was a silent wrong
+    // answer for `mixed $v` in `"x" . $v`, `(string) $v` and every other conversion.
+    emitter.label("__rt_mixed_cast_string_from_array");
+    abi::emit_symbol_address(emitter, "x1", "_array_to_string_msg");
+    emitter.instruction(&format!("mov x2, #{}", ARRAY_TO_STRING_MSG.len()));    // the warning's byte length
+    emitter.instruction("bl __rt_diag_warning");                                // php warns at every array-to-string conversion
+    abi::emit_symbol_address(emitter, "x1", "_iterable_array_str");             // the literal php answers with
+    emitter.instruction("mov x2, #5");                                          // 5-byte length of "Array"
+    emitter.instruction("b __rt_mixed_cast_string_done");                       // the result BORROWS static data, like the scratch arms
 
     emitter.label("__rt_mixed_cast_string_from_int");
     emitter.instruction("mov x0, x1");                                          // move the integer payload into the itoa argument register
@@ -117,9 +134,24 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_string_from_bool");                 // bools cast to \"1\" or \"\"
     emitter.instruction("cmp rax, 9");                                          // does the mixed payload hold a resource?
     emitter.instruction("je __rt_mixed_cast_string_from_resource");             // resources render as PHP's \"Resource id #N\"
+    emitter.instruction("cmp rax, 4");                                          // does the mixed payload hold an indexed array?
+    emitter.instruction("je __rt_mixed_cast_string_from_array");                // php renders any array as the literal \"Array\"
+    emitter.instruction("cmp rax, 5");                                          // does the mixed payload hold a hash?
+    emitter.instruction("je __rt_mixed_cast_string_from_array");                // a hash renders identically to an indexed array
     emitter.instruction("xor rax, rax");                                        // unsupported and null payloads produce an empty string pointer
     emitter.instruction("xor rdx, rdx");                                        // unsupported and null payloads produce an empty string length
     emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the normalized empty-string result
+
+    // A BOXED array reaching a string context is the same php event as a statically typed one:
+    // the warning, then the literal `Array`. Returning the empty string here was a silent wrong
+    // answer for `mixed $v` in `\"x\" . $v`, `(string) $v` and every other conversion.
+    emitter.label("__rt_mixed_cast_string_from_array");
+    abi::emit_symbol_address(emitter, "rdi", "_array_to_string_msg");
+    emitter.instruction(&format!("mov rsi, {}", ARRAY_TO_STRING_MSG.len()));    // the warning's byte length
+    emitter.instruction("call __rt_diag_warning");                              // php warns at every array-to-string conversion
+    abi::emit_symbol_address(emitter, "rax", "_iterable_array_str");            // the literal php answers with
+    emitter.instruction("mov rdx, 5");                                          // 5-byte length of \"Array\"
+    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // the result BORROWS static data, like the scratch arms
 
     emitter.label("__rt_mixed_cast_string_from_int");
     emitter.instruction("mov rax, rdi");                                        // move the integer payload into the itoa input register

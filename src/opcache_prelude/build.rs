@@ -68,15 +68,20 @@ pub(crate) fn php_assoc(entries: Vec<(Expr, Expr)>) -> Expr {
 }
 
 /// The VERBATIM `E_WARNING` php-src's OPcache API guard emits when `opcache.restrict_api`
-/// denies a call, written straight to `STDERR` as `Warning: <text>`. See the parent module's
-/// `RESTRICT_API_WARNING_TEXT` for the byte-for-byte reference evidence and why this does not
-/// go through `trigger_error`.
+/// denies a call, written to `STDOUT` as php writes it — MEASURED: `php -n -d
+/// opcache.enable_cli=1 -d opcache.restrict_api=/nowhere` puts it on stdout, with an opening
+/// blank line, and leaves stderr empty. See the parent module's `RESTRICT_API_WARNING_TEXT` for
+/// the byte-for-byte reference evidence and why this does not go through `trigger_error`.
 pub(crate) fn restrict_api_warning_stmt(text: &str) -> Stmt {
     s_expr(e_call(
         "fwrite",
         vec![
-            e_const("STDERR"),
-            e_binop(e_str(text), BinOp::Concat, e_str("\n")),
+            e_const("STDOUT"),
+            e_binop(
+                e_binop(e_str("\n"), BinOp::Concat, e_str(text)),
+                BinOp::Concat,
+                e_str("\n"),
+            ),
         ],
     ))
 }

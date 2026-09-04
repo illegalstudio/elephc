@@ -22,10 +22,10 @@ pub fn emit_stat(emitter: &mut Emitter) {
     }
 
     let plat = emitter.platform;
-    let stat_buf = plat.stat_buf_size();
+    let stat_buf = plat.stat_buf_size(emitter.target.arch);
     let frame_size = (stat_buf + 32 + 15) & !15; // 16-byte aligned: stat buf + saved regs
     let save_offset = frame_size - 16;
-    let mode_off = plat.stat_mode_offset();
+    let mode_off = plat.stat_mode_offset(emitter.target.arch);
     let size_off = plat.stat_size_offset();
     let mtime_off = plat.stat_mtime_offset();
 
@@ -37,6 +37,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_exists ---");
     emitter.label_global("__rt_file_exists");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -44,7 +46,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
@@ -65,6 +67,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_file ---");
     emitter.label_global("__rt_is_file");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -72,7 +76,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
@@ -104,6 +108,12 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_dir ---");
     emitter.label_global("__rt_is_dir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    // `glob()` reaches the filesystem through NO stream wrapper — php keeps it working while the
+    // plain-files wrapper is unregistered — so its GLOB_ONLYDIR filter enters below the guard.
+    // A second entry INTO the block above, not a function of its own: the guard branches here.
+    emitter.label_global_alt_entry("__rt_is_dir_core");
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -111,7 +121,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
@@ -143,6 +153,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_readable ---");
     emitter.label_global("__rt_is_readable");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -150,7 +162,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- null-terminate path --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
 
     // -- call access(path, R_OK) --
     emitter.instruction("mov x1, #4");                                          // R_OK = 4 (read permission check)
@@ -173,6 +185,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_writable ---");
     emitter.label_global("__rt_is_writable");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #16");                                     // allocate 16 bytes on the stack
@@ -180,7 +194,7 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
 
     // -- null-terminate path --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
 
     // -- call access(path, W_OK) --
     emitter.instruction("mov x1, #2");                                          // W_OK = 2 (write permission check)
@@ -203,6 +217,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: filesize ---");
     emitter.label_global("__rt_filesize");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::IntOrFalse);
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -210,29 +226,29 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
-    // -- extract st_size, but ONLY if stat() wrote the buffer --
-    // Reading it unconditionally answered whatever the stack held at the `st_size` offset, which
-    // measured as a steady `0` here and so read like a wrong constant — but it is not a constant,
-    // it is unfilled memory, exactly as in `__rt_filemtime` where the `st_mtime` offset made the
-    // same omission visible as five different values in five runs. `x1` carries the int|false
-    // flag the rest of the stat family already uses.
+    // -- extract st_size, or report false when stat() failed --
+    // Reading the buffer regardless returns whatever the stack held; that it usually looked
+    // like a plausible size was luck, not correctness.
     emitter.instruction("cmp x0, #0");                                          // did stat() succeed?
-    emitter.instruction("b.ne __rt_filesize_fail");                             // failure path: return the false flag
+    emitter.instruction("b.ne __rt_filesize_false");                            // no: php answers false
     emitter.instruction(&format!("ldr x0, [sp, #{}]", size_off));               // load st_size from stat struct
-    emitter.instruction("mov x1, #1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction("mov x1, #1");                                          // success flag for the int|false boxing
+
+    // -- restore frame and return --
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
-    emitter.label("__rt_filesize_fail");
-    emitter.instruction("mov x0, #0");                                          // stat failed: integer payload defaults to 0
-    emitter.instruction("mov x1, #0");                                          // failure flag tells codegen to box PHP false
+
+    emitter.label("__rt_filesize_false");
+    emitter.instruction("mov x0, #0");                                          // stat failed: the integer payload is unused
+    emitter.instruction("mov x1, #0");                                          // clear flag: the caller boxes PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("ret");                                                 // return the failure flag
 
     // ================================================================
     // __rt_filemtime: get file modification time
@@ -242,6 +258,8 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: filemtime ---");
     emitter.label_global("__rt_filemtime");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::IntOrFalse);
 
     // -- set up stack frame --
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate stack for stat buf + frame
@@ -249,28 +267,27 @@ pub fn emit_stat(emitter: &mut Emitter) {
     emitter.instruction(&format!("add x29, sp, #{}", save_offset));             // establish new frame pointer
 
     // -- null-terminate path and call stat64 --
-    emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("bl __rt_path_cstr");                                   // convert path to C string, x0=cstr
     emitter.instruction("add x1, sp, #0");                                      // pointer to stat buffer on stack
     emitter.syscall(338);
 
-    // -- extract st_mtimespec.tv_sec, but ONLY if stat() wrote the buffer --
-    // Reading it unconditionally returned whatever the stack happened to hold for a path that
-    // cannot be stat'ed: five runs of one binary gave five different values, because the leaked
-    // bytes track a stack address that ASLR moves. `x1` carries the int|false flag its seven
-    // siblings already use — 0 tells codegen to box php `false`.
+    // -- extract st_mtimespec.tv_sec, or report false when stat() failed --
     emitter.instruction("cmp x0, #0");                                          // did stat() succeed?
-    emitter.instruction("b.ne __rt_filemtime_fail");                            // failure path: return the false flag
+    emitter.instruction("b.ne __rt_filemtime_false");                           // no: php answers false
     emitter.instruction(&format!("ldr x0, [sp, #{}]", mtime_off));              // load mtime tv_sec from stat struct
-    emitter.instruction("mov x1, #1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction("mov x1, #1");                                          // success flag for the int|false boxing
+
+    // -- restore frame and return --
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
-    emitter.label("__rt_filemtime_fail");
-    emitter.instruction("mov x0, #0");                                          // stat failed: integer payload defaults to 0
-    emitter.instruction("mov x1, #0");                                          // failure flag tells codegen to box PHP false
+
+    emitter.label("__rt_filemtime_false");
+    emitter.instruction("mov x0, #0");                                          // stat failed: the integer payload is unused
+    emitter.instruction("mov x1, #0");                                          // clear flag: the caller boxes PHP false
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_offset));      // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", frame_size));               // deallocate stack frame
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("ret");                                                 // return the failure flag
 }
 
 /// Emits x86_64 Linux stat helpers: __rt_file_exists, __rt_is_file, __rt_is_dir,
@@ -286,6 +303,8 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file_exists ---");
     emitter.label_global("__rt_file_exists");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_stat_call(emitter, frame_size);
     emitter.instruction("cmp eax, 0");                                          // a successful libc stat() call returns zero as a C int
     emitter.instruction("sete al");                                             // convert the syscall success flag into a boolean byte
@@ -297,6 +316,8 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_file ---");
     emitter.label_global("__rt_is_file");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_stat_call(emitter, frame_size);
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading the stat buffer
     emitter.instruction("jne __rt_is_file_no");                                 // a failing stat call means the path is not a regular file
@@ -316,6 +337,12 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_dir ---");
     emitter.label_global("__rt_is_dir");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
+    // `glob()` reaches the filesystem through NO stream wrapper — php keeps it working while the
+    // plain-files wrapper is unregistered — so its GLOB_ONLYDIR filter enters below the guard.
+    // A second entry INTO the block above, not a function of its own: the guard branches here.
+    emitter.label_global_alt_entry("__rt_is_dir_core");
     emit_linux_stat_call(emitter, frame_size);
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading the stat buffer
     emitter.instruction("jne __rt_is_dir_no");                                  // a failing stat call means the path is not a directory
@@ -335,16 +362,22 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: is_readable ---");
     emitter.label_global("__rt_is_readable");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_access_check(emitter, 4);
 
     emitter.blank();
     emitter.comment("--- runtime: is_writable ---");
     emitter.label_global("__rt_is_writable");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::Predicate(0));
     emit_linux_access_check(emitter, 2);
 
     emitter.blank();
     emitter.comment("--- runtime: filesize ---");
     emitter.label_global("__rt_filesize");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::IntOrFalse);
     emit_linux_stat_call(emitter, frame_size);
     // This half already CHECKED the syscall — it just reported the failure as `0`, which is a
     // legitimate size for an empty file and therefore indistinguishable from success. `rdx`
@@ -352,11 +385,11 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading st_size
     emitter.instruction("jne __rt_filesize_fail");                              // failure path: return the false flag
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", size_off));   // load st_size from the Linux stat buffer
-    emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction("mov rdx, 1");                                          // success flag for the int|false boxing
     emitter.instruction("jmp __rt_filesize_ret");                               // skip the failure path after reading the file size
     emitter.label("__rt_filesize_fail");
-    emitter.instruction("mov rax, 0");                                          // stat failed: integer payload defaults to 0
-    emitter.instruction("mov rdx, 0");                                          // failure flag tells codegen to box PHP false
+    emitter.instruction("mov rax, 0");                                          // stat failed: the integer payload is unused
+    emitter.instruction("mov rdx, 0");                                          // clear flag: the caller boxes PHP false
     emitter.label("__rt_filesize_ret");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary stat buffer frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -365,6 +398,8 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: filemtime ---");
     emitter.label_global("__rt_filemtime");
+    // php locates a wrapper for every path; a bare one is the plain-files wrapper.
+    super::fopen::emit_refuse_when_file_wrapper_disabled(emitter, super::fopen::DisabledWrapperAnswer::IntOrFalse);
     emit_linux_stat_call(emitter, frame_size);
     // This half already CHECKED the syscall — it just reported the failure as `0`, which is a
     // legitimate timestamp and indistinguishable from success. `rdx` carries the int|false flag
@@ -372,11 +407,11 @@ fn emit_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp eax, 0");                                          // test whether libc stat() succeeded before reading st_mtime
     emitter.instruction("jne __rt_filemtime_fail");                             // failure path: return the false flag
     emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", mtime_off));  // load st_mtime.tv_sec from the Linux stat buffer
-    emitter.instruction("mov rdx, 1");                                          // success flag for codegen-side int|false boxing
+    emitter.instruction("mov rdx, 1");                                          // success flag for the int|false boxing
     emitter.instruction("jmp __rt_filemtime_ret");                              // skip the failure path after reading the modification time
     emitter.label("__rt_filemtime_fail");
-    emitter.instruction("mov rax, 0");                                          // stat failed: integer payload defaults to 0
-    emitter.instruction("mov rdx, 0");                                          // failure flag tells codegen to box PHP false
+    emitter.instruction("mov rax, 0");                                          // stat failed: the integer payload is unused
+    emitter.instruction("mov rdx, 0");                                          // clear flag: the caller boxes PHP false
     emitter.label("__rt_filemtime_ret");
     emitter.instruction(&format!("add rsp, {}", frame_size));                   // release the temporary stat buffer frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
@@ -393,7 +428,7 @@ fn emit_linux_stat_call(emitter: &mut Emitter, frame_size: usize) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the stat helper uses a local frame
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the temporary stat buffer
     emitter.instruction(&format!("sub rsp, {}", frame_size));                   // reserve stack space for the Linux stat buffer with 16-byte alignment
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc string in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first libc stat() argument
     emitter.instruction("lea rsi, [rsp]");                                      // pass the temporary stack buffer as the destination stat struct
     emitter.instruction("call stat");                                           // fill the temporary stat buffer through libc stat()
@@ -407,7 +442,7 @@ fn emit_linux_stat_call(emitter: &mut Emitter, frame_size: usize) {
 fn emit_linux_access_check(emitter: &mut Emitter, mode: u32) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while the access helper makes libc calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the call-aligned access helper
-    emitter.instruction("call __rt_cstr");                                      // convert the elephc string in rax/rdx into a null-terminated C path in rax
+    emitter.instruction("call __rt_path_cstr");                                 // convert the elephc string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov rdi, rax");                                        // pass the C path pointer as the first syscall argument to access
     emitter.instruction(&format!("mov rsi, {}", mode));                         // pass the access-mode mask as the second libc access() argument
     emitter.instruction("call access");                                         // perform the access check through libc access()
@@ -436,10 +471,14 @@ mod tests {
     #[test]
     fn the_stat_field_helpers_check_the_syscall_before_reading_their_buffer() {
         for (platform, arch, failure_labels) in [
+            // The two emitters name the failure arm differently: the AArch64 helpers answer
+            // through the `_false` arm that returns php's `false`, the x86_64 ones through
+            // `_fail`. The names are per target on purpose — checking one spelling against
+            // both emitters is how a defect survives on the target the host cannot run.
             (
                 Platform::MacOS,
                 Arch::AArch64,
-                ["__rt_filesize_fail", "__rt_filemtime_fail"],
+                ["__rt_filesize_false", "__rt_filemtime_false"],
             ),
             (
                 Platform::Linux,

@@ -54,6 +54,46 @@ fn asm_function<'a>(asm: &'a str, label: &str) -> &'a str {
     &rest[..end]
 }
 
+/// Pins the x86_64 argument register of `__rt_incref` at EVERY call site in the runtime.
+///
+/// `__rt_incref` does not follow SysV on x86_64: its body opens with `test rax, rax`, so it reads
+/// the pointer to retain from `rax`, never from `rdi`. A call site that loads the pointer into
+/// `rdi` instead assembles and links perfectly, retains whatever happened to be left in `rax`
+/// (usually the result hash the helper is building), and leaves the real payload unretained — the
+/// element is then freed with the source and read back as reused heap memory. That is silent on
+/// aarch64, where the same emitters use `x0` for both, which is why this scans the GENERATED
+/// linux-x86_64 runtime rather than any single emitter.
+///
+/// The gate is the instruction immediately before each `call __rt_incref`: it may not write `rdi`.
+#[test]
+fn every_x86_64_incref_call_site_passes_its_pointer_in_rax() {
+    let target = Target::parse("linux-x86_64").expect("linux-x86_64 is a supported target");
+    let runtime_asm = elephc::codegen::generate_runtime(8_388_608, target);
+
+    let mut previous_instruction = "";
+    let mut offenders: Vec<String> = Vec::new();
+    for line in runtime_asm.lines() {
+        let instruction = line.trim();
+        if instruction.is_empty() || instruction.starts_with('#') || instruction.ends_with(':') {
+            continue;
+        }
+        if instruction == "call __rt_incref"
+            && (previous_instruction.starts_with("mov rdi,")
+                || previous_instruction.starts_with("lea rdi,"))
+        {
+            offenders.push(previous_instruction.to_string());
+        }
+        previous_instruction = instruction;
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "{} x86_64 call site(s) hand __rt_incref its pointer in rdi, which it never reads: {:?}",
+        offenders.len(),
+        offenders
+    );
+}
+
 /// Verifies `unset()` emits an explicit GC safe point outside hash decref.
 ///
 /// Compiles a PHP snippet that creates a flat string-keyed array `["a" => 1, "b" => 2]` and then

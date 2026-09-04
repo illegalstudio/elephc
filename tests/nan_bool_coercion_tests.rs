@@ -42,11 +42,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// The exact stderr line elephc emits for one NAN-to-bool coercion.
+/// The exact diagnostic line elephc emits for one NAN-to-bool coercion.
 ///
-/// php-src appends ` in <file> on line <n>`; elephc deliberately does not (see the module
-/// preamble). Keeping the text in one constant makes the message and the counts below impossible
-/// to drift apart.
+/// php-src appends ` in <file> on line <n>` and elephc now does too, at this site; the split in
+/// `split_diagnostics` drops it, because the file is a per-run temporary directory. Keeping the
+/// text in one constant makes the message and the counts below impossible to drift apart.
 const NAN_WARNING: &str = "Warning: unexpected NAN value was coerced to bool\n";
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
@@ -118,13 +118,55 @@ fn compile(dir: &Path, source: &str, stem: &str, php_version: Option<&str>) -> P
     dir.join(stem)
 }
 
-/// Compiles and runs `source`, asserting its stdout and its stderr independently.
+/// Compiles and runs `source`, asserting its own output and its warnings independently.
 ///
-/// Stdout carries the PHP program's own output and stderr carries every runtime warning, so an
-/// assertion on one can never be satisfied by the other. `expected_stderr` is the COMPLETE
-/// stderr, which is what pins the warning COUNT as well as its text.
-fn assert_run(prefix: &str, source: &str, expected_stdout: &str, expected_stderr: &str) {
-    assert_run_for_version(prefix, source, None, expected_stdout, expected_stderr);
+/// php writes both to STDOUT, so the two are separated textually by `split_diagnostics`
+/// rather than by file descriptor. `expected_warnings` is the COMPLETE warning list, which
+/// is what pins the COUNT as well as the text.
+/// Splits elephc's diagnostics back out of a program's stdout.
+///
+/// php writes both to the same stream, so the separation these tests need is textual, not a file
+/// descriptor: a line whose kind prefix names a php diagnostic is one, and the blank line php
+/// opens it with goes with it. A program that prints a blank line of its own would be misread —
+/// none of these probes does, and the alternative (deciding on the ` in <file> on line <n>` tail)
+/// would file every unlocated warning as program output.
+fn split_diagnostics(stdout: &str) -> (String, String) {
+    const KINDS: &[&str] = &[
+        "Warning: ",
+        "Notice: ",
+        "Deprecated: ",
+        "Fatal error: ",
+        "Parse error: ",
+    ];
+    let mut program = String::with_capacity(stdout.len());
+    let mut diagnostics = String::new();
+    for line in stdout.split_inclusive('\n') {
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        if KINDS.iter().any(|kind| body.starts_with(kind)) {
+            // Exactly one newline, and without asking what precedes it: the program's own output
+            // and php's opening blank line share a line whenever the program did not end its last
+            // write with a newline.
+            if program.ends_with('\n') {
+                program.truncate(program.len() - 1);
+            }
+            // php ends every diagnostic with ` in <file> on line <n>`, and the file is a
+            // per-run temporary directory — a test could not write down what it expects to see.
+            // The location has tests of its own; here only the wording and the COUNT matter.
+            let message = match body.find(" in ") {
+                Some(cut) if body[cut..].contains(" on line ") => &body[..cut],
+                _ => body,
+            };
+            diagnostics.push_str(message);
+            diagnostics.push('\n');
+            continue;
+        }
+        program.push_str(line);
+    }
+    (program, diagnostics)
+}
+
+fn assert_run(prefix: &str, source: &str, expected_stdout: &str, expected_warnings: &str) {
+    assert_run_for_version(prefix, source, None, expected_stdout, expected_warnings);
 }
 
 /// `assert_run` with an explicit `--php-version` profile.
@@ -133,7 +175,7 @@ fn assert_run_for_version(
     source: &str,
     php_version: Option<&str>,
     expected_stdout: &str,
-    expected_stderr: &str,
+    expected_warnings: &str,
 ) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix, php_version);
@@ -146,15 +188,16 @@ fn assert_run_for_version(
         output.status.code(),
         String::from_utf8_lossy(&output.stderr)
     );
+    let (program, diagnostics) = split_diagnostics(&String::from_utf8_lossy(&output.stdout));
+    assert_eq!(program, expected_stdout, "program output diverged");
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        expected_stdout,
-        "program stdout diverged"
+        diagnostics, expected_warnings,
+        "the warning list diverged — this is what pins the COUNT as well as the text"
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        expected_stderr,
-        "program stderr diverged"
+        "",
+        "php leaves stderr empty; every diagnostic shares stdout with the program"
     );
     let _ = fs::remove_dir_all(&dir);
 }

@@ -29,6 +29,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         collect_declared_interface_names(program, &check_result.interfaces);
     module.declared_trait_names = collect_declared_trait_names(program);
     module.declared_trait_source_lines = collect_declared_trait_source_lines(program);
+    module.tentative_return_deprecations = check_result.tentative_return_deprecations.clone();
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);
@@ -105,7 +106,9 @@ pub(super) fn normalize_method_map_for_eir(
     // Stream-wrapper and user-filter contract methods are invoked through
     // runtime vtables with raw fixed-ABI arguments; widening their untyped
     // params to boxed Mixed would desynchronize the dispatcher and the body.
-    let is_wrapper_class = methods.contains_key("stream_open");
+    let is_wrapper_class = methods
+        .keys()
+        .any(|key| crate::codegen_support::runtime::is_user_wrapper_marker_method(key));
     let is_filter_class = methods.contains_key("filter");
     for (method_key, signature) in methods.iter_mut() {
         if (is_wrapper_class

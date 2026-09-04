@@ -115,9 +115,52 @@ pub(super) fn require_int(ty: PhpType, name: &str) -> Result<()> {
     )))
 }
 
+/// Loads a `?int` argument and materialises what NULL means at this call site.
+///
+/// The two steps belong together. `require_optional_int` ACCEPTS a literal null — correctly, php
+/// spells these parameters `?int $length = null` — but a literal null LOADS AS ZERO, and zero is a
+/// real length to every consumer here. Validating and loading separately is therefore a shape the
+/// validator permits and the code below mishandles, silently: `stream_get_contents($h, null)`
+/// answered `""` and `stream_copy_to_stream($a, $b, null)` copied nothing, where `php -n` 8.5.6
+/// answers the whole stream for both.
+///
+/// `null_answer` is the word the CALLER's consumer reads as "no bound", and it is not the same
+/// everywhere: `stream_get_contents` compares against `NULL_SENTINEL` (a large POSITIVE, tested by
+/// equality), while `stream_copy_to_stream`'s copier reads `-1`. Passing the site's own sentinel
+/// keeps that difference where it is true instead of picking one and hoping.
+pub(super) fn load_optional_int_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    name: &str,
+    null_answer: i64,
+) -> Result<()> {
+    // The DECLARED type, not the loaded one. `load_value_to_result` answers the representation it
+    // put in the register — a `const_null` is an `I64`, so it reports `Int` — and asking it about
+    // nullness is why `require_optional_int`'s `Void` arm was dead for a literal null while the
+    // checker was happily accepting one.
+    let declared = ctx.value_php_type(value)?.codegen_repr();
+    let loaded = ctx.load_value_to_result(value)?.codegen_repr();
+    let is_tagged = loaded == PhpType::TaggedScalar;
+    require_optional_int(loaded, name)?;
+    if matches!(declared, PhpType::Void | PhpType::Never) {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), null_answer);
+    } else if is_tagged {
+        // A forwarded `?int $length = null` parameter, which arrives as a (value, tag) pair.
+        crate::codegen::lower_inst::emit_tagged_scalar_to_int_or(ctx, null_answer);
+    }
+    Ok(())
+}
+
 /// Verifies that an optional integer argument is either `int` or literal `null`.
-pub(super) fn require_optional_int(ty: PhpType, name: &str) -> Result<()> {
-    if matches!(ty, PhpType::Int | PhpType::Void | PhpType::Never) {
+///
+/// Private on purpose: a caller that validates without going through
+/// `load_optional_int_to_result` reintroduces the zero-for-null bug above, and this is what stops
+/// that spelling from existing.
+fn require_optional_int(ty: PhpType, name: &str) -> Result<()> {
+    if matches!(
+        ty,
+        PhpType::Int | PhpType::Void | PhpType::Never | PhpType::TaggedScalar
+    ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -139,15 +182,4 @@ pub(super) fn require_int_or_bool(ty: PhpType, name: &str) -> Result<()> {
     )))
 }
 
-/// Verifies that a CSV fields argument has the supported indexed string-array layout.
-pub(super) fn require_string_array(ty: PhpType, name: &str) -> Result<()> {
-    match ty {
-        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name,
-            other
-        ))),
-    }
-}
 

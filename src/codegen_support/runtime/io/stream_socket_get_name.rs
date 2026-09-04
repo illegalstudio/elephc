@@ -223,6 +223,10 @@ pub fn emit_stream_socket_get_name(emitter: &mut Emitter) {
     emitter.instruction("add x11, x11, #1");                                    // advance the cursor
     emitter.instruction("b __rt_ssgn_unix_scan");                               // keep scanning the path bytes
     emitter.label("__rt_ssgn_unix_scan_done");
+    // A zero-length scan is the OTHER unnamed shape, and the one a `unix://` CLIENT really has:
+    // `getsockname` reports addrlen > 2 with a NUL first byte, so the addrlen test above lets it
+    // through. php answers `false` for it exactly as for a never-bound socket.
+    emitter.instruction("cbz x11, __rt_ssgn_unix_unnamed");                     // no path bytes = no name
 
     // -- allocate an owned heap string for the path --
     emitter.instruction("str x11, [sp, #184]");                                 // save the sun_path length across the alloc
@@ -257,15 +261,15 @@ pub fn emit_stream_socket_get_name(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the sun_path string
 
     emitter.label("__rt_ssgn_unix_unnamed");
-    // -- unbound Unix socket: return an empty heap-allocated string --
-    emitter.instruction("mov x0, #1");                                          // alloc one byte so the heap header is well-formed
-    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = single-byte buffer
-    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the buffer as an owned string
-    emitter.instruction("mov x1, x0");                                          // result string pointer
-    emitter.instruction("mov x2, #0");                                          // result length = 0 (empty string)
+    // -- an unbound Unix endpoint has NO name, and php answers `false` for it rather than the
+    //    empty string. Measured on `php -n` 8.5.6: a `unix://` client's LOCAL name and a
+    //    `unix://` server's PEER name are both `bool(false)`. Returning `""` instead would be a
+    //    name no socket can actually carry, and it breaks the `=== false` test php's manual
+    //    shows. The null pointer is the same failure signal the unsupported-family exit uses. --
+    emitter.instruction("mov x1, #0");                                          // a null pointer signals "no name", which the caller renders as false
+    emitter.instruction("mov x2, #0");                                          // zero length for the failure case
     emitter.instruction("ldp x29, x30, [sp], #208");                            // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return the empty path string
+    emitter.instruction("ret");                                                 // return the failure result
 }
 
 /// Emits the Linux x86_64 stream runtime helper for stream socket get name.
@@ -447,6 +451,9 @@ fn emit_stream_socket_get_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc rcx");                                             // advance the cursor
     emitter.instruction("jmp __rt_ssgn_unix_scan_x86");                         // keep scanning the path bytes
     emitter.label("__rt_ssgn_unix_scan_done_x86");
+    // See the AArch64 arm: a zero-length scan is the shape a `unix://` client has.
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jz __rt_ssgn_unix_unnamed_x86");                       // no path bytes = no name
 
     // -- allocate an owned heap string for the path --
     emitter.instruction("mov QWORD PTR [rbp - 176], rcx");                      // save the sun_path length across the alloc
@@ -482,18 +489,8 @@ fn emit_stream_socket_get_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the sun_path string
 
     emitter.label("__rt_ssgn_unix_unnamed_x86");
-    // -- unbound Unix socket: return an empty heap-allocated string --
-    emitter.instruction("mov rax, 1");                                          // alloc one byte so the heap header is well-formed
-    emitter.instruction("call __rt_heap_alloc");                                // rax = single-byte buffer
-    emitter.instruction(&format!(                                               // owned-string heap-kind word with the x86_64 heap marker
-        "mov r10, 0x{:x}",
-        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
-    ));
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the buffer as an owned string
-    emitter.instruction("xor edx, edx");                                        // result length = 0 (empty string)
-    emitter.instruction("add rsp, 208");                                        // release the frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return the empty path string
+    // -- see the AArch64 arm: an unbound Unix endpoint has no name, and php says `false`. --
+    emitter.instruction("jmp __rt_ssgn_fail_x86");                              // the same failure exit the unsupported families take
 
     emitter.label("__rt_ssgn_fail_x86");
     emitter.instruction("xor eax, eax");                                        // a null pointer signals a failed lookup

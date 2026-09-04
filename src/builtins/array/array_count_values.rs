@@ -34,6 +34,9 @@ builtin! {
 /// re-inferred here to drive the return type, and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
     match ty {
         PhpType::Array(elem) => Ok(PhpType::AssocArray {
             key: Box::new(array_key_type_from_value_type(*elem)),

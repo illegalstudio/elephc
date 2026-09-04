@@ -34,6 +34,7 @@ where
     let slurp_done = next_label("zlib_inflate_slurped");
     let zero = next_label("zlib_inflate_zero");
     let zeroed = next_label("zlib_inflate_zeroed");
+    let raw = next_label("zlib_inflate_raw");
     let write = next_label("zlib_inflate_write");
     let write_done = next_label("zlib_inflate_written");
 
@@ -83,12 +84,28 @@ where
     emitter.instruction(&format!("b {}", zero));                                // continue zeroing the struct
     emitter.label(&zeroed);
 
-    // -- inflateInit2_(strm, -15, version, size): -15 selects raw inflate --
+    // -- pick windowBits from the payload's OWN framing, then inflateInit2_ --
+    // One attach body serves two callers that disagree about framing: the `zlib.inflate`
+    // filter pairs with `zlib.deflate`, which writes RAW deflate, while `compress.zlib://`
+    // is php's gzopen-backed wrapper and carries a GZIP header. Reading the two magic bytes
+    // costs nothing and lets both work; php decides the same way, by looking at the bytes.
+    emitter.instruction("mov x1, #-15");                                        // default: raw inflate, no header
+    emitter.instruction("ldr x9, [sp, #120]");                                  // slurped compressed length
+    emitter.instruction("cmp x9, #2");                                          // a gzip magic needs two bytes
+    emitter.instruction(&format!("b.lt {}", raw));                              // too short to be gzip: stay raw
+    abi::emit_symbol_address(emitter, "x10", "_stream_filter_buf");
+    emitter.instruction("ldrb w11, [x10]");                                     // first slurped byte
+    emitter.instruction("cmp w11, #31");                                        // gzip magic byte 0 is 0x1f
+    emitter.instruction(&format!("b.ne {}", raw));                              // not gzip: stay raw
+    emitter.instruction("ldrb w11, [x10, #1]");                                 // second slurped byte
+    emitter.instruction("cmp w11, #139");                                       // gzip magic byte 1 is 0x8b
+    emitter.instruction(&format!("b.ne {}", raw));                              // not gzip: stay raw
+    emitter.instruction("mov x1, #31");                                         // gzip framing: 15 window bits plus 16
+    emitter.label(&raw);
     emitter.instruction("mov x0, sp");                                          // arg 0 = z_stream pointer
-    emitter.instruction("mov x1, #-15");                                        // arg 1 = windowBits -15: raw inflate
     abi::emit_symbol_address(emitter, "x2", "_zlib_version");
     emitter.instruction("mov x3, #112");                                        // arg 3 = sizeof(z_stream) for the ABI check
-    emitter.bl_c("inflateInit2_"); // initialize a raw-inflate zlib stream
+    emitter.bl_c("inflateInit2_"); // initialize the zlib stream in the framing the bytes named
 
     // -- point the stream at the slurped input and the output buffer --
     abi::emit_symbol_address(emitter, "x9", "_stream_filter_buf");
@@ -168,6 +185,7 @@ where
     let sized = next_label("zlib_inflate_sized");
     let zero = next_label("zlib_inflate_zero");
     let zeroed = next_label("zlib_inflate_zeroed");
+    let raw = next_label("zlib_inflate_raw");
     let write = next_label("zlib_inflate_write");
     let write_done = next_label("zlib_inflate_written");
 
@@ -220,12 +238,23 @@ where
     emitter.instruction(&format!("jmp {}", zero));                              // continue zeroing the struct
     emitter.label(&zeroed);
 
-    // -- inflateInit2_(strm, -15, version, size): -15 selects raw inflate --
+    // -- pick windowBits from the payload's OWN framing, then inflateInit2_ --
+    // Same reasoning as the AArch64 body: `zlib.deflate` writes raw deflate and
+    // `compress.zlib://` carries a gzip header, so the two magic bytes decide.
+    emitter.instruction("mov esi, -15");                                        // default: raw inflate, no header
+    emitter.instruction("cmp QWORD PTR [rsp + 120], 2");                        // a gzip magic needs two bytes
+    emitter.instruction(&format!("jl {}", raw));                                // too short to be gzip: stay raw
+    abi::emit_symbol_address(emitter, "r10", "_stream_filter_buf"); // scratch base address
+    emitter.instruction("cmp BYTE PTR [r10], 31");                              // gzip magic byte 0 is 0x1f
+    emitter.instruction(&format!("jne {}", raw));                               // not gzip: stay raw
+    emitter.instruction("cmp BYTE PTR [r10 + 1], 139");                         // gzip magic byte 1 is 0x8b
+    emitter.instruction(&format!("jne {}", raw));                               // not gzip: stay raw
+    emitter.instruction("mov esi, 31");                                         // gzip framing: 15 window bits plus 16
+    emitter.label(&raw);
     emitter.instruction("mov rdi, rsp");                                        // arg 0 = z_stream pointer
-    emitter.instruction("mov esi, -15");                                        // arg 1 = windowBits -15: raw inflate
     abi::emit_symbol_address(emitter, "rdx", "_zlib_version"); // arg 2 = the zlib version string
     emitter.instruction("mov ecx, 112");                                        // arg 3 = sizeof(z_stream) for the ABI check
-    emitter.instruction("call inflateInit2_");                                  // initialize a raw-inflate zlib stream
+    emitter.instruction("call inflateInit2_"); // initialize the zlib stream in the framing the bytes named
 
     // -- point the stream at the slurped input and the output buffer --
     abi::emit_symbol_address(emitter, "r9", "_stream_filter_buf"); // scratch base address

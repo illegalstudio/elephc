@@ -333,9 +333,10 @@ pub(super) fn restrict_api_warning_statement_is_verbatim() {
             true,
         )
         .expect("a restricted binary always carries the warning")]);
+        // php puts this on STDOUT, with the blank line it opens every diagnostic with.
         assert_eq!(
             warning.trim_end(),
-            format!("fwrite(STDERR, 'Warning: {RESTRICT_API_WARNING_TEXT}' . \"\\n\");")
+            format!("fwrite(STDOUT, \"\\n\" . 'Warning: {RESTRICT_API_WARNING_TEXT}' . \"\\n\");")
         );
         // Pin the message itself, so a typo in the const cannot pass by matching itself.
         assert_eq!(

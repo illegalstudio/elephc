@@ -180,15 +180,15 @@ pub(crate) fn collect_constants(
     );
     constants.insert(
         "STDIN".to_string(),
-        (ExprKind::IntLiteral(0), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0001), PhpType::stream_resource()),
     );
     constants.insert(
         "STDOUT".to_string(),
-        (ExprKind::IntLiteral(1), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0002), PhpType::stream_resource()),
     );
     constants.insert(
         "STDERR".to_string(),
-        (ExprKind::IntLiteral(2), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0003), PhpType::stream_resource()),
     );
     constants.insert(
         "LOCK_SH".to_string(),
@@ -207,6 +207,18 @@ pub(crate) fn collect_constants(
         (ExprKind::IntLiteral(4), PhpType::Int),
     );
     for (name, value) in ARRAY_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in crate::types::output_handler_constants::OUTPUT_HANDLER_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in crate::types::zlib_constants::ZLIB_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),
@@ -248,6 +260,16 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    // STREAM_PF_INET6 is target-divergent (AF_INET6 = 30 on macOS, 10 on Linux).
+    let pf_inet6: i64 = match target_platform {
+        Platform::MacOS => 30,
+        Platform::Linux => 10,
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    constants.insert(
+        "STREAM_PF_INET6".to_string(),
+        (ExprKind::IntLiteral(pf_inet6), PhpType::Int),
+    );
     for (name, value) in PREG_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
@@ -377,6 +399,12 @@ pub(crate) fn collect_constants(
             ExprKind::StringLiteral(std::path::MAIN_SEPARATOR.to_string()),
             PhpType::Str,
         ),
+    );
+    // MEASURED on `php -n` 8.5.6: `":"`. `MAIN_SEPARATOR` has no path-list counterpart in std, and
+    // every target elephc emits is POSIX, so the value is written out.
+    constants.insert(
+        "PATH_SEPARATOR".to_string(),
+        (ExprKind::StringLiteral(":".to_string()), PhpType::Str),
     );
     collect_constant_decls(program, &mut constants);
     constants

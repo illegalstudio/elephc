@@ -260,6 +260,8 @@ fn apply_instance_property(
         state.declared_properties.insert(prop.name.clone());
         is_declared_slot = true;
         refine_declared_array_type_from_default(declared_ty, prop.default.as_ref())
+    } else if is_engine_written_wrapper_context(class, prop) {
+        PhpType::Mixed
     } else if let Some(default) = &prop.default {
         infer_untyped_property_default_type(default)
     } else {
@@ -811,6 +813,37 @@ fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option
 /// writes; explicit `false` property declarations retain their narrower contract.
 fn infer_untyped_property_default_type(default: &Expr) -> PhpType {
     widen_false_literal_storage_type(infer_expr_type_syntactic(default))
+}
+
+/// True for the one untyped property whose writer is the ENGINE: `streamWrapper::$context`.
+///
+/// An untyped property with a null default — written or implied — is typed `Void`, and every
+/// read of it then FOLDS to null. For an ordinary property that is harmless: the checker widens
+/// the type as soon as PHP code assigns to it. `$context` has no such assignment. php fills it
+/// between constructing the wrapper and calling `stream_open()`, so a class that never mentions
+/// it is exactly the normal case — and the fold made the value invisible.
+///
+/// MEASURED: `var_dump($this->context)` answered NULL where php answers the context resource,
+/// and `gettype()` answered `"NULL"` — the compiler talking, not the slot. Adding an unreachable
+/// `$this->context = …` anywhere in the class made it appear, which is what named the cause.
+///
+/// Deliberately NOT a blanket "an untyped null property is mixed". That widening also reached
+/// properties holding callables and met a second checker limitation — `not a callable (got
+/// Mixed)` — in the examples corpus. The rule belongs where it is true.
+///
+/// `stream_open` is the marker because php calls a class a wrapper by that method; a class that
+/// declares `$context` and no wrapper method is an ordinary class with an ordinary property.
+fn is_engine_written_wrapper_context(class: &FlattenedClass, prop: &ClassProperty) -> bool {
+    if !prop.name.eq_ignore_ascii_case("context") || prop.type_expr.is_some() {
+        return false;
+    }
+    if !matches!(prop.default.as_ref().map(infer_untyped_property_default_type), None | Some(PhpType::Void)) {
+        return false;
+    }
+    class
+        .methods
+        .iter()
+        .any(|method| method.name.eq_ignore_ascii_case("stream_open"))
 }
 
 /// PHP treats a plain untyped property with no explicit default as `= null`: the slot
