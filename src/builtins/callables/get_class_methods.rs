@@ -5,8 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through the builtin registry.
 //!
 //! Key details:
-//! - AOT accepts a statically typed object or a literal class name.
-//! - The backend filters the emitted method inventory using the lexical visibility scope.
+//! - AOT accepts an object or a runtime class-name string.
+//! - EIR filters the emitted method inventory using the lexical visibility scope.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -21,7 +21,7 @@ builtin! {
     ),
 }
 
-/// Accepts a known object type or a literal class name and returns an indexed string array.
+/// Accepts an object or string class name and returns an indexed string array.
 fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
     let argument = match &cx.args[0].kind {
         ExprKind::NamedArg { name, value }
@@ -32,17 +32,10 @@ fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
         _ => &cx.args[0],
     };
     let ty = cx.checker.infer_type(argument, cx.env)?;
-    let is_static_class_name = match &argument.kind {
-        ExprKind::StringLiteral(_) => true,
-        ExprKind::ClassConstant { .. } => true,
-        _ => false,
-    };
-    if !matches!(ty.codegen_repr(), PhpType::Object(_))
-        && !is_static_class_name
-    {
+    if !matches!(ty.codegen_repr(), PhpType::Object(_) | PhpType::Str) {
         return Err(CompileError::new(
             cx.span,
-            "get_class_methods() argument must be an object or string literal in AOT mode",
+            "get_class_methods() argument must be an object or string in AOT mode",
         ));
     }
     Ok(PhpType::Array(Box::new(PhpType::Str)))

@@ -534,7 +534,7 @@ fn visible_class_method_names(
         let mut names = methods
             .iter()
             .filter(|(_, method)| method.visibility == Visibility::Public)
-            .map(|(name, _)| name.clone())
+            .map(|(_, method)| method.name.clone())
             .collect::<Vec<_>>();
         names.sort_unstable();
         return Ok(names);
