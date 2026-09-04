@@ -131,6 +131,114 @@ var_dump(byref($q), $q);
     );
 }
 
+/// Verifies a source variadic keeps its original positional history and omits named tail entries.
+#[test]
+fn test_func_get_args_in_source_variadic_function() {
+    let out = compile_and_run(
+        r#"<?php
+function snapshot($head, ...$rest) {
+    $head = 8;
+    $rest = [9];
+    echo func_num_args(), "|";
+    var_dump(func_get_args());
+}
+snapshot(1, 2, 3, extra: 4);
+"#,
+    );
+    assert_eq!(
+        out,
+        "3|array(3) {\n  [0]=>\n  int(8)\n  [1]=>\n  int(2)\n  [2]=>\n  int(3)\n}\n"
+    );
+}
+
+/// Verifies optional parameters distinguish omitted defaults from supplied named values.
+#[test]
+fn test_func_args_with_optional_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function optional_args($a = 10, $b = 20, $c = 30) {
+    $a = 99;
+    echo func_num_args(), ":", implode(",", func_get_args()), ":";
+    try {
+        echo func_get_arg(func_num_args());
+    } catch (ValueError $error) {
+        echo "range";
+    }
+    echo "|";
+}
+optional_args();
+optional_args(1);
+optional_args(b: 2);
+optional_args(c: 3);
+$values = [1, 2];
+optional_args(...$values);
+call_user_func("optional_args", 1, 2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0::range|1:99:range|2:99,2:range|3:99,20,3:range|2:99,2:range|2:99,2:range|"
+    );
+}
+
+/// Verifies optional and source-variadic parameters share the exact PHP passed count.
+#[test]
+fn test_func_args_with_optional_and_source_variadic_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function optional_variadic($a = 10, $b = 20, ...$rest) {
+    $a = 99;
+    $rest = [88];
+    echo func_num_args(), ":", implode(",", func_get_args()), "|";
+}
+optional_variadic();
+optional_variadic(1);
+optional_variadic(b: 2);
+optional_variadic(1, 2, 3, 4, named: 5);
+$values = [1, 2, 3];
+optional_variadic(...$values);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0:|1:99|2:99,2|4:99,2,3,4|3:99,2,3|"
+    );
+}
+
+/// Verifies optional source variadics keep their hidden count in methods and closures.
+#[test]
+fn test_func_args_with_optional_variadics_in_methods_and_closures() {
+    let out = compile_and_run(
+        r#"<?php
+class OptionalVariadicFrames {
+    public function instance($a = 10, ...$rest): string {
+        $a = 99;
+        $rest = [];
+        return func_num_args() . ":" . implode(",", func_get_args());
+    }
+
+    public static function staticFrame($a = 10, ...$rest): string {
+        $rest = [];
+        return func_num_args() . ":" . implode(",", func_get_args());
+    }
+}
+
+$object = new OptionalVariadicFrames();
+$closure = function ($a = 10, ...$rest): string {
+    $a = 77;
+    $rest = [];
+    return func_num_args() . ":" . implode(",", func_get_args());
+};
+
+echo $object->instance(), "|";
+echo $object->instance(1, 2, named: 3), "|";
+echo OptionalVariadicFrames::staticFrame(a: 4), "|";
+echo $closure(5, 6, named: 7);
+"#,
+    );
+    assert_eq!(out, "0:|2:99,2|1:4|2:77,6");
+}
+
 /// Verifies the constructs inside instance and static methods, which have their own
 /// argument frame.
 #[test]

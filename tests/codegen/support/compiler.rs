@@ -243,6 +243,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     TestLinkRequirements,
 ) {
     elephc::codegen::set_null_repr(null_repr);
+    elephc::codegen::set_compile_profile(php_version, false);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");

@@ -19,6 +19,7 @@ use super::*;
         let first = runtime_cache_key_with_build_identity(
             8 * 1024 * 1024,
             target,
+            80_500,
             features,
             false,
             b"emitter-build-a",
@@ -26,11 +27,35 @@ use super::*;
         let second = runtime_cache_key_with_build_identity(
             8 * 1024 * 1024,
             target,
+            80_500,
             features,
             false,
             b"emitter-build-b",
         );
         assert_ne!(first, second, "different runtime emitters must never share a cache entry");
+    }
+
+    /// Verifies version-sensitive runtime state cannot reuse another PHP profile's cache object.
+    #[test]
+    fn runtime_cache_key_covers_php_profile() {
+        let target = Target::detect_host();
+        let php84 = runtime_cache_key_with_build_identity(
+            8 * 1024 * 1024,
+            target,
+            80_400,
+            RuntimeFeatures::none(),
+            false,
+            b"same-emitter",
+        );
+        let php85 = runtime_cache_key_with_build_identity(
+            8 * 1024 * 1024,
+            target,
+            80_500,
+            RuntimeFeatures::none(),
+            false,
+            b"same-emitter",
+        );
+        assert_ne!(php84, php85, "PHP profiles with distinct runtime state must not share cache entries");
     }
 
     /// Verifies every optional runtime-emission switch has an independent cache identity.
@@ -40,6 +65,7 @@ use super::*;
         let baseline = runtime_cache_key_with_build_identity(
             8 * 1024 * 1024,
             target,
+            80_500,
             RuntimeFeatures::none(),
             false,
             b"same-emitter",
@@ -64,6 +90,7 @@ use super::*;
             let key = runtime_cache_key_with_build_identity(
                 8 * 1024 * 1024,
                 target,
+                80_500,
                 features,
                 false,
                 b"same-emitter",
@@ -74,6 +101,7 @@ use super::*;
         let pic = runtime_cache_key_with_build_identity(
             8 * 1024 * 1024,
             target,
+            80_500,
             RuntimeFeatures::none(),
             true,
             b"same-emitter",
@@ -83,6 +111,7 @@ use super::*;
         let static_library_boundary = identity::runtime_cache_key_with_build_identity_and_boundary(
             8 * 1024 * 1024,
             target,
+            80_500,
             RuntimeFeatures::none(),
             false,
             true,

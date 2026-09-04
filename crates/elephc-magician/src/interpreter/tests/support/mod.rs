@@ -99,6 +99,9 @@ pub(super) struct FakeOps {
     pub(super) array_set_calls: usize,
     pub(super) ob_stack: Vec<FakeObLevel>,
     pub(super) ob_implicit_flush: bool,
+    pub(super) gc_disabled: bool,
+    pub(super) gc_runs: i64,
+    pub(super) gc_collected: i64,
 }
 
 /// One fake output-buffer level: captured text plus the ob_start metadata the
@@ -148,6 +151,9 @@ impl FakeOps {
         if self.inert_resources.contains(&payload) {
             return;
         }
+        if payload == crate::stream_resources::EVAL_DEFAULT_CONTEXT_PAYLOAD {
+            return;
+        }
         if payload <= FAKE_STD_STREAM_MAX_PAYLOAD || self.resource_ids.contains_key(&payload) {
             return;
         }
@@ -190,6 +196,9 @@ impl FakeOps {
         }
         if payload < 0 {
             return -payload;
+        }
+        if payload == crate::stream_resources::EVAL_DEFAULT_CONTEXT_PAYLOAD {
+            return 4;
         }
         if payload <= FAKE_STD_STREAM_MAX_PAYLOAD {
             return payload + 1;

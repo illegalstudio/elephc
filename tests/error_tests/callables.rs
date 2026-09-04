@@ -455,28 +455,6 @@ fn test_error_func_num_args_outside_function() {
     );
 }
 
-/// Verifies that a function with an optional parameter is rejected: elephc collects the
-/// surplus arguments through a hidden variadic and cannot tell a passed argument from a
-/// defaulted one, so it refuses instead of reporting a wrong count.
-#[test]
-fn test_error_func_num_args_with_optional_parameter() {
-    expect_error(
-        "<?php function f($a, $b = 5) { return func_num_args(); } echo f(1);",
-        "parameter $b has a default value",
-    );
-}
-
-/// Verifies that a function which already declares a variadic parameter is rejected,
-/// because the body may reassign that parameter and PHP would still report the arguments
-/// actually passed.
-#[test]
-fn test_error_func_get_args_in_variadic_function() {
-    expect_error(
-        "<?php function f(...$r) { return func_get_args(); } var_dump(f(1));",
-        "it declares the variadic parameter $r",
-    );
-}
-
 /// Verifies php-src's rule that these constructs cannot be called dynamically, here through
 /// first-class callable syntax.
 #[test]
