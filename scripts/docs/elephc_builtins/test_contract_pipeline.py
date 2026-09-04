@@ -37,7 +37,7 @@ class ContractPipelineTests(unittest.TestCase):
         cls.render_by_name = {record["name"]: record for record in registry}
 
     def test_all_non_registry_contract_routes_are_exported(self) -> None:
-        """Keep the six constructs, 38 preludes, and three eval-only routes explicit."""
+        """Keep constructs, preludes, and compiler transforms explicit."""
         routes = Counter(
             (record.get("aot") or {}).get("kind")
             for record in self.records
@@ -49,11 +49,10 @@ class ContractPipelineTests(unittest.TestCase):
                 {
                     "language-construct": 5,
                     "dedicated-syntax": 1,
-                    # Four hash_* plus the thirty-four PHP-visible curl_* contracts,
-                    # which the canonical `--features curl` docs configuration
-                    # publishes (see extract.run_gen_builtins).
-                    "prelude": 38,
-                    "none": 3,
+                    # Four hash_*, thirty-four PHP-visible curl_* contracts, and
+                    # zend_version(), published by the canonical docs configuration.
+                    "prelude": 39,
+                    "compiler-transform": 3,
                 }
             ),
         )
@@ -95,11 +94,13 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertIn("`eval()` (magician interpreter)**: supported", rendered)
 
     def test_prelude_availability_names_the_declaring_prelude(self) -> None:
-        """Two preludes declare PHP-visible builtins; each page must name its own."""
+        """Each PHP-visible prelude route names its actual declaring prelude."""
         rendered = render._availability_section(self.render_by_name["curl_init"])
         self.assertIn("compiler-injected curl prelude", rendered)
         self.assertNotIn("hash prelude", rendered)
         self.assertNotIn("Compiled (AOT)**: not available", rendered)
+        rendered = render._availability_section(self.render_by_name["zend_version"])
+        self.assertIn("compiler-injected version prelude", rendered)
 
     def test_user_renderer_owns_section_spacing_once(self) -> None:
         """Join empty optional sections without accumulating blank-line runs."""

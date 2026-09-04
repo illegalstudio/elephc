@@ -1,16 +1,16 @@
 ---
-title: "__elephc_callable_ptr() — internals"
+title: "__elephc_callable_ptr() - internals"
 description: "Compiler internals for __elephc_callable_ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 550
+  order: 577
 ---
 
-## `__elephc_callable_ptr()` — internals
+## `__elephc_callable_ptr()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/elephc_callable_ptr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/elephc_callable_ptr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

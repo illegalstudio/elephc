@@ -1,16 +1,16 @@
 ---
-title: "stream_socket_pair() — internals"
+title: "stream_socket_pair() - internals"
 description: "Compiler internals for stream_socket_pair(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 246
 ---
 
-## `stream_socket_pair()` — internals
+## `stream_socket_pair()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_pair.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_pair.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

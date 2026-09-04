@@ -1,16 +1,16 @@
 ---
-title: "array_intersect_key() — internals"
+title: "array_intersect_key() - internals"
 description: "Compiler internals for array_intersect_key(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 17
 ---
 
-## `array_intersect_key()` — internals
+## `array_intersect_key()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_intersect_key.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_intersect_key.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

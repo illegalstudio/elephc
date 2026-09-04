@@ -1,17 +1,17 @@
 ---
-title: "die() — internals"
+title: "die() - internals"
 description: "Compiler internals for die(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 388
+  order: 415
 ---
 
-## `die()` — internals
+## `die()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
 - **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Function symbol**: `(none, type-checker only)()`
 
 
 ### Lowering notes

@@ -1,16 +1,16 @@
 ---
-title: "ptr_read8() — internals"
+title: "ptr_read8() - internals"
 description: "Compiler internals for ptr_read8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 376
+  order: 403
 ---
 
-## `ptr_read8()` — internals
+## `ptr_read8()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_read8.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_read8.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,11 +1,11 @@
 ---
-title: "curl_setopt() — internals"
+title: "curl_setopt() - internals"
 description: "Compiler internals for curl_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 356
+  order: 383
 ---
 
-## `curl_setopt()` — internals
+## `curl_setopt()` - internals
 
 ## Where it lives
 

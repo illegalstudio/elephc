@@ -1,11 +1,11 @@
 ---
-title: "curl_share_errno() — internals"
+title: "curl_share_errno() - internals"
 description: "Compiler internals for curl_share_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 359
+  order: 386
 ---
 
-## `curl_share_errno()` — internals
+## `curl_share_errno()` - internals
 
 ## Where it lives
 

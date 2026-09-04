@@ -1,16 +1,16 @@
 ---
-title: "array_udiff() — internals"
+title: "array_udiff() - internals"
 description: "Compiler internals for array_udiff(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 41
 ---
 
-## `array_udiff()` — internals
+## `array_udiff()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_udiff.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_udiff.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,16 +1,16 @@
 ---
-title: "range() — internals"
+title: "range() - internals"
 description: "Compiler internals for range(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 63
 ---
 
-## `range()` — internals
+## `range()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/range.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/range.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,16 +1,16 @@
 ---
-title: "array_sum() — internals"
+title: "array_sum() - internals"
 description: "Compiler internals for array_sum(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 40
 ---
 
-## `array_sum()` — internals
+## `array_sum()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_sum.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_sum.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

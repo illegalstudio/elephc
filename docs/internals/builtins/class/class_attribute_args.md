@@ -1,16 +1,16 @@
 ---
-title: "class_attribute_args() — internals"
+title: "class_attribute_args() - internals"
 description: "Compiler internals for class_attribute_args(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 74
 ---
 
-## `class_attribute_args()` — internals
+## `class_attribute_args()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/class_attribute_args.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_attribute_args.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

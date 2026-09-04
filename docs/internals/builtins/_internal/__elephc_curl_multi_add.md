@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_multi_add() — internals"
+title: "__elephc_curl_multi_add() - internals"
 description: "Compiler internals for __elephc_curl_multi_add(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 576
+  order: 603
 ---
 
-## `__elephc_curl_multi_add()` — internals
+## `__elephc_curl_multi_add()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_multi_add.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_multi_add.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

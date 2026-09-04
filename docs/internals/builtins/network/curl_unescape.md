@@ -1,11 +1,11 @@
 ---
-title: "curl_unescape() — internals"
+title: "curl_unescape() - internals"
 description: "Compiler internals for curl_unescape(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 365
+  order: 392
 ---
 
-## `curl_unescape()` — internals
+## `curl_unescape()` - internals
 
 ## Where it lives
 

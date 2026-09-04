@@ -1,16 +1,16 @@
 ---
-title: "putenv() — internals"
+title: "putenv() - internals"
 description: "Compiler internals for putenv(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 149
 ---
 
-## `putenv()` — internals
+## `putenv()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/putenv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/putenv.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

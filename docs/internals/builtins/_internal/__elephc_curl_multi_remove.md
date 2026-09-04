@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_multi_remove() — internals"
+title: "__elephc_curl_multi_remove() - internals"
 description: "Compiler internals for __elephc_curl_multi_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 581
+  order: 608
 ---
 
-## `__elephc_curl_multi_remove()` — internals
+## `__elephc_curl_multi_remove()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_multi_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_multi_remove.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,16 +1,16 @@
 ---
-title: "stripslashes() — internals"
+title: "stripslashes() - internals"
 description: "Compiler internals for stripslashes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 499
+  order: 526
 ---
 
-## `stripslashes()` — internals
+## `stripslashes()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/stripslashes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/stripslashes.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

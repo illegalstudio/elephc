@@ -1,16 +1,16 @@
 ---
-title: "bcfloor() — internals"
+title: "bcfloor() - internals"
 description: "Compiler internals for bcfloor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 272
 ---
 
-## `bcfloor()` — internals
+## `bcfloor()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcfloor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcfloor.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

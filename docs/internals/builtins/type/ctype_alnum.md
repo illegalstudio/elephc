@@ -1,16 +1,16 @@
 ---
-title: "ctype_alnum() — internals"
+title: "ctype_alnum() - internals"
 description: "Compiler internals for ctype_alnum(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 523
+  order: 550
 ---
 
-## `ctype_alnum()` — internals
+## `ctype_alnum()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/ctype_alnum.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/ctype_alnum.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

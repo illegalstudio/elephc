@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_multi_setopt_unsupported_warning() — internals"
+title: "__elephc_curl_multi_setopt_unsupported_warning() - internals"
 description: "Compiler internals for __elephc_curl_multi_setopt_unsupported_warning(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 584
+  order: 611
 ---
 
-## `__elephc_curl_multi_setopt_unsupported_warning()` — internals
+## `__elephc_curl_multi_setopt_unsupported_warning()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_multi_setopt_unsupported_warning.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_multi_setopt_unsupported_warning.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

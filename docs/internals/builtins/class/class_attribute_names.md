@@ -1,16 +1,16 @@
 ---
-title: "class_attribute_names() — internals"
+title: "class_attribute_names() - internals"
 description: "Compiler internals for class_attribute_names(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 75
 ---
 
-## `class_attribute_names()` — internals
+## `class_attribute_names()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/class_attribute_names.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_attribute_names.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

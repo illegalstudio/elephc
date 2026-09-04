@@ -8,7 +8,7 @@ sidebar:
 ## get_class_vars()
 
 ```php
-function get_class_vars(mixed $class): mixed
+function get_class_vars(mixed $class): array
 ```
 
 Returns visible default properties for a class.
@@ -16,14 +16,14 @@ Returns visible default properties for a class.
 **Parameters**:
 - `$class` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin (`eval-only-reflection`).
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs)).
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

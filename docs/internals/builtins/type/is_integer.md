@@ -1,16 +1,16 @@
 ---
-title: "is_integer() — internals"
+title: "is_integer() - internals"
 description: "Compiler internals for is_integer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 538
+  order: 565
 ---
 
-## `is_integer()` — internals
+## `is_integer()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_integer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_integer.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

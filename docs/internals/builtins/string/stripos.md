@@ -1,16 +1,16 @@
 ---
-title: "stripos() — internals"
+title: "stripos() - internals"
 description: "Compiler internals for stripos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 498
+  order: 525
 ---
 
-## `stripos()` — internals
+## `stripos()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/stripos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/stripos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,16 +1,16 @@
 ---
-title: "__elephc_class_has_constructor() — internals"
+title: "__elephc_class_has_constructor() - internals"
 description: "Compiler internals for __elephc_class_has_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 551
+  order: 578
 ---
 
-## `__elephc_class_has_constructor()` — internals
+## `__elephc_class_has_constructor()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_class_has_constructor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_class_has_constructor.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -287,6 +287,7 @@ fn implementation_name(implementation: BackendImplementation) -> &'static str {
         BackendImplementation::Registry => "registry",
         BackendImplementation::LanguageConstruct => "language-construct",
         BackendImplementation::DedicatedSyntax => "dedicated-syntax",
+        BackendImplementation::CompilerTransform => "compiler-transform",
         BackendImplementation::Prelude => "prelude",
     }
 }
@@ -296,7 +297,6 @@ fn unsupported_reason_name(reason: UnsupportedReason) -> &'static str {
     match reason {
         UnsupportedReason::InternalCompilerSurface => "internal-compiler-surface",
         UnsupportedReason::EvalImplementationPending => "eval-implementation-pending",
-        UnsupportedReason::EvalOnlyReflection => "eval-only-reflection",
     }
 }
 

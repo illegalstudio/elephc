@@ -1,17 +1,17 @@
 ---
-title: "exit() — internals"
+title: "exit() - internals"
 description: "Compiler internals for exit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 390
+  order: 417
 ---
 
-## `exit()` — internals
+## `exit()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
 - **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Function symbol**: `(none, type-checker only)()`
 
 
 ### Lowering notes

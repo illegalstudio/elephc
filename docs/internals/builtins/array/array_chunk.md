@@ -1,16 +1,16 @@
 ---
-title: "array_chunk() — internals"
+title: "array_chunk() - internals"
 description: "Compiler internals for array_chunk(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 3
 ---
 
-## `array_chunk()` — internals
+## `array_chunk()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_chunk.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_chunk.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

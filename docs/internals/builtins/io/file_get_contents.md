@@ -1,16 +1,16 @@
 ---
-title: "file_get_contents() — internals"
+title: "file_get_contents() - internals"
 description: "Compiler internals for file_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 175
 ---
 
-## `file_get_contents()` — internals
+## `file_get_contents()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_get_contents.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:583](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L583) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
