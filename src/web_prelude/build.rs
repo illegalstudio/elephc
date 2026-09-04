@@ -1823,35 +1823,6 @@ fn decl_fn_error_log() -> Stmt {
         .build()
 }
 
-/// `trigger_error` — transcribed from the PHP form.
-fn decl_fn_trigger_error() -> Stmt {
-    function("trigger_error")
-        .param("message", TypeExpr::Str)
-        .param_default("error_level", TypeExpr::Int, e_const("E_USER_NOTICE"))
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_assign("__elephc_te_prefix", e_str("Notice")),
-            s_if(
-                e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_ERROR")),
-                vec![
-                    s_assign("__elephc_te_prefix", e_str("Fatal error")),
-                ],
-                vec![
-                (e_binop(e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_WARNING")), BinOp::Or, e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_WARNING"))), vec![
-                    s_assign("__elephc_te_prefix", e_str("Warning")),
-                ]),
-                (e_binop(e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_USER_DEPRECATED")), BinOp::Or, e_binop(e_var("error_level"), BinOp::StrictEq, e_const("E_DEPRECATED"))), vec![
-                    s_assign("__elephc_te_prefix", e_str("Deprecated")),
-                ]),
-            ],
-                None,
-            ),
-            s_expr(e_call("fwrite", vec![e_const("STDERR"), e_binop(e_binop(e_binop(e_var("__elephc_te_prefix"), BinOp::Concat, e_str(": ")), BinOp::Concat, e_var("message")), BinOp::Concat, e_str("\n"))])),
-            s_return(e_bool(true)),
-        ])
-        .build()
-}
-
 /// `__elephc_session_start_option_known` — transcribed from the PHP form.
 fn decl_fn_elephc_session_start_option_known() -> Stmt {
     function("__elephc_session_start_option_known")
@@ -5264,7 +5235,6 @@ pub(crate) fn web_declarations(
             decl_class_elephcsessionstate(),
             decl_class_elephccallablesessionhandler(),
             decl_fn_error_log(),
-            decl_fn_trigger_error(),
             decl_fn_elephc_session_start_option_known(),
             decl_fn_session_start(),
             decl_fn_elephc_session_start_core(),
