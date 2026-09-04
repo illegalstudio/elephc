@@ -1216,7 +1216,7 @@ pub(crate) fn run_binary_with_env(
     dir: &Path,
     env: &[(&str, &std::ffi::OsStr)],
 ) -> Output {
-    if target().platform == Platform::Linux
+    let mut output = if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
     {
@@ -1230,7 +1230,58 @@ pub(crate) fn run_binary_with_env(
         let mut cmd = Command::new(bin_path);
         cmd.current_dir(dir).envs(env.iter().copied());
         run_command_with_timeout(cmd)
+    };
+    append_macos_signal_diagnostics(&mut output, bin_path, dir, env);
+    output
+}
+
+/// Replays a signalled native macOS fixture under LLDB and appends its crash context.
+#[cfg(target_os = "macos")]
+fn append_macos_signal_diagnostics(
+    output: &mut Output,
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+) {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    if target().platform != Platform::MacOS || output.status.signal().is_none() {
+        return;
     }
+
+    let mut cmd = Command::new("lldb");
+    cmd.args([
+        "--batch",
+        "-o",
+        "run",
+        "-o",
+        "thread backtrace all",
+        "-o",
+        "register read",
+        "-o",
+        "disassemble --frame",
+        "--",
+    ])
+    .arg(bin_path)
+    .current_dir(dir)
+    .envs(env.iter().copied());
+    let diagnostic = run_command_with_timeout(cmd);
+
+    output
+        .stderr
+        .extend_from_slice(b"\nLLDB replay after signal:\n");
+    output.stderr.extend_from_slice(&diagnostic.stdout);
+    output.stderr.extend_from_slice(&diagnostic.stderr);
+}
+
+/// Leaves non-macOS fixture output unchanged because LLDB replay is unavailable.
+#[cfg(not(target_os = "macos"))]
+fn append_macos_signal_diagnostics(
+    _output: &mut Output,
+    _bin_path: &Path,
+    _dir: &Path,
+    _env: &[(&str, &std::ffi::OsStr)],
+) {
 }
 
 /// Runs a child command with a timeout and captures stdout/stderr.
