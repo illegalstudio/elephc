@@ -9,11 +9,12 @@
 //! - Inventory nodes are append-only so descriptor reuse cannot erase closed resources.
 //! - Nodes store PHP id, native payload, subtype, and close state independently.
 //! - Returned hashes use integer PHP resource ids as keys and raw tag-9 values.
-//! - Reset frees every raw node before process diagnostics or a Web arena reset.
+//! - Reset closes any still-open owned handles before freeing every raw node.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::RuntimeFeatures;
 
 /// Synthetic payload reserved for PHP's implicit default stream context, resource id 4.
 pub(super) const DEFAULT_CONTEXT_PAYLOAD: i64 = (1_i64 << 62) - 1;
@@ -22,25 +23,25 @@ pub(super) const DEFAULT_CONTEXT_PAYLOAD: i64 = (1_i64 << 62) - 1;
 const RESOURCE_NODE_BYTES: i64 = 40;
 
 /// Emits inventory registration, close tracking, filtering, and enumeration helpers.
-pub(crate) fn emit_resource_inventory(emitter: &mut Emitter) {
+pub(crate) fn emit_resource_inventory(emitter: &mut Emitter, features: RuntimeFeatures) {
     match emitter.target.arch {
-        Arch::AArch64 => emit_resource_inventory_aarch64(emitter),
-        Arch::X86_64 => emit_resource_inventory_x86_64(emitter),
+        Arch::AArch64 => emit_resource_inventory_aarch64(emitter, features),
+        Arch::X86_64 => emit_resource_inventory_x86_64(emitter, features),
     }
 }
 
 /// Emits the complete AArch64 inventory helper family.
-fn emit_resource_inventory_aarch64(emitter: &mut Emitter) {
+fn emit_resource_inventory_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emit_register_aarch64(emitter);
     emit_close_aarch64(emitter);
-    emit_reset_aarch64(emitter);
+    emit_reset_aarch64(emitter, features);
     emit_insert_aarch64(emitter);
     emit_type_selector_aarch64(emitter);
     emit_get_resources_aarch64(emitter);
 }
 
-/// Frees every inventory node and restores request-local resource state on AArch64.
-fn emit_reset_aarch64(emitter: &mut Emitter) {
+/// Closes live owned handles, frees every node, and restores resource state on AArch64.
+fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: resource_inventory_reset ---");
     emitter.label_global("__rt_resource_inventory_reset");
@@ -53,6 +54,47 @@ fn emit_reset_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_resource_inventory_reset_done");          // finish after the final node
     emitter.instruction("ldr x10, [x9]");                                       // preserve next before freeing this node
     emitter.instruction("str x10, [sp, #0]");                                   // heap free may clobber all scratch registers
+    emitter.instruction("str x9, [sp, #8]");                                    // preserve the current node across handle cleanup
+    emitter.instruction("ldr x10, [x9, #32]");                                  // inspect whether an ordinary close already consumed it
+    emitter.instruction("cbnz x10, __rt_resource_inventory_reset_free");         // never close one native handle twice
+    emitter.instruction("ldr x10, [x9, #24]");                                  // load the resource cleanup subtype
+    emitter.instruction("cmp x10, #1");                                         // kind 1 owns a native stream descriptor
+    emitter.instruction("b.eq __rt_resource_inventory_reset_stream");           // close a leaked stream descriptor directly
+    if features.popen_resource {
+        emitter.instruction("cmp x10, #3");                                     // kind 3 owns a popen pipe
+        emitter.instruction("b.eq __rt_resource_inventory_reset_popen");        // close and reap the leaked pipe
+    }
+    if features.directory_resource {
+        emitter.instruction("cmp x10, #4");                                     // kind 4 owns an open directory stream
+        emitter.instruction("b.eq __rt_resource_inventory_reset_directory");    // release the leaked DIR pointer mapping
+    }
+    emitter.instruction("b __rt_resource_inventory_reset_free");                // other resource kinds have no inventory-owned destructor
+    emitter.label("__rt_resource_inventory_reset_stream");
+    emitter.instruction("ldr x0, [x9, #16]");                                   // load the native descriptor payload
+    emitter.instruction("mov x10, #0x40000000");                                // synthetic and closed sentinels start at this unsigned value
+    emitter.instruction("cmp x0, x10");                                         // skip synthetic or invalid descriptors
+    emitter.instruction("b.hs __rt_resource_inventory_reset_free");             // no operating-system handle is owned
+    emitter.syscall(6);                                                          // close the leaked descriptor on Darwin or Linux
+    emitter.instruction("b __rt_resource_inventory_reset_free");                // continue with node reclamation
+    if features.popen_resource {
+        emitter.label("__rt_resource_inventory_reset_popen");
+        emitter.instruction("ldr x0, [x9, #16]");                               // pass the leaked pipe descriptor
+        emitter.instruction("mov x10, #0x40000000");                            // reject synthetic or invalid descriptors
+        emitter.instruction("cmp x0, x10");
+        emitter.instruction("b.hs __rt_resource_inventory_reset_free");
+        abi::emit_call_label(emitter, "__rt_pclose");
+        emitter.instruction("b __rt_resource_inventory_reset_free");
+    }
+    if features.directory_resource {
+        emitter.label("__rt_resource_inventory_reset_directory");
+        emitter.instruction("ldr x0, [x9, #16]");                               // pass the leaked directory descriptor
+        emitter.instruction("mov x10, #0x40000000");                            // reject synthetic or invalid descriptors
+        emitter.instruction("cmp x0, x10");
+        emitter.instruction("b.hs __rt_resource_inventory_reset_free");
+        abi::emit_call_label(emitter, "__rt_closedir");
+    }
+    emitter.label("__rt_resource_inventory_reset_free");
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the node after cleanup helper calls
     emitter.instruction("mov x0, x9");                                          // free the raw inventory node
     abi::emit_call_label(emitter, "__rt_heap_free");
     emitter.instruction("ldr x9, [sp, #0]");                                    // continue from the saved next pointer
@@ -288,17 +330,17 @@ fn emit_get_resources_aarch64(emitter: &mut Emitter) {
 }
 
 /// Emits the complete x86_64 inventory helper family.
-fn emit_resource_inventory_x86_64(emitter: &mut Emitter) {
+fn emit_resource_inventory_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emit_register_x86_64(emitter);
     emit_close_x86_64(emitter);
-    emit_reset_x86_64(emitter);
+    emit_reset_x86_64(emitter, features);
     emit_insert_x86_64(emitter);
     emit_type_selector_x86_64(emitter);
     emit_get_resources_x86_64(emitter);
 }
 
-/// Frees every inventory node and restores request-local resource state on x86_64.
-fn emit_reset_x86_64(emitter: &mut Emitter) {
+/// Closes live owned handles, frees every node, and restores resource state on x86_64.
+fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.blank();
     emitter.comment("--- runtime: resource_inventory_reset ---");
     emitter.label_global("__rt_resource_inventory_reset");
@@ -312,6 +354,44 @@ fn emit_reset_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_resource_inventory_reset_done_x86");           // finish after the final node
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // preserve next before freeing this node
     emitter.instruction("mov QWORD PTR [rbp - 8], r11");                        // heap free may clobber all scratch registers
+    emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // preserve the current node across handle cleanup
+    emitter.instruction("cmp QWORD PTR [r10 + 32], 0");                         // inspect whether an ordinary close already consumed it
+    emitter.instruction("jne __rt_resource_inventory_reset_free_x86");          // never close one native handle twice
+    emitter.instruction("mov r11, QWORD PTR [r10 + 24]");                       // load the resource cleanup subtype
+    emitter.instruction("cmp r11, 1");                                          // kind 1 owns a native stream descriptor
+    emitter.instruction("je __rt_resource_inventory_reset_stream_x86");         // close a leaked stream descriptor directly
+    if features.popen_resource {
+        emitter.instruction("cmp r11, 3");                                      // kind 3 owns a popen pipe
+        emitter.instruction("je __rt_resource_inventory_reset_popen_x86");      // close and reap the leaked pipe
+    }
+    if features.directory_resource {
+        emitter.instruction("cmp r11, 4");                                      // kind 4 owns an open directory stream
+        emitter.instruction("je __rt_resource_inventory_reset_directory_x86"); // release the leaked DIR pointer mapping
+    }
+    emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");          // other resource kinds have no inventory-owned destructor
+    emitter.label("__rt_resource_inventory_reset_stream_x86");
+    emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");                       // load the native descriptor payload
+    emitter.instruction("cmp rdi, 0x40000000");                                 // reject synthetic or invalid descriptors
+    emitter.instruction("jae __rt_resource_inventory_reset_free_x86");          // no operating-system handle is owned
+    abi::emit_call_label(emitter, "close");
+    emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");
+    if features.popen_resource {
+        emitter.label("__rt_resource_inventory_reset_popen_x86");
+        emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");                   // pass the leaked pipe descriptor
+        emitter.instruction("cmp rdi, 0x40000000");                             // reject synthetic or invalid descriptors
+        emitter.instruction("jae __rt_resource_inventory_reset_free_x86");
+        abi::emit_call_label(emitter, "__rt_pclose");
+        emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");
+    }
+    if features.directory_resource {
+        emitter.label("__rt_resource_inventory_reset_directory_x86");
+        emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");                   // pass the leaked directory descriptor
+        emitter.instruction("cmp rdi, 0x40000000");                             // reject synthetic or invalid descriptors
+        emitter.instruction("jae __rt_resource_inventory_reset_free_x86");
+        abi::emit_call_label(emitter, "__rt_closedir");
+    }
+    emitter.label("__rt_resource_inventory_reset_free_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the node after cleanup helper calls
     emitter.instruction("mov rax, r10");                                        // free the raw inventory node
     abi::emit_call_label(emitter, "__rt_heap_free");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // continue from the saved next pointer
@@ -571,7 +651,7 @@ mod tests {
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
             let mut emitter = Emitter::new(target);
-            emit_resource_inventory(&mut emitter);
+            emit_resource_inventory(&mut emitter, RuntimeFeatures::none());
             let asm = emitter.output();
             for symbol in [
                 "__rt_resource_inventory_register:",
@@ -594,13 +674,41 @@ mod tests {
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
             let mut emitter = Emitter::new(target);
-            emit_resource_inventory(&mut emitter);
+            emit_resource_inventory(&mut emitter, RuntimeFeatures::none());
             let asm = emitter.output();
             assert!(asm.contains("_resource_inventory_head"), "{target:?}");
             assert!(asm.contains("_resource_inventory_tail"), "{target:?}");
             assert!(asm.contains("__rt_get_resources_standard"), "{target:?}");
             assert!(asm.contains("__rt_get_resources_loop"), "{target:?}");
             assert!(asm.contains("__rt_resource_inventory_insert"), "{target:?}");
+        }
+    }
+
+    /// Verifies reset emits live-handle cleanup for every inventory-owned resource kind.
+    #[test]
+    fn reset_closes_live_resource_handles_on_both_architectures() {
+        let features = RuntimeFeatures {
+            popen_resource: true,
+            directory_resource: true,
+            ..RuntimeFeatures::none()
+        };
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_resource_inventory(&mut emitter, features);
+            let asm = emitter.output();
+            for cleanup in ["close", "__rt_pclose", "__rt_closedir"] {
+                assert!(
+                    asm.contains(cleanup),
+                    "missing reset cleanup {cleanup} for {target:?}"
+                );
+            }
+            assert!(
+                asm.contains("#32]") || asm.contains("+ 32]"),
+                "missing closed-node guard for {target:?}"
+            );
         }
     }
 }
