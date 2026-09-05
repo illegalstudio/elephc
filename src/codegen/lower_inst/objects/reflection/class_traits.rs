@@ -121,102 +121,39 @@ pub(super) fn reflection_class_has_runtime_managed_storage(class_name: &str) -> 
 }
 
 /// Returns whether the reflected class-like name belongs to compiler-injected PHP metadata.
+///
+/// Every class-like the shared catalog knows (SPL, Core interfaces and throwables, date/time,
+/// Reflection, builtin enums, prelude classes such as `PDO` or `CurlHandle`) is a builtin. The
+/// only name outside the catalog is the compiler's own `AppendIterator` storage helper, which
+/// user code never declares.
 pub(super) fn reflection_class_like_is_internal(class_name: &str) -> bool {
-    let key = php_symbol_key(class_name.trim_start_matches('\\'));
-    matches!(
-        key.as_str(),
-        "__elephcappenditeratorarrayiterator"
-            | "appenditerator"
-            | "arrayaccess"
-            | "arrayiterator"
-            | "arrayobject"
-            | "badfunctioncallexception"
-            | "badmethodcallexception"
-            | "cachingiterator"
-            | "callbackfilteriterator"
-            | "countable"
-            | "directoryiterator"
-            | "domainexception"
-            | "emptyiterator"
-            | "error"
-            | "exception"
-            | "fiber"
-            | "fibererror"
-            | "filteriterator"
-            | "filesystemiterator"
-            | "generator"
-            | "globiterator"
-            | "infiniteiterator"
-            | "internaliterator"
-            | "invalidargumentexception"
-            | "iterator"
-            | "iteratoraggregate"
-            | "iteratoriterator"
-            | "jsonexception"
-            | "jsonserializable"
-            | "lengthexception"
-            | "limititerator"
-            | "logicexception"
-            | "multipleiterator"
-            | "norewinditerator"
-            | "outeriterator"
-            | "outofboundsexception"
-            | "outofrangeexception"
-            | "overflowexception"
-            | "parentiterator"
-            | "phar"
-            | "phardata"
-            | "pharfileinfo"
-            | "php_user_filter"
-            | "rangeexception"
-            | "recursivearrayiterator"
-            | "recursivecachingiterator"
-            | "recursivecallbackfilteriterator"
-            | "recursivedirectoryiterator"
-            | "recursivefilteriterator"
-            | "recursiveiterator"
-            | "recursiveiteratoriterator"
-            | "recursiveregexiterator"
-            | "reflectionattribute"
-            | "reflectionclass"
-            | "reflectionclassconstant"
-            | "reflectionenumbackedcase"
-            | "reflectionenumunitcase"
-            | "reflectionexception"
-            | "reflectionfunction"
-            | "reflectionintersectiontype"
-            | "reflectionmethod"
-            | "reflectionnamedtype"
-            | "reflectionparameter"
-            | "reflectionproperty"
-            | "reflectionuniontype"
-            | "regexiterator"
-            | "runtimeexception"
-            | "seekableiterator"
-            | "sortdirection"
-            | "spldoublylinkedlist"
-            | "splfixedarray"
-            | "splfileinfo"
-            | "splfileobject"
-            | "splheap"
-            | "splmaxheap"
-            | "splminheap"
-            | "splobjectstorage"
-            | "splobserver"
-            | "splpriorityqueue"
-            | "splqueue"
-            | "splstack"
-            | "splsubject"
-            | "spltempfileobject"
-            | "stdclass"
-            | "stringable"
-            | "throwable"
-            | "traversable"
-            | "typeerror"
-            | "underflowexception"
-            | "unexpectedvalueexception"
-            | "valueerror"
-    )
+    let trimmed = class_name.trim_start_matches('\\');
+    elephc_builtin_contract::lookup_class(trimmed).is_some()
+        || php_symbol_key(trimmed) == php_symbol_key(UNCATALOGUED_INTERNAL_CLASS)
+}
+
+/// The one compiler helper class reflection treats as internal without a catalog entry.
+const UNCATALOGUED_INTERNAL_CLASS: &str = "__ElephcAppendIteratorArrayIterator";
+
+#[cfg(test)]
+mod internal_class_tests {
+    use super::*;
+
+    /// Verifies the internal predicate follows the class catalog: catalogued builtins and the
+    /// one helper are internal, the helper has no catalog entry, and user names are not.
+    #[test]
+    fn internal_predicate_follows_the_class_catalog() {
+        for name in [
+            "Iterator", "\\Exception", "ReflectionClass", "Fiber", "DateTime", "PDO", "mysqli",
+            "CurlHandle", "SessionHandler", "SortDirection",
+        ] {
+            assert!(reflection_class_like_is_internal(name), "{name}");
+        }
+        assert!(reflection_class_like_is_internal(UNCATALOGUED_INTERNAL_CLASS));
+        assert!(elephc_builtin_contract::lookup_class(UNCATALOGUED_INTERNAL_CLASS).is_none());
+        assert!(!reflection_class_like_is_internal("App\\UserClass"));
+        assert!(!reflection_class_like_is_internal("UserClass"));
+    }
 }
 
 /// Collects direct and inherited parent interfaces for a reflected interface.

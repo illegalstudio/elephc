@@ -92,3 +92,20 @@ fn test_checker_provided_classes_exist_natively_and_in_eval_per_catalog() {
         mismatches.join("\n")
     );
 }
+
+/// Verifies compiled `ReflectionClass::isInternal()` follows the class catalog: catalogued
+/// builtins report internal (`DateTimeInterface` was missing from the former hand-written
+/// list), a user class does not.
+#[test]
+fn test_reflection_is_internal_follows_the_class_catalog() {
+    let out = compile_and_run(
+        r#"<?php
+class UserOrigin {}
+echo (new ReflectionClass("Exception"))->isInternal() ? "I" : "i";
+echo (new ReflectionClass("Iterator"))->isInternal() ? "I" : "i";
+echo (new ReflectionClass("DateTimeInterface"))->isInternal() ? "I" : "i";
+echo (new ReflectionClass("UserOrigin"))->isInternal() ? "I" : "i";
+"#,
+    );
+    assert_eq!(out, "IIIi");
+}
