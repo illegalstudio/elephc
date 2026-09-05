@@ -15,6 +15,9 @@
 //! - Attribute maps are stored as indexed `[name, value]` pairs. Nested
 //!   string-keyed arrays lose their keys when they pass through mixed
 //!   token/tree slots, which dropped `class` on Termwind's styled `div`.
+//! - Sibling pointers are assigned through typed `DOMNode` parameters on
+//!   `instanceof`-narrowed locals, then those locals are stored. Writes on
+//!   `mixed` array elements copy the object and drop `nextSibling`.
 //! - Written as PHP (not `synthetic_class` builders) because the HTML walk
 //!   is a few hundred lines of straightforward string/stack code; mysqli
 //!   and curl still use the same delivery form.
@@ -389,27 +392,65 @@ function __elephc_dom_serialize_node(mixed $node): string {
     return $_out . ">" . $_inner . "</" . $node->nodeName . ">";
 }
 
-function __elephc_dom_wire(mixed $siblings, mixed $parent): void {
-    $_n = count($siblings);
-    $_doc = $parent;
-    if (!($parent instanceof DOMDocument)) {
-        $_doc = $parent->ownerDocument;
+function __elephc_dom_link_siblings(DOMNode $left, DOMNode $right): void {
+    $left->nextSibling = $right;
+    $right->previousSibling = $left;
+}
+
+function __elephc_dom_attach_parent(DOMNode $node, DOMNode $parent, mixed $doc): void {
+    $node->parentNode = $parent;
+    $node->ownerDocument = $doc;
+}
+
+function __elephc_dom_link_prev(int $has_prev, int $prev_kind, DOMElement $prev_el, DOMText $prev_text, DOMComment $prev_comment, DOMNode $right): void {
+    if ($has_prev !== 1) {
+        return;
     }
-    for ($_i = 0; $_i < $_n; $_i++) {
-        $_node = $siblings[$_i];
-        $_node->parentNode = $parent;
-        $_node->ownerDocument = $_doc;
-        if ($_i > 0) {
-            $_node->previousSibling = $siblings[$_i - 1];
-        } else {
-            $_node->previousSibling = null;
-        }
-        if ($_i + 1 < $_n) {
-            $_node->nextSibling = $siblings[$_i + 1];
-        } else {
-            $_node->nextSibling = null;
+    if ($prev_kind === 1) {
+        __elephc_dom_link_siblings($prev_el, $right);
+    } elseif ($prev_kind === 2) {
+        __elephc_dom_link_siblings($prev_text, $right);
+    } else {
+        __elephc_dom_link_siblings($prev_comment, $right);
+    }
+}
+
+function __elephc_dom_make_children(DOMDocument $doc, DOMNode $parent, mixed $trees): mixed {
+    $_kids = [];
+    $_has_prev = 0;
+    $_prev_kind = 0;
+    $_prev_el = new DOMElement();
+    $_prev_text = new DOMText();
+    $_prev_comment = new DOMComment();
+    foreach ($trees as $_child) {
+        $_kid = __elephc_dom_make_node($doc, $_child);
+        if ($_kid instanceof DOMElement) {
+            $_el_kid = $_kid;
+            __elephc_dom_attach_parent($_el_kid, $parent, $doc);
+            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_el_kid);
+            $_kids[] = $_el_kid;
+            $_prev_el = $_el_kid;
+            $_prev_kind = 1;
+            $_has_prev = 1;
+        } elseif ($_kid instanceof DOMText) {
+            $_text_kid = $_kid;
+            __elephc_dom_attach_parent($_text_kid, $parent, $doc);
+            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_text_kid);
+            $_kids[] = $_text_kid;
+            $_prev_text = $_text_kid;
+            $_prev_kind = 2;
+            $_has_prev = 1;
+        } elseif ($_kid instanceof DOMComment) {
+            $_comment_kid = $_kid;
+            __elephc_dom_attach_parent($_comment_kid, $parent, $doc);
+            __elephc_dom_link_prev($_has_prev, $_prev_kind, $_prev_el, $_prev_text, $_prev_comment, $_comment_kid);
+            $_kids[] = $_comment_kid;
+            $_prev_comment = $_comment_kid;
+            $_prev_kind = 3;
+            $_has_prev = 1;
         }
     }
+    return $_kids;
 }
 
 function __elephc_dom_make_node(DOMDocument $doc, mixed $tree): mixed {
@@ -434,12 +475,8 @@ function __elephc_dom_make_node(DOMDocument $doc, mixed $tree): mixed {
     $_el->nodeName = (string) $tree["name"];
     $_el->__attrs = $tree["attrs"];
     $_el->ownerDocument = $doc;
-    $_kids = [];
-    foreach ($tree["children"] as $_child) {
-        $_kids[] = __elephc_dom_make_node($doc, $_child);
-    }
+    $_kids = __elephc_dom_make_children($doc, $_el, $tree["children"]);
     $_el->childNodes = new DOMNodeList($_kids);
-    __elephc_dom_wire($_kids, $_el);
     $_el->nodeValue = __elephc_dom_text_of($tree);
     return $_el;
 }
@@ -550,12 +587,8 @@ class DOMDocument extends DOMNode {
         $_tree = __elephc_dom_parse_html($source, $options);
         $this->nodeName = "#document";
         $this->ownerDocument = $this;
-        $_kids = [];
-        foreach ($_tree["children"] as $_child) {
-            $_kids[] = __elephc_dom_make_node($this, $_child);
-        }
+        $_kids = __elephc_dom_make_children($this, $this, $_tree["children"]);
         $this->childNodes = new DOMNodeList($_kids);
-        __elephc_dom_wire($_kids, $this);
         $this->nodeValue = (string) $_tree["value"];
         return true;
     }
