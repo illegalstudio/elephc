@@ -71,8 +71,12 @@ pub(super) fn lower_get_included_files(ctx: &mut FunctionContext<'_>) -> Result<
     crate::codegen::lower_inst::builtins::types::emit_string_array(ctx, &names)
 }
 
-/// Builds PHP's `internal` and `user` function inventories from contracts and EIR functions.
-pub(super) fn lower_get_defined_functions(ctx: &mut FunctionContext<'_>) -> Result<()> {
+/// Builds PHP's `internal` and `user` inventories after validating the accepted flag operand.
+pub(super) fn lower_get_defined_functions(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let _exclude_disabled = super::expect_operand(inst, 0)?;
     let mut internal = internal_function_names();
     let internal_keys = internal
         .iter()

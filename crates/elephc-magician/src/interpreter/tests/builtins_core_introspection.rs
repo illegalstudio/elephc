@@ -265,29 +265,43 @@ $callbackVars = call_user_func("get_defined_vars");
 $arrayCallbackVars = call_user_func_array("GET_DEFINED_VARS", []);
 $constants = get_defined_constants(true);
 $functions = get_defined_functions();
+$includeDisabled = get_defined_functions(false);
 $extension = get_extension_funcs("cOrE");
 $mangled = get_mangled_object_vars(new IntrospectionBag());
 echo $vars["local"] . ":" . $callbackVars["local"] . ":";
 echo $arrayCallbackVars["local"] . ":" . $constants["user"]["LOCAL_CONSTANT"] . ":";
 echo in_array("local_function", $functions["user"]) ? "function:" : "bad:";
+echo count($functions["internal"]) === count($includeDisabled["internal"])
+    && count($functions["user"]) === count($includeDisabled["user"])
+    && in_array("local_function", $includeDisabled["user"])
+    ? "flag:" : "bad-flag:";
 echo in_array("debug_backtrace", $extension) ? count($extension) . ":" : "bad:";
 $protected = chr(0) . "*" . chr(0) . "guarded";
 $private = chr(0) . "IntrospectionBag" . chr(0) . "secret";
 echo $mangled["open"] . ":" . $mangled[$protected] . ":";
 echo $mangled[$private] . ":";
-echo get_included_files()[0] === get_required_files()[0] ? "files" : "bad";
+$included = get_included_files();
+$required = get_required_files();
+echo count($included) === 3
+    && count($required) === 3
+    && $included[0] === $required[0]
+    && $included[1] === $required[1]
+    && $included[2] === $required[2]
+    ? "files" : "bad";
 return get_extension_funcs("missing");"#,
     )
     .expect("parse eval fragment");
     let mut context = ElephcEvalContext::new();
     context.set_call_site("/tmp/main.php", "/tmp", 1);
+    context.mark_included_file("/tmp/included.php");
+    context.mark_included_file("/tmp/required.php");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
 
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("execute eval ir");
 
-    assert_eq!(values.output, "7:7:7:9:function:59:1:2:3:files");
+    assert_eq!(values.output, "7:7:7:9:function:flag:59:1:2:3:files");
     assert_eq!(values.get(result), FakeValue::Bool(false));
 }
 
