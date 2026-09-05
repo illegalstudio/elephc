@@ -140,7 +140,7 @@ fn test_mb_strtolower_malformed_utf8() {
 echo bin2hex(mb_strtolower("\x80ABC")), ":";
 echo bin2hex(mb_strtolower("A\x80Σ"));"#,
     );
-    assert_eq!(out, "80616263:4180cf83");
+    assert_eq!(out, "80616263:6180cf83");
 }
 
 /// Verifies namespaced/case-insensitive lookup and unknown-encoding `ValueError` behavior.
