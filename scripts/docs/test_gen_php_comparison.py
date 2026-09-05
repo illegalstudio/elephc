@@ -207,6 +207,15 @@ class ValidationTests(unittest.TestCase):
         code, _ = run_gen(registry=[public("strlen")], symbols=symbols)
         self.assertEqual(code, 1)
 
+    def test_eval_only_functions_are_reported_not_counted(self):
+        reg = [public("strlen"), public("strrev", eval_only=True)]
+        code, out = run_gen(registry=reg)
+        self.assertEqual(code, 0)
+        self.assertIn("| `standard` | 1 / 3 · 33% |", out)     # strrev is not a compiled symbol
+        self.assertIn("- `standard` functions: 1 / 2", out)      # but eval() has it
+        self.assertIn("exist only inside `eval()`", out)
+        self.assertIn("`strrev()`", out)
+
     def test_dynamic_constants_are_reported_not_cross_checked(self):
         symbols = {"classes": [], "constants": [const("SID", module="session", value="", route="dynamic")]}
         code, out = run_gen(registry=[public("strlen")], symbols=symbols)

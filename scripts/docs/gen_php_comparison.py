@@ -146,7 +146,11 @@ def _minor(version: str) -> tuple[int, int]:
 
 
 class Coverage:
-    """Per-module tallies of one symbol kind (functions, classes, or constants)."""
+    """Per-module tallies of one symbol kind (functions, classes, or constants).
+
+    `count()` and `total()` are what the table shows: symbols a COMPILED program has.
+    Symbols only `eval()` provides are kept apart (`eval_only()`) and reported separately.
+    """
 
     def __init__(self):
         self.supported: dict[str, list] = defaultdict(list)
@@ -155,10 +159,15 @@ class Coverage:
         self.supported[module].append(symbol)
 
     def count(self, module: str) -> int:
-        return len(self.supported.get(module, []))
+        return self.aot(module)
 
     def total(self) -> int:
-        return sum(len(v) for v in self.supported.values())
+        return sum(self.aot(module) for module in self.supported)
+
+    def eval_only(self) -> list:
+        return [
+            s for symbols in self.supported.values() for s in symbols if s["_eval"] and not s["_aot"]
+        ]
 
     def aot(self, module: str) -> int:
         return sum(1 for s in self.supported.get(module, []) if s["_aot"])
@@ -228,7 +237,7 @@ def classify(registry: list, symbols: dict, baseline: dict):
             "internal": False,
             "area": entry.get("area", ""),
             "description": entry.get("description", ""),
-            "_aot": not entry.get("eval_only", False),
+            "_aot": bool(aot.get("supported", not entry.get("eval_only", False))),
             "_eval": bool((entry.get("eval") or {}).get("supported")),
         }
         if aot.get("kind") in CONSTRUCT_KINDS and not (
@@ -398,11 +407,25 @@ def render(
     if divergences:
         lines += [
             "",
-            "Every count above holds for compiled programs. Code run through `eval()` sees "
-            "fewer symbols in these modules (compiled / eval()):",
+            "The counts above are what a compiled program has. Code run through `eval()` "
+            "sees a different set in these modules (compiled / eval()):",
             "",
         ]
         lines += [f"- {item}" for item in divergences]
+    eval_only = [
+        (kind, s)
+        for kind, coverage in coverages.items()
+        for s in coverage.eval_only()
+    ]
+    if eval_only:
+        names = ", ".join(
+            _symbol_label(kind, s) for kind, s in sorted(eval_only, key=lambda item: item[1]["name"])
+        )
+        lines += [
+            "",
+            f"{len(eval_only)} symbol(s) exist only inside `eval()` and are not counted in "
+            f"the table: {names}.",
+        ]
     empty = sorted(set(baseline["extensions"]) - set(modules))
     if empty:
         names = ", ".join(f"`{e}`" for e in empty)
