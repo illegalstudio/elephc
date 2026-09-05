@@ -127,7 +127,7 @@ fn emit_case_upper_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x7, x3, x7");                                      // address the special mapping
     emitter.instruction("ldr w8, [x7]");                                        // load the special mapping's source code point
     emitter.instruction("cmp w8, w2");                                          // does this special mapping match?
-    emitter.instruction("b.eq __rt_mb_case_upper_special_found");                // write the expanded uppercase sequence
+    emitter.instruction("b.eq __rt_mb_case_upper_special_found");               // write the expanded uppercase sequence
     emitter.instruction("add x5, x5, #1");                                      // advance to the next special mapping
     emitter.instruction("b __rt_mb_case_upper_special_loop");                   // continue the linear special-map scan
     emitter.label("__rt_mb_case_upper_special_found");

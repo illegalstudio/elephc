@@ -132,14 +132,14 @@ fn emit_utf8_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp w5, #0x80");                                       // ASCII bytes are complete one-byte characters
     emitter.instruction("b.lo __rt_mb_strtoupper_utf8_ascii");                  // uppercase one ASCII byte
     emitter.instruction("cmp w5, #0xC2");                                       // C0/C1 and continuation bytes are malformed leaders
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                 // copy one malformed byte through
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                // copy one malformed byte through
     emitter.instruction("cmp w5, #0xE0");                                       // C2-DF introduce two-byte sequences
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_two");                     // validate a two-byte character
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_two");                    // validate a two-byte character
     emitter.instruction("cmp w5, #0xF0");                                       // E0-EF introduce three-byte sequences
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_three");                   // validate a three-byte character
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_three");                  // validate a three-byte character
     emitter.instruction("cmp w5, #0xF5");                                       // F0-F4 introduce Unicode-range four-byte sequences
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_four");                    // validate a four-byte character
-    emitter.instruction("b __rt_mb_strtoupper_utf8_invalid");                    // F5-FF cannot begin valid UTF-8
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_four");                   // validate a four-byte character
+    emitter.instruction("b __rt_mb_strtoupper_utf8_invalid");                   // F5-FF cannot begin valid UTF-8
 
     emitter.label("__rt_mb_strtoupper_utf8_ascii");
     emitter.instruction("mov w0, w5");                                          // ASCII code point is the loaded byte
@@ -149,12 +149,12 @@ fn emit_utf8_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_strtoupper_utf8_two");
     emitter.instruction("sub x6, x2, x4");                                      // compute bytes remaining from the two-byte leader
     emitter.instruction("cmp x6, #2");                                          // is the sequence truncated before its continuation byte?
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                 // copy a truncated leader through unchanged
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                // copy a truncated leader through unchanged
     emitter.instruction("add x8, x4, #1");                                      // address index of the required continuation byte
     emitter.instruction("ldrb w7, [x1, x8]");                                   // load the two-byte sequence continuation
     emitter.instruction("and w8, w7, #0xC0");                                   // isolate the continuation-byte prefix
     emitter.instruction("cmp w8, #0x80");                                       // does the second byte have the required 10xxxxxx shape?
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                 // copy the malformed leader through unchanged
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                // copy the malformed leader through unchanged
     emitter.instruction("and w0, w5, #0x1F");                                   // start the two-byte code point from the leader payload
     emitter.instruction("lsl w0, w0, #6");                                      // shift the leader payload into place
     emitter.instruction("and w7, w7, #0x3F");                                   // isolate the continuation payload
@@ -165,27 +165,27 @@ fn emit_utf8_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_strtoupper_utf8_three");
     emitter.instruction("sub x6, x2, x4");                                      // compute bytes remaining from the three-byte leader
     emitter.instruction("cmp x6, #3");                                          // are all two continuation bytes available?
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                 // copy a truncated leader through unchanged
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                // copy a truncated leader through unchanged
     emitter.instruction("add x8, x4, #1");                                      // address index of the first continuation byte
     emitter.instruction("ldrb w7, [x1, x8]");                                   // load the first three-byte continuation
     emitter.instruction("and w8, w7, #0xC0");                                   // isolate its continuation-byte prefix
     emitter.instruction("cmp w8, #0x80");                                       // is the first continuation structurally valid?
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                 // copy the malformed leader through unchanged
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                // copy the malformed leader through unchanged
     emitter.instruction("cmp w5, #0xE0");                                       // E0 requires a second byte at least A0 to avoid overlong UTF-8
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_three_not_e0");            // skip the E0 lower-bound check for other leaders
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_three_not_e0");           // skip the E0 lower-bound check for other leaders
     emitter.instruction("cmp w7, #0xA0");                                       // is the E0 continuation inside the non-overlong range?
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                 // copy an overlong three-byte sequence through
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                // copy an overlong three-byte sequence through
     emitter.label("__rt_mb_strtoupper_utf8_three_not_e0");
     emitter.instruction("cmp w5, #0xED");                                       // ED requires a second byte below A0 to exclude UTF-16 surrogates
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_three_second");            // skip the surrogate bound for other leaders
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_three_second");           // skip the surrogate bound for other leaders
     emitter.instruction("cmp w7, #0xA0");                                       // does the ED continuation enter the surrogate range?
-    emitter.instruction("b.hs __rt_mb_strtoupper_utf8_invalid");                 // copy UTF-8 encodings of surrogate code points through
+    emitter.instruction("b.hs __rt_mb_strtoupper_utf8_invalid");                // copy UTF-8 encodings of surrogate code points through
     emitter.label("__rt_mb_strtoupper_utf8_three_second");
     emitter.instruction("add x8, x4, #2");                                      // address index of the second continuation byte
     emitter.instruction("ldrb w6, [x1, x8]");                                   // load the final three-byte continuation
     emitter.instruction("and w8, w6, #0xC0");                                   // isolate its continuation-byte prefix
     emitter.instruction("cmp w8, #0x80");                                       // is the final continuation structurally valid?
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                 // copy the malformed leader through unchanged
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                // copy the malformed leader through unchanged
     emitter.instruction("and w0, w5, #0x0F");                                   // start the three-byte code point from the leader payload
     emitter.instruction("lsl w0, w0, #12");                                     // shift the leader payload into place
     emitter.instruction("and w7, w7, #0x3F");                                   // isolate the first continuation payload
@@ -199,32 +199,32 @@ fn emit_utf8_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_strtoupper_utf8_four");
     emitter.instruction("sub x6, x2, x4");                                      // compute bytes remaining from the four-byte leader
     emitter.instruction("cmp x6, #4");                                          // are all three continuation bytes available?
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                 // copy a truncated leader through unchanged
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                // copy a truncated leader through unchanged
     emitter.instruction("add x8, x4, #1");                                      // address index of the first continuation byte
     emitter.instruction("ldrb w7, [x1, x8]");                                   // load the first four-byte continuation
     emitter.instruction("and w8, w7, #0xC0");                                   // isolate its continuation-byte prefix
     emitter.instruction("cmp w8, #0x80");                                       // is the first continuation structurally valid?
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                 // copy the malformed leader through unchanged
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                // copy the malformed leader through unchanged
     emitter.instruction("cmp w5, #0xF0");                                       // F0 requires a second byte at least 90 to avoid overlong UTF-8
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_four_not_f0");             // skip the F0 lower-bound check for other leaders
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_four_not_f0");            // skip the F0 lower-bound check for other leaders
     emitter.instruction("cmp w7, #0x90");                                       // is the F0 continuation inside the non-overlong range?
-    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                 // copy an overlong four-byte sequence through
+    emitter.instruction("b.lo __rt_mb_strtoupper_utf8_invalid");                // copy an overlong four-byte sequence through
     emitter.label("__rt_mb_strtoupper_utf8_four_not_f0");
     emitter.instruction("cmp w5, #0xF4");                                       // F4 requires a second byte below 90 for Unicode's maximum scalar
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_four_rest");               // skip the upper bound for F0-F3
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_four_rest");              // skip the upper bound for F0-F3
     emitter.instruction("cmp w7, #0x90");                                       // does the F4 continuation exceed U+10FFFF?
-    emitter.instruction("b.hs __rt_mb_strtoupper_utf8_invalid");                 // copy out-of-range four-byte sequences through
+    emitter.instruction("b.hs __rt_mb_strtoupper_utf8_invalid");                // copy out-of-range four-byte sequences through
     emitter.label("__rt_mb_strtoupper_utf8_four_rest");
     emitter.instruction("add x8, x4, #2");                                      // address index of the second continuation byte
     emitter.instruction("ldrb w6, [x1, x8]");                                   // load the second four-byte continuation
     emitter.instruction("and w8, w6, #0xC0");                                   // isolate its continuation-byte prefix
     emitter.instruction("cmp w8, #0x80");                                       // is the second continuation structurally valid?
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                 // copy the malformed leader through unchanged
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                // copy the malformed leader through unchanged
     emitter.instruction("add x8, x4, #3");                                      // address index of the third continuation byte
     emitter.instruction("ldrb w3, [x1, x8]");                                   // load the final four-byte continuation
     emitter.instruction("and w8, w3, #0xC0");                                   // isolate its continuation-byte prefix
     emitter.instruction("cmp w8, #0x80");                                       // is the final continuation structurally valid?
-    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                 // copy the malformed leader through unchanged
+    emitter.instruction("b.ne __rt_mb_strtoupper_utf8_invalid");                // copy the malformed leader through unchanged
     emitter.instruction("and w0, w5, #0x07");                                   // start the four-byte code point from the leader payload
     emitter.instruction("lsl w0, w0, #18");                                     // shift the leader payload into place
     emitter.instruction("and w7, w7, #0x3F");                                   // isolate the first continuation payload
@@ -247,7 +247,7 @@ fn emit_utf8_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x15, #0");                                         // uppercase-scalar index starts at zero
     emitter.label("__rt_mb_strtoupper_utf8_encode");
     emitter.instruction("cmp x15, x17");                                        // encoded every uppercase scalar?
-    emitter.instruction("b.hs __rt_mb_strtoupper_utf8_mapped");                  // consume the source sequence after encoding
+    emitter.instruction("b.hs __rt_mb_strtoupper_utf8_mapped");                 // consume the source sequence after encoding
     emitter.instruction("ldr w0, [x14, x15, lsl #2]");                          // load the next uppercase scalar
     emitter.instruction("bl __rt_mb_strtoupper_put_utf8");                      // append its UTF-8 encoding to the destination
     emitter.instruction("add x15, x15, #1");                                    // advance the uppercase-scalar index
@@ -286,12 +286,12 @@ fn emit_bytes_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x4, #0");                                          // byte index starts at zero
     emitter.label("__rt_mb_strtoupper_bytes_loop");
     emitter.instruction("cmp x4, x2");                                          // copied every source byte?
-    emitter.instruction("b.hs __rt_mb_strtoupper_bytes_done");                   // publish once the source is exhausted
+    emitter.instruction("b.hs __rt_mb_strtoupper_bytes_done");                  // publish once the source is exhausted
     emitter.instruction("ldrb w5, [x1, x4]");                                   // load the next source byte
     emitter.instruction("cmp w5, #97");                                         // compare with 'a'
-    emitter.instruction("b.lo __rt_mb_strtoupper_bytes_store");                  // bytes below 'a' stay unchanged
+    emitter.instruction("b.lo __rt_mb_strtoupper_bytes_store");                 // bytes below 'a' stay unchanged
     emitter.instruction("cmp w5, #122");                                        // compare with 'z'
-    emitter.instruction("b.hi __rt_mb_strtoupper_bytes_store");                  // bytes above 'z' stay unchanged
+    emitter.instruction("b.hi __rt_mb_strtoupper_bytes_store");                 // bytes above 'z' stay unchanged
     emitter.instruction("sub w5, w5, #32");                                     // convert a-z to A-Z
     emitter.label("__rt_mb_strtoupper_bytes_store");
     emitter.instruction("strb w5, [x0, x4]");                                   // store the possibly uppercased byte
@@ -328,14 +328,14 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
 
     emitter.label("__rt_mb_strtoupper_iconv_dec_loop");
     emitter.instruction("ldr x9, [sp, #168]");                                  // load remaining input bytes
-    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_decoded");             // decode is finished when input is exhausted
+    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_decoded");            // decode is finished when input is exhausted
     emitter.instruction("ldr x9, [sp, #48]");                                   // decode-buffer base
     emitter.instruction("ldr x10, [sp, #64]");                                  // bytes already decoded
     emitter.instruction("add x9, x9, x10");                                     // current UTF-32 write cursor
     emitter.instruction("str x9, [sp, #176]");                                  // initialize iconv's mutable output pointer
     emitter.instruction("ldr x9, [sp, #56]");                                   // decode-buffer capacity
     emitter.instruction("sub x9, x9, x10");                                     // remaining output bytes
-    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_dec_grow");            // grow when the temporary is already full
+    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_dec_grow");           // grow when the temporary is already full
     emitter.instruction("str x9, [sp, #184]");                                  // initialize iconv's mutable output-byte count
     emitter.instruction("ldr x0, [sp, #192]");                                  // iconv argument 0 is the decode descriptor
     emitter.instruction("add x1, sp, #160");                                    // iconv argument 1 is `&input_ptr`
@@ -348,15 +348,15 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("sub x9, x9, x10");                                     // written = capacity - unused (out_left started at capacity - written)
     emitter.instruction("str x9, [sp, #64]");                                   // persist the accumulated UTF-32 byte count
     emitter.instruction("cmn x0, #1");                                          // did iconv report an error condition?
-    emitter.instruction("b.ne __rt_mb_strtoupper_iconv_dec_loop");               // successful progress continues
+    emitter.instruction("b.ne __rt_mb_strtoupper_iconv_dec_loop");              // successful progress continues
     emitter.instruction("ldr x9, [sp, #184]");                                  // remaining output capacity
-    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_dec_grow");            // a full output buffer needs a larger decode temporary
+    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_dec_grow");           // a full output buffer needs a larger decode temporary
     emitter.bl_c(errno_function); // fetch the platform thread-local errno written by iconv
     emitter.instruction("ldr w9, [x0]");                                        // load iconv's errno value
     emitter.instruction("cmp w9, #22");                                         // EINVAL means a truncated final sequence
-    emitter.instruction("b.eq __rt_mb_strtoupper_iconv_decoded");                // stop at a truncated suffix without inventing scalars
+    emitter.instruction("b.eq __rt_mb_strtoupper_iconv_decoded");               // stop at a truncated suffix without inventing scalars
     emitter.instruction("ldr x9, [sp, #168]");                                  // bytes remaining at a malformed sequence
-    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_decoded");             // defensive completion
+    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_decoded");            // defensive completion
     emitter.instruction("ldr x10, [sp, #160]");                                 // current input pointer
     emitter.instruction("add x10, x10, #1");                                    // skip one malformed input byte
     emitter.instruction("str x10, [sp, #160]");                                 // persist the advanced input pointer
@@ -368,7 +368,7 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("mov x3, #0");                                          // no output participates in the reset
     emitter.instruction("mov x4, #0");                                          // no output count participates in the reset
     emitter.bl_c("iconv"); // reset stateful decoders after skipping one malformed byte
-    emitter.instruction("b __rt_mb_strtoupper_iconv_dec_loop");                  // continue decoding
+    emitter.instruction("b __rt_mb_strtoupper_iconv_dec_loop");                 // continue decoding
 
     emitter.label("__rt_mb_strtoupper_iconv_dec_grow");
     emitter.instruction("ldr x0, [sp, #56]");                                   // current decode-buffer capacity
@@ -383,18 +383,18 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("mov x11, #0");                                         // copy index
     emitter.label("__rt_mb_strtoupper_iconv_dec_copy");
     emitter.instruction("cmp x11, x10");                                        // copied every decoded byte?
-    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_dec_copied");             // replace the old buffer once the prefix is duplicated
+    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_dec_copied");            // replace the old buffer once the prefix is duplicated
     emitter.instruction("ldrb w12, [x9, x11]");                                 // load one decoded byte
     emitter.instruction("strb w12, [x0, x11]");                                 // store it into the grown buffer
     emitter.instruction("add x11, x11, #1");                                    // advance the copy index
-    emitter.instruction("b __rt_mb_strtoupper_iconv_dec_copy");                  // continue the prefix copy
+    emitter.instruction("b __rt_mb_strtoupper_iconv_dec_copy");                 // continue the prefix copy
     emitter.label("__rt_mb_strtoupper_iconv_dec_copied");
     emitter.instruction("str x0, [sp, #48]");                                   // persist the grown decode buffer
     emitter.instruction("ldr x0, [sp, #200]");                                  // reload the new capacity
     emitter.instruction("str x0, [sp, #56]");                                   // persist the grown capacity
     emitter.instruction("mov x0, x9");                                          // release the superseded decode buffer
     emitter.instruction("bl __rt_heap_free");                                   // return the old temporary to the heap
-    emitter.instruction("b __rt_mb_strtoupper_iconv_dec_loop");                  // retry the conversion with the larger buffer
+    emitter.instruction("b __rt_mb_strtoupper_iconv_dec_loop");                 // retry the conversion with the larger buffer
 
     emitter.label("__rt_mb_strtoupper_iconv_decoded");
     emitter.instruction("ldr x0, [sp, #192]");                                  // close the decode descriptor
@@ -402,7 +402,7 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("ldr x0, [sp, #64]");                                   // allocate 3x the decoded UTF-32 for 1:N growth
     emitter.instruction("add x0, x0, x0, lsl #1");                              // dest_cap = decoded_len * 3
     emitter.instruction("cmp x0, #16");                                         // keep a minimum uppercase buffer
-    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_upper_cap");              // use the 3x size when it is large enough
+    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_upper_cap");             // use the 3x size when it is large enough
     emitter.instruction("mov x0, #16");                                         // minimum 16-byte uppercase buffer
     emitter.label("__rt_mb_strtoupper_iconv_upper_cap");
     emitter.instruction("str x0, [sp, #232]");                                  // remember the uppercase-buffer capacity
@@ -420,16 +420,16 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("ldr x11, [sp, #208]");                                 // load the decode byte index
     emitter.instruction("ldr x10, [sp, #216]");                                 // load the decoded length
     emitter.instruction("cmp x11, x10");                                        // mapped every decoded scalar?
-    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_mapped");                 // encode once uppercase is finished
+    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_mapped");                // encode once uppercase is finished
     emitter.instruction("ldr x9, [sp, #48]");                                   // reload the decode buffer
     emitter.instruction("ldr w0, [x9, x11]");                                   // load the next UTF-32LE scalar
     emitter.instruction("add x11, x11, #4");                                    // consume four decode bytes
     emitter.instruction("str x11, [sp, #208]");                                 // persist the advanced decode index
     emitter.instruction("ldr x12, [sp, #200]");                                 // load the saw_payload flag
-    emitter.instruction("cbnz x12, __rt_mb_strtoupper_iconv_map_apply");         // after the first payload scalar, keep every later BOM
+    emitter.instruction("cbnz x12, __rt_mb_strtoupper_iconv_map_apply");        // after the first payload scalar, keep every later BOM
     emitter.instruction("mov w12, #0xFEFF");                                    // UTF-32LE BOM scalar
     emitter.instruction("cmp w0, w12");                                         // is this a leading UTF-32 BOM?
-    emitter.instruction("b.eq __rt_mb_strtoupper_iconv_map_loop");               // skip a leading BOM
+    emitter.instruction("b.eq __rt_mb_strtoupper_iconv_map_loop");              // skip a leading BOM
     emitter.label("__rt_mb_strtoupper_iconv_map_apply");
     emitter.instruction("mov x12, #1");                                         // later scalars are payload
     emitter.instruction("str x12, [sp, #200]");                                 // persist saw_payload
@@ -440,7 +440,7 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("ldr x11, [sp, #232]");                                 // uppercase-buffer capacity
     emitter.instruction("add x12, x10, x1");                                    // the bytes this mapping would occupy
     emitter.instruction("cmp x12, x11");                                        // does the mapping still fit?
-    emitter.instruction("b.ls __rt_mb_strtoupper_iconv_map_store");              // copy when the current buffer is large enough
+    emitter.instruction("b.ls __rt_mb_strtoupper_iconv_map_store");             // copy when the current buffer is large enough
     emitter.instruction("str x0, [sp, #192]");                                  // preserve the uppercase scalar count across grow
     emitter.instruction("str x1, [sp, #176]");                                  // preserve the mapping byte count across grow
     emitter.instruction("lsl x0, x11, #1");                                     // double the uppercase capacity
@@ -454,11 +454,11 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("mov x11, #0");                                         // copy index
     emitter.label("__rt_mb_strtoupper_iconv_upper_copy");
     emitter.instruction("cmp x11, x10");                                        // copied every uppercase byte?
-    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_upper_copied");           // replace the old buffer once the prefix is duplicated
+    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_upper_copied");          // replace the old buffer once the prefix is duplicated
     emitter.instruction("ldrb w12, [x9, x11]");                                 // load one uppercase byte
     emitter.instruction("strb w12, [x0, x11]");                                 // store it into the grown buffer
     emitter.instruction("add x11, x11, #1");                                    // advance the copy index
-    emitter.instruction("b __rt_mb_strtoupper_iconv_upper_copy");                // continue the prefix copy
+    emitter.instruction("b __rt_mb_strtoupper_iconv_upper_copy");               // continue the prefix copy
     emitter.label("__rt_mb_strtoupper_iconv_upper_copied");
     emitter.instruction("str x0, [sp, #72]");                                   // persist the grown uppercase buffer
     emitter.instruction("mov x0, x9");                                          // release the superseded uppercase buffer
@@ -473,20 +473,20 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("mov x12, #0");                                         // copy index
     emitter.label("__rt_mb_strtoupper_iconv_map_copy");
     emitter.instruction("cmp x12, x1");                                         // copied every mapped UTF-32 byte?
-    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_map_copied");             // persist the written length once the mapping is stored
+    emitter.instruction("b.hs __rt_mb_strtoupper_iconv_map_copied");            // persist the written length once the mapping is stored
     emitter.instruction("ldrb w13, [x11, x12]");                                // load one mapped byte
     emitter.instruction("strb w13, [x9, x12]");                                 // store it into the uppercase buffer
     emitter.instruction("add x12, x12, #1");                                    // advance the copy index
-    emitter.instruction("b __rt_mb_strtoupper_iconv_map_copy");                  // continue the mapping copy
+    emitter.instruction("b __rt_mb_strtoupper_iconv_map_copy");                 // continue the mapping copy
     emitter.label("__rt_mb_strtoupper_iconv_map_copied");
     emitter.instruction("add x10, x10, x1");                                    // account for the mapped UTF-32 bytes
     emitter.instruction("str x10, [sp, #224]");                                 // persist the updated uppercase length
-    emitter.instruction("b __rt_mb_strtoupper_iconv_map_loop");                  // continue mapping the remaining scalars
+    emitter.instruction("b __rt_mb_strtoupper_iconv_map_loop");                 // continue mapping the remaining scalars
 
     emitter.label("__rt_mb_strtoupper_iconv_mapped");
     emitter.instruction("ldr x9, [sp, #224]");                                  // uppercase UTF-32 byte count
-    emitter.instruction("cbnz x9, __rt_mb_strtoupper_iconv_encode");             // encode when mapping produced at least one scalar
-    emitter.instruction("bl __rt_mb_strtoupper_iconv_free_temps");               // release both UTF-32 temporaries
+    emitter.instruction("cbnz x9, __rt_mb_strtoupper_iconv_encode");            // encode when mapping produced at least one scalar
+    emitter.instruction("bl __rt_mb_strtoupper_iconv_free_temps");              // release both UTF-32 temporaries
     emitter.instruction("b __rt_mb_strtoupper_empty");                          // an empty mapping produces an empty string
 
     emitter.label("__rt_mb_strtoupper_iconv_encode");
@@ -494,9 +494,9 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     abi::emit_symbol_address(emitter, "x1", "_mb_strlen_utf32le_name");
     emitter.bl_c("iconv_open"); // create the UTF-32LE-to-encoding conversion descriptor
     emitter.instruction("cmn x0, #1");                                          // did the encoder reject the same encoding name?
-    emitter.instruction("b.ne __rt_mb_strtoupper_iconv_encode_opened");          // continue when the encoder opened
-    emitter.instruction("bl __rt_mb_strtoupper_iconv_free_temps");               // release both UTF-32 temporaries before unwinding
-    emitter.instruction("b __rt_mb_strtoupper_unknown_encoding");                // treat a failed encoder open as an unknown encoding
+    emitter.instruction("b.ne __rt_mb_strtoupper_iconv_encode_opened");         // continue when the encoder opened
+    emitter.instruction("bl __rt_mb_strtoupper_iconv_free_temps");              // release both UTF-32 temporaries before unwinding
+    emitter.instruction("b __rt_mb_strtoupper_unknown_encoding");               // treat a failed encoder open as an unknown encoding
     emitter.label("__rt_mb_strtoupper_iconv_encode_opened");
     emitter.instruction("str x0, [sp, #192]");                                  // preserve the encode descriptor
     emitter.instruction("ldr x0, [sp, #224]");                                  // reserve at least the uppercase UTF-32 byte count
@@ -513,14 +513,14 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
 
     emitter.label("__rt_mb_strtoupper_iconv_enc_loop");
     emitter.instruction("ldr x9, [sp, #168]");                                  // load remaining uppercase UTF-32 bytes
-    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_encoded");             // encode is finished when input is exhausted
+    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_encoded");            // encode is finished when input is exhausted
     emitter.instruction("ldr x9, [sp, #24]");                                   // destination base
     emitter.instruction("ldr x10, [sp, #40]");                                  // bytes already encoded
     emitter.instruction("add x9, x9, x10");                                     // current encode write cursor
     emitter.instruction("str x9, [sp, #176]");                                  // initialize iconv's mutable output pointer
     emitter.instruction("ldr x9, [sp, #32]");                                   // destination capacity
     emitter.instruction("sub x9, x9, x10");                                     // remaining destination bytes
-    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_enc_grow");            // grow when the destination is already full
+    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_enc_grow");           // grow when the destination is already full
     emitter.instruction("str x9, [sp, #184]");                                  // initialize iconv's mutable output-byte count
     emitter.instruction("ldr x0, [sp, #192]");                                  // iconv argument 0 is the encode descriptor
     emitter.instruction("add x1, sp, #160");                                    // iconv argument 1 is `&input_ptr`
@@ -533,15 +533,15 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("sub x9, x9, x10");                                     // written = capacity - unused
     emitter.instruction("str x9, [sp, #40]");                                   // persist the accumulated encoded byte count
     emitter.instruction("cmn x0, #1");                                          // did iconv report an error condition?
-    emitter.instruction("b.ne __rt_mb_strtoupper_iconv_enc_loop");               // successful progress continues
+    emitter.instruction("b.ne __rt_mb_strtoupper_iconv_enc_loop");              // successful progress continues
     emitter.instruction("ldr x9, [sp, #184]");                                  // remaining destination capacity
-    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_enc_grow");            // a full destination needs a larger reservation
+    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_enc_grow");           // a full destination needs a larger reservation
     emitter.bl_c(errno_function); // fetch the platform thread-local errno written by iconv
     emitter.instruction("ldr w9, [x0]");                                        // load iconv's errno value
     emitter.instruction("cmp w9, #22");                                         // EINVAL means a truncated final sequence
-    emitter.instruction("b.eq __rt_mb_strtoupper_iconv_encoded");                // stop at a truncated suffix
+    emitter.instruction("b.eq __rt_mb_strtoupper_iconv_encoded");               // stop at a truncated suffix
     emitter.instruction("ldr x9, [sp, #168]");                                  // bytes remaining at a malformed sequence
-    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_encoded");             // defensive completion
+    emitter.instruction("cbz x9, __rt_mb_strtoupper_iconv_encoded");            // defensive completion
     emitter.instruction("ldr x10, [sp, #160]");                                 // current input pointer
     emitter.instruction("add x10, x10, #1");                                    // skip one malformed input byte
     emitter.instruction("str x10, [sp, #160]");                                 // persist the advanced input pointer
@@ -553,7 +553,7 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("mov x3, #0");                                          // no output participates in the reset
     emitter.instruction("mov x4, #0");                                          // no output count participates in the reset
     emitter.bl_c("iconv"); // reset stateful encoders after skipping one malformed byte
-    emitter.instruction("b __rt_mb_strtoupper_iconv_enc_loop");                  // continue encoding
+    emitter.instruction("b __rt_mb_strtoupper_iconv_enc_loop");                 // continue encoding
 
     emitter.label("__rt_mb_strtoupper_iconv_enc_grow");
     emitter.instruction("ldr x0, [sp, #24]");                                   // current destination buffer
@@ -564,12 +564,12 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("str x2, [sp, #32]");                                   // persist the new capacity before the grow call
     emitter.instruction("bl __rt_concat_grow");                                 // replace the destination with a larger owned buffer
     emitter.instruction("str x0, [sp, #24]");                                   // persist the grown destination pointer
-    emitter.instruction("b __rt_mb_strtoupper_iconv_enc_loop");                  // retry the conversion with the larger destination
+    emitter.instruction("b __rt_mb_strtoupper_iconv_enc_loop");                 // retry the conversion with the larger destination
 
     emitter.label("__rt_mb_strtoupper_iconv_encoded");
     emitter.instruction("ldr x0, [sp, #192]");                                  // close the encode descriptor
     emitter.bl_c("iconv_close"); // release the UTF-32LE-to-encoding descriptor
-    emitter.instruction("bl __rt_mb_strtoupper_iconv_free_temps");               // release both UTF-32 temporaries
+    emitter.instruction("bl __rt_mb_strtoupper_iconv_free_temps");              // release both UTF-32 temporaries
     emitter.instruction("b __rt_mb_strtoupper_finish");                         // publish the encoded uppercase string
 
     emitter.label("__rt_mb_strtoupper_iconv_free_temps");
@@ -577,7 +577,7 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
     emitter.instruction("ldr x0, [sp, #64]");                                   // decode buffer is at the original sp+48, now +16
     emitter.instruction("bl __rt_heap_free");                                   // release the decode temporary
     emitter.instruction("ldr x0, [sp, #88]");                                   // uppercase buffer is at the original sp+72, now +16
-    emitter.instruction("cbz x0, __rt_mb_strtoupper_iconv_free_done");           // skip when mapping never allocated
+    emitter.instruction("cbz x0, __rt_mb_strtoupper_iconv_free_done");          // skip when mapping never allocated
     emitter.instruction("bl __rt_heap_free");                                   // release the uppercase temporary
     emitter.label("__rt_mb_strtoupper_iconv_free_done");
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the helper return address
@@ -591,7 +591,7 @@ fn emit_helpers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #32]");                                  // load the reserved destination capacity
     emitter.instruction("add x12, x10, #12");                                   // the next scalar can emit up to twelve UTF-8 bytes
     emitter.instruction("cmp x12, x11");                                        // does the reservation still have twelve free bytes?
-    emitter.instruction("b.ls __rt_mb_strtoupper_ensure_done");                  // keep the current reservation when it still fits
+    emitter.instruction("b.ls __rt_mb_strtoupper_ensure_done");                 // keep the current reservation when it still fits
     emitter.instruction("ldr x0, [sp, #24]");                                   // current destination buffer
     emitter.instruction("mov x1, x10");                                         // preserve the bytes already written
     emitter.instruction("lsl x2, x11, #1");                                     // double the destination capacity
@@ -606,14 +606,14 @@ fn emit_helpers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");                                   // load the destination pointer
     emitter.instruction("ldr x10, [sp, #40]");                                  // load the number of bytes already written
     emitter.instruction("cmp w0, #0x80");                                       // one-byte UTF-8?
-    emitter.instruction("b.hs __rt_mb_strtoupper_put_utf8_2");                   // encode a longer sequence
+    emitter.instruction("b.hs __rt_mb_strtoupper_put_utf8_2");                  // encode a longer sequence
     emitter.instruction("strb w0, [x9, x10]");                                  // store the ASCII byte
     emitter.instruction("add x10, x10, #1");                                    // one byte was written
     emitter.instruction("str x10, [sp, #40]");                                  // persist the updated written length
     emitter.instruction("ret");                                                 // return after the one-byte encode
     emitter.label("__rt_mb_strtoupper_put_utf8_2");
     emitter.instruction("cmp w0, #0x800");                                      // two-byte UTF-8?
-    emitter.instruction("b.hs __rt_mb_strtoupper_put_utf8_3");                   // encode a three- or four-byte sequence
+    emitter.instruction("b.hs __rt_mb_strtoupper_put_utf8_3");                  // encode a three- or four-byte sequence
     emitter.instruction("lsr w11, w0, #6");                                     // high five bits
     emitter.instruction("orr w11, w11, #0xC0");                                 // two-byte leader
     emitter.instruction("strb w11, [x9, x10]");                                 // store the two-byte leader
@@ -626,7 +626,7 @@ fn emit_helpers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return after the two-byte encode
     emitter.label("__rt_mb_strtoupper_put_utf8_3");
     emitter.instruction("cmp w0, #0x10000");                                    // three-byte UTF-8?
-    emitter.instruction("b.hs __rt_mb_strtoupper_put_utf8_4");                   // encode a four-byte sequence
+    emitter.instruction("b.hs __rt_mb_strtoupper_put_utf8_4");                  // encode a four-byte sequence
     emitter.instruction("lsr w11, w0, #12");                                    // high four bits
     emitter.instruction("orr w11, w11, #0xE0");                                 // three-byte leader
     emitter.instruction("strb w11, [x9, x10]");                                 // store the three-byte leader

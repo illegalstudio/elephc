@@ -130,14 +130,14 @@ fn emit_utf8_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9d, 0x80");                                       // ASCII bytes are complete one-byte characters
     emitter.instruction("jb __rt_mb_strtoupper_utf8_ascii_x86");                // uppercase one ASCII byte
     emitter.instruction("cmp r9d, 0xC2");                                       // C0/C1 and continuation bytes are malformed leaders
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");               // copy one malformed byte through
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");              // copy one malformed byte through
     emitter.instruction("cmp r9d, 0xE0");                                       // C2-DF introduce two-byte sequences
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_two_x86");                   // validate a two-byte character
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_two_x86");                  // validate a two-byte character
     emitter.instruction("cmp r9d, 0xF0");                                       // E0-EF introduce three-byte sequences
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_three_x86");                 // validate a three-byte character
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_three_x86");                // validate a three-byte character
     emitter.instruction("cmp r9d, 0xF5");                                       // F0-F4 introduce Unicode-range four-byte sequences
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_four_x86");                  // validate a four-byte character
-    emitter.instruction("jmp __rt_mb_strtoupper_utf8_invalid_x86");              // F5-FF cannot begin valid UTF-8
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_four_x86");                 // validate a four-byte character
+    emitter.instruction("jmp __rt_mb_strtoupper_utf8_invalid_x86");             // F5-FF cannot begin valid UTF-8
 
     emitter.label("__rt_mb_strtoupper_utf8_ascii_x86");
     emitter.instruction("mov eax, r9d");                                        // ASCII code point is the loaded byte
@@ -148,12 +148,12 @@ fn emit_utf8_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rdx");                                        // copy the total byte length to compute remaining bytes
     emitter.instruction("sub r10, r8");                                         // compute bytes remaining from the two-byte leader
     emitter.instruction("cmp r10, 2");                                          // is the sequence truncated before its continuation byte?
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");               // copy a truncated leader through unchanged
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");              // copy a truncated leader through unchanged
     emitter.instruction("movzx r11d, BYTE PTR [rsi + r8 + 1]");                 // load the two-byte sequence continuation
     emitter.instruction("mov ecx, r11d");                                       // preserve the continuation value while checking its prefix
     emitter.instruction("and ecx, 0xC0");                                       // isolate the continuation-byte prefix
     emitter.instruction("cmp ecx, 0x80");                                       // does the second byte have the required 10xxxxxx shape?
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");              // copy the malformed leader through unchanged
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");             // copy the malformed leader through unchanged
     emitter.instruction("mov eax, r9d");                                        // start the two-byte code point from the leader
     emitter.instruction("and eax, 0x1F");                                       // isolate the leader payload
     emitter.instruction("shl eax, 6");                                          // shift the leader payload into place
@@ -166,27 +166,27 @@ fn emit_utf8_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rdx");                                        // copy the total byte length to compute remaining bytes
     emitter.instruction("sub r10, r8");                                         // compute bytes remaining from the three-byte leader
     emitter.instruction("cmp r10, 3");                                          // are all two continuation bytes available?
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");               // copy a truncated leader through unchanged
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");              // copy a truncated leader through unchanged
     emitter.instruction("movzx r11d, BYTE PTR [rsi + r8 + 1]");                 // load the first three-byte continuation
     emitter.instruction("mov ecx, r11d");                                       // preserve the continuation value while checking its prefix
     emitter.instruction("and ecx, 0xC0");                                       // isolate its continuation-byte prefix
     emitter.instruction("cmp ecx, 0x80");                                       // is the first continuation structurally valid?
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");              // copy the malformed leader through unchanged
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");             // copy the malformed leader through unchanged
     emitter.instruction("cmp r9d, 0xE0");                                       // E0 requires a second byte at least A0 to avoid overlong UTF-8
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_three_not_e0_x86");         // skip the E0 lower-bound check for other leaders
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_three_not_e0_x86");        // skip the E0 lower-bound check for other leaders
     emitter.instruction("cmp r11d, 0xA0");                                      // is the E0 continuation inside the non-overlong range?
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");               // copy an overlong three-byte sequence through
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");              // copy an overlong three-byte sequence through
     emitter.label("__rt_mb_strtoupper_utf8_three_not_e0_x86");
     emitter.instruction("cmp r9d, 0xED");                                       // ED requires a second byte below A0 to exclude UTF-16 surrogates
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_three_second_x86");         // skip the surrogate bound for other leaders
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_three_second_x86");        // skip the surrogate bound for other leaders
     emitter.instruction("cmp r11d, 0xA0");                                      // does the ED continuation enter the surrogate range?
-    emitter.instruction("jae __rt_mb_strtoupper_utf8_invalid_x86");              // copy UTF-8 encodings of surrogate code points through
+    emitter.instruction("jae __rt_mb_strtoupper_utf8_invalid_x86");             // copy UTF-8 encodings of surrogate code points through
     emitter.label("__rt_mb_strtoupper_utf8_three_second_x86");
     emitter.instruction("movzx ecx, BYTE PTR [rsi + r8 + 2]");                  // load the final three-byte continuation
     emitter.instruction("mov r10d, ecx");                                       // preserve the final continuation while checking its prefix
     emitter.instruction("and r10d, 0xC0");                                      // isolate its continuation-byte prefix
     emitter.instruction("cmp r10d, 0x80");                                      // is the final continuation structurally valid?
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");              // copy the malformed leader through unchanged
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");             // copy the malformed leader through unchanged
     emitter.instruction("mov eax, r9d");                                        // start the three-byte code point from the leader
     emitter.instruction("and eax, 0x0F");                                       // isolate the leader payload
     emitter.instruction("shl eax, 12");                                         // shift the leader payload into place
@@ -202,32 +202,32 @@ fn emit_utf8_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, rdx");                                        // copy the total byte length to compute remaining bytes
     emitter.instruction("sub r10, r8");                                         // compute bytes remaining from the four-byte leader
     emitter.instruction("cmp r10, 4");                                          // are all three continuation bytes available?
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");               // copy a truncated leader through unchanged
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");              // copy a truncated leader through unchanged
     emitter.instruction("movzx r11d, BYTE PTR [rsi + r8 + 1]");                 // load the first four-byte continuation
     emitter.instruction("mov ecx, r11d");                                       // preserve the continuation value while checking its prefix
     emitter.instruction("and ecx, 0xC0");                                       // isolate its continuation-byte prefix
     emitter.instruction("cmp ecx, 0x80");                                       // is the first continuation structurally valid?
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");              // copy the malformed leader through unchanged
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");             // copy the malformed leader through unchanged
     emitter.instruction("cmp r9d, 0xF0");                                       // F0 requires a second byte at least 90 to avoid overlong UTF-8
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_four_not_f0_x86");          // skip the F0 lower-bound check for other leaders
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_four_not_f0_x86");         // skip the F0 lower-bound check for other leaders
     emitter.instruction("cmp r11d, 0x90");                                      // is the F0 continuation inside the non-overlong range?
-    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");               // copy an overlong four-byte sequence through
+    emitter.instruction("jb __rt_mb_strtoupper_utf8_invalid_x86");              // copy an overlong four-byte sequence through
     emitter.label("__rt_mb_strtoupper_utf8_four_not_f0_x86");
     emitter.instruction("cmp r9d, 0xF4");                                       // F4 requires a second byte below 90 for Unicode's maximum scalar
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_four_rest_x86");            // skip the upper bound for F0-F3
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_four_rest_x86");           // skip the upper bound for F0-F3
     emitter.instruction("cmp r11d, 0x90");                                      // does the F4 continuation exceed U+10FFFF?
-    emitter.instruction("jae __rt_mb_strtoupper_utf8_invalid_x86");              // copy out-of-range four-byte sequences through
+    emitter.instruction("jae __rt_mb_strtoupper_utf8_invalid_x86");             // copy out-of-range four-byte sequences through
     emitter.label("__rt_mb_strtoupper_utf8_four_rest_x86");
     emitter.instruction("movzx ecx, BYTE PTR [rsi + r8 + 2]");                  // load the second four-byte continuation
     emitter.instruction("mov r10d, ecx");                                       // preserve the second continuation while checking its prefix
     emitter.instruction("and r10d, 0xC0");                                      // isolate its continuation-byte prefix
     emitter.instruction("cmp r10d, 0x80");                                      // is the second continuation structurally valid?
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");              // copy the malformed leader through unchanged
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");             // copy the malformed leader through unchanged
     emitter.instruction("movzx r10d, BYTE PTR [rsi + r8 + 3]");                 // load the final four-byte continuation
     emitter.instruction("mov edx, r10d");                                       // preserve the final continuation while checking its prefix
     emitter.instruction("and edx, 0xC0");                                       // isolate its continuation-byte prefix
     emitter.instruction("cmp edx, 0x80");                                       // is the final continuation structurally valid?
-    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");              // copy the malformed leader through unchanged
+    emitter.instruction("jne __rt_mb_strtoupper_utf8_invalid_x86");             // copy the malformed leader through unchanged
     emitter.instruction("mov eax, r9d");                                        // start the four-byte code point from the leader
     emitter.instruction("and eax, 0x07");                                       // isolate the leader payload
     emitter.instruction("shl eax, 18");                                         // shift the leader payload into place
