@@ -60,6 +60,12 @@ expect_builtin_arity_error!(
     "mb_strlen() takes 1 or 2 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_mb_strwidth_wrong_args,
+    "<?php mb_strwidth();",
+    "mb_strwidth() takes 1 or 2 arguments"
+);
+
 /// Verifies the OpenSSL IV-length helper rejects a missing cipher name.
 #[test]
 fn test_error_openssl_cipher_iv_length_wrong_args() {
@@ -102,6 +108,24 @@ fn test_error_mb_strlen_encoding_type() {
     expect_error(
         "<?php mb_strlen('abc', 123);",
         "mb_strlen() encoding argument must be string or null",
+    );
+}
+
+/// Verifies that `mb_strwidth()` rejects a statically non-string value argument.
+#[test]
+fn test_error_mb_strwidth_string_type() {
+    expect_error(
+        "<?php mb_strwidth([1, 2]);",
+        "mb_strwidth() string argument must be string",
+    );
+}
+
+/// Verifies that `mb_strwidth()` accepts only string or null encoding arguments.
+#[test]
+fn test_error_mb_strwidth_encoding_type() {
+    expect_error(
+        "<?php mb_strwidth('abc', 123);",
+        "mb_strwidth() encoding argument must be string or null",
     );
 }
 
