@@ -141,6 +141,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
         regmatches_ptr_off,
         current_cstr_off,
         subject_cstr_off,
+        subject_ptr_off,
         group_rows_off,
         outer_off,
         group_idx_off,
@@ -253,7 +254,7 @@ fn emit_preg_match_all_capture_init_matrix_arm64(
     emitter.instruction(&format!("ldr x13, [sp, #{}]", nmatch_off));            // reload compiled slot count
     emitter.instruction("cmp x12, x13");                                        // have all group rows been allocated?
     emitter.instruction("b.ge __rt_pma_cap_init_done");                         // PATTERN_ORDER skeleton is ready
-    emitter.instruction("mov x0, #0");                                          // each group row grows as matches are found
+    emitter.instruction("mov x0, #8");                                          // each group row starts with room for several matches
     emitter.instruction("mov x1, #8");                                          // Mixed slots store boxed pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate one empty group row
     emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
@@ -265,7 +266,7 @@ fn emit_preg_match_all_capture_init_matrix_arm64(
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save the next group index
     emitter.instruction("b __rt_pma_cap_init_po_loop");                         // continue allocating group rows
     emitter.label("__rt_pma_cap_init_set");
-    emitter.instruction("mov x0, #0");                                          // SET_ORDER outer grows one row per match
+    emitter.instruction("mov x0, #8");                                          // SET_ORDER outer starts with room for several matches
     emitter.instruction("mov x1, #8");                                          // Mixed slots store boxed pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate an empty SET_ORDER outer array
     emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
@@ -282,6 +283,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
     regmatches_ptr_off: usize,
     current_cstr_off: usize,
     subject_cstr_off: usize,
+    subject_ptr_off: usize,
     group_rows_off: usize,
     outer_off: usize,
     group_idx_off: usize,
@@ -309,6 +311,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
         group_idx_off,
         current_cstr_off,
         subject_cstr_off,
+        subject_ptr_off,
         piece_ptr_off,
         piece_len_off,
         piece_offset_off,
@@ -351,6 +354,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
         group_idx_off,
         current_cstr_off,
         subject_cstr_off,
+        subject_ptr_off,
         piece_ptr_off,
         piece_len_off,
         piece_offset_off,
@@ -394,6 +398,7 @@ fn emit_preg_match_all_capture_box_cell_arm64(
     group_idx_off: usize,
     current_cstr_off: usize,
     subject_cstr_off: usize,
+    subject_ptr_off: usize,
     piece_ptr_off: usize,
     piece_len_off: usize,
     piece_offset_off: usize,
@@ -412,16 +417,16 @@ fn emit_preg_match_all_capture_box_cell_arm64(
     emitter.instruction("ldr x16, [x14, #8]");                                  // load signed-64-bit capture end
     emitter.instruction("cmp x15, #0");                                         // unmatched captures report a negative start
     emitter.instruction(&format!("b.lt {unmatched}"));                          // emit PHP's unmatched cell
-    emitter.instruction(&format!("ldr x1, [sp, #{}]", current_cstr_off));       // reload the current C-string cursor
-    emitter.instruction("add x1, x1, x15");                                     // capture pointer = cursor + rm_so
-    emitter.instruction("sub x2, x16, x15");                                    // capture length = rm_eo - rm_so
-    emitter.instruction(&format!("str x1, [sp, #{}]", piece_ptr_off));          // save the capture string pointer
-    emitter.instruction(&format!("str x2, [sp, #{}]", piece_len_off));          // save the capture string length
     emitter.instruction(&format!("ldr x9, [sp, #{}]", current_cstr_off));       // reload the current C-string cursor
     emitter.instruction(&format!("ldr x10, [sp, #{}]", subject_cstr_off));      // reload the original subject C string
     emitter.instruction("sub x9, x9, x10");                                     // bytes already consumed before this exec
     emitter.instruction("add x9, x9, x15");                                     // absolute subject offset of this capture
     emitter.instruction(&format!("str x9, [sp, #{}]", piece_offset_off));       // save the absolute byte offset
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", subject_ptr_off));        // reload the original elephc subject payload
+    emitter.instruction("add x1, x1, x9");                                      // capture pointer = subject + absolute offset
+    emitter.instruction("sub x2, x16, x15");                                    // capture length = rm_eo - rm_so
+    emitter.instruction(&format!("str x1, [sp, #{}]", piece_ptr_off));          // save the capture string pointer
+    emitter.instruction(&format!("str x2, [sp, #{}]", piece_len_off));          // save the capture string length
     emitter.instruction("mov x0, #1");                                          // runtime value tag 1 = string
     emitter.instruction(&format!("ldr x1, [sp, #{}]", piece_ptr_off));          // load the capture string pointer
     emitter.instruction(&format!("ldr x2, [sp, #{}]", piece_len_off));          // load the capture string length
@@ -654,6 +659,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         regmatches_ptr_off,
         current_cstr_off,
         subject_cstr_off,
+        subject_ptr_off,
         group_rows_off,
         outer_off,
         group_idx_off,
@@ -757,7 +763,7 @@ fn emit_preg_match_all_capture_init_matrix_linux_x86_64(
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload the current group index
     emitter.instruction(&format!("cmp r9, QWORD PTR [rsp + {}]", nmatch_off));  // have all group rows been allocated?
     emitter.instruction("jge __rt_pma_cap_init_done_linux_x86_64");             // PATTERN_ORDER skeleton is ready
-    emitter.instruction("xor edi, edi");                                        // each group row grows as matches are found
+    emitter.instruction("mov edi, 8");                                          // each group row starts with room for several matches
     emitter.instruction("mov esi, 8");                                          // Mixed slots store boxed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate one empty group row
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
@@ -768,7 +774,7 @@ fn emit_preg_match_all_capture_init_matrix_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", group_idx_off)); // save the next group index
     emitter.instruction("jmp __rt_pma_cap_init_po_loop_linux_x86_64");          // continue allocating group rows
     emitter.label("__rt_pma_cap_init_set_linux_x86_64");
-    emitter.instruction("xor edi, edi");                                        // SET_ORDER outer grows one row per match
+    emitter.instruction("mov edi, 8");                                          // SET_ORDER outer starts with room for several matches
     emitter.instruction("mov esi, 8");                                          // Mixed slots store boxed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate an empty SET_ORDER outer array
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
@@ -785,6 +791,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     regmatches_ptr_off: usize,
     current_cstr_off: usize,
     subject_cstr_off: usize,
+    subject_ptr_off: usize,
     group_rows_off: usize,
     outer_off: usize,
     group_idx_off: usize,
@@ -811,6 +818,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
         group_idx_off,
         current_cstr_off,
         subject_cstr_off,
+        subject_ptr_off,
         piece_ptr_off,
         piece_len_off,
         piece_offset_off,
@@ -850,6 +858,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
         group_idx_off,
         current_cstr_off,
         subject_cstr_off,
+        subject_ptr_off,
         piece_ptr_off,
         piece_len_off,
         piece_offset_off,
@@ -872,7 +881,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction("xor esi, esi");                                        // indexed-array payload has no high word
     emitter.instruction("call __rt_mixed_from_value");                          // box the SET_ORDER row as Mixed
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save the boxed row Mixed pointer
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", row_off));    // reload the helper-owned row array
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", row_off));    // reload the helper-owned row array into the x86 decref input
     emitter.instruction("call __rt_decref_array");                              // drop helper ownership after Mixed retain
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", outer_off));  // reload the SET_ORDER outer array
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", mixed_ptr_off)); // load the boxed row
@@ -893,6 +902,7 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     group_idx_off: usize,
     current_cstr_off: usize,
     subject_cstr_off: usize,
+    subject_ptr_off: usize,
     piece_ptr_off: usize,
     piece_len_off: usize,
     piece_offset_off: usize,
@@ -911,16 +921,16 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
     emitter.instruction("cmp r11, 0");                                          // unmatched captures report a negative start
     emitter.instruction(&format!("jl {unmatched}"));                            // emit PHP's unmatched cell
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_cstr_off)); // reload the current C-string cursor
-    emitter.instruction("add rsi, r11");                                        // capture pointer = cursor + rm_so
-    emitter.instruction("mov rdx, rcx");                                        // copy capture end before subtracting start
-    emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", piece_ptr_off)); // save the capture string pointer
-    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", piece_len_off)); // save the capture string length
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", current_cstr_off)); // reload the current C-string cursor
     emitter.instruction(&format!("sub r9, QWORD PTR [rsp + {}]", subject_cstr_off)); // bytes already consumed before this exec
     emitter.instruction("add r9, r11");                                         // absolute subject offset of this capture
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", piece_offset_off)); // save the absolute byte offset
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", subject_ptr_off)); // reload the original elephc subject payload
+    emitter.instruction("add rsi, r9");                                         // capture pointer = subject + absolute offset
+    emitter.instruction("mov rdx, rcx");                                        // copy capture end before subtracting start
+    emitter.instruction("sub rdx, r11");                                        // capture length = rm_eo - rm_so
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rsi", piece_ptr_off)); // save the capture string pointer
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", piece_len_off)); // save the capture string length
     emitter.instruction("mov rax, 1");                                          // runtime value tag 1 = string
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", piece_ptr_off)); // load the capture string pointer
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", piece_len_off)); // load the capture string length
@@ -970,7 +980,7 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     emitter.instruction("xor esi, esi");                                        // indexed-array payload has no high word
     emitter.instruction("call __rt_mixed_from_value");                          // box the offset-capture row as Mixed
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save the boxed [value, offset] cell
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", pair_ptr_off)); // reload the helper-owned row array
+    emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {}]", pair_ptr_off)); // reload the helper-owned row array into the x86 decref input
     emitter.instruction("call __rt_decref_array");                              // drop helper ownership after Mixed retain
     emitter.label(&done);
 }
@@ -1009,7 +1019,7 @@ fn emit_preg_match_all_capture_finish_pattern_order_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save the boxed group-row cell
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload the current group index
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", group_rows_off)); // reload the group-row table
-    emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // reload the helper-owned group row
+    emitter.instruction("mov rax, QWORD PTR [r10 + r9 * 8]");                   // reload the helper-owned group row into the x86 decref input
     emitter.instruction("call __rt_decref_array");                              // drop helper ownership after Mixed retain
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", outer_off));  // reload the PATTERN_ORDER outer array
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", mixed_ptr_off)); // load the boxed group row
