@@ -190,6 +190,8 @@ echo "mb_strlen bytes: " . mb_strlen("héllo", "8bit") . "\n";
 $legacyName = "\x82\xA0\x82\xA2\x82\xA4";
 echo "mb_strlen Shift-JIS: " . mb_strlen($legacyName, "SJIS") . "\n";
 echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
+echo "strip_tags: " . strip_tags("<p>Hello <b>World</b></p>") . "\n";
+echo "strip_tags(allow): " . strip_tags("<p>Hello <b>World</b></p>", "<p>") . "\n";
 echo "urlencode: " . urlencode("hello world") . "\n";
 echo "base64: " . base64_encode("Hello") . "\n";
 // base64_decode() skips whitespace and tolerates missing padding; $strict = true
