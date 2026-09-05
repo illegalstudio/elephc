@@ -40,6 +40,33 @@ fn execute_program_dispatches_mb_strlen_builtin() {
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `mb_strimwidth()` matches display-width trim, encoding, callable, and error behavior.
+#[test]
+fn execute_program_dispatches_mb_strimwidth_builtin() {
+    let program = parse_fragment(
+        r#"echo mb_strimwidth("hello", 0, 4, "..."); echo ":";
+	echo mb_strimwidth(string: "日本語", start: 0, width: 4, trim_marker: "…"); echo ":";
+	echo mb_strimwidth("héllo", 0, 3, "", "8bit"); echo ":";
+	echo call_user_func("mb_strimwidth", "hello", 1, 3); echo ":";
+	try {
+	    mb_strimwidth("abc", 0, 1, "", "definitely-not-an-encoding");
+	} catch (ValueError $error) {
+	    echo "caught";
+	}
+	echo ":";
+	return function_exists("mb_strimwidth") && is_callable("mb_strimwidth");"#
+            .as_bytes(),
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "h...:日…:hé:ell:caught:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `explode()` and `implode()` bridge byte strings and arrays.
 #[test]
 fn execute_program_dispatches_explode_implode_builtins() {

@@ -85,3 +85,65 @@ try {
     );
     assert_eq!(out, "3:caught");
 }
+
+/// Verifies `mb_strimwidth()` trims ASCII and CJK text by PHP display width.
+#[test]
+fn test_mb_strimwidth_ascii_and_cjk() {
+    let out = compile_and_run(
+        r#"<?php
+echo mb_strimwidth("hello", 0, 3), ":";
+echo mb_strimwidth("hello", 0, 3, "..."), ":";
+echo mb_strimwidth("hello", 0, 4, "..."), ":";
+echo mb_strimwidth("日本語", 0, 4, "…"), ":";
+echo mb_strimwidth("hello", 1, 3), ":";
+echo mb_strimwidth("hello", -2, 10), ":";
+echo mb_strimwidth("hello", 0, -2), ":";
+echo mb_strimwidth("ab", 2, 1), ":";
+echo mb_strimwidth("", 0, 3, "...");"#,
+    );
+    assert_eq!(out, "hel:...:h...:日…:ell:lo:hel::");
+}
+
+/// Verifies `mb_strimwidth()` encoding aliases, first-class callables, and Termwind's UTF-8 form.
+#[test]
+fn test_mb_strimwidth_encoding_and_callable() {
+    let out = compile_and_run(
+        r#"<?php
+echo mb_strimwidth("héllo", 0, 3, "", "UTF-8"), ":";
+echo mb_strimwidth("héllo", 0, 3, "", "UTF8"), ":";
+echo mb_strimwidth("héllo", 0, 3, "", "8bit"), ":";
+echo mb_strimwidth(string: "日本語", start: 0, width: 4, trim_marker: "…", encoding: null), ":";
+$trim = mb_strimwidth(...);
+echo $trim("hello", 0, 4, "...");"#,
+    );
+    assert_eq!(out, "hél:hél:hé:日…:h...");
+}
+
+/// Verifies namespaced/case-insensitive lookup and catchable `mb_strimwidth()` `ValueError`s.
+#[test]
+fn test_mb_strimwidth_namespace_and_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+echo Mb_StRiMwIdTh("日本語", 0, 4, "…"), ":";
+$encoding = $argc > 0 ? "definitely-not-an-encoding" : "UTF-8";
+try {
+    mb_strimwidth("abc", 0, 1, "", $encoding);
+} catch (\ValueError $error) {
+    echo "enc";
+}
+echo ":";
+try {
+    mb_strimwidth("ab", 3, 1);
+} catch (\ValueError $error) {
+    echo "start";
+}
+echo ":";
+try {
+    mb_strimwidth("ab", 2, -1);
+} catch (\ValueError $error) {
+    echo "width";
+}"#,
+    );
+    assert_eq!(out, "日…:enc:start:width");
+}
