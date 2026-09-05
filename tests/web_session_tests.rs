@@ -374,6 +374,38 @@ fn extract_phpsessid(resp: &str) -> Option<String> {
     extract_session_id(resp, "PHPSESSID")
 }
 
+/// Verifies request reset preserves stderr when a prior request leaks a PHP stream alias.
+#[test]
+fn web_request_reset_preserves_standard_stream_aliases() {
+    let dir = make_test_dir("web_stdio_alias_reset");
+    let stderr_path = dir.join("server.stderr");
+    let source = r#"<?php
+$stream = fopen("php://stderr", "w");
+fwrite($stream, "stdio-alive\n");
+echo "response-alive";
+"#;
+    let bin = compile_web(&dir, source, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server_with_stderr(&bin, &addr, &stderr_path);
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = server.kill();
+    let _ = server.wait();
+
+    assert!(first.ends_with("response-alive"), "first response: {first:?}");
+    assert!(
+        second.ends_with("response-alive"),
+        "second response: {second:?}"
+    );
+    let stderr = fs::read_to_string(&stderr_path).expect("failed to read server stderr");
+    assert_eq!(
+        stderr.matches("stdio-alive").count(),
+        2,
+        "stderr alias stopped working after request reset: {stderr:?}"
+    );
+}
+
 /// Verifies a session handler that cannot produce a non-empty identifier makes
 /// `session_start()` fail closed without entering the ACTIVE state.
 #[test]
