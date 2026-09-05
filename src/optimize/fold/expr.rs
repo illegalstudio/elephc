@@ -200,14 +200,16 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                             crate::strict_php::is_enabled(),
                         );
                         if user_function || profile_builtin {
-                            ExprKind::BoolLiteral(
-                                user_function
-                                    || crate::types::checker::builtins::is_php_visible_builtin_function_for_target(
-                                        candidate,
-                                        crate::strict_php::is_enabled(),
-                                        target,
-                                    ),
-                            )
+                            let target_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_target(
+                                candidate,
+                                crate::strict_php::is_enabled(),
+                                target,
+                            );
+                            if user_function || target_builtin || active_target_guard_condition() {
+                                ExprKind::BoolLiteral(user_function || target_builtin)
+                            } else {
+                                ExprKind::FunctionCall { name, args }
+                            }
                         } else {
                             ExprKind::FunctionCall { name, args }
                         }

@@ -166,8 +166,11 @@ undefined in macOS output, and the macOS QoS API is undefined in Linux output.
 before availability checks, so one portable source can isolate those calls;
 `PHP_OS_FAMILY` exposes the same target family inside `eval()`. A source may
 also declare a fallback function with a target-unavailable builtin name inside
-the negative `function_exists()` branch; builtins available on the selected
-target remain protected from redeclaration.
+the negative `function_exists()` branch. The guard must pass the function name
+as a direct string literal so the target fold can run before type checking;
+variables, constants, and concatenated expressions are not supported in this
+compile-time polyfill idiom. Builtins available on the selected target remain
+protected from redeclaration.
 Linux namespace and CPU-affinity argument failures are classified separately
 from OS permission/resource failures: invalid values raise `ValueError`, while
 operating-system failures emit a suppressible PHP warning and return `false`.

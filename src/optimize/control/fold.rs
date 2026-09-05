@@ -44,11 +44,11 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             elseif_clauses,
             else_body,
         } => StmtKind::If {
-            condition: fold_expr(condition),
+            condition: fold_condition_expr(condition),
             then_body: fold_block(then_body),
             elseif_clauses: elseif_clauses
                 .into_iter()
-                .map(|(condition, body)| (fold_expr(condition), fold_block(body)))
+                .map(|(condition, body)| (fold_condition_expr(condition), fold_block(body)))
                 .collect(),
             else_body: else_body.map(fold_block),
         },
@@ -397,7 +397,7 @@ pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
 /// Only these conditions may be structurally pruned before type checking. Ordinary constant
 /// conditions remain intact until the regular post-check optimizer so warning analysis still
 /// observes the source control-flow shape.
-fn target_dependent_condition(expr: &Expr) -> bool {
+pub(in crate::optimize) fn target_dependent_condition(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::ConstRef(name) => matches!(
             name.as_canonical().trim_start_matches('\\'),

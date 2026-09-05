@@ -53,6 +53,7 @@ thread_local! {
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
     static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
+    static ACTIVE_TARGET_GUARD_CONDITION: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Borrows the active function-effect summary without cloning its whole map.
@@ -107,6 +108,14 @@ pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
         let previous_functions =
             ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
         let folded = fold_constants(program);
+        // A target guard can turn a conditional polyfill declaration into an unconditional
+        // declaration. Rebuild the function inventory and fold once more so later probes in
+        // the same program observe the function that the retained branch just defined. Use
+        // `fold_block` directly here because `fold_constants` would seed CLI superglobals twice.
+        let materialized_functions = collect_top_level_user_functions(&folded);
+        ACTIVE_FOLD_USER_FUNCTIONS
+            .with(|functions| functions.replace(Some(materialized_functions)));
+        let folded = fold_block(folded);
         ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
         slot.replace(previous);
         folded
@@ -125,6 +134,24 @@ pub(in crate::optimize) fn active_fold_user_function_exists(name: &str) -> bool 
         slot.borrow()
             .as_ref()
             .is_some_and(|functions| functions.contains(&key))
+    })
+}
+
+/// Returns whether constant folding is currently evaluating a target-dependent guard condition.
+pub(in crate::optimize) fn active_target_guard_condition() -> bool {
+    ACTIVE_TARGET_GUARD_CONDITION.with(|slot| *slot.borrow())
+}
+
+/// Folds an `if` condition while marking literal target guards as safe for eager availability folds.
+pub(in crate::optimize) fn fold_condition_expr(expr: Expr) -> Expr {
+    if active_fold_target().is_none() || !target_dependent_condition(&expr) {
+        return fold_expr(expr);
+    }
+    ACTIVE_TARGET_GUARD_CONDITION.with(|slot| {
+        let previous = slot.replace(true);
+        let folded = fold_expr(expr);
+        slot.replace(previous);
+        folded
     })
 }
 

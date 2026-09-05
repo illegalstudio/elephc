@@ -157,6 +157,26 @@ fn test_pcntl_target_unavailable_builtin_can_be_polyfilled() {
     assert_eq!(compile_and_run(source), "7");
 }
 
+/// Reports a retained target polyfill as defined to later `function_exists()` probes.
+#[test]
+fn test_pcntl_target_polyfill_updates_later_function_exists() {
+    #[cfg(target_os = "linux")]
+    let source = "<?php
+        if (!function_exists('pcntl_getqos_class')) {
+            function pcntl_getqos_class(): int { return 7; }
+        }
+        var_dump(function_exists('pcntl_getqos_class'));
+        var_dump(pcntl_getqos_class());";
+    #[cfg(target_os = "macos")]
+    let source = "<?php
+        if (!function_exists('pcntl_getcpu')) {
+            function pcntl_getcpu(): int { return 7; }
+        }
+        var_dump(function_exists('pcntl_getcpu'));
+        var_dump(pcntl_getcpu());";
+    assert_eq!(compile_and_run(source), "bool(true)\nint(7)\n");
+}
+
 /// Resolves a namespaced guarded polyfill before falling back to a global target builtin.
 #[test]
 fn test_pcntl_namespaced_target_unavailable_builtin_can_be_polyfilled() {
