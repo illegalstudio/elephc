@@ -9,8 +9,8 @@
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
 //!   helpers because generated SPL methods can call them.
-//! - Lowered `mb_strlen()` calls enable its iconv-backed runtime helper without
-//!   imposing that native dependency on programs that never use the builtin.
+//! - Lowered `mb_strlen()` and `mb_convert_case()` calls enable their iconv-backed
+//!   runtime helpers without imposing that native dependency on unused programs.
 //! - Emitted stream/archive classes enable PHAR bridge libraries because their
 //!   generated methods route dynamic paths through `__rt_*_maybe_phar` helpers.
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
@@ -46,6 +46,8 @@ pub struct RuntimeFeatures {
     pub regex: bool,
     /// True when lowered code can call the optional iconv-backed `mb_strlen()` helper.
     pub mb_strlen: bool,
+    /// True when lowered code can call the optional `mb_convert_case()` helper.
+    pub mb_convert_case: bool,
     pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor
     /// invoker) that builds per-builtin wrappers referencing `elephc_crypto`.
@@ -129,6 +131,7 @@ impl RuntimeFeatures {
             | ((self.generator as u64) << 9)
             | ((self.popen_resource as u64) << 10)
             | ((self.directory_resource as u64) << 11)
+            | ((self.mb_convert_case as u64) << 12)
     }
 
     /// Returns an empty feature set for programs that need only the base runtime.
@@ -136,6 +139,7 @@ impl RuntimeFeatures {
         Self {
             regex: false,
             mb_strlen: false,
+            mb_convert_case: false,
             phar_archive: false,
             descriptor_invoker: false,
             eval_bridge: false,
@@ -155,6 +159,7 @@ impl RuntimeFeatures {
         Self {
             regex: true,
             mb_strlen: true,
+            mb_convert_case: true,
             phar_archive: true,
             descriptor_invoker: true,
             eval_bridge: true,
@@ -1268,6 +1273,7 @@ mod tests {
         assert!(link_requirements_for_runtime_features(RuntimeFeatures {
             regex: false,
             mb_strlen: false,
+            mb_convert_case: false,
             phar_archive: false,
             descriptor_invoker: true,
             eval_bridge: false,

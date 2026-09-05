@@ -114,6 +114,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.mb_strlen {
         strings::emit_mb_strlen(emitter);
     }
+    if features.mb_convert_case {
+        strings::emit_mb_convert_case(emitter);
+    }
     strings::emit_iconv(emitter);
     strings::emit_hash(emitter);
     strings::emit_hash_hmac(emitter);

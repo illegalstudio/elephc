@@ -219,3 +219,9 @@ pub(crate) const HASH_COPY_FINALIZED_CTX_MSG: &str =
 /// Catchable `\ValueError` message when `mb_strlen()` receives an unknown encoding name.
 pub(crate) const MB_STRLEN_UNKNOWN_ENCODING_MSG: &str =
     "mb_strlen(): Argument #2 ($encoding) must be a valid encoding";
+/// Catchable `\ValueError` message when `mb_convert_case()` receives an unknown `MB_CASE_*` mode.
+pub(crate) const MB_CONVERT_CASE_BAD_MODE_MSG: &str =
+    "mb_convert_case(): Argument #2 ($mode) must be one of the MB_CASE_* constants";
+/// Catchable `\ValueError` message when `mb_convert_case()` receives an unknown encoding name.
+pub(crate) const MB_CONVERT_CASE_BAD_ENCODING_MSG: &str =
+    "mb_convert_case(): Argument #3 ($encoding) must be a valid encoding";

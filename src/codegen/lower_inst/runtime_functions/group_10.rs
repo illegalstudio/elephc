@@ -19,6 +19,9 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::MbConvertCase => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_convert_case(ctx, inst)
+        }),
         RuntimeFnId::MbStrlen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_strlen(ctx, inst)
         }),

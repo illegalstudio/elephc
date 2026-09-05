@@ -71,6 +71,25 @@ fn test_runtime_can_gate_mb_strlen_helper() {
     assert!(included.output().contains("__rt_mb_strlen:"));
 }
 
+/// Verifies the `mb_convert_case()` helper is emitted only for programs that use it.
+#[test]
+fn test_runtime_can_gate_mb_convert_case_helper() {
+    let target = Target::new(Platform::MacOS, Arch::AArch64);
+    let mut omitted = Emitter::new(target);
+    emit_runtime(&mut omitted, RuntimeFeatures::none());
+    assert!(!omitted.output().contains("__rt_mb_convert_case:"));
+
+    let mut included = Emitter::new(target);
+    emit_runtime(
+        &mut included,
+        RuntimeFeatures {
+            mb_convert_case: true,
+            ..RuntimeFeatures::none()
+        },
+    );
+    assert!(included.output().contains("__rt_mb_convert_case:"));
+}
+
 /// Verifies that Linux x86_64 uses the shared runtime surface.
 #[test]
 fn test_linux_x86_64_runtime_uses_shared_surface() {
