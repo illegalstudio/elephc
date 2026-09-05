@@ -560,10 +560,13 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         // rather than like `Mixed`.
         TypeSpec::Ptr => "ptr",
         TypeSpec::Callable => "callable",
+        TypeSpec::Array => "array",
+        // `declared` already had its `?` stripped above, so compare the inner type.
+        TypeSpec::Nullable(inner) => return php_type_matches(*inner, declared),
         TypeSpec::Mixed => {
             return !matches!(
                 declared,
-                "int" | "float" | "string" | "bool" | "ptr" | "callable"
+                "int" | "float" | "string" | "bool" | "ptr" | "callable" | "array"
             );
         }
     };

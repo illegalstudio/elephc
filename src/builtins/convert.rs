@@ -31,6 +31,10 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Void => PhpType::Void,
         TypeSpec::Ptr => PhpType::Pointer(None),
         TypeSpec::Callable => PhpType::Callable,
+        TypeSpec::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+        // The checker's type model carries nullability through flow narrowing rather than a
+        // type constructor, so a nullable declaration converts to its inner type.
+        TypeSpec::Nullable(inner) => type_spec_to_php(inner),
     }
 }
 

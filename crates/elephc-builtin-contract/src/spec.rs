@@ -83,6 +83,10 @@ pub enum TypeSpec {
     Bool,
     /// PHP `mixed` or a shape refined by a backend-specific checker.
     Mixed,
+    /// PHP `array` (element shape left to the backend checker).
+    Array,
+    /// PHP nullable type `?T`.
+    Nullable(&'static TypeSpec),
     /// PHP `void` in return position.
     Void,
     /// elephc `pointer` — a raw address, not a PHP type.

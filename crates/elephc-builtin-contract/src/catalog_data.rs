@@ -3028,7 +3028,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "file",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: None,
                 by_ref: false,
             },
@@ -6550,7 +6550,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -6970,7 +6970,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -8206,7 +8206,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -8237,7 +8237,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -10132,7 +10132,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -10169,7 +10169,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -10249,7 +10249,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -10282,25 +10282,25 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "latitude",
-                ty: TypeSpec::Float,
+                ty: TypeSpec::Nullable(&TypeSpec::Float),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "longitude",
-                ty: TypeSpec::Float,
+                ty: TypeSpec::Nullable(&TypeSpec::Float),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "zenith",
-                ty: TypeSpec::Float,
+                ty: TypeSpec::Nullable(&TypeSpec::Float),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "utcOffset",
-                ty: TypeSpec::Float,
+                ty: TypeSpec::Nullable(&TypeSpec::Float),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -10343,25 +10343,25 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "latitude",
-                ty: TypeSpec::Float,
+                ty: TypeSpec::Nullable(&TypeSpec::Float),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "longitude",
-                ty: TypeSpec::Float,
+                ty: TypeSpec::Nullable(&TypeSpec::Float),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "zenith",
-                ty: TypeSpec::Float,
+                ty: TypeSpec::Nullable(&TypeSpec::Float),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "utcOffset",
-                ty: TypeSpec::Float,
+                ty: TypeSpec::Nullable(&TypeSpec::Float),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -10874,7 +10874,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "year",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -10911,7 +10911,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "year",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -11028,13 +11028,13 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "destination",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "additional_headers",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -11133,7 +11133,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "required_sections",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -12834,7 +12834,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -13686,7 +13686,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "timestamp",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -14881,7 +14881,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "timestamp",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -14986,13 +14986,13 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "affine",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Array,
                 default: None,
                 by_ref: false,
             },
             ParamSpec {
                 name: "clip",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Nullable(&TypeSpec::Array),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -15023,13 +15023,13 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "matrix1",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Array,
                 default: None,
                 by_ref: false,
             },
             ParamSpec {
                 name: "matrix2",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Array,
                 default: None,
                 by_ref: false,
             },
@@ -15039,7 +15039,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -15213,7 +15213,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "file",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -16031,7 +16031,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -16089,7 +16089,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "color",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -16126,7 +16126,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "matrix",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Array,
                 default: None,
                 by_ref: false,
             },
@@ -17295,7 +17295,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "points",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Array,
                 default: None,
                 by_ref: false,
             },
@@ -17688,7 +17688,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "file",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -17725,7 +17725,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "enable",
-                ty: TypeSpec::Bool,
+                ty: TypeSpec::Nullable(&TypeSpec::Bool),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -17793,7 +17793,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "file",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -17934,7 +17934,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "points",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Array,
                 default: None,
                 by_ref: false,
             },
@@ -18045,7 +18045,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "file",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -18094,7 +18094,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "points",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Array,
                 default: None,
                 by_ref: false,
             },
@@ -18198,13 +18198,13 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "resolution_x",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "resolution_y",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -18751,7 +18751,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "file",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -18961,7 +18961,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "extension",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -21791,7 +21791,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "name",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -21896,7 +21896,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "name",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -21927,37 +21927,37 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "hostname",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "username",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "password",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "database",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "port",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "socket",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -22017,7 +22017,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Str,
+        returns: TypeSpec::Nullable(&TypeSpec::Str),
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -22147,7 +22147,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -22248,7 +22248,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "params",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Nullable(&TypeSpec::Array),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -22295,7 +22295,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -22332,7 +22332,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Nullable(&TypeSpec::Array),
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -22363,7 +22363,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Nullable(&TypeSpec::Array),
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -22499,7 +22499,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -22530,7 +22530,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Nullable(&TypeSpec::Array),
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -22563,7 +22563,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "constructor_args",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Array,
                 default: Some(DefaultSpec::EmptyArray),
                 by_ref: false,
             },
@@ -22604,7 +22604,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Nullable(&TypeSpec::Array),
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -22982,7 +22982,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Str,
+        returns: TypeSpec::Nullable(&TypeSpec::Str),
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -23380,37 +23380,37 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "hostname",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "username",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "password",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "database",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "port",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
             ParamSpec {
                 name: "socket",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -23601,7 +23601,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "name",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -24019,7 +24019,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -24046,7 +24046,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "params",
-                ty: TypeSpec::Mixed,
+                ty: TypeSpec::Nullable(&TypeSpec::Array),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -25173,7 +25173,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -25784,7 +25784,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -27207,7 +27207,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "required_sections",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -27814,7 +27814,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "value",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -27845,7 +27845,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "value",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -28042,7 +28042,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -28063,7 +28063,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "id",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -28094,7 +28094,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "module",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -28125,7 +28125,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "name",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -28237,7 +28237,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "path",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -31382,7 +31382,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "timestamp",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -32406,7 +32406,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
             },
             ParamSpec {
                 name: "countryCode",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
@@ -32416,7 +32416,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Mixed,
+        returns: TypeSpec::Array,
         by_ref_return: false,
         summary: "",
         examples: &[
@@ -33030,7 +33030,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "timestamp",
-                ty: TypeSpec::Int,
+                ty: TypeSpec::Nullable(&TypeSpec::Int),
                 default: Some(DefaultSpec::Null),
                 by_ref: false,
             },
