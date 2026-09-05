@@ -2,7 +2,7 @@
 title: "get_defined_functions()"
 description: "Returns internal and user-defined function names. Elephc has no disable_functions configuration, so exclude_disabled is accepted but does not change the result."
 sidebar:
-  order: 336
+  order: 620
 ---
 
 ## get_defined_functions()

@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_multi_info_read() — internals"
+title: "__elephc_curl_multi_info_read() - internals"
 description: "Compiler internals for __elephc_curl_multi_info_read(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1004
 ---
 
-## `__elephc_curl_multi_info_read()` — internals
+## `__elephc_curl_multi_info_read()` - internals
 
 ## Where it lives
 

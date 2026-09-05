@@ -1,11 +1,11 @@
 ---
-title: "strripos() — internals"
+title: "strripos() - internals"
 description: "Compiler internals for strripos(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 835
 ---
 
-## `strripos()` — internals
+## `strripos()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_fill_rule() — internals"
+title: "cairo_set_fill_rule() - internals"
 description: "Compiler internals for cairo_set_fill_rule(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 433
 ---
 
-## `cairo_set_fill_rule()` — internals
+## `cairo_set_fill_rule()` - internals
 
 ## Where it lives
 

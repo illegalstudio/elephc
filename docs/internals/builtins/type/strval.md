@@ -1,11 +1,11 @@
 ---
-title: "strval() — internals"
+title: "strval() - internals"
 description: "Compiler internals for strval(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 879
 ---
 
-## `strval()` — internals
+## `strval()` - internals
 
 ## Where it lives
 

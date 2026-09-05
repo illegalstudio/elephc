@@ -1,11 +1,11 @@
 ---
-title: "imageinterlace() — internals"
+title: "imageinterlace() - internals"
 description: "Compiler internals for imageinterlace(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 512
 ---
 
-## `imageinterlace()` — internals
+## `imageinterlace()` - internals
 
 ## Where it lives
 

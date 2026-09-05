@@ -24,7 +24,7 @@ Joins array elements into a single string using a separator (alias of implode).
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

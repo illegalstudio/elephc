@@ -2,7 +2,7 @@
 title: "trigger_error() - internals"
 description: "Compiler internals for trigger_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 355
+  order: 649
 ---
 
 ## `trigger_error()` - internals
@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function trigger_error(string $message, int $error_level = 1024): bool
+function trigger_error(string $message, int $error_level = E_USER_NOTICE): bool
 ```
 
 ## What the type checker enforces

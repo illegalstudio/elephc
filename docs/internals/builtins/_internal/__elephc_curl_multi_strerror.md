@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_multi_strerror() — internals"
+title: "__elephc_curl_multi_strerror() - internals"
 description: "Compiler internals for __elephc_curl_multi_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1010
 ---
 
-## `__elephc_curl_multi_strerror()` — internals
+## `__elephc_curl_multi_strerror()` - internals
 
 ## Where it lives
 

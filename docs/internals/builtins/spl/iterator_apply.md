@@ -1,11 +1,11 @@
 ---
-title: "iterator_apply() — internals"
+title: "iterator_apply() - internals"
 description: "Compiler internals for iterator_apply(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 735
 ---
 
-## `iterator_apply()` — internals
+## `iterator_apply()` - internals
 
 ## Where it lives
 

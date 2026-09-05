@@ -1,11 +1,11 @@
 ---
-title: "iconv_strpos() — internals"
+title: "iconv_strpos() - internals"
 description: "Compiler internals for iconv_strpos(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 787
 ---
 
-## `iconv_strpos()` — internals
+## `iconv_strpos()` - internals
 
 ## Where it lives
 

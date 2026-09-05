@@ -1,11 +1,11 @@
 ---
-title: "define() — internals"
+title: "define() - internals"
 description: "Compiler internals for define(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 603
+  order: 605
 ---
 
-## `define()` — internals
+## `define()` - internals
 
 ## Where it lives
 

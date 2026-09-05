@@ -2,7 +2,7 @@
 title: "get_resources() - internals"
 description: "Compiler internals for get_resources(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 343
+  order: 627
 ---
 
 ## `get_resources()` - internals

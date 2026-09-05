@@ -1,16 +1,16 @@
 ---
-title: "session_name() — internals"
+title: "session_name() - internals"
 description: "Compiler internals for session_name(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 897
 ---
 
-## `session_name()` — internals
+## `session_name()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:2979](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L2979) (`session_name`)
+- **Lowering**: [`src/web_prelude/build.rs`:3021](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3021) (`session_name`)
 - **Function symbol**: `session_name()`
 
 

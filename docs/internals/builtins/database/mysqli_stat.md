@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stat() — internals"
+title: "mysqli_stat() - internals"
 description: "Compiler internals for mysqli_stat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 158
 ---
 
-## `mysqli_stat()` — internals
+## `mysqli_stat()` - internals
 
 ## Where it lives
 

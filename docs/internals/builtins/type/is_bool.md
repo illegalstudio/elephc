@@ -1,11 +1,11 @@
 ---
-title: "is_bool() — internals"
+title: "is_bool() - internals"
 description: "Compiler internals for is_bool(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 863
 ---
 
-## `is_bool()` — internals
+## `is_bool()` - internals
 
 ## Where it lives
 

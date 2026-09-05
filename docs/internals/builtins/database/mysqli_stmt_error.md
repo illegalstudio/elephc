@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_error() — internals"
+title: "mysqli_stmt_error() - internals"
 description: "Compiler internals for mysqli_stmt_error(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 163
 ---
 
-## `mysqli_stmt_error()` — internals
+## `mysqli_stmt_error()` - internals
 
 ## Where it lives
 

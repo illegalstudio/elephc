@@ -2,7 +2,7 @@
 title: "get_required_files()"
 description: "Returns the files included or required by the current program."
 sidebar:
-  order: 342
+  order: 626
 ---
 
 ## get_required_files()

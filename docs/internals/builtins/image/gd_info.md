@@ -1,11 +1,11 @@
 ---
-title: "gd_info() — internals"
+title: "gd_info() - internals"
 description: "Compiler internals for gd_info(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 450
 ---
 
-## `gd_info()` — internals
+## `gd_info()` - internals
 
 ## Where it lives
 

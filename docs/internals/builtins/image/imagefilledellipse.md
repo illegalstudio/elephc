@@ -1,11 +1,11 @@
 ---
-title: "imagefilledellipse() — internals"
+title: "imagefilledellipse() - internals"
 description: "Compiler internals for imagefilledellipse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 501
 ---
 
-## `imagefilledellipse()` — internals
+## `imagefilledellipse()` - internals
 
 ## Where it lives
 

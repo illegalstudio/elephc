@@ -1,11 +1,11 @@
 ---
-title: "imagesetpixel() — internals"
+title: "imagesetpixel() - internals"
 description: "Compiler internals for imagesetpixel(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 528
 ---
 
-## `imagesetpixel()` — internals
+## `imagesetpixel()` - internals
 
 ## Where it lives
 

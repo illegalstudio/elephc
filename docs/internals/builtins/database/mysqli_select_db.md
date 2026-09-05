@@ -1,11 +1,11 @@
 ---
-title: "mysqli_select_db() — internals"
+title: "mysqli_select_db() - internals"
 description: "Compiler internals for mysqli_select_db(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 154
 ---
 
-## `mysqli_select_db()` — internals
+## `mysqli_select_db()` - internals
 
 ## Where it lives
 

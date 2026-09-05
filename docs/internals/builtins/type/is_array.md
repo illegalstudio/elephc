@@ -1,11 +1,11 @@
 ---
-title: "is_array() — internals"
+title: "is_array() - internals"
 description: "Compiler internals for is_array(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 862
 ---
 
-## `is_array()` — internals
+## `is_array()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_affected_rows() — internals"
+title: "mysqli_affected_rows() - internals"
 description: "Compiler internals for mysqli_affected_rows(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 98
 ---
 
-## `mysqli_affected_rows()` — internals
+## `mysqli_affected_rows()` - internals
 
 ## Where it lives
 

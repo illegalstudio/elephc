@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_lengths() — internals"
+title: "mysqli_fetch_lengths() - internals"
 description: "Compiler internals for mysqli_fetch_lengths(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 121
 ---
 
-## `mysqli_fetch_lengths()` — internals
+## `mysqli_fetch_lengths()` - internals
 
 ## Where it lives
 

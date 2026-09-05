@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_easy_id() — internals"
+title: "__elephc_curl_easy_id() - internals"
 description: "Compiler internals for __elephc_curl_easy_id(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 984
 ---
 
-## `__elephc_curl_easy_id()` — internals
+## `__elephc_curl_easy_id()` - internals
 
 ## Where it lives
 

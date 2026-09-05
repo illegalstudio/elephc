@@ -2,7 +2,7 @@
 title: "opcache_is_script_cached()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 616
+  order: 636
 ---
 
 ## opcache_is_script_cached()
@@ -23,7 +23,7 @@ Implemented by the compiler-injected OPcache prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_prepare() — internals"
+title: "mysqli_prepare() - internals"
 description: "Compiler internals for mysqli_prepare(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 145
 ---
 
-## `mysqli_prepare()` — internals
+## `mysqli_prepare()` - internals
 
 ## Where it lives
 

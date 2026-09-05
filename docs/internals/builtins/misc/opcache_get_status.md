@@ -1,11 +1,11 @@
 ---
-title: "opcache_get_status() — internals"
+title: "opcache_get_status() - internals"
 description: "Compiler internals for opcache_get_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 614
+  order: 634
 ---
 
-## `opcache_get_status()` — internals
+## `opcache_get_status()` - internals
 
 ## Where it lives
 

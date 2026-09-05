@@ -2,7 +2,7 @@
 title: "opcache_compile_file()"
 description: "Implemented by the compiler-injected OPcache prelude."
 sidebar:
-  order: 612
+  order: 632
 ---
 
 ## opcache_compile_file()
@@ -23,7 +23,7 @@ Implemented by the compiler-injected OPcache prelude.
 - **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

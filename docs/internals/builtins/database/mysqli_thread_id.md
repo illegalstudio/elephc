@@ -1,11 +1,11 @@
 ---
-title: "mysqli_thread_id() — internals"
+title: "mysqli_thread_id() - internals"
 description: "Compiler internals for mysqli_thread_id(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 178
 ---
 
-## `mysqli_thread_id()` — internals
+## `mysqli_thread_id()` - internals
 
 ## Where it lives
 

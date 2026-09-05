@@ -1,11 +1,11 @@
 ---
-title: "imagecopyresized() — internals"
+title: "imagecopyresized() - internals"
 description: "Compiler internals for imagecopyresized(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 484
 ---
 
-## `imagecopyresized()` — internals
+## `imagecopyresized()` - internals
 
 ## Where it lives
 

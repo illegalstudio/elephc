@@ -1,11 +1,11 @@
 ---
-title: "mysqli_warning_count() — internals"
+title: "mysqli_warning_count() - internals"
 description: "Compiler internals for mysqli_warning_count(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 181
 ---
 
-## `mysqli_warning_count()` — internals
+## `mysqli_warning_count()` - internals
 
 ## Where it lives
 

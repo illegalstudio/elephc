@@ -1,11 +1,11 @@
 ---
-title: "http_response_code() — internals"
+title: "http_response_code() - internals"
 description: "Compiler internals for http_response_code(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 609
+  order: 629
 ---
 
-## `http_response_code()` — internals
+## `http_response_code()` - internals
 
 ## Where it lives
 

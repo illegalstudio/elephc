@@ -1,11 +1,11 @@
 ---
-title: "ptr_write32() — internals"
+title: "ptr_write32() - internals"
 description: "Compiler internals for ptr_write32(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 711
 ---
 
-## `ptr_write32()` — internals
+## `ptr_write32()` - internals
 
 ## Where it lives
 

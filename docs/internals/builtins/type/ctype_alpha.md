@@ -1,11 +1,11 @@
 ---
-title: "ctype_alpha() — internals"
+title: "ctype_alpha() - internals"
 description: "Compiler internals for ctype_alpha(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 854
 ---
 
-## `ctype_alpha()` — internals
+## `ctype_alpha()` - internals
 
 ## Where it lives
 

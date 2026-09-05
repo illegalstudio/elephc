@@ -1,11 +1,11 @@
 ---
-title: "imagealphablending() — internals"
+title: "imagealphablending() - internals"
 description: "Compiler internals for imagealphablending(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 457
 ---
 
-## `imagealphablending()` — internals
+## `imagealphablending()` - internals
 
 ## Where it lives
 

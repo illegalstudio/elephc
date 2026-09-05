@@ -1,11 +1,11 @@
 ---
-title: "shell_exec() — internals"
+title: "shell_exec() - internals"
 description: "Compiler internals for shell_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 725
 ---
 
-## `shell_exec()` — internals
+## `shell_exec()` - internals
 
 ## Where it lives
 

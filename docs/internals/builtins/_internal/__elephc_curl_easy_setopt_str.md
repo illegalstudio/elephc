@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_easy_setopt_str() — internals"
+title: "__elephc_curl_easy_setopt_str() - internals"
 description: "Compiler internals for __elephc_curl_easy_setopt_str(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 993
 ---
 
-## `__elephc_curl_easy_setopt_str()` — internals
+## `__elephc_curl_easy_setopt_str()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "imagelayereffect() — internals"
+title: "imagelayereffect() - internals"
 description: "Compiler internals for imagelayereffect(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 515
 ---
 
-## `imagelayereffect()` — internals
+## `imagelayereffect()` - internals
 
 ## Where it lives
 

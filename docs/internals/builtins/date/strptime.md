@@ -1,11 +1,11 @@
 ---
-title: "strptime() — internals"
+title: "strptime() - internals"
 description: "Compiler internals for strptime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 240
 ---
 
-## `strptime()` — internals
+## `strptime()` - internals
 
 ## Where it lives
 

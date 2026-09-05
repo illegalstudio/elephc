@@ -1,11 +1,11 @@
 ---
-title: "number_format() — internals"
+title: "number_format() - internals"
 description: "Compiler internals for number_format(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 801
 ---
 
-## `number_format()` — internals
+## `number_format()` - internals
 
 ## Where it lives
 

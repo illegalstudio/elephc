@@ -1,11 +1,11 @@
 ---
-title: "pfsockopen() — internals"
+title: "pfsockopen() - internals"
 description: "Compiler internals for pfsockopen(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 748
 ---
 
-## `pfsockopen()` — internals
+## `pfsockopen()` - internals
 
 ## Where it lives
 

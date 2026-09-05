@@ -1,11 +1,11 @@
 ---
-title: "imagecolorresolvealpha() — internals"
+title: "imagecolorresolvealpha() - internals"
 description: "Compiler internals for imagecolorresolvealpha(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 474
 ---
 
-## `imagecolorresolvealpha()` — internals
+## `imagecolorresolvealpha()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "exif_imagetype() — internals"
+title: "exif_imagetype() - internals"
 description: "Compiler internals for exif_imagetype(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 446
 ---
 
-## `exif_imagetype()` — internals
+## `exif_imagetype()` - internals
 
 ## Where it lives
 

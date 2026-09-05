@@ -1,11 +1,11 @@
 ---
-title: "mysqli_more_results() — internals"
+title: "mysqli_more_results() - internals"
 description: "Compiler internals for mysqli_more_results(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 138
 ---
 
-## `mysqli_more_results()` — internals
+## `mysqli_more_results()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "zval_type() — internals"
+title: "zval_type() - internals"
 description: "Compiler internals for zval_type(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 716
 ---
 
-## `zval_type()` — internals
+## `zval_type()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_easy_error() — internals"
+title: "__elephc_curl_easy_error() - internals"
 description: "Compiler internals for __elephc_curl_easy_error(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 981
 ---
 
-## `__elephc_curl_easy_error()` — internals
+## `__elephc_curl_easy_error()` - internals
 
 ## Where it lives
 

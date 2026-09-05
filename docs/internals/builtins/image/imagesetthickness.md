@@ -1,11 +1,11 @@
 ---
-title: "imagesetthickness() — internals"
+title: "imagesetthickness() - internals"
 description: "Compiler internals for imagesetthickness(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 529
 ---
 
-## `imagesetthickness()` — internals
+## `imagesetthickness()` - internals
 
 ## Where it lives
 

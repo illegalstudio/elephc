@@ -1,11 +1,11 @@
 ---
-title: "exif_read_data() — internals"
+title: "exif_read_data() - internals"
 description: "Compiler internals for exif_read_data(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 447
 ---
 
-## `exif_read_data()` — internals
+## `exif_read_data()` - internals
 
 ## Where it lives
 

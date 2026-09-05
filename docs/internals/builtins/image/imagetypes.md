@@ -1,11 +1,11 @@
 ---
-title: "imagetypes() — internals"
+title: "imagetypes() - internals"
 description: "Compiler internals for imagetypes(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 535
 ---
 
-## `imagetypes()` — internals
+## `imagetypes()` - internals
 
 ## Where it lives
 

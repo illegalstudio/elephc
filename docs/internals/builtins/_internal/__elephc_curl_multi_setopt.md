@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_multi_setopt() — internals"
+title: "__elephc_curl_multi_setopt() - internals"
 description: "Compiler internals for __elephc_curl_multi_setopt(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1008
 ---
 
-## `__elephc_curl_multi_setopt()` — internals
+## `__elephc_curl_multi_setopt()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "is_callable() — internals"
+title: "is_callable() - internals"
 description: "Compiler internals for is_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 864
 ---
 
-## `is_callable()` — internals
+## `is_callable()` - internals
 
 ## Where it lives
 

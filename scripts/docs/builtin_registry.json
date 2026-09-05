@@ -38188,6 +38188,316 @@
       "params": [
         {
           "by_ref": false,
+          "default": 1,
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "debug_backtrace",
+    "description": "Generates a PHP backtrace for the active call stack.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/debug_backtrace.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "1",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/debug_backtrace.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "debug_backtrace",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "1",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "debug_backtrace",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "debug_print_backtrace",
+    "description": "Prints a PHP backtrace for the active call stack.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/debug_print_backtrace.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/debug_print_backtrace.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "debug_print_backtrace",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "debug_print_backtrace",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
           "default": null,
           "name": "num",
           "optional": false,
@@ -40092,6 +40402,128 @@
     "since": null,
     "slug": "error_log",
     "sub_area": "Web"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "error_level",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "error_reporting",
+    "description": "Gets or sets the active error reporting mask.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/error_reporting.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "error_level",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/error_reporting.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "error_reporting",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "error_level",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "error_reporting",
+    "sub_area": "System"
   },
   {
     "aot": {
@@ -47114,6 +47546,204 @@
   },
   {
     "aot": {
+      "kind": "compiler-transform",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "position",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "func_get_arg",
+    "description": "Returns one argument from the current function call.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/func_get_arg.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "position",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "func_get_arg",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "position",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "func_get_arg",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "compiler-transform",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "func_get_args",
+    "description": "Returns the arguments passed to the current function call.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/func_get_args.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "func_get_args",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "func_get_args",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "compiler-transform",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "func_num_args",
+    "description": "Returns the number of arguments passed to the current function call.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/func_num_args.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": null,
+      "codegen_function": null,
+      "codegen_line": null,
+      "notes": [],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "func_num_args",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "func_num_args",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -47404,6 +48034,598 @@
   },
   {
     "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "gc_collect_cycles",
+    "description": "Forces collection of any existing garbage cycles.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/gc_collect_cycles.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/gc_collect_cycles.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "gc_collect_cycles",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "refcount_op"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "gc_collect_cycles",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "gc_disable",
+    "description": "Disables automatic collection of circular references.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/gc_disable.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/gc_disable.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "gc_disable",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "writes_global"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "gc_disable",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "gc_enable",
+    "description": "Enables automatic collection of circular references.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/gc_enable.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/gc_enable.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "gc_enable",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "writes_global"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "gc_enable",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "gc_enabled",
+    "description": "Reports whether automatic cycle collection is enabled.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/gc_enabled.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/gc_enabled.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "gc_enabled",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "gc_enabled",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "gc_mem_caches",
+    "description": "Drains runtime small-block allocator caches and returns the number of cached bytes released.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/gc_mem_caches.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/gc_mem_caches.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "gc_mem_caches",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "gc_mem_caches",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "gc_status",
+    "description": "Returns live collector counters, roots, and phase timings in PHP's array shape. Elephc has no collector buffer, so full, threshold, and buffer_size are compatibility fields fixed to false, 0, and 0.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/gc_status.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/gc_status.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "gc_status",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_process",
+          "alloc_heap",
+          "refcount_op"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_graph",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "gc_status",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
       "kind": "prelude",
       "params": [],
       "required_param_count": 0,
@@ -47452,17 +48674,16 @@
   },
   {
     "aot": {
-      "kind": "none",
+      "kind": "registry",
       "params": [],
       "required_param_count": 0,
       "signature_override_reason": null,
-      "supported": false,
-      "unsupported_reason": "eval-only-reflection",
+      "supported": true,
       "variadic": null
     },
     "area": "Class",
     "canonical_name": "get_called_class",
-    "description": "Returns the late-static-binding class name in eval context.",
+    "description": "Returns the late-static-binding class name.",
     "eval": {
       "adapter_reason": "callable-or-reflection",
       "area": "symbols",
@@ -47480,7 +48701,7 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": true,
+    "eval_only": false,
     "examples": [],
     "in_catalog": true,
     "is_extension": false,
@@ -47488,21 +48709,62 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_file": "src/builtins/callables/get_called_class.rs",
       "sig_line": null
     },
     "module": "core",
     "name": "get_called_class",
-    "semantics": null,
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "get_called_class() requires the lexical class scope of its direct call"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "borrowed"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "string",
       "variadic": null
     },
     "since": null,
@@ -47637,7 +48899,7 @@
   },
   {
     "aot": {
-      "kind": "none",
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -47649,8 +48911,7 @@
       ],
       "required_param_count": 1,
       "signature_override_reason": null,
-      "supported": false,
-      "unsupported_reason": "eval-only-reflection",
+      "supported": true,
       "variadic": null
     },
     "area": "Class",
@@ -47681,7 +48942,7 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": true,
+    "eval_only": false,
     "examples": [],
     "in_catalog": true,
     "is_extension": false,
@@ -47689,18 +48950,65 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.get_class_methods` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_file": "src/builtins/callables/get_class_methods.rs",
       "sig_line": null
     },
     "module": "core",
     "name": "get_class_methods",
-    "semantics": null,
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "get_class_methods"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "get_class_methods"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
     "sig": {
       "params": [
         {
@@ -47711,7 +49019,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -47720,7 +49028,7 @@
   },
   {
     "aot": {
-      "kind": "none",
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -47732,13 +49040,12 @@
       ],
       "required_param_count": 1,
       "signature_override_reason": null,
-      "supported": false,
-      "unsupported_reason": "eval-only-reflection",
+      "supported": true,
       "variadic": null
     },
     "area": "Class",
     "canonical_name": "get_class_vars",
-    "description": "Returns visible default properties for a class.",
+    "description": "Returns visible default properties for a class. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported.",
     "eval": {
       "adapter_reason": "callable-or-reflection",
       "area": "symbols",
@@ -47764,7 +49071,7 @@
       "supported": true,
       "variadic": null
     },
-    "eval_only": true,
+    "eval_only": false,
     "examples": [],
     "in_catalog": true,
     "is_extension": false,
@@ -47772,18 +49079,61 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": null,
-      "codegen_function": null,
-      "codegen_line": null,
-      "notes": [],
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_file": "src/builtins/callables/get_class_vars.rs",
       "sig_line": null
     },
     "module": "core",
     "name": "get_class_vars",
-    "semantics": null,
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "get_class_vars() requires a statically resolved callable target in AOT mode"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_graph",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
     "sig": {
       "params": [
         {
@@ -47794,7 +49144,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -48162,6 +49512,599 @@
         {
           "by_ref": false,
           "default": false,
+          "name": "categorize",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "get_defined_constants",
+    "description": "Returns constants visible to the current program.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/get_defined_constants.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "categorize",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_defined_constants.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "get_defined_constants",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "categorize",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_defined_constants",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": true,
+          "name": "exclude_disabled",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "get_defined_functions",
+    "description": "Returns internal and user-defined function names. Elephc has no disable_functions configuration, so exclude_disabled is accepted but does not change the result.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/get_defined_functions.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "true",
+          "name": "exclude_disabled",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_defined_functions.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "get_defined_functions",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "true",
+          "name": "exclude_disabled",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_defined_functions",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "get_defined_vars",
+    "description": "Returns variables visible in the current scope.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/get_defined_vars.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_defined_vars.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "get_defined_vars",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "direct_only",
+        "reason": "Cannot call get_defined_vars() dynamically"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_defined_vars",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "extension",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "get_extension_funcs",
+    "description": "Returns functions exported by a loaded extension or false.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/get_extension_funcs.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "extension",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_extension_funcs.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "get_extension_funcs",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "shared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "extension",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_extension_funcs",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "get_included_files",
+    "description": "Returns the files included by the current program.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/get_included_files.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_included_files.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "get_included_files",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_included_files",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": false,
           "name": "zend_extensions",
           "optional": true,
           "type": "bool"
@@ -48296,6 +50239,134 @@
     "since": null,
     "slug": "get_loaded_extensions",
     "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "object",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "get_mangled_object_vars",
+    "description": "Returns an object's properties using PHP's visibility-mangled keys.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/get_mangled_object_vars.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "object",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_mangled_object_vars.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "get_mangled_object_vars",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "object",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_mangled_object_vars",
+    "sub_area": "Callables"
   },
   {
     "aot": {
@@ -48558,6 +50629,110 @@
   {
     "aot": {
       "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "get_required_files",
+    "description": "Returns the files included or required by the current program.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/get_required_files.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_required_files.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "get_required_files",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_required_files",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -48802,6 +50977,134 @@
     "since": null,
     "slug": "get_resource_type",
     "sub_area": "Type"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "type",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "get_resources",
+    "description": "Returns currently active resources, optionally filtered by type.",
+    "eval": {
+      "adapter_reason": "callable-or-reflection",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/get_resources.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "type",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/get_resources.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "get_resources",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "type",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_resources",
+    "sub_area": "Callables"
   },
   {
     "aot": {
@@ -65374,7 +67677,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_get",
-      "codegen_line": 4356,
+      "codegen_line": 4398,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -65445,7 +67748,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_get_all",
-      "codegen_line": 5029,
+      "codegen_line": 5071,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -65587,7 +67890,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "ini_set",
-      "codegen_line": 4452,
+      "codegen_line": 4494,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -98808,6 +101111,214 @@
   {
     "aot": {
       "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "restore_error_handler",
+    "description": "Restores the previously active user error handler.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/restore_error_handler.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/restore_error_handler.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "restore_error_handler",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "restore_error_handler",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "restore_exception_handler",
+    "description": "Restores the previously active uncaught-exception handler.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/restore_exception_handler.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/restore_exception_handler.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "restore_exception_handler",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "restore_exception_handler",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -99974,7 +102485,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_abort",
-      "codegen_line": 3373,
+      "codegen_line": 3415,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100030,7 +102541,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_cache_expire",
-      "codegen_line": 3480,
+      "codegen_line": 3522,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100094,7 +102605,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_cache_limiter",
-      "codegen_line": 3452,
+      "codegen_line": 3494,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100150,7 +102661,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_commit",
-      "codegen_line": 3687,
+      "codegen_line": 3729,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100206,7 +102717,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_create_id",
-      "codegen_line": 3298,
+      "codegen_line": 3340,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100270,7 +102781,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_decode",
-      "codegen_line": 3064,
+      "codegen_line": 3106,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100326,7 +102837,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_destroy",
-      "codegen_line": 2914,
+      "codegen_line": 2956,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100374,7 +102885,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_encode",
-      "codegen_line": 3046,
+      "codegen_line": 3088,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100422,7 +102933,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_gc",
-      "codegen_line": 3343,
+      "codegen_line": 3385,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100470,7 +102981,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_get_cookie_params",
-      "codegen_line": 3508,
+      "codegen_line": 3550,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100526,7 +103037,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_id",
-      "codegen_line": 2950,
+      "codegen_line": 2992,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100590,7 +103101,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_module_name",
-      "codegen_line": 3707,
+      "codegen_line": 3749,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100654,7 +103165,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_name",
-      "codegen_line": 2979,
+      "codegen_line": 3021,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100718,7 +103229,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_regenerate_id",
-      "codegen_line": 3113,
+      "codegen_line": 3155,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100774,7 +103285,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_register_shutdown",
-      "codegen_line": 3697,
+      "codegen_line": 3739,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100822,7 +103333,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_reset",
-      "codegen_line": 3405,
+      "codegen_line": 3447,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100878,7 +103389,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_save_path",
-      "codegen_line": 3084,
+      "codegen_line": 3126,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -100934,7 +103445,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_set_cookie_params",
-      "codegen_line": 3527,
+      "codegen_line": 3569,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -101046,7 +103557,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_set_save_handler",
-      "codegen_line": 3744,
+      "codegen_line": 3786,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -101166,7 +103677,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_start",
-      "codegen_line": 1886,
+      "codegen_line": 1928,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -101222,7 +103733,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_status",
-      "codegen_line": 3017,
+      "codegen_line": 3059,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -101270,7 +103781,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_unset",
-      "codegen_line": 3027,
+      "codegen_line": 3069,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -101318,7 +103829,7 @@
       "checker_line": null,
       "codegen_file": "src/web_prelude/build.rs",
       "codegen_function": "session_write_close",
-      "codegen_line": 2826,
+      "codegen_line": 2868,
       "notes": [
         "Implemented by the compiler-injected web prelude."
       ],
@@ -101338,6 +103849,283 @@
     "since": null,
     "slug": "session_write_close",
     "sub_area": "Web"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "E_ALL",
+          "name": "error_levels",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "set_error_handler",
+    "description": "Installs a user error handler and returns the previous handler.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/set_error_handler.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "30719",
+          "name": "error_levels",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/set_error_handler.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "set_error_handler",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "E_ALL",
+          "name": "error_levels",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "set_error_handler",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "set_exception_handler",
+    "description": "Installs an uncaught-exception handler and returns the previous handler.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/set_exception_handler.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/set_exception_handler.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "set_exception_handler",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "callback",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "set_exception_handler",
+    "sub_area": "System"
   },
   {
     "aot": {
@@ -114003,9 +116791,43 @@
     "canonical_name": "strncasecmp",
     "description": "Compares the first n bytes of two strings, ignoring ASCII case.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/strncasecmp.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "length",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -114137,9 +116959,43 @@
     "canonical_name": "strncmp",
     "description": "Compares the first n bytes of two strings.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/strncmp.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "length",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -118331,7 +121187,7 @@
   },
   {
     "aot": {
-      "kind": "prelude",
+      "kind": "registry",
       "params": [
         {
           "by_ref": false,
@@ -118355,13 +121211,40 @@
       "supported": true,
       "variadic": null
     },
-    "area": "Web",
+    "area": "Misc",
     "canonical_name": "trigger_error",
-    "description": "Implemented by the compiler-injected web prelude.",
+    "description": "Generates a user-level PHP error.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/trigger_error.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "1024",
+          "name": "error_level",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -118371,20 +121254,76 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/web_prelude/build.rs",
-      "codegen_function": "trigger_error",
-      "codegen_line": 1828,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
       "notes": [
-        "Implemented by the compiler-injected web prelude."
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
-      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs",
+      "sig_file": "src/builtins/system/trigger_error.rs",
       "sig_line": null
     },
     "module": "core",
     "name": "trigger_error",
-    "semantics": null,
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
     "sig": {
       "params": [
         {
@@ -118407,7 +121346,7 @@
     },
     "since": null,
     "slug": "trigger_error",
-    "sub_area": "Web"
+    "sub_area": "System"
   },
   {
     "aot": {
@@ -119684,7 +122623,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 140,
+      "codegen_line": 141,
       "notes": [
         "Rejects `unset()` calls that were not converted into direct EIR unbind operations.",
         "Reaching this lowering means `crate::ir_lower::expr` could not turn the target",
@@ -119967,6 +122906,167 @@
     "since": null,
     "slug": "urlencode",
     "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 1024,
+          "name": "error_level",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "user_error",
+    "description": "Alias of trigger_error.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/user_error.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "1024",
+          "name": "error_level",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 588,
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/user_error.rs",
+      "sig_line": null
+    },
+    "module": "core",
+    "name": "user_error",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "1024",
+          "name": "error_level",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "user_error",
+    "sub_area": "System"
   },
   {
     "aot": {
@@ -128560,9 +131660,21 @@
     "canonical_name": "zend_version",
     "description": "Implemented by the compiler-injected version prelude.",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "dynamic-language-surface",
+      "area": "core",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],

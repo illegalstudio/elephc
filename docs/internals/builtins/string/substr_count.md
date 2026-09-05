@@ -1,11 +1,11 @@
 ---
-title: "substr_count() — internals"
+title: "substr_count() - internals"
 description: "Compiler internals for substr_count(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 842
 ---
 
-## `substr_count()` — internals
+## `substr_count()` - internals
 
 ## Where it lives
 

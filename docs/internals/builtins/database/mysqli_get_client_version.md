@@ -1,11 +1,11 @@
 ---
-title: "mysqli_get_client_version() — internals"
+title: "mysqli_get_client_version() - internals"
 description: "Compiler internals for mysqli_get_client_version(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 130
 ---
 
-## `mysqli_get_client_version()` — internals
+## `mysqli_get_client_version()` - internals
 
 ## Where it lives
 

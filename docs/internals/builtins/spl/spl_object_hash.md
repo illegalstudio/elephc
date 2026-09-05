@@ -1,11 +1,11 @@
 ---
-title: "spl_object_hash() — internals"
+title: "spl_object_hash() - internals"
 description: "Compiler internals for spl_object_hash(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 745
 ---
 
-## `spl_object_hash()` — internals
+## `spl_object_hash()` - internals
 
 ## Where it lives
 

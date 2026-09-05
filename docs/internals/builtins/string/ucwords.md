@@ -1,11 +1,11 @@
 ---
-title: "ucwords() — internals"
+title: "ucwords() - internals"
 description: "Compiler internals for ucwords(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 846
 ---
 
-## `ucwords()` — internals
+## `ucwords()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "html_entity_decode() — internals"
+title: "html_entity_decode() - internals"
 description: "Compiler internals for html_entity_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 777
 ---
 
-## `html_entity_decode()` — internals
+## `html_entity_decode()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "iconv_set_encoding() — internals"
+title: "iconv_set_encoding() - internals"
 description: "Compiler internals for iconv_set_encoding(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 785
 ---
 
-## `iconv_set_encoding()` — internals
+## `iconv_set_encoding()` - internals
 
 ## Where it lives
 

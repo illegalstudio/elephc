@@ -1,11 +1,11 @@
 ---
-title: "md5() — internals"
+title: "md5() - internals"
 description: "Compiler internals for md5(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 799
 ---
 
-## `md5()` — internals
+## `md5()` - internals
 
 ## Where it lives
 

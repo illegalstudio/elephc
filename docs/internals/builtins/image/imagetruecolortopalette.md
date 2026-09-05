@@ -1,11 +1,11 @@
 ---
-title: "imagetruecolortopalette() — internals"
+title: "imagetruecolortopalette() - internals"
 description: "Compiler internals for imagetruecolortopalette(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 534
 ---
 
-## `imagetruecolortopalette()` — internals
+## `imagetruecolortopalette()` - internals
 
 ## Where it lives
 

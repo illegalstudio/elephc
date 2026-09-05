@@ -1,11 +1,11 @@
 ---
-title: "zval_free() — internals"
+title: "zval_free() - internals"
 description: "Compiler internals for zval_free(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 714
 ---
 
-## `zval_free()` — internals
+## `zval_free()` - internals
 
 ## Where it lives
 

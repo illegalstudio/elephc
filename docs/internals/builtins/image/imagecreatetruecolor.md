@@ -1,11 +1,11 @@
 ---
-title: "imagecreatetruecolor() — internals"
+title: "imagecreatetruecolor() - internals"
 description: "Compiler internals for imagecreatetruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 493
 ---
 
-## `imagecreatetruecolor()` — internals
+## `imagecreatetruecolor()` - internals
 
 ## Where it lives
 

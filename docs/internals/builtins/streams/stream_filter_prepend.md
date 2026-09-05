@@ -1,11 +1,11 @@
 ---
-title: "stream_filter_prepend() — internals"
+title: "stream_filter_prepend() - internals"
 description: "Compiler internals for stream_filter_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 752
 ---
 
-## `stream_filter_prepend()` — internals
+## `stream_filter_prepend()` - internals
 
 ## Where it lives
 

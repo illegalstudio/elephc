@@ -1,11 +1,11 @@
 ---
-title: "strrpos() — internals"
+title: "strrpos() - internals"
 description: "Compiler internals for strrpos(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 836
 ---
 
-## `strrpos()` — internals
+## `strrpos()` - internals
 
 ## Where it lives
 

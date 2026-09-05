@@ -1,11 +1,11 @@
 ---
-title: "__elephc_pdo_adapter_addr() — internals"
+title: "__elephc_pdo_adapter_addr() - internals"
 description: "Compiler internals for __elephc_pdo_adapter_addr(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1034
 ---
 
-## `__elephc_pdo_adapter_addr()` — internals
+## `__elephc_pdo_adapter_addr()` - internals
 
 ## Where it lives
 

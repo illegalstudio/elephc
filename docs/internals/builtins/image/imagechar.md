@@ -1,11 +1,11 @@
 ---
-title: "imagechar() — internals"
+title: "imagechar() - internals"
 description: "Compiler internals for imagechar(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 461
 ---
 
-## `imagechar()` — internals
+## `imagechar()` - internals
 
 ## Where it lives
 

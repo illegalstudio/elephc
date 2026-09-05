@@ -1,11 +1,11 @@
 ---
-title: "iterator_count() — internals"
+title: "iterator_count() - internals"
 description: "Compiler internals for iterator_count(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 736
 ---
 
-## `iterator_count()` — internals
+## `iterator_count()` - internals
 
 ## Where it lives
 

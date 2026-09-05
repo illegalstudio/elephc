@@ -1,11 +1,11 @@
 ---
-title: "is_object() — internals"
+title: "is_object() - internals"
 description: "Compiler internals for is_object(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 873
 ---
 
-## `is_object()` — internals
+## `is_object()` - internals
 
 ## Where it lives
 

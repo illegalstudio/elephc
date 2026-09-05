@@ -1,11 +1,11 @@
 ---
-title: "is_int() — internals"
+title: "is_int() - internals"
 description: "Compiler internals for is_int(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 867
 ---
 
-## `is_int()` — internals
+## `is_int()` - internals
 
 ## Where it lives
 

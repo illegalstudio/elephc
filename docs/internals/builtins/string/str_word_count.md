@@ -1,11 +1,11 @@
 ---
-title: "str_word_count() — internals"
+title: "str_word_count() - internals"
 description: "Compiler internals for str_word_count(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 825
 ---
 
-## `str_word_count()` — internals
+## `str_word_count()` - internals
 
 ## Where it lives
 

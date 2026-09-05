@@ -1,11 +1,11 @@
 ---
-title: "exec() — internals"
+title: "exec() - internals"
 description: "Compiler internals for exec(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 719
 ---
 
-## `exec()` — internals
+## `exec()` - internals
 
 ## Where it lives
 

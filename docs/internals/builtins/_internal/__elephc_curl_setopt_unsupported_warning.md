@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_setopt_unsupported_warning() — internals"
+title: "__elephc_curl_setopt_unsupported_warning() - internals"
 description: "Compiler internals for __elephc_curl_setopt_unsupported_warning(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1012
 ---
 
-## `__elephc_curl_setopt_unsupported_warning()` — internals
+## `__elephc_curl_setopt_unsupported_warning()` - internals
 
 ## Where it lives
 

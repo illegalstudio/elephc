@@ -1,16 +1,16 @@
 ---
-title: "session_set_cookie_params() — internals"
+title: "session_set_cookie_params() - internals"
 description: "Compiler internals for session_set_cookie_params(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 902
 ---
 
-## `session_set_cookie_params()` — internals
+## `session_set_cookie_params()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3527](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3527) (`session_set_cookie_params`)
+- **Lowering**: [`src/web_prelude/build.rs`:3569](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3569) (`session_set_cookie_params`)
 - **Function symbol**: `session_set_cookie_params()`
 
 

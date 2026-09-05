@@ -101,8 +101,6 @@ The counts above are what a compiled program has. Code run through `eval()` sees
 - `standard` constants: 155 / 134
 - `zend opcache` functions: 8 / 0
 
-3 symbol(s) exist only inside `eval()` and are not counted in the table: `get_called_class()`, `get_class_methods()`, `get_class_vars()`.
-
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
 In addition, elephc implements 5 PHP language constructs that PHP does not count as functions: `die()`, `empty()`, `exit()`, `isset()`, `unset()`.

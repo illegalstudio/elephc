@@ -1,11 +1,11 @@
 ---
-title: "ctype_space() — internals"
+title: "ctype_space() - internals"
 description: "Compiler internals for ctype_space(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 856
 ---
 
-## `ctype_space()` — internals
+## `ctype_space()` - internals
 
 ## Where it lives
 

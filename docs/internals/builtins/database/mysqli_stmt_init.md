@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_init() — internals"
+title: "mysqli_stmt_init() - internals"
 description: "Compiler internals for mysqli_stmt_init(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 169
 ---
 
-## `mysqli_stmt_init()` — internals
+## `mysqli_stmt_init()` - internals
 
 ## Where it lives
 

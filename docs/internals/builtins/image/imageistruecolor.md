@@ -1,11 +1,11 @@
 ---
-title: "imageistruecolor() — internals"
+title: "imageistruecolor() - internals"
 description: "Compiler internals for imageistruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 513
 ---
 
-## `imageistruecolor()` — internals
+## `imageistruecolor()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "__elephc_class_has_constructor() — internals"
+title: "__elephc_class_has_constructor() - internals"
 description: "Compiler internals for __elephc_class_has_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 976
 ---
 
-## `__elephc_class_has_constructor()` — internals
+## `__elephc_class_has_constructor()` - internals
 
 ## Where it lives
 

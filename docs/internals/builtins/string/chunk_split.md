@@ -1,11 +1,11 @@
 ---
-title: "chunk_split() — internals"
+title: "chunk_split() - internals"
 description: "Compiler internals for chunk_split(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 759
 ---
 
-## `chunk_split()` — internals
+## `chunk_split()` - internals
 
 ## Where it lives
 

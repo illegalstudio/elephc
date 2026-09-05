@@ -1,11 +1,11 @@
 ---
-title: "floatval() — internals"
+title: "floatval() - internals"
 description: "Compiler internals for floatval(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 857
 ---
 
-## `floatval()` — internals
+## `floatval()` - internals
 
 ## Where it lives
 

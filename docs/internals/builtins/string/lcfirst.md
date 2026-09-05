@@ -1,11 +1,11 @@
 ---
-title: "lcfirst() — internals"
+title: "lcfirst() - internals"
 description: "Compiler internals for lcfirst(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 795
 ---
 
-## `lcfirst()` — internals
+## `lcfirst()` - internals
 
 ## Where it lives
 

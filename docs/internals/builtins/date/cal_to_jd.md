@@ -1,11 +1,11 @@
 ---
-title: "cal_to_jd() — internals"
+title: "cal_to_jd() - internals"
 description: "Compiler internals for cal_to_jd(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 186
 ---
 
-## `cal_to_jd()` — internals
+## `cal_to_jd()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_multi_exec() — internals"
+title: "__elephc_curl_multi_exec() - internals"
 description: "Compiler internals for __elephc_curl_multi_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1003
 ---
 
-## `__elephc_curl_multi_exec()` — internals
+## `__elephc_curl_multi_exec()` - internals
 
 ## Where it lives
 

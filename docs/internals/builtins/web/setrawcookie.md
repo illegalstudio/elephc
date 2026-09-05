@@ -1,11 +1,11 @@
 ---
-title: "setrawcookie() — internals"
+title: "setrawcookie() - internals"
 description: "Compiler internals for setrawcookie(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 909
 ---
 
-## `setrawcookie()` — internals
+## `setrawcookie()` - internals
 
 ## Where it lives
 

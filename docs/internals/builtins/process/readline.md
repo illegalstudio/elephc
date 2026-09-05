@@ -1,11 +1,11 @@
 ---
-title: "readline() — internals"
+title: "readline() - internals"
 description: "Compiler internals for readline(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 724
 ---
 
-## `readline()` — internals
+## `readline()` - internals
 
 ## Where it lives
 

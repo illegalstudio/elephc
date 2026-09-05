@@ -1,11 +1,11 @@
 ---
-title: "print_r() — internals"
+title: "print_r() - internals"
 description: "Compiler internals for print_r(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 658
 ---
 
-## `print_r()` — internals
+## `print_r()` - internals
 
 ## Where it lives
 

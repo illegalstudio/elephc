@@ -1,11 +1,11 @@
 ---
-title: "substr_replace() — internals"
+title: "substr_replace() - internals"
 description: "Compiler internals for substr_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 843
 ---
 
-## `substr_replace()` — internals
+## `substr_replace()` - internals
 
 ## Where it lives
 

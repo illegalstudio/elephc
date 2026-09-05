@@ -1,11 +1,11 @@
 ---
-title: "cairo_pattern_create_rgba() — internals"
+title: "cairo_pattern_create_rgba() - internals"
 description: "Compiler internals for cairo_pattern_create_rgba(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 427
 ---
 
-## `cairo_pattern_create_rgba()` — internals
+## `cairo_pattern_create_rgba()` - internals
 
 ## Where it lives
 

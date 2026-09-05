@@ -1,11 +1,11 @@
 ---
-title: "gzdeflate() — internals"
+title: "gzdeflate() - internals"
 description: "Compiler internals for gzdeflate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 765
 ---
 
-## `gzdeflate()` — internals
+## `gzdeflate()` - internals
 
 ## Where it lives
 

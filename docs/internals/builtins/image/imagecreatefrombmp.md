@@ -1,11 +1,11 @@
 ---
-title: "imagecreatefrombmp() — internals"
+title: "imagecreatefrombmp() - internals"
 description: "Compiler internals for imagecreatefrombmp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 486
 ---
 
-## `imagecreatefrombmp()` — internals
+## `imagecreatefrombmp()` - internals
 
 ## Where it lives
 

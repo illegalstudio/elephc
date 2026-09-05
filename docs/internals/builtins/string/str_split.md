@@ -1,11 +1,11 @@
 ---
-title: "str_split() — internals"
+title: "str_split() - internals"
 description: "Compiler internals for str_split(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 823
 ---
 
-## `str_split()` — internals
+## `str_split()` - internals
 
 ## Where it lives
 

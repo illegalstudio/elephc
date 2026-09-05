@@ -1,11 +1,11 @@
 ---
-title: "mysqli_stmt_close() — internals"
+title: "mysqli_stmt_close() - internals"
 description: "Compiler internals for mysqli_stmt_close(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 161
 ---
 
-## `mysqli_stmt_close()` — internals
+## `mysqli_stmt_close()` - internals
 
 ## Where it lives
 

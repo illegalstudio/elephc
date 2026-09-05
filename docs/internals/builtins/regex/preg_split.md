@@ -1,11 +1,11 @@
 ---
-title: "preg_split() — internals"
+title: "preg_split() - internals"
 description: "Compiler internals for preg_split(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 734
 ---
 
-## `preg_split()` — internals
+## `preg_split()` - internals
 
 ## Where it lives
 

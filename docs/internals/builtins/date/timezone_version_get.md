@@ -1,11 +1,11 @@
 ---
-title: "timezone_version_get() — internals"
+title: "timezone_version_get() - internals"
 description: "Compiler internals for timezone_version_get(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 251
 ---
 
-## `timezone_version_get()` — internals
+## `timezone_version_get()` - internals
 
 ## Where it lives
 

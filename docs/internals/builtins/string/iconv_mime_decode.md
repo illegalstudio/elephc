@@ -1,11 +1,11 @@
 ---
-title: "iconv_mime_decode() — internals"
+title: "iconv_mime_decode() - internals"
 description: "Compiler internals for iconv_mime_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 782
 ---
 
-## `iconv_mime_decode()` — internals
+## `iconv_mime_decode()` - internals
 
 ## Where it lives
 

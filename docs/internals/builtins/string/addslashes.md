@@ -1,11 +1,11 @@
 ---
-title: "addslashes() — internals"
+title: "addslashes() - internals"
 description: "Compiler internals for addslashes(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 753
 ---
 
-## `addslashes()` — internals
+## `addslashes()` - internals
 
 ## Where it lives
 

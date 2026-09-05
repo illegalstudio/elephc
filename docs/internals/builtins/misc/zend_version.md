@@ -1,11 +1,11 @@
 ---
-title: "zend_version() — internals"
+title: "zend_version() - internals"
 description: "Compiler internals for zend_version(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 663
 ---
 
-## `zend_version()` — internals
+## `zend_version()` - internals
 
 ## Where it lives
 
@@ -38,7 +38,10 @@ function zend_version(): string
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/zend_version.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-language-surface`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

@@ -1,11 +1,11 @@
 ---
-title: "strtr() — internals"
+title: "strtr() - internals"
 description: "Compiler internals for strtr(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 840
 ---
 
-## `strtr()` — internals
+## `strtr()` - internals
 
 ## Where it lives
 

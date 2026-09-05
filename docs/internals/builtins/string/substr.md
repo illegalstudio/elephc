@@ -1,11 +1,11 @@
 ---
-title: "substr() — internals"
+title: "substr() - internals"
 description: "Compiler internals for substr(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 841
 ---
 
-## `substr()` — internals
+## `substr()` - internals
 
 ## Where it lives
 

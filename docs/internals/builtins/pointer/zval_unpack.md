@@ -1,11 +1,11 @@
 ---
-title: "zval_unpack() — internals"
+title: "zval_unpack() - internals"
 description: "Compiler internals for zval_unpack(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 717
 ---
 
-## `zval_unpack()` — internals
+## `zval_unpack()` - internals
 
 ## Where it lives
 

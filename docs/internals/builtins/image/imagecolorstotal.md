@@ -1,11 +1,11 @@
 ---
-title: "imagecolorstotal() — internals"
+title: "imagecolorstotal() - internals"
 description: "Compiler internals for imagecolorstotal(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 477
 ---
 
-## `imagecolorstotal()` — internals
+## `imagecolorstotal()` - internals
 
 ## Where it lives
 

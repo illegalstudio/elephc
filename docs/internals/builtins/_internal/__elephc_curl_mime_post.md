@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_mime_post() — internals"
+title: "__elephc_curl_mime_post() - internals"
 description: "Compiler internals for __elephc_curl_mime_post(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1000
 ---
 
-## `__elephc_curl_mime_post()` — internals
+## `__elephc_curl_mime_post()` - internals
 
 ## Where it lives
 

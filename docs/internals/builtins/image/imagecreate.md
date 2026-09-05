@@ -1,11 +1,11 @@
 ---
-title: "imagecreate() — internals"
+title: "imagecreate() - internals"
 description: "Compiler internals for imagecreate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 485
 ---
 
-## `imagecreate()` — internals
+## `imagecreate()` - internals
 
 ## Where it lives
 

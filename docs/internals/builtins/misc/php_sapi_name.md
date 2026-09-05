@@ -1,11 +1,11 @@
 ---
-title: "php_sapi_name() — internals"
+title: "php_sapi_name() - internals"
 description: "Compiler internals for php_sapi_name(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 653
 ---
 
-## `php_sapi_name()` — internals
+## `php_sapi_name()` - internals
 
 ## Where it lives
 

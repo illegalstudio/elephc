@@ -1,11 +1,11 @@
 ---
-title: "iconv_substr() — internals"
+title: "iconv_substr() - internals"
 description: "Compiler internals for iconv_substr(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 789
 ---
 
-## `iconv_substr()` — internals
+## `iconv_substr()` - internals
 
 ## Where it lives
 

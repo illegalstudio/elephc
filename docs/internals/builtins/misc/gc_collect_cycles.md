@@ -2,7 +2,7 @@
 title: "gc_collect_cycles() - internals"
 description: "Compiler internals for gc_collect_cycles(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 329
+  order: 613
 ---
 
 ## `gc_collect_cycles()` - internals

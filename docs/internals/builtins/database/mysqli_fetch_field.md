@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_field() — internals"
+title: "mysqli_fetch_field() - internals"
 description: "Compiler internals for mysqli_fetch_field(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 118
 ---
 
-## `mysqli_fetch_field()` — internals
+## `mysqli_fetch_field()` - internals
 
 ## Where it lives
 

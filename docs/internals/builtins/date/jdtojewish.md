@@ -1,11 +1,11 @@
 ---
-title: "jdtojewish() — internals"
+title: "jdtojewish() - internals"
 description: "Compiler internals for jdtojewish(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 231
 ---
 
-## `jdtojewish()` — internals
+## `jdtojewish()` - internals
 
 ## Where it lives
 

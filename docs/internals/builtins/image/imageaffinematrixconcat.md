@@ -1,11 +1,11 @@
 ---
-title: "imageaffinematrixconcat() — internals"
+title: "imageaffinematrixconcat() - internals"
 description: "Compiler internals for imageaffinematrixconcat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 456
 ---
 
-## `imageaffinematrixconcat()` — internals
+## `imageaffinematrixconcat()` - internals
 
 ## Where it lives
 

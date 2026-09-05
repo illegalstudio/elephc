@@ -1,11 +1,11 @@
 ---
-title: "imageflip() — internals"
+title: "imageflip() - internals"
 description: "Compiler internals for imageflip(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 506
 ---
 
-## `imageflip()` — internals
+## `imageflip()` - internals
 
 ## Where it lives
 

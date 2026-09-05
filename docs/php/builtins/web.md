@@ -38,4 +38,3 @@ sidebar:
 | [`session_write_close()`](./web/session_write_close.md) | `(): bool` | `bool` | ✓ | — |
 | [`setcookie()`](./web/setcookie.md) | `(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed` | `mixed` | ✓ | — |
 | [`setrawcookie()`](./web/setrawcookie.md) | `(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed` | `mixed` | ✓ | — |
-| [`trigger_error()`](./web/trigger_error.md) | `(string $message, int $error_level = E_USER_NOTICE): bool` | `bool` | ✓ | — |

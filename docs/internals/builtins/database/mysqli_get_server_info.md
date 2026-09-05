@@ -1,11 +1,11 @@
 ---
-title: "mysqli_get_server_info() — internals"
+title: "mysqli_get_server_info() - internals"
 description: "Compiler internals for mysqli_get_server_info(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 133
 ---
 
-## `mysqli_get_server_info()` — internals
+## `mysqli_get_server_info()` - internals
 
 ## Where it lives
 

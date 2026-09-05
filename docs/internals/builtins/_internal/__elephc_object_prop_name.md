@@ -1,11 +1,11 @@
 ---
-title: "__elephc_object_prop_name() — internals"
+title: "__elephc_object_prop_name() - internals"
 description: "Compiler internals for __elephc_object_prop_name(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1032
 ---
 
-## `__elephc_object_prop_name()` — internals
+## `__elephc_object_prop_name()` - internals
 
 ## Where it lives
 

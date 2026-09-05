@@ -2,7 +2,7 @@
 title: "ini_restore()"
 description: "Implemented by the compiler-injected version prelude."
 sidebar:
-  order: 610
+  order: 630
 ---
 
 ## ini_restore()
@@ -23,7 +23,7 @@ Implemented by the compiler-injected version prelude.
 - **Compiled (AOT)**: supported through the compiler-injected version prelude.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -1,11 +1,11 @@
 ---
-title: "crc32() — internals"
+title: "crc32() - internals"
 description: "Compiler internals for crc32(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 761
 ---
 
-## `crc32()` — internals
+## `crc32()` - internals
 
 ## Where it lives
 

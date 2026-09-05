@@ -1,11 +1,11 @@
 ---
-title: "pclose() — internals"
+title: "pclose() - internals"
 description: "Compiler internals for pclose(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 722
 ---
 
-## `pclose()` — internals
+## `pclose()` - internals
 
 ## Where it lives
 

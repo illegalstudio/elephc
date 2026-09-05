@@ -1,11 +1,11 @@
 ---
-title: "cairo_matrix_init_translate() — internals"
+title: "cairo_matrix_init_translate() - internals"
 description: "Compiler internals for cairo_matrix_init_translate(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 415
 ---
 
-## `cairo_matrix_init_translate()` — internals
+## `cairo_matrix_init_translate()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "chop() — internals"
+title: "chop() - internals"
 description: "Compiler internals for chop(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 757
 ---
 
-## `chop()` — internals
+## `chop()` - internals
 
 ## Where it lives
 

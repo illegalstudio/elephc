@@ -1,11 +1,11 @@
 ---
-title: "cairo_transform() — internals"
+title: "cairo_transform() - internals"
 description: "Compiler internals for cairo_transform(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 444
 ---
 
-## `cairo_transform()` — internals
+## `cairo_transform()` - internals
 
 ## Where it lives
 

@@ -2,7 +2,7 @@
 title: "restore_exception_handler()"
 description: "Restores the previously active uncaught-exception handler."
 sidebar:
-  order: 351
+  order: 645
 ---
 
 ## restore_exception_handler()

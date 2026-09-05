@@ -1,11 +1,11 @@
 ---
-title: "is_iterable() — internals"
+title: "is_iterable() - internals"
 description: "Compiler internals for is_iterable(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 869
 ---
 
-## `is_iterable()` — internals
+## `is_iterable()` - internals
 
 ## Where it lives
 

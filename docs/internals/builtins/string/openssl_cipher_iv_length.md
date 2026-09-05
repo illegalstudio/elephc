@@ -1,11 +1,11 @@
 ---
-title: "openssl_cipher_iv_length() — internals"
+title: "openssl_cipher_iv_length() - internals"
 description: "Compiler internals for openssl_cipher_iv_length(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 802
 ---
 
-## `openssl_cipher_iv_length()` — internals
+## `openssl_cipher_iv_length()` - internals
 
 ## Where it lives
 

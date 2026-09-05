@@ -1,11 +1,11 @@
 ---
-title: "imagecolormatch() — internals"
+title: "imagecolormatch() - internals"
 description: "Compiler internals for imagecolormatch(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 472
 ---
 
-## `imagecolormatch()` — internals
+## `imagecolormatch()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "str_repeat() — internals"
+title: "str_repeat() - internals"
 description: "Compiler internals for str_repeat(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 821
 ---
 
-## `str_repeat()` — internals
+## `str_repeat()` - internals
 
 ## Where it lives
 

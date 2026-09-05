@@ -2,7 +2,7 @@
 title: "gc_status()"
 description: "Returns live collector counters, roots, and phase timings in PHP's array shape. Elephc has no collector buffer, so full, threshold, and buffer_size are compatibility fields fixed to false, 0, and 0."
 sidebar:
-  order: 334
+  order: 618
 ---
 
 ## gc_status()

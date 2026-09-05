@@ -1,11 +1,11 @@
 ---
-title: "spl_object_id() — internals"
+title: "spl_object_id() - internals"
 description: "Compiler internals for spl_object_id(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 746
 ---
 
-## `spl_object_id()` — internals
+## `spl_object_id()` - internals
 
 ## Where it lives
 

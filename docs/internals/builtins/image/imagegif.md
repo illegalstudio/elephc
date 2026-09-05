@@ -1,11 +1,11 @@
 ---
-title: "imagegif() — internals"
+title: "imagegif() - internals"
 description: "Compiler internals for imagegif(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 511
 ---
 
-## `imagegif()` — internals
+## `imagegif()` - internals
 
 ## Where it lives
 

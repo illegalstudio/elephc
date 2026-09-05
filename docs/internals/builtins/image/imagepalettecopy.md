@@ -1,11 +1,11 @@
 ---
-title: "imagepalettecopy() — internals"
+title: "imagepalettecopy() - internals"
 description: "Compiler internals for imagepalettecopy(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 518
 ---
 
-## `imagepalettecopy()` — internals
+## `imagepalettecopy()` - internals
 
 ## Where it lives
 

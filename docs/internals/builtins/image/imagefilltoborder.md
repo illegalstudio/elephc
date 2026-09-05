@@ -1,11 +1,11 @@
 ---
-title: "imagefilltoborder() — internals"
+title: "imagefilltoborder() - internals"
 description: "Compiler internals for imagefilltoborder(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 504
 ---
 
-## `imagefilltoborder()` — internals
+## `imagefilltoborder()` - internals
 
 ## Where it lives
 

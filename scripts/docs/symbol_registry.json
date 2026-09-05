@@ -16583,7 +16583,9 @@
       "name": "E_ALL",
       "route": "predefined",
       "since": null,
-      "value": 32767
+      "value": {
+        "target_dependent": "int"
+      }
     },
     {
       "aot": {

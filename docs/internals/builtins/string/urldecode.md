@@ -1,11 +1,11 @@
 ---
-title: "urldecode() — internals"
+title: "urldecode() - internals"
 description: "Compiler internals for urldecode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 847
 ---
 
-## `urldecode()` — internals
+## `urldecode()` - internals
 
 ## Where it lives
 

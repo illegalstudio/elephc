@@ -1,11 +1,11 @@
 ---
-title: "date_get_last_errors() — internals"
+title: "date_get_last_errors() - internals"
 description: "Compiler internals for date_get_last_errors(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 199
 ---
 
-## `date_get_last_errors()` — internals
+## `date_get_last_errors()` - internals
 
 ## Where it lives
 

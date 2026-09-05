@@ -1,11 +1,11 @@
 ---
-title: "imagepng() — internals"
+title: "imagepng() - internals"
 description: "Compiler internals for imagepng(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 520
 ---
 
-## `imagepng()` — internals
+## `imagepng()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "is_real() — internals"
+title: "is_real() - internals"
 description: "Compiler internals for is_real(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 874
 ---
 
-## `is_real()` — internals
+## `is_real()` - internals
 
 ## Where it lives
 

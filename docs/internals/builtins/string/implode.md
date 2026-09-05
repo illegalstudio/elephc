@@ -1,11 +1,11 @@
 ---
-title: "implode() — internals"
+title: "implode() - internals"
 description: "Compiler internals for implode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 790
 ---
 
-## `implode()` — internals
+## `implode()` - internals
 
 ## Where it lives
 

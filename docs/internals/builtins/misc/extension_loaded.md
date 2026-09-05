@@ -1,11 +1,11 @@
 ---
-title: "extension_loaded() — internals"
+title: "extension_loaded() - internals"
 description: "Compiler internals for extension_loaded(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 606
+  order: 609
 ---
 
-## `extension_loaded()` — internals
+## `extension_loaded()` - internals
 
 ## Where it lives
 

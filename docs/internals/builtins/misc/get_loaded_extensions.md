@@ -1,11 +1,11 @@
 ---
-title: "get_loaded_extensions() — internals"
+title: "get_loaded_extensions() - internals"
 description: "Compiler internals for get_loaded_extensions(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 607
+  order: 624
 ---
 
-## `get_loaded_extensions()` — internals
+## `get_loaded_extensions()` - internals
 
 ## Where it lives
 

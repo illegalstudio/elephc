@@ -1,11 +1,11 @@
 ---
-title: "imagegammacorrect() — internals"
+title: "imagegammacorrect() - internals"
 description: "Compiler internals for imagegammacorrect(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 509
 ---
 
-## `imagegammacorrect()` — internals
+## `imagegammacorrect()` - internals
 
 ## Where it lives
 

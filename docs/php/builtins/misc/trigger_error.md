@@ -2,20 +2,20 @@
 title: "trigger_error()"
 description: "Generates a user-level PHP error."
 sidebar:
-  order: 355
+  order: 649
 ---
 
 ## trigger_error()
 
 ```php
-function trigger_error(string $message, int $error_level = 1024): bool
+function trigger_error(string $message, int $error_level = E_USER_NOTICE): bool
 ```
 
 Generates a user-level PHP error.
 
 **Parameters**:
 - `$message` (`string`)
-- `$error_level` (`int`), default `1024`, optional
+- `$error_level` (`int`), default `E_USER_NOTICE`, optional
 
 **Returns**: `bool`
 

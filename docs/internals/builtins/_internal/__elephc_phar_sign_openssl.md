@@ -1,11 +1,11 @@
 ---
-title: "__elephc_phar_sign_openssl() — internals"
+title: "__elephc_phar_sign_openssl() - internals"
 description: "Compiler internals for __elephc_phar_sign_openssl(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1052
 ---
 
-## `__elephc_phar_sign_openssl()` — internals
+## `__elephc_phar_sign_openssl()` - internals
 
 ## Where it lives
 

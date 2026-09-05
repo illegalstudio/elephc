@@ -1,11 +1,11 @@
 ---
-title: "is_scalar() — internals"
+title: "is_scalar() - internals"
 description: "Compiler internals for is_scalar(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 876
 ---
 
-## `is_scalar()` — internals
+## `is_scalar()` - internals
 
 ## Where it lives
 

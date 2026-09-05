@@ -1,11 +1,11 @@
 ---
-title: "date_interval_format() — internals"
+title: "date_interval_format() - internals"
 description: "Compiler internals for date_interval_format(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 201
 ---
 
-## `date_interval_format()` — internals
+## `date_interval_format()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "stripslashes() — internals"
+title: "stripslashes() - internals"
 description: "Compiler internals for stripslashes(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 829
 ---
 
-## `stripslashes()` — internals
+## `stripslashes()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_assoc() — internals"
+title: "mysqli_fetch_assoc() - internals"
 description: "Compiler internals for mysqli_fetch_assoc(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 116
 ---
 
-## `mysqli_fetch_assoc()` — internals
+## `mysqli_fetch_assoc()` - internals
 
 ## Where it lives
 

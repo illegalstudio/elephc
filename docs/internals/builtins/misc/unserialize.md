@@ -1,11 +1,11 @@
 ---
-title: "unserialize() — internals"
+title: "unserialize() - internals"
 description: "Compiler internals for unserialize(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 660
 ---
 
-## `unserialize()` — internals
+## `unserialize()` - internals
 
 ## Where it lives
 

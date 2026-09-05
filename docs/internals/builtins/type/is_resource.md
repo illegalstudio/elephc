@@ -1,11 +1,11 @@
 ---
-title: "is_resource() — internals"
+title: "is_resource() - internals"
 description: "Compiler internals for is_resource(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 875
 ---
 
-## `is_resource()` — internals
+## `is_resource()` - internals
 
 ## Where it lives
 

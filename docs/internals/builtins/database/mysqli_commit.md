@@ -1,11 +1,11 @@
 ---
-title: "mysqli_commit() — internals"
+title: "mysqli_commit() - internals"
 description: "Compiler internals for mysqli_commit(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 103
 ---
 
-## `mysqli_commit()` — internals
+## `mysqli_commit()` - internals
 
 ## Where it lives
 

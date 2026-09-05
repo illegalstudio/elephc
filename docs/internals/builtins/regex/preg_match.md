@@ -1,11 +1,11 @@
 ---
-title: "preg_match() — internals"
+title: "preg_match() - internals"
 description: "Compiler internals for preg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 730
 ---
 
-## `preg_match()` — internals
+## `preg_match()` - internals
 
 ## Where it lives
 

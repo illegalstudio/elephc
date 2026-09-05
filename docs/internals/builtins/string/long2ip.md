@@ -1,11 +1,11 @@
 ---
-title: "long2ip() — internals"
+title: "long2ip() - internals"
 description: "Compiler internals for long2ip(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 796
 ---
 
-## `long2ip()` — internals
+## `long2ip()` - internals
 
 ## Where it lives
 

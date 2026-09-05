@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_easy_body() — internals"
+title: "__elephc_curl_easy_body() - internals"
 description: "Compiler internals for __elephc_curl_easy_body(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 978
 ---
 
-## `__elephc_curl_easy_body()` — internals
+## `__elephc_curl_easy_body()` - internals
 
 ## Where it lives
 

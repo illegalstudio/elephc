@@ -1,11 +1,11 @@
 ---
-title: "join() — internals"
+title: "join() - internals"
 description: "Compiler internals for join(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 794
 ---
 
-## `join()` — internals
+## `join()` - internals
 
 ## Where it lives
 

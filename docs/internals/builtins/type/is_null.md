@@ -1,11 +1,11 @@
 ---
-title: "is_null() — internals"
+title: "is_null() - internals"
 description: "Compiler internals for is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 871
 ---
 
-## `is_null()` — internals
+## `is_null()` - internals
 
 ## Where it lives
 

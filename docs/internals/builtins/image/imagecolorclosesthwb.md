@@ -1,11 +1,11 @@
 ---
-title: "imagecolorclosesthwb() — internals"
+title: "imagecolorclosesthwb() - internals"
 description: "Compiler internals for imagecolorclosesthwb(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 468
 ---
 
-## `imagecolorclosesthwb()` — internals
+## `imagecolorclosesthwb()` - internals
 
 ## Where it lives
 

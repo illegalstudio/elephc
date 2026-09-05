@@ -1,11 +1,11 @@
 ---
-title: "ptr_null() — internals"
+title: "ptr_null() - internals"
 description: "Compiler internals for ptr_null(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 702
 ---
 
-## `ptr_null()` — internals
+## `ptr_null()` - internals
 
 ## Where it lives
 

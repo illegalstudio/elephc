@@ -1,11 +1,11 @@
 ---
-title: "error_log() — internals"
+title: "error_log() - internals"
 description: "Compiler internals for error_log(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 881
 ---
 
-## `error_log()` — internals
+## `error_log()` - internals
 
 ## Where it lives
 

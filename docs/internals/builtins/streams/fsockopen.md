@@ -1,11 +1,11 @@
 ---
-title: "fsockopen() — internals"
+title: "fsockopen() - internals"
 description: "Compiler internals for fsockopen(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 747
 ---
 
-## `fsockopen()` — internals
+## `fsockopen()` - internals
 
 ## Where it lives
 

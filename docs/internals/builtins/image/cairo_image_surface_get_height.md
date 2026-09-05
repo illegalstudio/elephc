@@ -1,11 +1,11 @@
 ---
-title: "cairo_image_surface_get_height() — internals"
+title: "cairo_image_surface_get_height() - internals"
 description: "Compiler internals for cairo_image_surface_get_height(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 409
 ---
 
-## `cairo_image_surface_get_height()` — internals
+## `cairo_image_surface_get_height()` - internals
 
 ## Where it lives
 

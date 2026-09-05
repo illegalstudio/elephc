@@ -1,11 +1,11 @@
 ---
-title: "__elephc_ptr_read_string() — internals"
+title: "__elephc_ptr_read_string() - internals"
 description: "Compiler internals for __elephc_ptr_read_string(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1054
 ---
 
-## `__elephc_ptr_read_string()` — internals
+## `__elephc_ptr_read_string()` - internals
 
 ## Where it lives
 

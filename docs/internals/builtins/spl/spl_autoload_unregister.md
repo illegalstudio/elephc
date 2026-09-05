@@ -1,11 +1,11 @@
 ---
-title: "spl_autoload_unregister() — internals"
+title: "spl_autoload_unregister() - internals"
 description: "Compiler internals for spl_autoload_unregister(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 743
 ---
 
-## `spl_autoload_unregister()` — internals
+## `spl_autoload_unregister()` - internals
 
 ## Where it lives
 

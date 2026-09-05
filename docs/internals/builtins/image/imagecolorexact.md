@@ -1,11 +1,11 @@
 ---
-title: "imagecolorexact() — internals"
+title: "imagecolorexact() - internals"
 description: "Compiler internals for imagecolorexact(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 470
 ---
 
-## `imagecolorexact()` — internals
+## `imagecolorexact()` - internals
 
 ## Where it lives
 

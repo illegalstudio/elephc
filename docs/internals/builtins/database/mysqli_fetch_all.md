@@ -1,11 +1,11 @@
 ---
-title: "mysqli_fetch_all() — internals"
+title: "mysqli_fetch_all() - internals"
 description: "Compiler internals for mysqli_fetch_all(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 114
 ---
 
-## `mysqli_fetch_all()` — internals
+## `mysqli_fetch_all()` - internals
 
 ## Where it lives
 

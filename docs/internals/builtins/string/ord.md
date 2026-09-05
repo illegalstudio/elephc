@@ -1,11 +1,11 @@
 ---
-title: "ord() — internals"
+title: "ord() - internals"
 description: "Compiler internals for ord(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 806
 ---
 
-## `ord()` — internals
+## `ord()` - internals
 
 ## Where it lives
 

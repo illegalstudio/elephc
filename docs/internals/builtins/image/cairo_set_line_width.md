@@ -1,11 +1,11 @@
 ---
-title: "cairo_set_line_width() — internals"
+title: "cairo_set_line_width() - internals"
 description: "Compiler internals for cairo_set_line_width(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 436
 ---
 
-## `cairo_set_line_width()` — internals
+## `cairo_set_line_width()` - internals
 
 ## Where it lives
 

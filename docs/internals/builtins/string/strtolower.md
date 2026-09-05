@@ -1,11 +1,11 @@
 ---
-title: "strtolower() — internals"
+title: "strtolower() - internals"
 description: "Compiler internals for strtolower(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 838
 ---
 
-## `strtolower()` — internals
+## `strtolower()` - internals
 
 ## Where it lives
 

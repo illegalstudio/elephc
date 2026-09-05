@@ -1,11 +1,11 @@
 ---
-title: "cairo_image_surface_create() — internals"
+title: "cairo_image_surface_create() - internals"
 description: "Compiler internals for cairo_image_surface_create(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 407
 ---
 
-## `cairo_image_surface_create()` — internals
+## `cairo_image_surface_create()` - internals
 
 ## Where it lives
 

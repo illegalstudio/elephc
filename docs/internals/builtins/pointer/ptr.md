@@ -1,11 +1,11 @@
 ---
-title: "ptr() — internals"
+title: "ptr() - internals"
 description: "Compiler internals for ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 699
 ---
 
-## `ptr()` — internals
+## `ptr()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "__elephc_ptr_write_string() — internals"
+title: "__elephc_ptr_write_string() - internals"
 description: "Compiler internals for __elephc_ptr_write_string(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1055
 ---
 
-## `__elephc_ptr_write_string()` — internals
+## `__elephc_ptr_write_string()` - internals
 
 ## Where it lives
 

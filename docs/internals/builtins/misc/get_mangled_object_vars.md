@@ -2,7 +2,7 @@
 title: "get_mangled_object_vars() - internals"
 description: "Compiler internals for get_mangled_object_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 341
+  order: 625
 ---
 
 ## `get_mangled_object_vars()` - internals

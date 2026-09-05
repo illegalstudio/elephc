@@ -1,11 +1,11 @@
 ---
-title: "count_chars() — internals"
+title: "count_chars() - internals"
 description: "Compiler internals for count_chars(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 760
 ---
 
-## `count_chars()` — internals
+## `count_chars()` - internals
 
 ## Where it lives
 

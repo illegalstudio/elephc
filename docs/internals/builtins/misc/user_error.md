@@ -2,7 +2,7 @@
 title: "user_error() - internals"
 description: "Compiler internals for user_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 358
+  order: 652
 ---
 
 ## `user_error()` - internals

@@ -1,11 +1,11 @@
 ---
-title: "strcasecmp() — internals"
+title: "strcasecmp() - internals"
 description: "Compiler internals for strcasecmp(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 826
 ---
 
-## `strcasecmp()` — internals
+## `strcasecmp()` - internals
 
 ## Where it lives
 

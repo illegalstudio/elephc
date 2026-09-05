@@ -1,11 +1,11 @@
 ---
-title: "_imagick_hexval() — internals"
+title: "_imagick_hexval() - internals"
 description: "Compiler internals for _imagick_hexval(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1069
 ---
 
-## `_imagick_hexval()` — internals
+## `_imagick_hexval()` - internals
 
 ## Where it lives
 

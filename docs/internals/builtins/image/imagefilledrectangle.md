@@ -1,11 +1,11 @@
 ---
-title: "imagefilledrectangle() — internals"
+title: "imagefilledrectangle() - internals"
 description: "Compiler internals for imagefilledrectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 503
 ---
 
-## `imagefilledrectangle()` — internals
+## `imagefilledrectangle()` - internals
 
 ## Where it lives
 

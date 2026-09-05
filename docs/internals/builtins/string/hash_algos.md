@@ -1,11 +1,11 @@
 ---
-title: "hash_algos() — internals"
+title: "hash_algos() - internals"
 description: "Compiler internals for hash_algos(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 769
 ---
 
-## `hash_algos()` — internals
+## `hash_algos()` - internals
 
 ## Where it lives
 

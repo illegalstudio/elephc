@@ -1,11 +1,11 @@
 ---
-title: "phpversion() — internals"
+title: "phpversion() - internals"
 description: "Compiler internals for phpversion(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 655
 ---
 
-## `phpversion()` — internals
+## `phpversion()` - internals
 
 ## Where it lives
 

@@ -1,11 +1,11 @@
 ---
-title: "imagesy() — internals"
+title: "imagesy() - internals"
 description: "Compiler internals for imagesy(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 533
 ---
 
-## `imagesy()` — internals
+## `imagesy()` - internals
 
 ## Where it lives
 

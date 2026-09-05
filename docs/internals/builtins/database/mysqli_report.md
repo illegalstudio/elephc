@@ -1,11 +1,11 @@
 ---
-title: "mysqli_report() — internals"
+title: "mysqli_report() - internals"
 description: "Compiler internals for mysqli_report(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 151
 ---
 
-## `mysqli_report()` — internals
+## `mysqli_report()` - internals
 
 ## Where it lives
 

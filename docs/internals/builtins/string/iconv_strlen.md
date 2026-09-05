@@ -1,11 +1,11 @@
 ---
-title: "iconv_strlen() — internals"
+title: "iconv_strlen() - internals"
 description: "Compiler internals for iconv_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 786
 ---
 
-## `iconv_strlen()` — internals
+## `iconv_strlen()` - internals
 
 ## Where it lives
 

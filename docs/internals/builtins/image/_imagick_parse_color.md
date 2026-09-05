@@ -1,11 +1,11 @@
 ---
-title: "_imagick_parse_color() — internals"
+title: "_imagick_parse_color() - internals"
 description: "Compiler internals for _imagick_parse_color(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 1072
 ---
 
-## `_imagick_parse_color()` — internals
+## `_imagick_parse_color()` - internals
 
 ## Where it lives
 

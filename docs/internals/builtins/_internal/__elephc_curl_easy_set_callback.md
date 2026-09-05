@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_easy_set_callback() — internals"
+title: "__elephc_curl_easy_set_callback() - internals"
 description: "Compiler internals for __elephc_curl_easy_set_callback(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 989
 ---
 
-## `__elephc_curl_easy_set_callback()` — internals
+## `__elephc_curl_easy_set_callback()` - internals
 
 ## Where it lives
 

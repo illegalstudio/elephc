@@ -1,11 +1,11 @@
 ---
-title: "__elephc_curl_easy_getinfo_long() — internals"
+title: "__elephc_curl_easy_getinfo_long() - internals"
 description: "Compiler internals for __elephc_curl_easy_getinfo_long(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 983
 ---
 
-## `__elephc_curl_easy_getinfo_long()` — internals
+## `__elephc_curl_easy_getinfo_long()` - internals
 
 ## Where it lives
 
