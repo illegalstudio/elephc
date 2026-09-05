@@ -68,8 +68,9 @@ fn test_runtime_can_gate_mb_strlen_helper() {
             ..RuntimeFeatures::none()
         },
     );
-    assert!(included.output().contains("__rt_mb_strlen:"));
-    assert!(included.output().contains("__rt_mb_strwidth:"));
+    let included = included.output();
+    assert!(included.contains("__rt_mb_strlen:"));
+    assert!(included.contains("__rt_mb_strwidth:"));
 }
 
 /// Verifies the iconv-backed `mb_strwidth()` helper is omitted when unused.
