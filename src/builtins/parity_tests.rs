@@ -536,9 +536,9 @@ fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
 /// or union surface is `Mixed` in the catalog and the prelude is free to declare
 /// `CurlHandle`, `mixed` or a union for it. The check is therefore compatibility, not
 /// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared with a
-/// spelling the catalog can express (a scalar or `array`), because that spelling is
-/// precisely what the catalog deliberately did not say. A leading `?` is stripped and a
-/// `Nullable` contract compares its inner type: nullability is also carried by the
+/// spelling the catalog can express (a scalar, `array`, `callable` or `ptr`), because that
+/// spelling is precisely what the catalog deliberately did not say. A leading `?` is stripped
+/// and a `Nullable` contract compares its inner type: nullability is also carried by the
 /// parameter's default, which is compared separately.
 fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
     let declared = declared.trim().trim_start_matches('?').trim();
