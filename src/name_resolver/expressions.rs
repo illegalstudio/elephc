@@ -16,7 +16,9 @@ use super::names::{
     resolve_type_expr, resolved_class_constant_name,
 };
 use super::statements::{resolve_params, resolve_stmt_list};
-use super::{resolved_name, rewrite_callback_literal_args, Imports, Symbols};
+use super::{
+    parse_callback_name, resolved_name, rewrite_callback_literal_args, Imports, Symbols,
+};
 
 /// Recursively resolves names in an expression, returning a new expression with
 /// all name references rewritten according to namespace and import rules.
@@ -363,6 +365,27 @@ pub(super) fn resolve_expr(
                     name: resolved_name("__elephc_list_identifiers".to_string()),
                     args: resolved_args,
                 }
+            } else if method_key == "fromcallable"
+                && resolved_args.len() == 1
+                && matches!(
+                    &resolved_receiver,
+                    StaticReceiver::Named(name)
+                        if name.last_segment().is_some_and(|segment| segment.eq_ignore_ascii_case("Closure"))
+                            && !symbols.declares_class_like(&name.as_canonical())
+                )
+                && matches!(&resolved_args[0].kind, ExprKind::StringLiteral(_))
+            {
+                let ExprKind::StringLiteral(candidate) = &resolved_args[0].kind else {
+                    unreachable!("Closure::fromCallable literal guard must hold")
+                };
+                ExprKind::FirstClassCallable(CallableTarget::Function(resolved_name(
+                    resolve_function_name(
+                        &parse_callback_name(candidate),
+                        current_namespace,
+                        imports,
+                        symbols,
+                    ),
+                )))
             } else {
                 ExprKind::StaticMethodCall {
                     receiver: resolved_receiver,

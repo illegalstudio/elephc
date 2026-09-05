@@ -23,6 +23,19 @@ echo $double(5);
     assert_eq!(out, "10");
 }
 
+/// Resolves `Closure::fromCallable()` for a builtin function into a callable Closure value.
+#[test]
+fn test_closure_from_callable_builtin_function() {
+    let out = compile_and_run(
+        r#"<?php
+$closure = Closure::fromCallable('strtoupper');
+echo $closure('hello'), '|', get_class($closure), '|';
+echo $closure instanceof Closure ? 'yes' : 'no';
+"#,
+    );
+    assert_eq!(out, "HELLO|Closure|yes");
+}
+
 /// Verifies anonymous function with multiple parameters and a simple arithmetic body.
 #[test]
 fn test_closure_multiple_params() {
