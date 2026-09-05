@@ -19,6 +19,7 @@ pub mod execute;
 #[cfg(not(test))]
 pub mod function_calls;
 pub mod native_functions;
+pub mod native_constants;
 pub mod native_methods;
 #[cfg(not(test))]
 pub mod object_construction;
@@ -38,6 +39,7 @@ pub use execute::*;
 #[cfg(not(test))]
 pub use function_calls::*;
 pub use native_functions::*;
+pub use native_constants::*;
 pub use native_methods::*;
 #[cfg(not(test))]
 pub use object_construction::*;

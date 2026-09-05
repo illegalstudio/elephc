@@ -354,7 +354,7 @@ fn eval_get_defined_constants(
     };
     let entries = context.defined_constant_entries();
     let user = assoc_from_entries(&entries, values)?;
-    let core = core_constant_array(values)?;
+    let core = core_constant_array(context, values)?;
     if !categorize {
         let mut result = core;
         for (name, value) in entries {
@@ -372,8 +372,19 @@ fn eval_get_defined_constants(
 
 /// Builds the eval-visible PHP Core predefined constant category.
 fn core_constant_array(
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let registered = context.native_global_constant_entries();
+    if !registered.is_empty() {
+        let mut result = values.assoc_new(registered.len())?;
+        for (name, value) in registered {
+            let key = values.string(&name)?;
+            let value = eval_native_global_constant(&value, values)?;
+            result = values.array_set(result, key, value)?;
+        }
+        return Ok(result);
+    }
     let integer_constants = [
         ("E_ERROR", 1),
         ("E_WARNING", 2),

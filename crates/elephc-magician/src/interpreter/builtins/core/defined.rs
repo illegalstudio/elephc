@@ -53,5 +53,7 @@ fn eval_defined_name(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let name = eval_constant_name(name, values)?;
-    Ok(eval_predefined_constant_value(&name).is_some() || context.has_constant(&name))
+    Ok(context.has_native_global_constant(&name)
+        || eval_predefined_constant_value(&name).is_some()
+        || context.has_constant(&name))
 }

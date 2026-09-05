@@ -9,11 +9,63 @@
 
 use super::*;
 
+/// One scalar AOT global constant registered with a persistent eval context.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvalNativeGlobalConstant {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Resource(i64),
+}
+
 impl ElephcEvalContext {
+    /// Registers one AOT global constant for eval fetches and Core introspection.
+    pub fn define_native_global_constant(
+        &mut self,
+        name: &str,
+        value: EvalNativeGlobalConstant,
+    ) -> bool {
+        let key = normalize_constant_name(name);
+        if key.is_empty() || self.native_global_constants.contains_key(&key) {
+            return false;
+        }
+        self.native_global_constants.insert(key, value);
+        true
+    }
+
+    /// Returns one registered AOT global constant by its case-sensitive PHP name.
+    pub fn native_global_constant(&self, name: &str) -> Option<&EvalNativeGlobalConstant> {
+        self.native_global_constants
+            .get(&normalize_constant_name(name))
+    }
+
+    /// Returns whether an AOT global constant is registered under the requested name.
+    pub fn has_native_global_constant(&self, name: &str) -> bool {
+        self.native_global_constant(name).is_some()
+    }
+
+    /// Returns registered AOT global constants in stable PHP-visible name order.
+    pub(crate) fn native_global_constant_entries(
+        &self,
+    ) -> Vec<(String, EvalNativeGlobalConstant)> {
+        let mut entries = self
+            .native_global_constants
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
     /// Defines an eval dynamic constant value, failing if the name is invalid or already present.
     pub fn define_constant(&mut self, name: &str, value: RuntimeCellHandle) -> bool {
         let key = normalize_constant_name(name);
-        if key.is_empty() || self.constants.contains_key(&key) {
+        if key.is_empty()
+            || self.constants.contains_key(&key)
+            || self.native_global_constants.contains_key(&key)
+        {
             return false;
         }
         self.constants.insert(key, value);
