@@ -608,6 +608,7 @@ pub enum RuntimeFnId {
     Strcmp,
     Strncasecmp,
     Strncmp,
+    StripTags,
     Stripos,
     Strpos,
     Strripos,
@@ -1077,6 +1078,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrEndsWith |
             RuntimeFnId::StrIreplace |
             RuntimeFnId::StrReplace |
+            RuntimeFnId::StripTags |
             RuntimeFnId::StrStartsWith |
             RuntimeFnId::Strcasecmp |
             RuntimeFnId::Strcmp |
@@ -2004,6 +2006,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::Decoct
                 | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
+                | RuntimeFnId::StripTags
                 | RuntimeFnId::Implode
         ) {
             BuiltinResultOwnership::Independent
@@ -2485,6 +2488,7 @@ impl RuntimeFnId {
             RuntimeFnId::Strcmp => "strcmp",
             RuntimeFnId::Strncasecmp => "strncasecmp",
             RuntimeFnId::Strncmp => "strncmp",
+            RuntimeFnId::StripTags => "strip_tags",
             RuntimeFnId::Stripos => "stripos",
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::Strripos => "strripos",
