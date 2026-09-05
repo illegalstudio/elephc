@@ -40,6 +40,45 @@ fn execute_program_dispatches_mb_strlen_builtin() {
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `mb_convert_case()` title case, encodings, callables, and ValueErrors.
+#[test]
+fn execute_program_dispatches_mb_convert_case_builtin() {
+    let program = parse_fragment(
+        r#"echo mb_convert_case("hello world", MB_CASE_TITLE); echo ":";
+	echo mb_convert_case(string: "don't stop", mode: MB_CASE_TITLE, encoding: "UTF-8"); echo ":";
+	echo mb_convert_case("straße", MB_CASE_UPPER); echo ":";
+	echo mb_convert_case("straße", MB_CASE_UPPER_SIMPLE); echo ":";
+	echo mb_convert_case("hello", MB_CASE_UPPER, "8bit"); echo ":";
+	echo call_user_func("mb_convert_case", "hi", MB_CASE_TITLE); echo ":";
+	echo call_user_func_array("mb_convert_case", ["string" => "abc", "mode" => MB_CASE_UPPER]); echo ":";
+	try {
+	    mb_convert_case("x", 99);
+	} catch (ValueError $error) {
+	    echo "mode";
+	}
+	echo ":";
+	try {
+	    mb_convert_case("x", MB_CASE_TITLE, "definitely-not-an-encoding");
+	} catch (ValueError $error) {
+	    echo "enc";
+	}
+	echo ":";
+	return function_exists("mb_convert_case") && defined("MB_CASE_TITLE") && MB_CASE_TITLE === 2;"#
+            .as_bytes(),
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "Hello World:Don't Stop:STRASSE:STRAßE:HELLO:Hi:ABC:mode:enc:"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `explode()` and `implode()` bridge byte strings and arrays.
 #[test]
 fn execute_program_dispatches_explode_implode_builtins() {

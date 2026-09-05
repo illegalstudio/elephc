@@ -33,6 +33,14 @@ fn declared_builtin_registry_derives_core_metadata() {
             Some(EvalBuiltinDefaultValue::Null)
         );
         assert_eq!(
+            eval_declared_builtin_param_names("mb_convert_case"),
+            Some(["string", "mode", "encoding"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("mb_convert_case", 2),
+            Some(EvalBuiltinDefaultValue::Null)
+        );
+        assert_eq!(
             eval_declared_builtin_param_names("is_finite"),
             Some(["num"].as_slice())
         );

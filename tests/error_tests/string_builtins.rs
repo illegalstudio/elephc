@@ -60,6 +60,18 @@ expect_builtin_arity_error!(
     "mb_strlen() takes 1 or 2 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_mb_convert_case_wrong_args,
+    "<?php mb_convert_case();",
+    "mb_convert_case() takes 2 or 3 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_mb_convert_case_missing_mode,
+    "<?php mb_convert_case('hello');",
+    "mb_convert_case() takes 2 or 3 arguments"
+);
+
 /// Verifies the OpenSSL IV-length helper rejects a missing cipher name.
 #[test]
 fn test_error_openssl_cipher_iv_length_wrong_args() {
@@ -102,6 +114,33 @@ fn test_error_mb_strlen_encoding_type() {
     expect_error(
         "<?php mb_strlen('abc', 123);",
         "mb_strlen() encoding argument must be string or null",
+    );
+}
+
+/// Verifies that `mb_convert_case()` rejects a statically non-string value argument.
+#[test]
+fn test_error_mb_convert_case_string_type() {
+    expect_error(
+        "<?php mb_convert_case([1, 2], 2);",
+        "mb_convert_case() string argument must be string",
+    );
+}
+
+/// Verifies that `mb_convert_case()` rejects a statically non-integer mode.
+#[test]
+fn test_error_mb_convert_case_mode_type() {
+    expect_error(
+        "<?php mb_convert_case('hello', 'title');",
+        "mb_convert_case() mode argument must be int",
+    );
+}
+
+/// Verifies that `mb_convert_case()` accepts only string or null encoding arguments.
+#[test]
+fn test_error_mb_convert_case_encoding_type() {
+    expect_error(
+        "<?php mb_convert_case('hello', 2, 123);",
+        "mb_convert_case() encoding argument must be string or null",
     );
 }
 
