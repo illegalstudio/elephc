@@ -410,10 +410,11 @@ fn is_builtin_global_constant(name: &str) -> bool {
             return true;
         }
     // Shared source-of-truth slices for JSON, stream/socket, session, array, math, iconv,
-    // and curl
+    // curl, and Termwind-facing libxml
     // constants. CURL_INT_CONSTANTS is always in this chain (like JSON_INT_CONSTANTS) so a
     // bare `CURLOPT_URL` mention resolves to the global constant even inside a namespace,
-    // with or without the curl prelude/bridge being linked.
+    // with or without the curl prelude/bridge being linked. LIBXML_* follows the same
+    // rule so `namespace Termwind { LIBXML_NOERROR }` falls back to the global flag.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::openssl_constants::OPENSSL_INT_CONSTANTS.iter())
@@ -424,5 +425,6 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
         .chain(crate::types::iconv_constants::ICONV_INT_CONSTANTS.iter())
         .chain(crate::types::curl_constants::CURL_INT_CONSTANTS.iter())
+        .chain(crate::types::libxml_constants::LIBXML_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
 }

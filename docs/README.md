@@ -66,6 +66,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Calendar](php/calendar.md) — `ext/calendar`: Julian Day conversions for the Gregorian, Julian, French Republican and Jewish calendars, Easter, day/month names, `cal_*` dispatch
 - [Images](php/image.md) — GD image creation, I/O, color, drawing, text, transforms/filters, Exif/IPTC metadata, the Imagick (`Imagick`/`ImagickDraw`/`ImagickPixel`/`ImagickPixelIterator`/`ImagickKernel`) and Gmagick (`Gmagick`/`GmagickDraw`/`GmagickPixel`) object APIs, and Cairo 2D vector drawing (`CairoImageSurface`/`CairoContext`/`CairoMatrix`/patterns/gradients), plus `getimagesize`/`image_type_to_*`, backed by a pure-Rust codec/raster bridge (no system GD/ImageMagick/GraphicsMagick/cairo/libpng/libjpeg/libexif)
 - [cURL](php/curl.md) — `ext/curl`'s complete function, class, and constant surface (easy, multi, share, `CURLFile`/`CURLStringFile` uploads, six libcurl callbacks) on a statically pinned libcurl 8.21.0 with OpenSSL 3.5.8 as its TLS backend and native Apple SecTrust verification on iOS, plus the protocol matrix, the option-rejection table, and every documented difference from PHP
+- [DOM HTML (Termwind subset)](php/dom-html.md) — `DOMDocument::loadHTML()` and the node walk Termwind's `HtmlRenderer` needs; not full PHP DOM (see PR #654)
 
 ## Beyond PHP
 

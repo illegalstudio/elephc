@@ -204,8 +204,9 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         // arms. Table-driven, not gated behind the `curl` Cargo feature: see
         // `super::curl_constants`'s header for why a bare numeric constant carries no
         // ABI-linkage cost.
-        other => super::curl_constants::EVAL_CURL_INT_CONSTANTS
+        other => EVAL_LIBXML_INT_CONSTANTS
             .iter()
+            .chain(super::curl_constants::EVAL_CURL_INT_CONSTANTS.iter())
             .find(|(name, _)| *name == other)
             .map(|(_, value)| EvalPredefinedConstant::Int(*value)),
     }
