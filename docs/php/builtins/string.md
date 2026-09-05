@@ -55,6 +55,7 @@ sidebar:
 | [`long2ip()`](./string/long2ip.md) | `(int $ip): string` | `string` | ✓ | ✓ |
 | [`ltrim()`](./string/ltrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`mb_strlen()`](./string/mb_strlen.md) | `(string $string, string $encoding = null): int` | `int` | ✓ | ✓ |
+| [`mb_strwidth()`](./string/mb_strwidth.md) | `(string $string, string $encoding = null): int` | `int` | ✓ | ✓ |
 | [`md5()`](./string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`number_format()`](./string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |

@@ -9,8 +9,9 @@
 //! Key details:
 //! - Direct `preg_*` calls and emitted regex iterator classes both enable regex
 //!   helpers because generated SPL methods can call them.
-//! - Lowered `mb_strlen()` calls enable its iconv-backed runtime helper without
-//!   imposing that native dependency on programs that never use the builtin.
+//! - Lowered `mb_strlen()` / `mb_strwidth()` calls enable their iconv-backed
+//!   runtime helpers without imposing that native dependency on programs that
+//!   never use those builtins.
 //! - Emitted stream/archive classes enable PHAR bridge libraries because their
 //!   generated methods route dynamic paths through `__rt_*_maybe_phar` helpers.
 //! - The dynamic builtin dispatcher (descriptor invoker) emits per-builtin
@@ -44,7 +45,8 @@ pub enum LinkRequirement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
     pub regex: bool,
-    /// True when lowered code can call the optional iconv-backed `mb_strlen()` helper.
+    /// True when lowered code can call the optional iconv-backed `mb_strlen()` /
+    /// `mb_strwidth()` helpers.
     pub mb_strlen: bool,
     pub phar_archive: bool,
     /// True when codegen can emit the runtime callable dispatcher (descriptor

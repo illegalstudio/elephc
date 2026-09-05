@@ -151,6 +151,28 @@ eval($source);
     assert_eq!(out, "6:2");
 }
 
+/// Verifies dynamic eval links and dispatches Magician's encoding-aware `mb_strwidth()` path.
+#[test]
+fn test_eval_mb_strwidth_encoding_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$source = 'echo function_exists("mb_strwidth") ? "1" : "0";
+echo ":";
+echo mb_strwidth("日本語");
+echo ":";
+echo mb_strwidth("héllo", "8bit");
+echo ":";
+$utf16 = chr(104) . chr(0) . chr(233) . chr(0);
+echo mb_strwidth($utf16, "UTF-16LE");
+echo ":";
+echo mb_strwidth("🐘");';
+eval($source);
+"#,
+    );
+
+    assert_eq!(out, "1:6:6:2:2");
+}
+
 /// Verifies eval preg builtins use PCRE2 features that Rust regex did not support.
 #[test]
 fn test_eval_preg_uses_pcre2_lookaround_semantics() {

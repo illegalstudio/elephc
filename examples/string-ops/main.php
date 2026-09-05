@@ -156,6 +156,8 @@ try {
 echo "\n--- Encoding ---\n";
 echo "mb_strlen UTF-8: " . mb_strlen("héllo", "UTF-8") . "\n";
 echo "mb_strlen bytes: " . mb_strlen("héllo", "8bit") . "\n";
+echo "mb_strwidth CJK: " . mb_strwidth("日本語") . "\n";
+echo "mb_strwidth fullwidth: " . mb_strwidth("\u{FF41}") . "\n";
 echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
 echo "urlencode: " . urlencode("hello world") . "\n";
 echo "base64: " . base64_encode("Hello") . "\n";

@@ -20,6 +20,7 @@ mod catalog_curl;
 mod catalog_surfaces;
 mod eval_profile;
 mod id;
+mod mb_eaw;
 mod registry;
 mod requirements;
 mod runtime_id;
@@ -33,6 +34,7 @@ pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
 pub use id::BuiltinId;
+pub use mb_eaw::{character_width, EAW_RANGES, FIRST_DOUBLEWIDTH_CODEPOINT};
 pub use registry::{contracts, lookup, lookup_id};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{

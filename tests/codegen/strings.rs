@@ -85,3 +85,62 @@ try {
     );
     assert_eq!(out, "3:caught");
 }
+
+/// Verifies `mb_strwidth()` uses PHP 8.5 East Asian Width for ASCII, CJK, fullwidth, and emoji.
+#[test]
+fn test_mb_strwidth_display_width() {
+    let out = compile_and_run(
+        "<?php echo mb_strwidth('abc'), ':', mb_strwidth('héllo wörld'), ':', mb_strwidth(''), ':', mb_strwidth('日本語'), ':', mb_strwidth(\"\\u{FF41}\"), ':', mb_strwidth(\"\\u{2630}\"), ':', mb_strwidth(\"\\u{1F418}\"), ':', mb_strwidth(\"\\u{1F6DC}\");",
+    );
+    assert_eq!(out, "3:11:0:6:2:2:2:2");
+}
+
+/// Verifies `mb_strwidth()` accepts PHP's optional nullable encoding and byte-count aliases.
+#[test]
+fn test_mb_strwidth_encoding_argument() {
+    let out = compile_and_run(
+        r#"<?php
+echo function_exists('mb_strwidth') ? '1' : '0', ":";
+echo mb_strwidth("héllo", "UTF-8"), ":";
+echo mb_strwidth("héllo", "8bit"), ":";
+echo mb_strwidth(string: "日本語", encoding: null), ":";
+$encoding = $argc > 0 ? "binary" : "UTF-8";
+echo mb_strwidth("héllo", $encoding), ":";
+echo mb_strwidth("\x68\x00\xE9\x00", "UTF-16LE"), ":";
+$width = mb_strwidth(...);
+echo $width("héllo", "8bit");"#,
+    );
+    assert_eq!(out, "1:5:6:6:6:2:6");
+}
+
+/// Verifies malformed and truncated UTF-8 follows PHP mbstring substitution widths.
+#[test]
+fn test_mb_strwidth_malformed_utf8() {
+    let out = compile_and_run(
+        r#"<?php
+echo mb_strwidth("\x80", "UTF-8"), ":";
+echo mb_strwidth("\xC0\xAF", "UTF-8"), ":";
+echo mb_strwidth("\xE2\x82", "UTF-8"), ":";
+echo mb_strwidth("\xED\xA0\x80", "UTF-8"), ":";
+echo mb_strwidth("\xF4\x90\x80\x80", "UTF-8"), ":";
+echo mb_strwidth("\xE2\x28\xA1", "UTF-8");"#,
+    );
+    assert_eq!(out, "1:2:1:3:4:3");
+}
+
+/// Verifies namespaced/case-insensitive lookup and unknown-encoding `ValueError` behavior.
+#[test]
+fn test_mb_strwidth_namespace_and_invalid_encoding() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+echo Mb_StRwIdTh("日本語"), ":";
+$encoding = $argc > 0 ? "definitely-not-an-encoding" : "UTF-8";
+try {
+    mb_strwidth("abc", $encoding);
+} catch (\ValueError $error) {
+    echo "caught";
+}"#,
+    );
+    assert_eq!(out, "6:caught");
+}

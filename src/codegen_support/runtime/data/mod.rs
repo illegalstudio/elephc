@@ -219,3 +219,6 @@ pub(crate) const HASH_COPY_FINALIZED_CTX_MSG: &str =
 /// Catchable `\ValueError` message when `mb_strlen()` receives an unknown encoding name.
 pub(crate) const MB_STRLEN_UNKNOWN_ENCODING_MSG: &str =
     "mb_strlen(): Argument #2 ($encoding) must be a valid encoding";
+/// Catchable `\ValueError` message when `mb_strwidth()` receives an unknown encoding name.
+pub(crate) const MB_STRWIDTH_UNKNOWN_ENCODING_MSG: &str =
+    "mb_strwidth(): Argument #2 ($encoding) must be a valid encoding";
