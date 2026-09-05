@@ -775,3 +775,23 @@ return mb_substitute_character(63);
     assert_eq!(values.output, "33:21:none::21");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval `strip_tags()` strips tags, honors allow-lists, and is callable.
+#[test]
+fn execute_program_dispatches_strip_tags_builtin() {
+    let program = parse_fragment(
+        br#"echo strip_tags("<p>Hello <b>World</b></p>"); echo ":";
+echo strip_tags("<p>Hello <b>World</b></p>", "<p>"); echo ":";
+echo strip_tags("1 < 2"); echo ":";
+echo call_user_func("strip_tags", "<x>y</x>"); echo ":";
+return function_exists("strip_tags");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "Hello World:<p>Hello World</p>:1 < 2:y:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
