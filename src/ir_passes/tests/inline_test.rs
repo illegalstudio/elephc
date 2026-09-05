@@ -487,6 +487,91 @@ fn inliner_handles_multi_block_callee() {
     assert!(validate_module(&module).is_ok());
 }
 
+/// A load the CALLEE proved pure does not stay pure in the caller.
+///
+/// `immutable_local_loads` clears `READS_LOCAL` from a load whose slot it can
+/// show is written once — which a parameter of a small function always is, and
+/// which CSE and LICM then rely on. Spliced into a caller's LOOP that slot is
+/// written once PER ITERATION, so the proof is gone and the load is not pure at
+/// all: LICM took it at face value and hoisted `spin`'s `$rounds` read above the
+/// store that gives it a value, and `while (...) { $t += spin(1000); }` ran
+/// `for ($i = 0; $i < $rounds; ...)` against whatever the frame happened to hold
+/// and never came back.
+///
+/// Asserted on the spliced instruction rather than by running such a program,
+/// because the wrong answer there is a HANG — and a test that hangs reports
+/// nothing.
+#[test]
+fn inliner_restores_the_effects_of_a_load_it_splices() {
+    let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
+
+    let mut callee = Function::new("reads_param".to_string(), IrType::I64, PhpType::Int);
+    let slot = callee.add_local(
+        Some("rounds".to_string()),
+        IrType::I64,
+        PhpType::Int,
+        LocalKind::PhpLocal,
+    );
+    {
+        let mut b = Builder::new(&mut callee);
+        let entry = b.create_named_block("entry", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        let loaded = b
+            .emit(
+                Op::LoadLocal,
+                vec![],
+                Some(Immediate::LocalSlot(slot)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .unwrap();
+        b.terminate(Terminator::Return { value: Some(loaded) });
+    }
+    // Exactly what the pass leaves behind once it has proven the slot immutable
+    // in THIS function: the load reads nothing, as far as anything downstream
+    // can see.
+    for inst in &mut callee.instructions {
+        if inst.op == Op::LoadLocal {
+            inst.effects = crate::ir::Effects::empty();
+        }
+    }
+    module.add_function(callee);
+
+    let mut host = Function::new("h".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut b = Builder::new(&mut host);
+        let entry = b.create_named_block("entry", vec![]);
+        b.set_entry(entry);
+        b.position_at_end(entry);
+        let data = module.data.intern_function_name("reads_param");
+        let r = b
+            .emit(
+                Op::Call,
+                vec![],
+                Some(Immediate::Data(data)),
+                IrType::I64,
+                PhpType::Int,
+                Ownership::NonHeap,
+            )
+            .unwrap();
+        b.terminate(Terminator::Return { value: Some(r) });
+    }
+    module.add_function(host);
+
+    assert!(inline_small_functions(&mut module));
+    let h = module.functions.iter().find(|f| f.name == "h").unwrap();
+    let loads: Vec<_> = h.instructions.iter().filter(|i| i.op == Op::LoadLocal).collect();
+    assert!(!loads.is_empty(), "the callee's load must have been spliced in at all");
+    assert!(
+        loads.iter().all(|i| i.effects.contains(crate::ir::Effects::READS_LOCAL)),
+        "a load spliced into another function reads that function's local again; leaving it \
+         pure is what let LICM hoist it above the store that fills the slot"
+    );
+    assert!(validate_module(&module).is_ok());
+}
+
 /// Structural test: FVC call-site name resolution must use the canonical
 /// `resolve_variant_callee_name` over `module.functions`, and inlining at that
 /// site must remove the `FunctionVariantCall` opcode (using the shipped search

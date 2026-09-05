@@ -1107,6 +1107,18 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
         flag.write(1);
         ASKED.store(true, Ordering::Relaxed);
         arm_timer();
+        // The same channel that said "you are being monitored" can also answer
+        // "what have you sampled so far" — but only for a monitor that said it
+        // would ask. The exact path spawns, waits for the program to finish and
+        // reads its output; a thread parked in `recv` for the whole of that run
+        // is one nobody wanted, and one more thing between the program and its
+        // exit.
+        if POLLED.load(Ordering::Relaxed) {
+            std::thread::Builder::new()
+                .name("elephc-probe-control".to_string())
+                .spawn(serve_control_channel)
+                .ok();
+        }
     }
 
     // fork() RESETS interval timers in the child (POSIX; `man 2 fork`), so a
@@ -1124,7 +1136,7 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
     // The remote endpoint is opt-in: a Unix socket path in ELEPHC_PROBE_ADDR
     // turns it on. A background thread accepts connections, runs the build-key
     // handshake, and serves the folded profile — so a live production process
-    // can be profiled by `elephc monitor --probe-host` without SIGPROF from
+    // can be profiled by `elephc monitor <addr>` without SIGPROF from
     // outside and without suspending the process.
     if !key.is_null() {
         if let Ok(path) = std::env::var("ELEPHC_PROBE_ADDR") {
@@ -1133,6 +1145,119 @@ pub unsafe extern "C" fn elephc_probe_init(table: *const SymtabEntry, len: usize
             }
         }
     }
+}
+
+/// Request byte the monitor sends on the control channel to ask for a snapshot
+/// of what has been sampled so far.
+///
+/// One byte, because the channel carries exactly one question. Anything else is
+/// ignored rather than answered: fd 3 is an ordinary number and this thread must
+/// never invent a reply to a protocol it does not own.
+const CONTROL_SNAPSHOT_REQUEST: u8 = b'S';
+
+/// Serves sampled snapshots to the process that launched us, over the control
+/// channel it already holds the other end of.
+///
+/// The channel IS the credential. A socketpair created before the fork cannot be
+/// opened, guessed, or replayed by anything else on the machine, which is why
+/// this path needs no key handshake where the network endpoint does — the same
+/// reasoning that lets init treat its magic byte as "you are being monitored".
+///
+/// What this buys is `--live` without an external sampler. Reading a process
+/// from the outside needs a tool that ships on macOS alone, so the live table
+/// was macOS-only — for a program `monitor` had launched ITSELF, and could
+/// therefore simply have asked. Answering here is the ask.
+///
+/// Snapshots are cumulative, exactly as the endpoint's answer is; a caller that
+/// wants one window subtracts two of them. Keeping the accumulation on this side
+/// would mean the probe deciding what a window is, which is the caller's
+/// question, and would lose a sample to every reader that ever disconnected.
+fn serve_control_channel() {
+    // Both for the reasons the endpoint thread blocks them. SIGPIPE: a monitor
+    // that exits mid-write must not take the profiled process down with it.
+    // SIGPROF: `ITIMER_PROF` is delivered to the PROCESS and the kernel picks
+    // any thread not blocking it, so the sampler would otherwise interrupt this
+    // thread and fill the ring with the profiler's own frames instead of the
+    // ones running PHP.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::sigaddset(&mut set, libc::SIGPROF);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+    }
+    loop {
+        let mut request = [0u8; 1];
+        // Safety: CONTROL_FD is the socketpair end init identified; this thread
+        // is its only reader.
+        let read = unsafe {
+            libc::recv(
+                CONTROL_FD,
+                request.as_mut_ptr() as *mut libc::c_void,
+                1,
+                0,
+            )
+        };
+        if read < 0 {
+            // A signal that arrived mid-wait is not the monitor leaving. Treating
+            // `EINTR` as the end would stop serving snapshots silently, and the
+            // live loop on the other side reads that as "the target is gone" and
+            // stops with the program still running.
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return;
+        }
+        if read == 0 {
+            // A real EOF: the monitor is gone, which is the end of the reason
+            // this thread exists.
+            return;
+        }
+        if request[0] != CONTROL_SNAPSHOT_REQUEST {
+            continue;
+        }
+        let profile = sampled_answer();
+        let bytes = profile.as_bytes();
+        let header = (bytes.len() as u32).to_le_bytes();
+        if !control_send_all(&header) || !control_send_all(bytes) {
+            return;
+        }
+    }
+}
+
+/// Writes every byte of `data` to the control channel, or reports that it could
+/// not.
+///
+/// A short write on a stream socket is ordinary, not an error, and a reply that
+/// stops halfway is worse than no reply: the reader is length-prefixed and would
+/// block waiting for a body that is never coming.
+fn control_send_all(data: &[u8]) -> bool {
+    let mut sent = 0usize;
+    while sent < data.len() {
+        // Safety: writing `data`'s own bytes to a socket this thread owns.
+        let wrote = unsafe {
+            libc::send(
+                CONTROL_FD,
+                data[sent..].as_ptr() as *const libc::c_void,
+                data.len() - sent,
+                0,
+            )
+        };
+        if wrote < 0 {
+            // Same reasoning as the read side: an interrupted write has sent
+            // nothing and can simply be retried, where reporting failure would
+            // truncate a reply the reader is length-prefixed to wait for.
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return false;
+        }
+        if wrote == 0 {
+            return false;
+        }
+        sent += wrote as usize;
+    }
+    true
 }
 
 /// Starts sampled collection, because someone authenticated and asked for it.
@@ -1403,8 +1528,29 @@ const CONTROL_FD: i32 = 3;
 /// buffered when the child looks. A stray inherited socket on the same descriptor
 /// says nothing and is ignored.
 const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
+/// The same marker, from a monitor that intends to POLL this process for
+/// snapshots rather than read its output at the end.
+///
+/// Same length as the plain one, so the peek that decides whether fd 3 is ours
+/// is unchanged — it reads a fixed sixteen bytes and compares. Written before
+/// the fork like the other, which is what makes this free of a race: the child
+/// cannot look before the parent has decided.
+///
+/// The distinction earns its keep by NOT starting a server for a run that will
+/// never ask. `--live` polls; the exact path spawns, waits for the program to
+/// end and reads its output, and a thread parked in `recv` for the whole of that
+/// is a thread nobody wanted.
+const CONTROL_MAGIC_LIVE: &[u8] = b"ELEPHC-MONITOR-L";
 /// Returned to the spawning monitor only after the marker was consumed.
 const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
+
+/// Whether the monitor that started this process said it would poll it.
+///
+/// Set by the marker check, read by init. A plain word rather than a return
+/// value because `control_fd_present` answers a yes/no question that three
+/// callers already depend on, and widening it would make every one of them
+/// carry a distinction only one of them uses.
+static POLLED: AtomicBool = AtomicBool::new(false);
 
 /// Whether this process was started by `elephc monitor`.
 ///
@@ -1447,9 +1593,11 @@ fn control_fd_present() -> bool {
             buf.len(),
             libc::MSG_PEEK | libc::MSG_DONTWAIT,
         );
-        if read != CONTROL_MAGIC.len() as isize || buf != CONTROL_MAGIC {
+        let polled = buf == CONTROL_MAGIC_LIVE;
+        if read != CONTROL_MAGIC.len() as isize || (buf != CONTROL_MAGIC && !polled) {
             return false;
         }
+        POLLED.store(polled, Ordering::Relaxed);
         // It is ours: consume the marker so nothing downstream reads it back.
         libc::recv(
             CONTROL_FD,
@@ -1732,9 +1880,73 @@ fn decode_hex(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// How far the fold has already carried, as a ticket number.
+///
+/// The ring's head only grows, so this is a watermark: everything below it has
+/// been taken out of the buffer and added to `CARRIED`, and re-reading it would
+/// count the same samples twice.
+static CARRIED_THROUGH: AtomicU64 = AtomicU64::new(0);
+
+/// Everything carried out of the ring so far.
+///
+/// Touched only by a reader — the control thread answering a snapshot, or the
+/// exit-time dump — and never by the signal handler, which is what makes a lock
+/// safe here at all.
+static CARRIED: std::sync::Mutex<Carried> = std::sync::Mutex::new(Carried::new());
+
+/// The cumulative half of the answer: stacks, allocation weights, and the count
+/// of samples that produced a walkable stack.
+struct Carried {
+    folded: std::collections::BTreeMap<Vec<String>, u64>,
+    allocated: std::collections::BTreeMap<Vec<String>, u64>,
+    valid: u64,
+}
+
+impl Carried {
+    const fn new() -> Self {
+        Self {
+            folded: std::collections::BTreeMap::new(),
+            allocated: std::collections::BTreeMap::new(),
+            valid: 0,
+        }
+    }
+}
+
+/// Adds one fold's worth of ring to what has been carried, and answers the
+/// running total.
+///
+/// A poisoned lock answers the fresh fold rather than panicking: a profiler that
+/// takes the program down because its own bookkeeping tripped is worse than one
+/// that reports a short window.
+fn carry_forward(
+    taken: u64,
+    folded: std::collections::BTreeMap<Vec<String>, u64>,
+    allocated: std::collections::BTreeMap<Vec<String>, u64>,
+    valid: u64,
+) -> (
+    std::collections::BTreeMap<Vec<String>, u64>,
+    std::collections::BTreeMap<Vec<String>, u64>,
+    u64,
+) {
+    let Ok(mut carried) = CARRIED.lock() else {
+        return (folded, allocated, valid);
+    };
+    for (stack, count) in folded {
+        *carried.folded.entry(stack).or_default() += count;
+    }
+    for (stack, allocs) in allocated {
+        *carried.allocated.entry(stack).or_default() += allocs;
+    }
+    carried.valid += valid;
+    CARRIED_THROUGH.store(taken, Ordering::Relaxed);
+    (carried.folded.clone(), carried.allocated.clone(), carried.valid)
+}
+
 /// Renders the current folded profile for the endpoint responder.
 pub fn current_folded_profile() -> Option<String> {
-    unsafe { folded_profile() }
+    // Cumulative: this is the answer `monitor --live` subtracts one window from
+    // the previous, and the endpoint's own contract says the same.
+    unsafe { folded_profile_with(true) }
 }
 
 /// How long the first sampled answer waits for collection to produce something.
@@ -1829,6 +2041,24 @@ pub unsafe extern "C" fn elephc_probe_dump() {
 /// a concurrent handler may add a sample mid-read (endpoint) — a raced slot
 /// only skews one count, never corrupts memory.
 unsafe fn folded_profile() -> Option<String> {
+    folded_profile_with(false)
+}
+
+/// The same fold, optionally CUMULATIVE across calls.
+///
+/// `cumulative` is what the snapshot answer needs and the exit dump does not.
+/// The dump reads once, with the timer disarmed, and "everything still in the
+/// ring" is exactly right for it; a reader that asks every window needs the
+/// total, because the ring stops growing the moment its head wraps and a
+/// consumer subtracting one answer from the last then sees nothing at all.
+///
+/// Kept as a parameter rather than made unconditional because a fold that
+/// carries is not idempotent, and both the dump and the tests fold more than
+/// once expecting the same answer twice.
+///
+/// # Safety
+/// As `folded_profile`.
+unsafe fn folded_profile_with(cumulative: bool) -> Option<String> {
     let table = TABLE_PTR.load(Ordering::Relaxed) as *const SymtabEntry;
     let table_len = TABLE_LEN.load(Ordering::Relaxed);
     if table.is_null() || table_len == 0 {
@@ -1850,8 +2080,26 @@ unsafe fn folded_profile() -> Option<String> {
 
     let head = region_head()?;
     let base = REGION.load(Ordering::Relaxed);
-    let taken = head.load(Ordering::Relaxed) as usize;
-    let available = taken.min(RING_SLOTS);
+    let taken = head.load(Ordering::Relaxed);
+    // Fold by TICKET, not by slot, and only the tickets not folded already.
+    //
+    // The ring holds the last `RING_SLOTS` samples, so folding all of it answers
+    // "the recent window" — which stops growing the moment the head wraps. The
+    // answer is documented as CUMULATIVE and `monitor --live` subtracts one from
+    // the previous on that basis, so past 8192 samples every delta went zero or
+    // negative and the live table emptied while the program ran flat out. What
+    // is cumulative is not the ring; it is what has been carried out of it.
+    //
+    // A slot caught mid-write is skipped, as it always was, and the watermark
+    // still advances past it: one sample lost rather than the same slot counted
+    // again on the next read. The reader that falls more than a full ring behind
+    // loses what was overwritten, which no fixed ring can avoid.
+    let oldest_live = taken.saturating_sub(RING_SLOTS as u64);
+    let from = if cumulative {
+        CARRIED_THROUGH.load(Ordering::Relaxed).max(oldest_live)
+    } else {
+        oldest_live
+    };
     let mut valid = 0u64;
     let mut folded: std::collections::BTreeMap<Vec<String>, u64> = std::collections::BTreeMap::new();
     // Allocations charged to each stack, kept apart from the sample counts: they
@@ -1859,7 +2107,8 @@ unsafe fn folded_profile() -> Option<String> {
     // profile whose bars mean two things at once.
     let mut allocated: std::collections::BTreeMap<Vec<String>, u64> =
         std::collections::BTreeMap::new();
-    for index in 0..available {
+    for ticket in from..taken {
+        let index = (ticket % RING_SLOTS as u64) as usize;
         // Acquire the depth gate before reading the PCs the handler stored; a
         // torn or in-flight slot with depth 0 is skipped.
         // Read the sequence first: odd means a handler is inside this slot right
@@ -1916,6 +2165,14 @@ unsafe fn folded_profile() -> Option<String> {
         }
         *folded.entry(stack).or_default() += 1;
     }
+    // Carried out of the ring before anything is rendered, so what the answer
+    // reports is every sample since the process started and not merely the ones
+    // still in the buffer.
+    let (folded, allocated, valid) = if cumulative {
+        carry_forward(taken, folded, allocated, valid)
+    } else {
+        (folded, allocated, valid)
+    };
     // A dormant binary took no samples and recorded no events. Saying
     // "elephc-probe-samples: 0" would still announce a profiler to anyone
     // reading the program's own stderr, which is exactly what
@@ -2508,6 +2765,116 @@ mod tests {
             !mid_write.as_deref().unwrap_or_default().contains(name),
             "a slot a handler is inside must not fold, however readable it looks: {mid_write:?}"
         );
+    }
+
+    /// The cumulative answer keeps growing after the ring's head has lapped.
+    ///
+    /// The ring holds the last `RING_SLOTS` samples, so folding all of it
+    /// answers "the recent window" — and `monitor --live` subtracts one answer
+    /// from the previous on the documented promise that it is CUMULATIVE. Past
+    /// 8192 samples the count stopped growing, so every later delta was zero or
+    /// negative and the live table emptied while the program ran flat out. The
+    /// CLI fixtures run six seconds at about a kilohertz and never reach the
+    /// lap, which is why nothing saw it.
+    ///
+    /// Staged rather than run for real: a fixture long enough to take 8192
+    /// samples is eight seconds of CPU in a unit test, and what is under test is
+    /// the arithmetic across the lap, not the sampler.
+    #[test]
+    fn a_lapped_ring_still_answers_a_growing_total() {
+        let _serial = ROUTE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let name = "hot\0";
+        let end = "<end>\0";
+        let symbols = [
+            SymtabEntry {
+                address: 0x1000,
+                name_ptr: name.as_ptr() as u64,
+                name_len: name.len() as u64,
+            },
+            SymtabEntry {
+                address: 0x2000,
+                name_ptr: end.as_ptr() as u64,
+                name_len: end.len() as u64,
+            },
+        ];
+        let mut region = vec![0u8; REGION_BYTES];
+        let base = region.as_mut_ptr() as usize;
+
+        let saved_region = REGION.swap(base, Ordering::Relaxed);
+        let saved_ptr = TABLE_PTR.swap(symbols.as_ptr() as usize, Ordering::Relaxed);
+        let saved_len = TABLE_LEN.swap(symbols.len(), Ordering::Relaxed);
+        let saved_stopped = STOPPED.swap(false, Ordering::Relaxed);
+        reset_carried();
+
+        let answers = unsafe {
+            let head = region_head().expect("mapped");
+
+            // One sample, taken as ticket 0 and still in the ring.
+            head.store(1, Ordering::Relaxed);
+            region_word(base, 0, 0).store(1, Ordering::Release);
+            region_word(base, 0, PC_WORD0).store(0x1000, Ordering::Relaxed);
+            region_word(base, 0, SEQ_WORD).store(slot_seq_settled(0), Ordering::Release);
+            let first = folded_profile_with(true);
+
+            // Asked AGAIN with nothing new taken. The total must not move: a
+            // sample still sitting in the ring has already been carried, and a
+            // fold that re-reads it counts it twice — which grows the total for
+            // the wrong reason and would hide the lap defect from this test.
+            let asked_twice = folded_profile_with(true);
+
+            // The head has now lapped: `RING_SLOTS` further samples were taken
+            // and the newest of them landed back in slot 0, overwriting the one
+            // above. All the reader can still SEE is one sample; the total it
+            // must report is two.
+            let lapped = RING_SLOTS as u64 + 1;
+            head.store(lapped, Ordering::Relaxed);
+            region_word(base, 0, 0).store(1, Ordering::Release);
+            region_word(base, 0, PC_WORD0).store(0x1000, Ordering::Relaxed);
+            region_word(base, 0, SEQ_WORD).store(slot_seq_settled(lapped - 1), Ordering::Release);
+            let after_lap = folded_profile_with(true);
+            (first, asked_twice, after_lap)
+        };
+
+        REGION.store(saved_region, Ordering::Relaxed);
+        TABLE_PTR.store(saved_ptr, Ordering::Relaxed);
+        TABLE_LEN.store(saved_len, Ordering::Relaxed);
+        STOPPED.store(saved_stopped, Ordering::Relaxed);
+        reset_carried();
+
+        let (first, asked_twice, after_lap) = answers;
+        let first = first.unwrap_or_default();
+        let asked_twice = asked_twice.unwrap_or_default();
+        let after_lap = after_lap.unwrap_or_default();
+        assert!(
+            first.contains("elephc-probe-samples: 1"),
+            "the first answer counts the one sample taken: {first}"
+        );
+        assert!(
+            asked_twice.contains("elephc-probe-samples: 1"),
+            "asking twice must not count the same sample twice: {asked_twice}"
+        );
+        assert!(
+            after_lap.contains("elephc-probe-samples: 2"),
+            "a lapped ring must still answer a GROWING total; a count that stops at what the \
+             buffer still holds is what emptied the live table: {after_lap}"
+        );
+        // Matched on the tail rather than on `"hot 2"`: the fixture's symbol
+        // names carry their C terminator, so the folded line reads `hot\0 2`.
+        assert!(
+            after_lap
+                .lines()
+                .any(|line| line.starts_with("elephc-probe: ") && line.ends_with(" 2")),
+            "and the per-stack weight has to grow with it: {after_lap}"
+        );
+    }
+
+    /// Clears what previous folds carried, so one test's samples are not another
+    /// test's total. The accumulator is process-wide by design.
+    fn reset_carried() {
+        CARRIED_THROUGH.store(0, Ordering::Relaxed);
+        if let Ok(mut carried) = CARRIED.lock() {
+            *carried = Carried::new();
+        }
     }
 
     /// Two writers a lap apart cannot agree on a settled value.

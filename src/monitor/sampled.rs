@@ -1,15 +1,19 @@
 //! Purpose:
-//! The sampled path: `--live` and `--attach`, which read a process from the
-//! outside through `/usr/bin/sample`, and the folded-stack parsing shared with
-//! the endpoint's sampled answer.
+//! The macOS sampled path: `--attach` reading a process from the outside through
+//! `/usr/bin/sample`, and the folded-stack parsing shared with the endpoint's
+//! sampled answer.
 //!
 //! Called from:
-//! - `monitor::main` for `--live`/`--attach`.
+//! - `monitor::main` for `--attach` on macOS. NOT for `--live`, which launches
+//!   its target and asks it over a socketpair instead.
 //! - `remote::run`, to parse what a service's ring returned.
 //!
 //! Key details:
-//! - macOS-only, because no equivalent external sampler ships on Linux; the
-//!   Linux answer is the endpoint.
+//! - macOS-only, because no equivalent external sampler ships on Linux. That is
+//!   no longer the whole story for the modes that used it: `--live` asks the
+//!   child it launched, and Linux `--attach` reads the process itself through
+//!   `ptrace`. This file is what remains of reading one from the outside on
+//!   macOS.
 //! - Sampled shares sharpen as samples accumulate and carry real noise; time
 //!   spent blocked on I/O is not attributed on the CPU-time timer.
 

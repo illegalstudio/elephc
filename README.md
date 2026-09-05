@@ -275,7 +275,8 @@ elephc --gc-stats heavy.php
 # profile on disk, inlined calls recovered as virtual frames (macOS)
 elephc monitor hot.php
 
-# Top-style live view of a running program and its worker children
+# Top-style live view of a running program and its worker children. Reads the
+# process from the outside, so build it with --keep-symbols and allow tracing
 elephc monitor --attach <pid> --live
 
 # Embed the profiling capability (dormant until asked); the .key sidecar it

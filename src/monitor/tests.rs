@@ -105,24 +105,131 @@
         };
         assert_eq!(sent, super::CONTROL_ACK.len() as isize);
         assert!(super::control_channel_activated(&channel));
+        // Asked twice on purpose. The probe peeks, so the second question gets
+        // the same answer as the first; when it consumed, the ACK it reported
+        // was the ACK it had just destroyed, and nobody downstream could see it.
+        assert!(
+            super::control_channel_activated(&channel),
+            "asking must not spend the answer"
+        );
+    }
+
+    /// The activation probe must not eat what it was not looking for.
+    ///
+    /// It shares one stream with `request_snapshot`. While it consumed, a window
+    /// that opened with a reply already queued — a child that answered the
+    /// previous request after that read had given up — had that reply taken by
+    /// the question, and the next length parsed came out of the middle of a
+    /// message. That reads as `Gone`, which ends the live view and reaps a
+    /// program that was replying perfectly well.
+    ///
+    /// The reply here is deliberately LONGER than the twenty bytes the probe
+    /// asks for. The consuming version used `MSG_WAITALL`, which `MSG_DONTWAIT`
+    /// does not override on macOS: given less than twenty bytes it waits for the
+    /// rest, so a shorter reply makes this test HANG instead of fail, and a test
+    /// that hangs reports nothing. At this length the bug returns immediately,
+    /// twenty bytes poorer, and the read-back below says so.
+    #[test]
+    fn asking_whether_the_child_activated_does_not_consume_its_answer() {
+        let channel = super::open_control_channel().expect("control socketpair");
+
+        let payload = b"main 5;__rt_hash_set 3;fn_spin 1";
+        let header = (payload.len() as u32).to_le_bytes();
+        for chunk in [&header[..], &payload[..]] {
+            let sent = unsafe {
+                libc::send(channel.child, chunk.as_ptr() as *const libc::c_void, chunk.len(), 0)
+            };
+            assert_eq!(sent, chunk.len() as isize);
+        }
+
+        assert!(
+            !super::control_channel_activated(&channel),
+            "a snapshot reply is not an activation ACK"
+        );
+
+        let mut back = vec![0u8; header.len() + payload.len()];
+        let read = unsafe {
+            libc::recv(
+                channel.parent,
+                back.as_mut_ptr() as *mut libc::c_void,
+                back.len(),
+                libc::MSG_DONTWAIT,
+            )
+        };
+        assert_eq!(read, back.len() as isize, "the reply was consumed by the question");
+        assert_eq!(&back[..4], &header[..], "its length word must be intact");
+        assert_eq!(&back[4..], &payload[..], "and so must its body");
+    }
+
+    /// A snapshot read must survive an activation ACK that arrives late.
+    ///
+    /// `await_activation` has a deadline. A child that boots slower than it sends
+    /// its ACK into the snapshot read instead, and the reply is length-prefixed:
+    /// the ACK's first four bytes are `ELEP`, which decodes as a 1.3 GB length,
+    /// which the size bound refuses. That answer used to be `Gone`, and `Gone`
+    /// ends a live view on a program that is running perfectly well.
+    ///
+    /// Staged the way the race actually happens — nothing waiting for the ACK
+    /// first, both messages already in the buffer when the read begins — because
+    /// the point is that the reader copes on its own, not that some earlier step
+    /// drained it.
+    #[test]
+    fn a_late_activation_ack_does_not_end_the_snapshot_read() {
+        let channel = super::open_control_channel().expect("control socketpair");
+
+        // The child answers the request, but its ACK is still queued in front.
+        let ack = unsafe {
+            libc::send(
+                channel.child,
+                super::CONTROL_ACK.as_ptr() as *const libc::c_void,
+                super::CONTROL_ACK.len(),
+                0,
+            )
+        };
+        assert_eq!(ack, super::CONTROL_ACK.len() as isize);
+
+        let payload = b"main 5";
+        let header = (payload.len() as u32).to_le_bytes();
+        for chunk in [&header[..], &payload[..]] {
+            let sent = unsafe {
+                libc::send(channel.child, chunk.as_ptr() as *const libc::c_void, chunk.len(), 0)
+            };
+            assert_eq!(sent, chunk.len() as isize);
+        }
+
+        match super::request_snapshot(&channel) {
+            super::Snapshot::Answered(text) => assert_eq!(text, "main 5"),
+            super::Snapshot::Late { .. } => {
+                panic!("a queued ACK must not read as a slow target")
+            }
+            super::Snapshot::Gone => {
+                panic!("a queued ACK must not read as a dead channel — this is the bug")
+            }
+        }
     }
 
     use super::*;
 
-    /// The refusal of an unequipped target must not sit behind a platform
-    /// branch.
+    /// The refusal of an unequipped target must not depend on the platform.
     ///
-    /// It did, once: `require_monitoring` was called after the
+    /// It did, once: `require_monitoring` was called after a
     /// `cfg!(target_os = "macos")` block, so the same binary that was refused on
     /// a laptop was run and quietly under-reported on a Linux server — an
     /// environment-dependent behaviour in the one command whose whole purpose is
     /// not to have any.
     ///
-    /// Nothing that runs can catch this. CI is macOS-only, so a Linux-only
-    /// ordering bug is invisible to every test that executes the binary, and the
-    /// two branches cannot both be taken in one process. What is left is the
-    /// order of the source itself, so that is what this reads — the file as an
-    /// interface, because here it is the only witness.
+    /// Nothing that runs can catch this. A Linux-only ordering bug is invisible
+    /// to every test that executes the binary on macOS, and the two branches
+    /// cannot both be taken in one process. What is left is the order of the
+    /// source itself, so that is what this reads — the file as an interface,
+    /// because here it is the only witness.
+    ///
+    /// The dispatch has no runtime platform branch left: `--attach` was the last
+    /// one, and it is no longer refused off macOS. So the ordering rule is
+    /// vacuous TODAY and the test says so rather than pretending to check it —
+    /// but it stays armed, because the way this broke the first time was
+    /// somebody adding a branch above the gate, and that is precisely the edit
+    /// this still catches.
     #[test]
     fn the_capability_gate_runs_before_any_platform_branch() {
         // `mod.rs`, because that is where `run` lives now: a guard that reads a
@@ -137,14 +244,16 @@
         let gate = body
             .find("require_monitoring(")
             .expect("the dispatch must refuse an unequipped target");
-        let platform = body
-            .find("cfg!(target_os = \"macos\")")
-            .expect("the dispatch must still have its one platform branch");
-        assert!(
-            gate < platform,
-            "the capability check is inside or after the platform branch, so it \
-             would be enforced on macOS and skipped on Linux"
-        );
+        // A compile-time `#[cfg]` picks which code EXISTS and cannot put one
+        // platform's behaviour behind another's branch; only a runtime `cfg!`
+        // inside this one body can, which is why that is what is looked for.
+        if let Some(platform) = body.find("cfg!(target_os") {
+            assert!(
+                gate < platform,
+                "the capability check is inside or after a platform branch, so it \
+                 would be enforced on one platform and skipped on another"
+            );
+        }
     }
 
     /// The exact capture's Speedscope/pprof export must account for the run
@@ -1447,4 +1556,211 @@ echo call_hot(1);
     fn recommends_the_hotspot() {
         let out = instrument_recommendations(&instr_graph());
         assert!(out.contains("leaf is the hotspot"), "{out}");
+    }
+
+    /// A `Late` that took the ACK on its way past says so.
+    ///
+    /// The ACK is sent ONCE. If a read consumes it and then gives up on the
+    /// reply behind it, the caller's `activated` flag is still false over a
+    /// message that no longer exists — so every later window opens by spending
+    /// the whole activation deadline waiting for it again. The read is the only
+    /// thing that knows, so the answer has to carry it.
+    ///
+    /// Staged against a real socketpair with a real deadline: only the ACK is
+    /// sent, and nothing follows it.
+    #[test]
+    fn a_late_answer_reports_the_ack_it_consumed_on_the_way() {
+        let channel = super::open_polled_control_channel().expect("a socketpair");
+        let sent = unsafe {
+            libc::send(
+                channel.child,
+                super::CONTROL_ACK.as_ptr() as *const libc::c_void,
+                super::CONTROL_ACK.len(),
+                0,
+            )
+        };
+        assert_eq!(sent, super::CONTROL_ACK.len() as isize);
+
+        match super::request_snapshot(&channel) {
+            super::Snapshot::Late { activation_seen } => assert!(
+                activation_seen,
+                "the ACK was consumed by this read and nobody will send another"
+            ),
+            super::Snapshot::Answered(text) => {
+                panic!("nothing was sent after the ACK, so there was nothing to answer: {text:?}")
+            }
+            super::Snapshot::Gone => panic!("a lone ACK is not a dead channel"),
+        }
+    }
+
+    /// A window nobody answered in time does not end the view.
+    ///
+    /// The live loop ending is what REAPS the target: the program only outlives
+    /// the view while the view is still running. So a slow answer treated as a
+    /// dead one does not merely lose a window — it stops the healthy program the
+    /// operator was in the middle of profiling.
+    ///
+    /// Driven against a real socketpair with a real receive deadline and nobody
+    /// on the other end, because the distinction being tested is what the KERNEL
+    /// reports, not what this code believes it will.
+    #[test]
+    fn a_window_that_times_out_is_not_a_dead_child() {
+        let channel = super::open_polled_control_channel().expect("a socketpair");
+        // Nothing answers, so the deadline is what ends the read. The marker the
+        // parent wrote is on the child's side and is not read back here.
+        let started = std::time::Instant::now();
+        let outcome = super::request_snapshot(&channel);
+        assert!(
+            matches!(outcome, super::Snapshot::Late { activation_seen: false }),
+            "a target that has not answered YET must not be reported as gone, and nothing \
+             here sent an ACK for the read to have taken"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the read waited far past its own deadline"
+        );
+
+        // And a closed peer is the other answer, from the same call.
+        unsafe { libc::close(channel.child) };
+        let mut closed = channel;
+        closed.forget_child();
+        assert!(
+            matches!(super::request_snapshot(&closed), super::Snapshot::Gone),
+            "a channel whose peer is closed must end the view rather than stall it"
+        );
+    }
+
+    /// What gets stopped when a capture ends, and what does not.
+    ///
+    /// The rule decides the fate of a program this process launched, so getting
+    /// it wrong either orphans work or destroys it. A program that ended on its
+    /// own is never touched; a live view or a failed capture stops one that is
+    /// still up, because both run until monitoring is over and waiting on a
+    /// long-running target would hang forever.
+    ///
+    /// The case this rule deliberately does NOT see is a view whose channel
+    /// broke: that is decided before it, because whose fault it is changes the
+    /// answer.
+    #[test]
+    fn only_a_capture_that_owns_the_target_stops_it() {
+        use super::Disposition::{Collect, LeaveAlone, Stop};
+        // Already exited: nothing to stop, whatever the capture did.
+        assert!(matches!(super::disposition(false, 0, true, false), Collect));
+        assert!(matches!(super::disposition(false, 1, true, false), Collect));
+        assert!(matches!(super::disposition(false, 1, false, false), Collect));
+        // A one-shot capture that worked lets a live program finish by itself.
+        assert!(matches!(super::disposition(true, 0, false, false), Collect));
+        // A live view owns its target; a failed capture stops it too.
+        assert!(matches!(super::disposition(true, 0, true, false), Stop));
+        assert!(matches!(super::disposition(true, 1, false, false), Stop));
+        // …but not when the view ended because OUR channel broke. This is the
+        // one input that reverses the answer, on exactly the case that would
+        // otherwise be stopped: a live view over a program that is still up.
+        assert!(matches!(super::disposition(true, 0, true, true), LeaveAlone));
+        assert!(matches!(super::disposition(true, 1, true, true), LeaveAlone));
+        // A program that already exited is still collected, so a lost channel
+        // never leaves a zombie behind.
+        assert!(matches!(super::disposition(false, 0, true, true), Collect));
+    }
+
+    /// A reply that arrives in pieces is waited for, not cut off mid-sentence.
+    ///
+    /// The deadline resets on every piece, so a child that is merely slow keeps
+    /// the channel. Only a stall with NOTHING arriving mid-message ends it — and
+    /// ending it reaps the target, which is why the difference between "slow"
+    /// and "stopped" is worth spending three deadlines on.
+    ///
+    /// Driven over a real socketpair with a real writer, because what is under
+    /// test is how the kernel delivers a stream, not how this code imagines it.
+    #[test]
+    fn a_reply_arriving_in_pieces_is_waited_for() {
+        let mut channel = super::open_polled_control_channel().expect("a socketpair");
+        // One second, so the pause below genuinely PASSES the deadline. With the
+        // production five, a test short enough to keep would never reach the
+        // path it exists to cover.
+        super::set_receive_deadline(channel.parent, 1);
+        let child = channel.child;
+        let body = b"elephc-probe: {main};hot 12\n";
+        let header = (body.len() as u32).to_le_bytes();
+
+        // A writer that sends the length, pauses, then the body a byte at a
+        // time — the shape a loaded child produces.
+        let writer = std::thread::spawn(move || {
+            // The request byte the caller sends first, taken so it does not sit
+            // in front of anything.
+            let mut request = [0u8; 1];
+            unsafe {
+                libc::recv(child, request.as_mut_ptr() as *mut libc::c_void, 1, 0);
+                libc::send(child, header.as_ptr() as *const libc::c_void, 4, 0);
+            }
+            // Longer than the deadline: the reader stalls mid-message, with the
+            // length already consumed. Retrying is only safe because `filled`
+            // says how much of THIS reply is still owed.
+            std::thread::sleep(std::time::Duration::from_millis(1_800));
+            for byte in body {
+                unsafe {
+                    libc::send(child, byte as *const u8 as *const libc::c_void, 1, 0);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        });
+
+        match super::request_snapshot(&channel) {
+            super::Snapshot::Answered(text) => assert_eq!(text.as_bytes(), body),
+            super::Snapshot::Late { .. } => {
+                panic!("a reply that did arrive was reported as absent")
+            }
+            super::Snapshot::Gone => {
+                panic!("a child sending its reply in pieces was reported as gone, which reaps it")
+            }
+        }
+        writer.join().expect("the writer finished");
+        channel.forget_child();
+        unsafe { libc::close(child) };
+    }
+
+    /// The profiler's own lines are removed from a program's stderr; the
+    /// program's are not.
+    ///
+    /// Both mechanisms write to the same stderr, so a monitor forwarding a
+    /// program's diagnostics has to tell them apart — and a prefix alone is not
+    /// enough. A program that writes `elephc-instrumentation disabled` had that
+    /// line deleted by the tool watching it, silently, which is the failure this
+    /// rule exists to prevent: the author's own message, gone, with nothing to
+    /// say it ever existed.
+    #[test]
+    fn profiler_lines_are_told_from_the_programs_own() {
+        for profiler in [
+            "elephc-instr: hot calls=1 incl_ns=5",
+            "elephc-instr-edge: a -> b count=1 ns=2",
+            "elephc-instr-query: 3 SELECT ?",
+            "elephc-instr-query-dropped: 2",
+            "elephc-instr-trace: wrote /tmp/t.json",
+            "elephc-probe: {main};hot 12",
+            "elephc-probe-io: 4",
+            "elephc-probe-samples: 934",
+            "elephc-probe-alloc: {main};hot 594",
+        ] {
+            assert!(
+                super::is_profiler_line(profiler),
+                "profiler output reached the operator as if the program wrote it: {profiler}"
+            );
+        }
+        for own in [
+            "elephc-instrumentation disabled by config",
+            "elephc-probes are not enabled here",
+            "elephc-instr is what we call it",
+            // A name the profiler does not use, which a prefix-and-colon rule
+            // would still have taken.
+            "elephc-instr-custom: our own channel",
+            "elephc-probe-of-ours: hello",
+            "warning: something the program wanted to say",
+            "",
+            "   ",
+        ] {
+            assert!(
+                !super::is_profiler_line(own),
+                "the program's own diagnostic was deleted by the tool watching it: {own}"
+            );
+        }
     }

@@ -57,8 +57,8 @@ selection, toolchain overrides, and transactional behavior.
 |---|---|---|
 | `monitor` | `<program\|source.php> [--html <file>] [--trace <file>] [--assert <expr>] [--assert-file <file>] [--save <file>] [--baseline <file>] [--out <file.speedscope.json>]` | Profile a program built with `--with-monitoring` (a `.php` source is built first): exact per-function wall time, allocations, retained objects, DB-driver wait, SQL queries, outgoing network operations and network wait, plus calls, rooted at `{main}`. File I/O is not measured. A service endpoint answers from the sampled CPU-time ring instead unless `--exact` requests one completed request. A binary without the capability is refused. |
 | `monitor <address>` | `<host:port\|http://host\|https://host\|/path/to.sock> [--key <file>] [--out <file>] [--pprof <file>] [--dot <file>] [--html <file>]` | Profile a service already running. Sampled CPU time, allocation attribution and route tags by default; no blocked wall time or combined-build SQL/wait summary. `--exact` returns the measured table for the next completed request. Needs the build key. |
-| `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and macOS-only. |
-| `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled, and macOS-only. |
+| `monitor --attach` | `<pid> [--live] [--duration <seconds>]` | Monitor an already-running local process (and its worker children) instead of spawning one. Sampled, and reads the process from the outside, so the target must have been built with `--keep-symbols` and the OS must permit tracing it. |
+| `monitor --live` | `<program\|source.php> [--duration <seconds>] [--html <file>] [--serve <host:port>]` | Top-style table refreshed once per window. Sampled — it answers from the ring — but on every platform: it launches the program, so it asks over the same control channel the exact path uses rather than reading it from the outside. |
 | `monitor --stitch` | `<log> [<log>...] [--html <file>] [--otlp <endpoint>] [--prometheus <file>]` | Correlate per-request slices from several services into distributed traces, joined by W3C trace id; summarise them per service and route, and export them as OpenTelemetry spans or Prometheus metrics. |
 
 `elephc monitor` runs the program and renders what it measured: a per-function
@@ -87,7 +87,7 @@ because a degraded profile that looks like the real one is worse than none.
 | launched default | exact wall; recorded waits are derived dimensions, not OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | untagged |
 | service default | sampled CPU; no blocked wall time | none | exact inter-sample deltas with sampled attribution; no retained | none in combined `--with-monitoring`; no file-I/O metrics | sampled stacks carry route tags |
 | service `--exact` / signed request | exact request wall; no separate OS CPU | exact | exact plus exact retained | exact DB queries and curl operations; no file-I/O metrics; exact DB and network wait | exact request route/trace |
-| `--live` / `--attach` | external sampled CPU only | none | none | none | none |
+| `--live` / `--attach` | sampled CPU only — `--live` asks the child it launched, `--attach` reads the process from the outside (`ptrace` on Linux, `/usr/bin/sample` on macOS) | none | none | none | none |
 
 Reading a running service (`monitor <address>`) needs the build key: from
 `--key <file>`, the `ELEPHC_PROBE_KEY` hex environment variable, or a `.key`
@@ -126,12 +126,17 @@ bare-binary capture cannot, and the asymmetry reads as phantom deltas.
 Sampling noise on identical runs measures around ±0.3 points at ~1,500
 samples; thresholds of a few points are well clear of it.
 
-`--live` and `--attach` read a process from the **outside** with `/usr/bin/sample`
-— the only way to look at a program already running under someone else's control,
-with nothing built into it. Their numbers are sampled shares, they cannot see
-time spent blocked on I/O, and they need macOS. On Linux, or for a process that
-does carry the capability, use `monitor <address>`: it answers from the process's
-own CPU-time sample ring, which also cannot see blocked wall time. In a combined
+`--live` launches its target, so it can hand it a socketpair and **ask**: it needs
+no external tool and works wherever elephc does. `--attach` is handed a pid that
+is already running under someone else's control, with no channel in, so it reads
+the process from the **outside** — `/usr/bin/sample` on macOS, and on Linux
+elephc does it itself, stopping each thread with `ptrace` and walking its frame
+chain. Reading from the outside also needs the target's symbol table
+(`--keep-symbols`) and the kernel's permission (`yama/ptrace_scope`, or
+`CAP_SYS_PTRACE` in a container). Both report sampled shares and cannot see time
+spent blocked on I/O. For a process that carries the capability, use
+`monitor <address>`: it answers from the process's own CPU-time sample ring,
+which also cannot see blocked wall time. In a combined
 `--with-monitoring` build that default answer has no SQL/wait summary; `--exact`
 returns the measured per-function table and DB-driver wait for one completed
 request.
@@ -140,10 +145,11 @@ request.
 (`--duration`, default 3s in live mode): the current window's shares with
 trend arrows against the previous window, the cumulative share alongside, and
 a final cumulative table on exit. `--attach <pid>` monitors a process that is
-already running — Ctrl-C stops monitoring and leaves it running. In both
-modes the target's direct children are discovered each window and merged, so
-a `--web` prefork server is measured across all its workers, not just the
-master. Live mode skips inlined-frame recovery to keep the refresh light. When
+already running — Ctrl-C stops monitoring and leaves it running. `--attach`
+discovers the target's direct children each window and merges them, so a
+`--web` prefork server is measured across all its workers, not just the master.
+A launched `--live` asks the program it started, over the channel it handed it,
+so its answer is that process's own. Live mode skips inlined-frame recovery to keep the refresh light. When
 the sampler refuses (it will not read a process it did not spawn without
 elevation), the command says so rather than reporting an empty capture.
 

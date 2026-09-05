@@ -354,7 +354,7 @@ src/
 │   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
 │   ├── literal_defaults.rs    Literal property defaults → backend-native values
 │   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (9 files)
-│   ├── shared_{count_guard,helper,mixed_string}.rs Shared once-per-program helper frames and common frame plumbing (3 files)
+│   ├── shared_*.rs            Shared once-per-program helper frames: the count() TypeError guard, the boxed-mixed __toString ladder, their common helper-frame plumbing, and the module-wide state that dedupes callable descriptors and owns the label counter (4 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │

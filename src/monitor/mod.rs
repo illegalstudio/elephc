@@ -9,7 +9,9 @@
 //! Key details:
 //! - A launched program defaults to exact capture on macOS and Linux. A running
 //!   service defaults to its in-process sampled ring; `--exact` selects one
-//!   completed request. `--live`/`--attach` use macOS's external sampler.
+//!   completed request. `--live` asks the program it launched over a socketpair;
+//!   `--attach` reads a process it did not launch from the outside, with
+//!   `/usr/bin/sample` on macOS and `ptrace` on Linux.
 //! - `sample` splits one function into sibling call-graph nodes per sampled call
 //!   offset; aggregation is by symbol, never by node identity.
 //! - Inlined PHP calls leave no frame, but the inliner preserves callee source
@@ -25,6 +27,27 @@ use std::process;
 
 mod command;
 pub(crate) use command::*;
+// Reading an image from the outside, for the one path that has no channel in.
+// Parsing only, so it is exercised by ordinary tests on any host — which is what
+// makes code whose real use is on another platform reviewable at all.
+//
+// Its CALLER is Linux's, so on any other host every item here is dead outside
+// the tests. Allowed rather than gated away: gating it would take the tests with
+// it, and then the parsing that Linux depends on would be checked nowhere but
+// Linux — which is the opposite of why it was separated.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod elf;
+// Naming what an out-of-process sampler read. Also parsing only, allowed dead on
+// non-Linux hosts for the same reason: the syscalls that produce those addresses
+// are the one part a host without `ptrace` cannot run, and they are kept apart
+// from this so that everything except them stays testable.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod attach;
+// The syscalls themselves, and the loop that drives them. Linux only, and the
+// one file here no test on this host reaches — which is why it holds nothing
+// but them.
+#[cfg(target_os = "linux")]
+mod ptrace;
 mod channel;
 pub(crate) use channel::*;
 mod local;
@@ -149,7 +172,10 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     // asking them to know where their program is running, which is exactly the
     // distinction this command exists not to have. A source is compiled with the
     // capability; a binary that carries it is read exactly. `--live` and
-    // `--attach` still need the external sampler, so they keep their own path.
+    // `--attach` are not sampled from the outside any more, but they still keep
+    // their own path: live ASKS the child it launched over a socketpair, and
+    // attach reads a process it never launched, and neither is what
+    // `run_instrument` does.
     if !cmd.live && cmd.attach_pid.is_none() {
         let is_source = cmd.target.ends_with(".php");
         if is_source || carries_monitoring(std::path::Path::new(&cmd.target)) {
@@ -167,39 +193,40 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
             return 1;
         }
     }
-    // `--live` and `--attach` are the only paths left that read a process from
-    // the outside, and the tool that does it ships on macOS alone. Everything
-    // remaining local default — a source or equipped binary — is measured
-    // exactly and needs no sampler, which is why this is the only platform
-    // branch left.
-    if !cfg!(target_os = "macos") {
-        if let Some(pid) = cmd.attach_pid {
-            eprintln!(
-                "elephc monitor: attaching to a running process needs an external sampler, \
-                 which only macOS ships. Read it through its endpoint instead: start it \
-                 with ELEPHC_PROBE_ADDR=127.0.0.1:9411, then `elephc monitor \
-                 127.0.0.1:9411` (pid {pid} is untouched)."
-            );
-            return 1;
-        }
-        if cmd.live {
-            eprintln!(
-                "elephc monitor: --live refreshes from an external sampler, which only macOS \
-                 ships. For a live view here, start the program with \
-                 ELEPHC_PROBE_ADDR=127.0.0.1:9411, then `elephc monitor 127.0.0.1:9411`."
-            );
-            return 1;
-        }
-    }
+    // `--attach` is the only path that reads a process from the OUTSIDE. It used
+    // to be macOS-only, and `--live` was refused beside it for the same stated
+    // reason — wrongly, since `--live` LAUNCHES its target and can hand it a
+    // socketpair and ask. Attach cannot ask: it is handed a pid already running
+    // under someone else's control, so reading it from the outside is not a
+    // shortcut here, it is the whole job. macOS has `/usr/bin/sample` for that;
+    // on Linux this tool does it itself, with `ptrace`.
     if let Some(pid) = cmd.attach_pid {
+        let image = match attach_image(pid) {
+            Ok(image) => image,
+            Err(reason) => {
+                eprintln!("elephc monitor: {reason}");
+                return 1;
+            }
+        };
         return if cmd.live {
-            run_live(&cmd, pid, None)
+            // Attach never launched the target, so it never owns its lifetime
+            // and there is nothing here to leave alone or reap.
+            run_live(&cmd, pid, None, None, image.as_ref()).code
         } else {
-            run_once(&cmd, pid, None, None)
+            run_once(&cmd, pid, None, None, image.as_ref())
         };
     }
+    // With `--with-monitoring`, not `--debug-info`. Reaching here with a `.php`
+    // means `--live`, because the source path returns through `run_instrument`
+    // above and `--attach` never has a path at all — and live asks the child for
+    // its samples, which a binary compiled without the probe cannot answer. It
+    // did not ask for the probe before, so `monitor hot.php --live` launched a
+    // program with nothing listening and then waited out every window for an ACK
+    // that could not come. The test that was meant to cover this compiled the
+    // fixture by hand first and monitored the BINARY, so the one path a user
+    // takes was the one path nothing ran.
     let (binary, php_source) = if cmd.target.ends_with(".php") {
-        match compile_php_target(&cmd.target) {
+        match channel::compile_php_monitored(&cmd.target) {
             Ok(path) => (path, Some(PathBuf::from(&cmd.target))),
             Err(error) => {
                 eprintln!("elephc monitor: {error}");
@@ -214,28 +241,72 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
         // PATH carries an empty entry.
         (spawnable_path(&cmd.target), None)
     };
-    let mut child = match process::Command::new(&binary).spawn() {
+    // The live path launches the target too, so it can ask it directly rather
+    // than read it from the outside. It did not open a channel before, which is
+    // the whole reason `--live` needed an external sampler — for a program this
+    // process had started itself.
+    let mut command = process::Command::new(&binary);
+    let channel = if cmd.live { open_polled_control_channel() } else { None };
+    if let Some(channel) = &channel {
+        attach_control_channel(&mut command, channel);
+        // Asking also wakes the EXACT profiler, which writes its table to stderr
+        // when the program ends. That is the one thing a live table must not
+        // print: the operator would get the raw dump under the view they are
+        // watching, as if the program had written it. Captured and filtered, the
+        // way the exact path has always filtered the sampler's folded stacks out
+        // of a program's own diagnostics.
+        command.stderr(process::Stdio::piped());
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             eprintln!("elephc monitor: cannot run {}: {error}", binary.display());
             return 1;
         }
     };
-    let root = child.id();
-    let code = if cmd.live {
-        run_live(&cmd, root, Some(&mut child))
-    } else {
-        run_once(&cmd, root, Some(&binary), php_source.as_deref())
-    };
-    // A short-lived program is allowed to finish naturally after a successful
-    // one-shot capture. But when sampling failed, or when the live loop ended
-    // with the target still up (it only exits once monitoring is over), waiting
-    // would hang forever on a long-running target — reap it instead.
-    let still_running = child.try_wait().ok().flatten().is_none();
-    if still_running && (code != 0 || cmd.live) {
-        let _ = child.kill();
+    // The spawn gave the program its own copy; ours would keep the socket alive
+    // after it exits and turn the next snapshot request into a permanent wait.
+    let mut channel = channel;
+    if let Some(channel) = channel.as_mut() {
+        channel.release_child();
     }
-    let _ = child.wait();
+    // Drained as it arrives rather than at exit: a live view runs for as long as
+    // the program does, and a pipe nobody reads fills and blocks the program
+    // writing into it.
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::Builder::new()
+            .name("elephc-monitor-stderr".to_string())
+            .spawn(move || {
+                use std::io::BufRead as _;
+                for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                    if is_profiler_line(&line) {
+                        continue;
+                    }
+                    eprintln!("{line}");
+                }
+            })
+            .ok();
+    }
+    let root = child.id();
+    let (code, leave_target_running) = if cmd.live {
+        let outcome = run_live(&cmd, root, Some(&mut child), channel.as_ref(), None);
+        (outcome.code, outcome.leave_target_running)
+    } else {
+        (run_once(&cmd, root, Some(&binary), php_source.as_deref(), None), false)
+    };
+    let still_running = child.try_wait().ok().flatten().is_none();
+    match disposition(still_running, code, cmd.live, leave_target_running) {
+        Disposition::Stop => {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Disposition::Collect => {
+            let _ = child.wait();
+        }
+        // Not even waited for: waiting is what would hang this process on a
+        // program that is still doing its work.
+        Disposition::LeaveAlone => {}
+    }
     code
 }
 
@@ -509,24 +580,63 @@ pub(crate) const CONTROL_FD: i32 = 3;
 /// Marker written into the channel before spawning, so it is already buffered
 /// when the child looks and no handshake can race the program's own start.
 pub(crate) const CONTROL_MAGIC: &[u8] = b"ELEPHC-MONITOR-1";
+/// The same marker, from a monitor that will POLL the child for snapshots.
+///
+/// Deliberately the same length: the child's check peeks a fixed sixteen bytes
+/// and compares, so a second marker costs it nothing. Mirrors
+/// `CONTROL_MAGIC_LIVE` in `elephc-probe`; the two are one protocol and share a
+/// name so a `grep` finds the pair.
+pub(crate) const CONTROL_MAGIC_LIVE: &[u8] = b"ELEPHC-MONITOR-L";
 /// Acknowledgement returned after the child consumed the control marker and
 /// activated its embedded monitoring runtime.
 pub(crate) const CONTROL_ACK: &[u8] = b"ELEPHC-MONITOR-ACK-1";
 
 /// Holds the parent's end of the control channel open for the child's lifetime.
 pub(crate) struct ControlChannel {
-    parent: i32,
+    /// This process's end. `request_snapshot` asks over it; nothing else on the
+    /// machine can, which is what makes it a credential.
+    pub(crate) parent: i32,
     child: i32,
+}
+
+impl ControlChannel {
+    /// Drops the parent's copy of the CHILD end, once the spawn has handed the
+    /// real one to the profiled program.
+    ///
+    /// Only matters to a caller that reads the channel. While this process holds
+    /// a copy, the socket has a writer that never writes — so when the profiled
+    /// program exits, `recv` on the parent end does not report EOF, it blocks
+    /// forever waiting for us. A `--live` loop asking for a snapshot hung there
+    /// instead of noticing the target was gone.
+    /// Marks the child end as no longer ours to close, for a caller that closed
+    /// it itself. Closing a descriptor twice closes whatever was opened on that
+    /// number in between.
+    #[cfg(test)]
+    fn forget_child(&mut self) {
+        self.child = -1;
+    }
+
+    fn release_child(&mut self) {
+        if self.child >= 0 {
+            unsafe {
+                libc::close(self.child);
+            }
+            self.child = -1;
+        }
+    }
 }
 
 impl Drop for ControlChannel {
     /// Closes both ends. The child end is inherited across the spawn, so
     /// leaking either would leave the profiled program holding a channel
-    /// nobody reads.
+    /// nobody reads. Already-released ends are left alone rather than closed
+    /// twice — a second `close` on a recycled number closes somebody else's file.
     fn drop(&mut self) {
         unsafe {
             libc::close(self.parent);
-            libc::close(self.child);
+            if self.child >= 0 {
+                libc::close(self.child);
+            }
         }
     }
 }
@@ -786,6 +896,79 @@ pub(crate) fn parse_hex_key(hex: &str) -> Option<[u8; 32]> {
         key[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
     }
     Some(key)
+}
+
+/// What `--attach` needs to read a process it was only handed a pid for, or the
+/// sentence explaining why this host cannot.
+///
+/// `None` is not a failure: macOS reads a process through `/usr/bin/sample`,
+/// which resolves its own symbols, so there is nothing to prepare. Linux reads
+/// the process itself and needs the image first. Anywhere else there is no way
+/// in at all, and saying so — with the way that DOES work on every host — beats
+/// an `EPERM` from a syscall the reader did not know was being made.
+fn attach_image(pid: u32) -> Result<Option<attach::Image>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        attach::image_for(pid).map(Some).map_err(|error| {
+            // The hint only goes on a refusal. Appended to every failure it named
+            // a cause that had not occurred: an absent pid answered "No such file
+            // or directory (the kernel's yama/ptrace_scope is 1, …)", which sends
+            // an operator to change a setting that was never in the way.
+            match (error.denied, ptrace::attach_refusal_hint()) {
+                (true, Some(hint)) => format!("{} ({hint})", error.reason),
+                _ => error.reason,
+            }
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = pid;
+        Ok(None)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err(format!(
+            "attaching to a running process is not implemented on this platform. Read it \
+             through its endpoint instead: start it with ELEPHC_PROBE_ADDR=127.0.0.1:9411, \
+             then `elephc monitor 127.0.0.1:9411` (pid {pid} is untouched)."
+        ))
+    }
+}
+
+/// What becomes of a target this process launched, now that the capture is over.
+enum Disposition {
+    /// Stop it, then collect it.
+    Stop,
+    /// Collect it: it has finished, or is about to on its own.
+    Collect,
+    /// Leave it running and do not wait for it.
+    LeaveAlone,
+}
+
+/// Decides between them from the four facts that matter, in one place, so the
+/// rule can be read and tested rather than inferred from where it sits.
+///
+/// A short-lived program is allowed to finish on its own after a successful
+/// one-shot capture. A capture that FAILED, and every live view, stops one that
+/// is still up: `--live` runs until monitoring is over, so waiting on a
+/// long-running target would hang forever.
+///
+/// `lost_channel` is the exception that outranks all of it, and the reason is
+/// whose fault it is. The view ended because THIS tool's plumbing stopped
+/// answering, not because the program did anything, and stopping a program over
+/// our own quiet socket ends work the operator never asked us to end. It stays
+/// up, uncollected — they have its pid.
+fn disposition(still_running: bool, code: i32, live: bool, lost_channel: bool) -> Disposition {
+    if !still_running {
+        return Disposition::Collect;
+    }
+    if lost_channel {
+        return Disposition::LeaveAlone;
+    }
+    if code != 0 || live {
+        return Disposition::Stop;
+    }
+    Disposition::Collect
 }
 
 /// A display-ready frame: its user-facing name and what kind of time it is.

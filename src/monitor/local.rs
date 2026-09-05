@@ -12,6 +12,7 @@
 //! - The control channel is established before the spawn; the program reads it
 //!   during its own init.
 
+use super::attach::Image;
 use super::*;
 
 /// One sampling window over the whole process tree, rendered once: the bar
@@ -21,12 +22,19 @@ pub(crate) fn run_once(
     root: u32,
     binary: Option<&Path>,
     php_source: Option<&Path>,
+    image: Option<&Image>,
 ) -> i32 {
     let pids = discover_pids(root);
-    let reports = capture_window(&pids, cmd.duration_secs);
-    let samples = match samples_from_reports(&reports, binary, php_source) {
-        Some(samples) => samples,
-        None => {
+    let window = match capture_display(&pids, cmd.duration_secs, binary, php_source, image) {
+        Ok(Some(window)) => window,
+        // Said plainly, and never as "it may have exited": the target was there,
+        // the kernel would not let this process read it, and the message carries
+        // the setting to change.
+        Err(reason) => {
+            eprintln!("elephc monitor: {reason}");
+            return 1;
+        }
+        Ok(None) => {
             eprintln!(
                 "elephc monitor: no samples captured — the program may have exited before \
                  sampling started; try a longer-running input"
@@ -34,7 +42,7 @@ pub(crate) fn run_once(
             return 1;
         }
     };
-    let display = render_stacks(&samples);
+    let display = window.display;
     let out_path = cmd
         .out
         .clone()
@@ -68,10 +76,10 @@ pub(crate) fn run_once(
     };
     // Per-line attribution needs the dSYM and the source, so it rides the same
     // .php-target path that recovers inlined frames.
-    let lines = match (binary, php_source) {
-        (Some(binary), Some(source)) => reports
+    let lines = match (binary, php_source, &window.source) {
+        (Some(binary), Some(source), Some((reports, samples))) => reports
             .iter()
-            .find_map(|report| line_profile(&samples, report, binary, source)),
+            .find_map(|report| line_profile(samples, report, binary, source)),
         _ => None,
     };
     if let Err(error) = write_graph_exports(cmd, &display, &graph_title, lines.as_ref()) {
@@ -90,13 +98,45 @@ pub(crate) fn run_once(
     0
 }
 
+/// How a live view ended, and what that means for the program it was watching.
+///
+/// `--live` normally owns its target's lifetime: it launched the program so the
+/// operator could watch it, and leaving it behind when the view ends would be
+/// its own surprise. Losing the CHANNEL is the exception. That is this tool's
+/// plumbing failing, not the program's, and killing a running program because
+/// our own socket stopped answering destroys work the operator did not ask us to
+/// end — it just tells them which pid is still theirs to stop.
+pub(crate) struct LiveOutcome {
+    pub(crate) code: i32,
+    pub(crate) leave_target_running: bool,
+}
+
 /// The live loop: sample a window, merge the process tree, redraw, repeat
 /// until the target goes away. Prints the cumulative table on exit.
-pub(crate) fn run_live(cmd: &MonitorCommand, root: u32, mut child: Option<&mut process::Child>) -> i32 {
+pub(crate) fn run_live(
+    cmd: &MonitorCommand,
+    root: u32,
+    mut child: Option<&mut process::Child>,
+    channel: Option<&ControlChannel>,
+    image: Option<&Image>,
+) -> LiveOutcome {
     use std::io::IsTerminal;
     let interactive = std::io::stdout().is_terminal();
     let started = std::time::Instant::now();
     let mut cumulative: BTreeMap<Vec<(String, Kind)>, u64> = BTreeMap::new();
+    // The previous snapshot, when the target answers over the control channel.
+    // Windows are differences between snapshots, so the first one is measured
+    // against nothing and reports everything sampled since the program started.
+    let mut sampled_before: BTreeMap<Vec<(String, Kind)>, u64> = BTreeMap::new();
+    // Whether the child's activation ACK has been taken off the channel. One
+    // byte-sequence, sent once; leaving it there would put it in front of the
+    // first snapshot reply.
+    let mut activated = false;
+    // Whether a late window has already been mentioned.
+    let mut reported_late = false;
+    // Whether the view ended because the channel broke rather than because the
+    // program did.
+    let mut lost_channel = false;
     let mut previous: HashMap<String, f64> = HashMap::new();
     let mut windows = 0u32;
     let graph_title = if cmd.target.is_empty() {
@@ -122,14 +162,110 @@ pub(crate) fn run_live(cmd: &MonitorCommand, root: u32, mut child: Option<&mut p
             }
         }
         let pids = discover_pids(root);
-        let reports = capture_window(&pids, cmd.duration_secs);
-        let Some(samples) = samples_from_reports(&reports, None, None) else {
-            // Attach mode has no child handle: a window with zero reports is
-            // how we learn the target is gone.
-            break;
+        // A target this process launched can simply be ASKED — it holds the
+        // other end of a socketpair nothing else on the machine can open. Only
+        // a foreign process needs to be read from the outside, and that is the
+        // one tool that ships on macOS alone.
+        let display = if let Some(channel) = channel {
+            std::thread::sleep(std::time::Duration::from_secs(u64::from(cmd.duration_secs)));
+            // The child's activation ACK is sent once, at init, and sits in the
+            // buffer until somebody takes it. It has to come off BEFORE the first
+            // snapshot reply, because this reader is length-prefixed: it would
+            // otherwise read `ELEP` as a length, refuse it, and the loop would
+            // read that as a dead channel and stop after one window.
+            //
+            // Waited for rather than merely attempted. A non-blocking look
+            // succeeds whenever the child booted inside the first window, which
+            // is every run on an idle machine and not every run under load.
+            if !activated {
+                activated = await_activation(channel, std::time::Duration::from_secs(2));
+            }
+            let snapshot = match request_snapshot(channel) {
+                Snapshot::Answered(text) => {
+                    // An answer proves the child is past init, whether or not
+                    // `await_activation` was the one that saw the ACK — it may
+                    // have been consumed by the snapshot read itself. Without
+                    // this, every later window would spend its deadline waiting
+                    // for an ACK that has already been taken.
+                    activated = true;
+                    text
+                }
+                Snapshot::Late { activation_seen } => {
+                    // The read may have taken the ACK off the front before giving
+                    // up on the reply behind it. Recording that is what stops
+                    // every later window from opening with the full activation
+                    // deadline spent waiting for a message already consumed.
+                    activated |= activation_seen;
+                    // Slow is not gone. Ending the loop here would REAP a healthy
+                    // program: the target only outlives the view while the view is
+                    // still running, so a window nobody answered in time would
+                    // stop the thing being profiled.
+                    //
+                    // Said once, because a busy target would otherwise bury its
+                    // own table under the same line every window.
+                    if !reported_late {
+                        reported_late = true;
+                        eprintln!(
+                            "elephc monitor: the target did not answer within the window; \
+                             still watching"
+                        );
+                    }
+                    continue;
+                }
+                Snapshot::Gone => {
+                    // The channel is finished. Whether the PROGRAM is finished is
+                    // a different question, and the answer decides whether it
+                    // gets stopped: this tool's own plumbing failing is not a
+                    // reason to end work the operator is in the middle of.
+                    if child.as_deref_mut().is_some_and(|c| c.try_wait().ok().flatten().is_none()) {
+                        lost_channel = true;
+                        eprintln!(
+                            "elephc monitor: lost the channel to the target; it is still running \
+                             as pid {root} and is left alone. Reporting what was collected."
+                        );
+                    }
+                    break;
+                }
+            };
+            // Snapshots are cumulative, so the window is what this one has that
+            // the last did not. A stack that stopped being sampled contributes
+            // nothing rather than a negative.
+            // Summed, not collected. `folded_text_to_display` can emit the same
+            // display stack twice — one folded line becomes several stacks when
+            // it carries a native leaf — and `collect` into a map keeps the LAST
+            // of a pair instead of their total, which silently loses samples
+            // from the window and from every window after it.
+            let mut total: BTreeMap<Vec<(String, Kind)>, u64> = BTreeMap::new();
+            for (stack, count) in folded_text_to_display(&snapshot) {
+                *total.entry(stack).or_default() += count;
+            }
+            let window: Vec<(Vec<(String, Kind)>, u64)> = total
+                .iter()
+                .filter_map(|(stack, count)| {
+                    let before = sampled_before.get(stack).copied().unwrap_or(0);
+                    count.checked_sub(before).filter(|delta| *delta > 0).map(|delta| (stack.clone(), delta))
+                })
+                .collect();
+            sampled_before = total;
+            windows += 1;
+            window
+        } else {
+            let window = match capture_display(&pids, cmd.duration_secs, None, None, image) {
+                Ok(Some(window)) => window,
+                // Attach mode has no child handle: an empty window is how we
+                // learn the target is gone.
+                Ok(None) => break,
+                // A refusal is not a target that ended. Ending the view silently
+                // here is what made `yama/ptrace_scope=1` look like a program
+                // that had exited.
+                Err(reason) => {
+                    eprintln!("elephc monitor: {reason}");
+                    break;
+                }
+            };
+            windows += 1;
+            window.display
         };
-        windows += 1;
-        let display = render_stacks(&samples);
         for (stack, weight) in &display {
             *cumulative.entry(stack.clone()).or_default() += weight;
         }
@@ -157,8 +293,69 @@ pub(crate) fn run_live(cmd: &MonitorCommand, root: u32, mut child: Option<&mut p
         let merged: Vec<(Vec<(String, Kind)>, u64)> = cumulative.into_iter().collect();
         println!("\n=== cumulative ({windows} windows) ===");
         print!("{}", why_table(&merged, 1));
+    } else {
+        // A program shorter than one window left NOTHING behind: the loop sleeps
+        // first and asks second, so it was already gone by the first question,
+        // and the exit dump it wrote to its own stderr is filtered out of a live
+        // view on purpose. Silence and a zero exit reads as a broken profiler
+        // rather than as a program that finished, so say which it was.
+        eprintln!(
+            "elephc monitor: the program finished before the first window; there was nothing \
+             to sample. Use a longer-running input, or a shorter --duration."
+        );
     }
-    0
+    LiveOutcome { code: 0, leave_target_running: lost_channel }
+}
+
+/// One window of samples, already named and folded, whichever way it was read.
+///
+/// Two ways exist and they meet here. A process this tool can ask — anything
+/// launched or reachable through its endpoint — answers for itself. A process it
+/// can only WATCH answers for nothing, and has to be read from the outside:
+/// through `/usr/bin/sample` on macOS, and by stopping it with `ptrace` on
+/// Linux. `image` is what says which: it exists only for `--attach`, and only
+/// where reading a process from the outside is this tool's own job.
+///
+/// `None` means the window is empty, which is the same thing both ways: no
+/// samples landed, and for `--attach` that is how the target's disappearance is
+/// noticed at all.
+pub(crate) struct Window {
+    /// What every consumer downstream reads: named stacks and their weights.
+    pub(crate) display: Vec<(Vec<(String, Kind)>, u64)>,
+    /// The text a sampler produced, and the frames parsed out of it.
+    ///
+    /// Kept only because per-line attribution needs both again, and re-deriving
+    /// them from `display` is impossible — a name is not an address. `None` for
+    /// a window this tool sampled itself, which never had text to begin with.
+    pub(crate) source: Option<(Vec<String>, Vec<(Vec<Frame>, u64)>)>,
+}
+
+/// One window, and THREE answers rather than two.
+///
+/// `Err` is "this target cannot be read at all", which is not the same as the
+/// `Ok(None)` that means "read it, saw nothing". Attach treats an empty window
+/// as proof the target has gone, so folding a refusal into it told operators
+/// their still-running program had exited and swallowed the one line that named
+/// what to change.
+fn capture_display(
+    pids: &[u32],
+    duration_secs: u32,
+    binary: Option<&Path>,
+    php_source: Option<&Path>,
+    image: Option<&Image>,
+) -> Result<Option<Window>, String> {
+    #[cfg(target_os = "linux")]
+    if let Some(image) = image {
+        let display = super::ptrace::attach_window(pids, duration_secs, image)?;
+        return Ok((!display.is_empty()).then_some(Window { display, source: None }));
+    }
+    // Bound so the macOS build does not warn on an argument only Linux reads.
+    let _ = &image;
+    let reports = capture_window(pids, duration_secs);
+    let Some(samples) = samples_from_reports(&reports, binary, php_source) else {
+        return Ok(None);
+    };
+    Ok(Some(Window { display: render_stacks(&samples), source: Some((reports, samples)) }))
 }
 
 /// Samples every pid of one window in parallel and returns the reports that
@@ -242,20 +439,6 @@ pub(crate) fn spawnable_path(path: &str) -> PathBuf {
         // which at least defeats the PATH search.
         Err(_) => PathBuf::from(".").join(path),
     }
-}
-
-/// Compiles a `.php` target with `--debug-info` by re-executing this binary, and
-/// returns the produced executable's path (next to the source, like a normal compile).
-pub(crate) fn compile_php_target(source: &str) -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("cannot locate elephc: {e}"))?;
-    let status = process::Command::new(exe)
-        .args(["--debug-info", source])
-        .status()
-        .map_err(|e| format!("cannot run elephc: {e}"))?;
-    if !status.success() {
-        return Err(format!("compiling {source} failed"));
-    }
-    Ok(spawnable_path(source.trim_end_matches(".php")))
 }
 
 /// Explains an empty capture by what the run actually did.
@@ -359,7 +542,7 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
     // holds the sampler's folded stacks; forwarding those would print raw
     // profiler output as if the program had written it.
     for line in stderr.lines() {
-        if !line.starts_with("elephc-instr") && !line.starts_with("elephc-probe") {
+        if !is_profiler_line(line) {
             eprintln!("{line}");
         }
     }

@@ -753,6 +753,24 @@ fn transplant_callee_body(
 
             let mut new_inst = old_inst.clone();
             new_inst.result = new_res;
+            // A load whose effects were stripped was proven pure IN THE CALLEE,
+            // and that proof does not travel. `immutable_local_loads` clears
+            // `READS_LOCAL` from a load of a slot it can show is written once —
+            // which a parameter of a small function always is. Spliced into a
+            // caller's LOOP, that same slot is written once PER ITERATION, and
+            // the load is no longer pure at all: LICM took the purity at face
+            // value and hoisted `spin`'s `$rounds` read above the store that
+            // gives it a value, so `while (…) { $t += spin(1000); }` ran the
+            // inner `for ($i = 0; $i < $rounds; …)` against whatever the frame
+            // held and never came back.
+            //
+            // Restored rather than re-proven: the pass runs again on the host
+            // and will strip it a second time where it is still true, so being
+            // conservative here costs a round, and being wrong costs the
+            // program.
+            if new_inst.op == Op::LoadLocal {
+                new_inst.effects |= Op::LoadLocal.default_effects();
+            }
             host.instructions.push(new_inst);
             // Re-borrow block only for append.
             host.block_mut(new_bid)
