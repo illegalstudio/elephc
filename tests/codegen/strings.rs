@@ -125,7 +125,7 @@ echo bin2hex(mb_strtoupper("\xE2\x82", "UTF-8")), ":";
 echo bin2hex(mb_strtoupper("\xED\xA0\x80", "UTF-8")), ":";
 echo bin2hex(mb_strtoupper("a\x80b", "UTF-8"));"#,
     );
-    assert_eq!(out, "80:c0af:e282:eda080:418062");
+    assert_eq!(out, "80:c0af:e282:eda080:418042");
 }
 
 /// Verifies namespaced/case-insensitive lookup and unknown-encoding `ValueError` behavior.

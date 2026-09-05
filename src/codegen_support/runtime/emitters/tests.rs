@@ -87,8 +87,9 @@ fn test_mb_strtoupper_runtime_is_feature_gated() {
             ..RuntimeFeatures::none()
         },
     );
-    assert!(included.output().contains("__rt_mb_strtoupper:"));
-    assert!(included.output().contains("__rt_mb_case_upper:"));
+    let asm = included.output();
+    assert!(asm.contains("__rt_mb_strtoupper:"));
+    assert!(asm.contains("__rt_mb_case_upper:"));
 }
 
 /// Verifies that Linux x86_64 uses the shared runtime surface.
