@@ -132,6 +132,20 @@ echo $div->ownerDocument->saveXML($div);
     assert_eq!(out, "D:<div class=\"text-green-500\">Hi</div>");
 }
 
+/// Verifies several attributes on one element stay addressable by name.
+#[test]
+fn test_multiple_attributes() {
+    let out = compile_and_run(
+        r#"<?php
+$dom = new DOMDocument();
+$dom->loadHTML('<div class="text-green-500" id="hero" hidden>Hi</div>', LIBXML_NOERROR | LIBXML_NOBLANKS);
+$div = $dom->getElementsByTagName('div')->item(0);
+echo $div->getAttribute('class'), '|', $div->getAttribute('id'), '|', $div->getAttribute('hidden'), '|', $div->getAttribute('missing');
+"#,
+    );
+    assert_eq!(out, "text-green-500|hero||");
+}
+
 /// Verifies namespaced unqualified `LIBXML_*` and `\DOMDocument` as Termwind spells them.
 #[test]
 fn test_namespaced_termwind_call_shape() {
