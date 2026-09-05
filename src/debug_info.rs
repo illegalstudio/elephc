@@ -117,6 +117,34 @@ fn debug_info_sections(
         ),
         Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
+    // `DW_AT_stmt_list` is an offset into the LINKED `.debug_line`, and this unit
+    // is not the only contributor to it: every libc object linked in brings its
+    // own line program. A literal 0 names whichever landed first, which after a
+    // Linux link is musl's `rcrt1.c` — so `addr2line` followed this unit's
+    // pointer into someone else's table and answered `:?` for every PHP address.
+    //
+    // macOS never saw it, and that is the whole reason it went unnoticed:
+    // `dsymutil` rebuilds the debug map from the OBJECT files, where this unit is
+    // the only one and 0 is right. Linking is what moves it.
+    //
+    // The fix is the idiom clang and gcc use: put a label at the top of the
+    // section and let the assembler append its generated program after it.
+    // The same hazard applies to `debug_abbrev_offset` in the unit header: it is an
+    // offset into the LINKED `.debug_abbrev`, and a literal 0 names musl's table
+    // rather than this unit's. The unit then decodes against the wrong
+    // abbreviations, which is why `readelf --debug-dump=info` reported only the
+    // two libc units and never this one, even though the PHP path was sitting in
+    // the section's bytes.
+    let (line_anchor_section, stmt_list, abbrev_offset) = match platform {
+        Platform::Linux => (
+            "    .section .debug_line,\"\",@progbits\nLelephc_debug_line0:\n",
+            "Lelephc_debug_line0",
+            "Lelephc_debug_abbrev0",
+        ),
+        // Mach-O keeps each object's DWARF separate until `dsymutil` reads it, so
+        // 0 is the correct offset there and a label would not survive the pass.
+        _ => ("", "0", "0"),
+    };
     let name = escape_asm_string(source_path);
     let comp_dir = escape_asm_string(
         &std::env::current_dir()
@@ -131,10 +159,11 @@ fn debug_info_sections(
     // Abbrev 2: DW_TAG_subprogram (0x2e), no children;
     //   DW_AT_name(0x03)/string(0x08), DW_AT_low_pc(0x11)/addr(0x01),
     //   DW_AT_high_pc(0x12)/data8(0x07).
+    let abbrev_anchor = if platform == Platform::Linux { "Lelephc_debug_abbrev0:\n" } else { "" };
     let mut out = format!(
         "\
 {abbrev_section}
-    .byte 1
+{abbrev_anchor}    .byte 1
     .byte 0x11
     .byte 1
     .byte 0x25, 0x08
@@ -155,14 +184,14 @@ fn debug_info_sections(
     .long Lelephc_debug_cu_end - Lelephc_debug_cu_start
 Lelephc_debug_cu_start:
     .short 4
-    .long 0
+    .long {abbrev_offset}
     .byte 8
     .byte 1
     .asciz \"elephc\"
     .short 0x0002
     .asciz \"{name}\"
     .asciz \"{comp_dir}\"
-    .long 0
+    .long {stmt_list}
 "
     );
     for subprogram in subprograms {
@@ -176,6 +205,7 @@ Lelephc_debug_cu_start:
         );
     }
     out.push_str("    .byte 0\nLelephc_debug_cu_end:\n");
+    out.push_str(line_anchor_section);
     out
 }
 
@@ -237,6 +267,39 @@ _php_foo:
     ret
     # @endfn name=foo
 ";
+
+    /// Verifies the Linux unit points at ITS OWN abbrev table and line program,
+    /// by label rather than by a literal zero.
+    ///
+    /// Both offsets are into sections the linker CONCATENATES. A literal 0 names
+    /// whatever landed first, which after a Linux link is musl's — so the unit
+    /// decoded against the wrong abbreviations, `readelf --debug-dump=info`
+    /// reported two compile units for a binary that has thirty-seven, and every
+    /// unit after this one was dropped with it. `addr2line` answered `:?` for
+    /// every PHP address, and a debugger lost the same ground.
+    ///
+    /// macOS keeps 0, and that is why this went unseen: `dsymutil` rebuilds the
+    /// debug map from the OBJECT files, where this unit is the only contributor
+    /// and 0 is correct. Linking is what moves it.
+    #[test]
+    fn the_linux_unit_references_its_own_sections_by_label() {
+        let out = inject_line_directives(ASM, "a.php", Platform::Linux);
+        assert!(out.contains("Lelephc_debug_abbrev0:"), "abbrev table not anchored: {out}");
+        assert!(out.contains("Lelephc_debug_line0:"), "line program not anchored: {out}");
+        assert!(
+            out.contains(".long Lelephc_debug_abbrev0"),
+            "unit header still names a literal abbrev offset: {out}"
+        );
+        assert!(
+            out.contains(".long Lelephc_debug_line0"),
+            "DW_AT_stmt_list still names a literal line offset: {out}"
+        );
+
+        // Mach-O keeps the literal, because there it is the right answer.
+        let macos = inject_line_directives(ASM, "a.php", Platform::MacOS);
+        assert!(!macos.contains("Lelephc_debug_abbrev0"), "{macos}");
+        assert!(!macos.contains("Lelephc_debug_line0"), "{macos}");
+    }
 
     /// Verifies every `@src` marker gets a matching `.loc` on the next line,
     /// the module starts with the `.file` directive, and the compile unit is

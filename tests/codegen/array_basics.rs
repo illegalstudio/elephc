@@ -895,6 +895,59 @@ fn test_rsort() {
     assert_eq!(out, "321");
 }
 
+/// Verifies `sort()` and `rsort()` over elements whose type is only known at run
+/// time, which used to be a compile error.
+///
+/// `json_decode()` hands back values the checker can only call `mixed`, so each
+/// appended element is a boxed cell rather than a typed slot, and the sort had no
+/// helper for that: it refused with "sort indexed-array element PHP type Mixed".
+///
+/// The ordering comes from `__rt_php_compare`, the same table `<` and `<=>` use,
+/// which is why the numbers sort NUMERICALLY — `10` after `3`, not between `1`
+/// and `2` as a string sort would put it. That distinction is the reason not to
+/// route these to the existing string sorter.
+///
+/// The mixed int-and-numeric-string case is asserted because PHP 8 changed how
+/// those compare, and it is the case a hand-rolled comparator gets wrong.
+#[test]
+fn sort_orders_runtime_typed_elements_the_way_php_does() {
+    let numbers = compile_and_run(
+        r#"<?php
+$m = json_decode("[3,1,2,10]");
+$a = [];
+foreach ($m as $v) { $a[] = $v; }
+sort($a);
+foreach ($a as $v) { echo $v, ","; }
+rsort($a);
+foreach ($a as $v) { echo $v, ","; }
+"#,
+    );
+    assert_eq!(numbers, "1,2,3,10,10,3,2,1,");
+
+    let strings = compile_and_run(
+        r#"<?php
+$m = json_decode('["pear","apple","fig"]');
+$a = [];
+foreach ($m as $v) { $a[] = $v; }
+sort($a);
+foreach ($a as $v) { echo $v, ","; }
+"#,
+    );
+    assert_eq!(strings, "apple,fig,pear,");
+
+    // An int beside a numeric string: PHP compares them numerically.
+    let mixed = compile_and_run(
+        r#"<?php
+$m = json_decode('[10,"9",2]');
+$a = [];
+foreach ($m as $v) { $a[] = $v; }
+sort($a);
+foreach ($a as $v) { echo var_export($v, true), ","; }
+"#,
+    );
+    assert_eq!(mixed, "2,'9',10,");
+}
+
 /// Verifies array keys.
 #[test]
 fn test_array_keys() {

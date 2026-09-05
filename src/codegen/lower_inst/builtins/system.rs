@@ -193,19 +193,42 @@ pub(crate) fn lower_getdate(
 
 /// Boxes the raw associative-array hash pointer in the integer result register into a `Mixed` cell
 /// (runtime tag 5), the representation `getdate`/`localtime` results use — mirroring `stat`.
+///
+/// The hash arrives FRESH: its only reference is the creator's, and boxing hands
+/// that ownership to the cell. `__rt_mixed_from_value` increfs its child, which is
+/// right for a SHARED payload and one reference too many for this one, so the
+/// creator's is dropped here.
+///
+/// Measured before this: `$x = getdate(); unset($x);` freed one block of
+/// fourteen, and `getdate()` in a loop leaked about thirteen per call. The chain
+/// ran to completion — two `__rt_decref_mixed` calls taking the cell to zero, then
+/// one `__rt_decref_hash` — and the hash simply never reached zero, because it had
+/// been left at two.
 fn emit_box_hash_pointer_as_assoc_mixed(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // Mixed payload low word = hash pointer
             ctx.emitter.instruction("mov x2, #0");                              // associative-array payloads do not use the high word
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // keep the hash pointer: the reference below has to be dropped by hand
             ctx.emitter.instruction("mov x0, #5");                              // runtime tag 5 = associative array
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");                   // x9 = the hash the new cell now shares
+            abi::emit_push_reg_pair(ctx.emitter, "x0", "x1");                   // preserve the boxed result across the release
+            ctx.emitter.instruction("mov x0, x9");
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");              // drop the CREATOR's reference; the box took its own
+            abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");                    // restore the boxed result
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // Mixed payload low word = hash pointer
             ctx.emitter.instruction("xor esi, esi");                            // associative-array payloads do not use the high word
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");                 // keep the hash pointer: the reference below has to be dropped by hand
             ctx.emitter.instruction("mov rax, 5");                              // runtime tag 5 = associative array
             abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            abi::emit_pop_reg_pair(ctx.emitter, "r10", "r11");                  // r10 = the hash the new cell now shares
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // preserve the boxed result across the release
+            ctx.emitter.instruction("mov rax, r10");
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");              // drop the CREATOR's reference; the box took its own
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                  // restore the boxed result
         }
     }
 }
