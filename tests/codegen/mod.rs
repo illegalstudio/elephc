@@ -82,6 +82,7 @@ mod static_class_features;
 mod types;
 mod optimizer;
 mod iterators;
+mod dom_html;
 mod spl;
 mod generators;
 mod dead_strip;
