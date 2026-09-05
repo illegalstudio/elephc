@@ -176,16 +176,18 @@ fn test_core_get_class_vars_aot_callable_forms() {
             protected string $hidden = "no";
         }
         $fromCuf = call_user_func("get_class_vars", "CoreCallableVars");
+        $fromSpread = call_user_func("get_class_vars", ...["CoreCallableVars"]);
         $fromCufa = call_user_func_array("get_class_vars", ["class" => "CoreCallableVars"]);
         $callback = get_class_vars(...);
         $fromFcc = $callback("CoreCallableVars");
         echo $fromCuf["plain"], $fromCuf["items"][1], ":",
+             $fromSpread["plain"], $fromSpread["items"][0], ":",
              $fromCufa["plain"], $fromCufa["items"][0], ":",
              $fromFcc["plain"], $fromFcc["items"][1], ":",
              isset($fromFcc["hidden"]) ? "bad" : "visible";
         "#,
     );
-    assert_eq!(out, "74:72:74:visible");
+    assert_eq!(out, "74:72:72:74:visible");
 }
 
 /// Verifies `get_class_methods()` callable forms preserve dynamic names and live results.
@@ -201,11 +203,13 @@ fn test_core_get_class_methods_aot_callable_forms() {
         $name = "CoreCallableMethods";
         $direct = get_class_methods("CoreCallableMethods");
         $fromLiteralCuf = call_user_func("get_class_methods", "CoreCallableMethods");
+        $fromSpreadCuf = call_user_func("get_class_methods", ...["CoreCallableMethods"]);
         $fromDynamicCuf = call_user_func("get_class_methods", $name);
         $callback = get_class_methods(...);
         $fromFcc = $callback($name);
         echo implode(",", $direct), ":", implode(",", $fromLiteralCuf), ":",
-             implode(",", $fromDynamicCuf), ":", implode(",", $fromFcc), "\n";
+             implode(",", $fromSpreadCuf), ":", implode(",", $fromDynamicCuf), ":",
+             implode(",", $fromFcc), "\n";
         var_export([$direct, $fromLiteralCuf]);
         "#,
     );
@@ -216,7 +220,27 @@ fn test_core_get_class_methods_aot_callable_forms() {
     );
     assert_eq!(
         out.stdout,
-        "alpha,beta:alpha,beta:alpha,beta:alpha,beta\narray (\n  0 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n  1 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n)"
+        "alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta\narray (\n  0 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n  1 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n)"
     );
     assert_eq!(out.stderr, "");
+}
+
+/// Verifies literal array-map inputs keep classes reached only through introspection callbacks.
+#[test]
+fn test_core_class_introspection_aot_array_map_reachability() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreMappedVars {
+            public int $value = 9;
+        }
+        class CoreMappedMethods {
+            public function mapped(): void {}
+        }
+
+        $vars = array_map(get_class_vars(...), ["CoreMappedVars"]);
+        $methods = array_map(get_class_methods(...), ["CoreMappedMethods"]);
+        echo $vars[0]["value"], ":", implode(",", $methods[0]);
+        "#,
+    );
+    assert_eq!(out, "9:mapped");
 }

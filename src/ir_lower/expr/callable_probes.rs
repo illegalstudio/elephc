@@ -78,6 +78,14 @@ pub(super) fn lower_static_call_user_func(
             if callback_args.is_empty() && is_static_get_defined_vars_callback(callback_expr) {
                 return Some(lower_visible_defined_vars(ctx, expr));
             }
+            if let Some(value) = lower_static_class_introspection_spread_call(
+                ctx,
+                callback_expr,
+                callback_args,
+                expr,
+            ) {
+                return Some(value);
+            }
             let signature = callable_descriptor_signature_for_expr(ctx, callback_expr);
             if call_user_func_should_use_descriptor(ctx, callback_expr, callback_args, signature.as_ref()) {
                 return lower_call_user_func_descriptor_invoke(
@@ -143,6 +151,33 @@ fn is_static_get_defined_vars_callback(callback: &Expr) -> bool {
         return false;
     };
     php_symbol_key(name.trim_start_matches('\\')) == "get_defined_vars"
+}
+
+/// Replays one literal positional spread before class introspection reaches descriptor dispatch.
+fn lower_static_class_introspection_spread_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    callback_expr: &Expr,
+    callback_args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let [argument] = callback_args else {
+        return None;
+    };
+    let ExprKind::Spread(argument_array) = &argument.kind else {
+        return None;
+    };
+    let callback = static_call_user_func_callback(ctx, callback_expr)?;
+    let StaticCallableBinding::Builtin(function_name) = &callback else {
+        return None;
+    };
+    if !matches!(
+        php_symbol_key(function_name.trim_start_matches('\\')).as_str(),
+        "get_class_vars" | "get_class_methods"
+    ) {
+        return None;
+    }
+    let expanded = static_call_user_func_array_args(argument_array)?;
+    lower_static_callable_call(ctx, callback, &expanded, expr)
 }
 
 /// Lowers unresolved string callbacks after an eval barrier through the eval function table.

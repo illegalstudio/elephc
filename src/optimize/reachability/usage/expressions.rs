@@ -248,6 +248,7 @@ impl Scanner<'_> {
             }
             "function_exists" => self.literal_function_or_hazard(first),
             "get_defined_functions" => self.usage.hazards.enumerates_functions = true,
+            "array_map" => self.scan_array_map_class_introspection(&normalized),
             "is_callable" | "call_user_func" | "call_user_func_array" => {
                 self.callable_or_hazard(first);
                 self.scan_call_user_func_class_introspection(&key, &normalized);
@@ -333,6 +334,27 @@ impl Scanner<'_> {
                 };
                 if let Some(callback_args) = static_call_user_func_array_args(arg_array) {
                     self.scan_class_introspection_callable(callback, &callback_args);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Roots class metadata passed by a literal map source to an introspection callback.
+    fn scan_array_map_class_introspection(&mut self, args: &[Expr]) {
+        let [callback, source] = args else {
+            return;
+        };
+        let callback = unwrap_named_arg(callback);
+        match &unwrap_named_arg(source).kind {
+            ExprKind::ArrayLiteral(items) => {
+                for item in items {
+                    self.scan_class_introspection_callable(callback, std::slice::from_ref(item));
+                }
+            }
+            ExprKind::ArrayLiteralAssoc(items) => {
+                for (_, item) in items {
+                    self.scan_class_introspection_callable(callback, std::slice::from_ref(item));
                 }
             }
             _ => {}
