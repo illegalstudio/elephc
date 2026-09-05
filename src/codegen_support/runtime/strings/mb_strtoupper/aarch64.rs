@@ -597,7 +597,9 @@ fn emit_helpers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("lsl x2, x11, #1");                                     // double the destination capacity
     emitter.instruction("add x2, x2, #16");                                     // plus a small extra so tiny strings can grow
     emitter.instruction("str x2, [sp, #32]");                                   // persist the new capacity before the grow call
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the walker return address across concat_grow
     emitter.instruction("bl __rt_concat_grow");                                 // replace the destination with a larger owned buffer
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the walker return address after the grow
     emitter.instruction("str x0, [sp, #24]");                                   // persist the grown destination pointer
     emitter.label("__rt_mb_strtoupper_ensure_done");
     emitter.instruction("ret");                                                 // return to the UTF-8 walker
