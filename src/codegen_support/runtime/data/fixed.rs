@@ -13,7 +13,7 @@ use super::{
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
-    MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    MB_STRLEN_UNKNOWN_ENCODING_MSG, MB_STRTOLOWER_UNKNOWN_ENCODING_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
@@ -557,6 +557,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _mb_strlen_8bit_name\n_mb_strlen_8bit_name:\n    .asciz \"8bit\"\n");
     out.push_str(".globl _mb_strlen_binary_name\n_mb_strlen_binary_name:\n    .asciz \"binary\"\n");
     out.push_str(".globl _mb_strlen_7bit_name\n_mb_strlen_7bit_name:\n    .asciz \"7bit\"\n");
+    out.push_str(&format!(
+        ".globl _mb_strtolower_unknown_encoding_msg\n_mb_strtolower_unknown_encoding_msg:\n    .ascii {:?}\n",
+        MB_STRTOLOWER_UNKNOWN_ENCODING_MSG
+    ));
     // Fixed algorithm-name constants for md5()/sha1(): both route through the
     // same elephc_crypto_hash entry point as hash(), so __rt_md5 / __rt_sha1
     // load these literal names into the algorithm-name register pair before

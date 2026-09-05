@@ -54,6 +54,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_inc_dec(emitter);
     strings::emit_mixed_inc_dec(emitter);
     strings::emit_strtolower(emitter);
+    strings::emit_mb_strtolower(emitter);
     strings::emit_strtoupper(emitter);
     strings::emit_trim(emitter);
     strings::emit_ltrim(emitter);
