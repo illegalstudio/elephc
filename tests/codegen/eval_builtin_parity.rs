@@ -151,6 +151,23 @@ eval($source);
     assert_eq!(out, "6:2");
 }
 
+/// Verifies dynamic eval links and dispatches Magician's `mb_convert_case()` path.
+#[test]
+fn test_eval_mb_convert_case_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$source = 'echo mb_convert_case("hello world", MB_CASE_TITLE);
+echo ":";
+echo mb_convert_case("don\'t", MB_CASE_TITLE, "UTF-8");
+echo ":";
+echo mb_convert_case("straße", MB_CASE_UPPER);';
+eval($source);
+"#,
+    );
+
+    assert_eq!(out, "Hello World:Don't:STRASSE");
+}
+
 /// Verifies eval preg builtins use PCRE2 features that Rust regex did not support.
 #[test]
 fn test_eval_preg_uses_pcre2_lookaround_semantics() {

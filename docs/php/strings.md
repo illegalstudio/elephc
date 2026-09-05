@@ -160,6 +160,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
 | `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
+| `mb_convert_case()` | `mb_convert_case($string, $mode, $encoding = null): string` | Unicode case conversion with `MB_CASE_UPPER`/`LOWER`/`TITLE`/`FOLD` and the `*_SIMPLE` 1:1 variants. Title case follows PHP 8.5 `Cased` / `Case_Ignorable` rules (`"don't"` → `"Don't"`). Omitted/`null`/`UTF-8` encodings convert Unicode; `8bit`/`binary`/`7bit` treat each byte as `U+00xx`; other names go through `iconv`. Invalid `$mode` or encoding throws `\ValueError` |
 | `iconv_strlen()` | `iconv_strlen($str, $encoding = null): int\|false` | Character count through the platform `iconv`. See [iconv](./iconv.md) for the whole extension |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract a substring. Negative `$start` counts from the end; a negative `$len` omits that many trailing bytes from the selected suffix, matching PHP |
 | `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |
@@ -280,6 +281,24 @@ the input untouched *before* either check runs, so `str_pad("xyz", 1, "")` is
 throws `\ValueError: str_pad(): Argument #3 ($pad_string) must not be empty` and a
 `$type` outside `0..2` throws
 `\ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH`.
+
+#### `mb_convert_case()` modes
+
+`MB_CASE_UPPER` (`0`), `MB_CASE_LOWER` (`1`), `MB_CASE_TITLE` (`2`), and
+`MB_CASE_FOLD` (`3`) select Unicode full mappings. The `*_SIMPLE` constants
+(`4`–`7`) stay 1:1, so `ß` remains `ß` instead of expanding to `SS`/`Ss`/`ss`.
+Title case uses Unicode `Cased` / `Case_Ignorable` (an apostrophe does not start
+a new word):
+
+```php
+mb_convert_case("mary had a Little lamb", MB_CASE_TITLE, "UTF-8");
+// "Mary Had A Little Lamb"
+mb_convert_case("don't stop", MB_CASE_TITLE);
+// "Don't Stop"
+```
+
+An `$mode` outside `0..7` throws
+`\ValueError: mb_convert_case(): Argument #2 ($mode) must be one of the MB_CASE_* constants`.
 
 #### `number_format()` and negative `$decimals`
 

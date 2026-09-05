@@ -65,6 +65,7 @@ pub mod join;
 pub mod lcfirst;
 pub mod long2ip;
 pub mod ltrim;
+pub mod mb_convert_case;
 pub mod mb_ereg_match;
 pub mod mb_strlen;
 pub mod md5;

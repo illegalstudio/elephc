@@ -584,6 +584,7 @@ pub enum RuntimeFnId {
     Lcfirst,
     Long2ip,
     Ltrim,
+    MbConvertCase,
     MbEregMatch,
     MbStrlen,
     Md5,
@@ -1113,7 +1114,7 @@ impl RuntimeFnId {
             | RuntimeFnId::Min
             | RuntimeFnId::Range
             | RuntimeFnId::Round
-            | RuntimeFnId::StrPad
+            |             RuntimeFnId::StrPad
             | RuntimeFnId::StrRepeat
             | RuntimeFnId::StrSplit
             | RuntimeFnId::StrWordCount
@@ -1211,6 +1212,10 @@ impl RuntimeFnId {
             RuntimeFnId::Strtr => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
+            ),
+            RuntimeFnId::MbConvertCase => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::ALLOC_CONCAT.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
             ),
             // A `%s` conversion can invoke arbitrary userland `__toString()` code. Keep the
             // full externally observable call surface here so AST try/catch pruning retains
@@ -1540,7 +1545,9 @@ impl RuntimeFnId {
                 BuiltinRequirement::Bridge("elephc_iconv"),
                 BuiltinRequirement::MacOsLibrary("iconv"),
             ],
-            RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
+            RuntimeFnId::MbConvertCase | RuntimeFnId::MbStrlen => {
+                &[BuiltinRequirement::MacOsLibrary("iconv")]
+            }
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::StreamSocketEnableCrypto => &[BuiltinRequirement::Bridge("elephc_tls")],
@@ -1597,6 +1604,11 @@ impl RuntimeFnId {
     /// Returns whether this operation requires the optional multibyte-length runtime.
     pub const fn uses_mb_strlen_runtime(self) -> bool {
         matches!(self, RuntimeFnId::MbStrlen)
+    }
+
+    /// Returns whether this operation requires the optional multibyte case-conversion runtime.
+    pub const fn uses_mb_convert_case_runtime(self) -> bool {
+        matches!(self, RuntimeFnId::MbConvertCase)
     }
 
     /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
@@ -1716,6 +1728,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::IconvStrpos
                 | RuntimeFnId::IconvStrrpos
                 | RuntimeFnId::IconvSubstr
+                | RuntimeFnId::MbConvertCase
         ) {
             return BuiltinResultOwnership::Fresh;
         }
@@ -2460,6 +2473,7 @@ impl RuntimeFnId {
             RuntimeFnId::Lcfirst => "lcfirst",
             RuntimeFnId::Long2ip => "long2ip",
             RuntimeFnId::Ltrim => "ltrim",
+            RuntimeFnId::MbConvertCase => "mb_convert_case",
             RuntimeFnId::MbEregMatch => "mb_ereg_match",
             RuntimeFnId::MbStrlen => "mb_strlen",
             RuntimeFnId::Md5 => "md5",

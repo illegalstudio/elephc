@@ -30,6 +30,8 @@ echo "strtolower: " . strtolower($str) . "\n";
 echo "strtoupper: " . strtoupper($str) . "\n";
 echo "ucfirst: " . ucfirst("hello") . "\n";
 echo "lcfirst: " . lcfirst("HELLO") . "\n";
+echo "mb_convert_case title: " . mb_convert_case("mary had a Little lamb", MB_CASE_TITLE, "UTF-8") . "\n";
+echo "mb_convert_case don't: " . mb_convert_case("don't stop", MB_CASE_TITLE) . "\n";
 
 // Trimming
 echo "\n--- Trim ---\n";

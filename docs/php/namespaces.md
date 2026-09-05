@@ -494,6 +494,14 @@ define("PI", 3.14159);
 | `STR_PAD_RIGHT` | int | 1 — `str_pad()`'s default padding mode |
 | `STR_PAD_LEFT` | int | 0 |
 | `STR_PAD_BOTH` | int | 2 |
+| `MB_CASE_UPPER` | int | 0 — `mb_convert_case()` full uppercase |
+| `MB_CASE_LOWER` | int | 1 — `mb_convert_case()` full lowercase |
+| `MB_CASE_TITLE` | int | 2 — `mb_convert_case()` full title case |
+| `MB_CASE_FOLD` | int | 3 — `mb_convert_case()` full case fold |
+| `MB_CASE_UPPER_SIMPLE` | int | 4 — 1:1 uppercase |
+| `MB_CASE_LOWER_SIMPLE` | int | 5 — 1:1 lowercase |
+| `MB_CASE_TITLE_SIMPLE` | int | 6 — 1:1 title case |
+| `MB_CASE_FOLD_SIMPLE` | int | 7 — 1:1 case fold |
 | `COUNT_NORMAL` | int | 0 — `count()`'s default mode |
 | `COUNT_RECURSIVE` | int | 1 |
 | `PHP_ROUND_HALF_UP` | int | 1 — `round()`'s default mode |

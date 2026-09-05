@@ -385,6 +385,14 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "STR_PAD_LEFT"
                 | "STR_PAD_RIGHT"
                 | "STR_PAD_BOTH"
+                | "MB_CASE_UPPER"
+                | "MB_CASE_LOWER"
+                | "MB_CASE_TITLE"
+                | "MB_CASE_FOLD"
+                | "MB_CASE_UPPER_SIMPLE"
+                | "MB_CASE_LOWER_SIMPLE"
+                | "MB_CASE_TITLE_SIMPLE"
+                | "MB_CASE_FOLD_SIMPLE"
                 | "STDIN"
                 | "STDOUT"
                 | "STDERR"
@@ -423,6 +431,7 @@ fn is_builtin_global_constant(name: &str) -> bool {
         .chain(crate::types::array_constants::ARRAY_INT_CONSTANTS.iter())
         .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
         .chain(crate::types::iconv_constants::ICONV_INT_CONSTANTS.iter())
+        .chain(crate::types::string_constants::STRING_INT_CONSTANTS.iter())
         .chain(crate::types::curl_constants::CURL_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
 }

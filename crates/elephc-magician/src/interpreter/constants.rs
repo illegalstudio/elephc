@@ -275,6 +275,22 @@ pub(super) const EVAL_STR_PAD_LEFT: i64 = 0;
 pub(super) const EVAL_STR_PAD_RIGHT: i64 = 1;
 /// `str_pad()` splits the padding across both sides of the input.
 pub(super) const EVAL_STR_PAD_BOTH: i64 = 2;
+/// `mb_convert_case()` full uppercase mapping (`MB_CASE_UPPER`).
+pub(super) const EVAL_MB_CASE_UPPER: i64 = 0;
+/// `mb_convert_case()` full lowercase mapping (`MB_CASE_LOWER`).
+pub(super) const EVAL_MB_CASE_LOWER: i64 = 1;
+/// `mb_convert_case()` full title-case mapping (`MB_CASE_TITLE`).
+pub(super) const EVAL_MB_CASE_TITLE: i64 = 2;
+/// `mb_convert_case()` full case-fold mapping (`MB_CASE_FOLD`).
+pub(super) const EVAL_MB_CASE_FOLD: i64 = 3;
+/// `mb_convert_case()` 1:1 uppercase mapping (`MB_CASE_UPPER_SIMPLE`).
+pub(super) const EVAL_MB_CASE_UPPER_SIMPLE: i64 = 4;
+/// `mb_convert_case()` 1:1 lowercase mapping (`MB_CASE_LOWER_SIMPLE`).
+pub(super) const EVAL_MB_CASE_LOWER_SIMPLE: i64 = 5;
+/// `mb_convert_case()` 1:1 title-case mapping (`MB_CASE_TITLE_SIMPLE`).
+pub(super) const EVAL_MB_CASE_TITLE_SIMPLE: i64 = 6;
+/// `mb_convert_case()` 1:1 case-fold mapping (`MB_CASE_FOLD_SIMPLE`).
+pub(super) const EVAL_MB_CASE_FOLD_SIMPLE: i64 = 7;
 pub(super) const EVAL_COUNT_NORMAL: i64 = 0;
 pub(super) const EVAL_COUNT_RECURSIVE: i64 = 1;
 /// `round()` breaks exact `.5` ties away from zero, which is PHP's default.

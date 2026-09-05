@@ -180,6 +180,39 @@ pub(crate) fn lower_mb_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Lowers `mb_convert_case(string, mode, encoding = null)` through the multibyte runtime helper.
+///
+/// The integer mode is passed beside the source string; omitted/null encodings use a null
+/// pointer plus zero length so the helper can apply PHP's UTF-8 default.
+pub(crate) fn lower_mb_convert_case(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, "mb_convert_case", 2, 3)?;
+    let mode = inst.operands[1];
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "mb_convert_case", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the source string while materializing the case mode
+            load_as_int(ctx, mode, "mb_convert_case mode")?;
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve the case mode while loading the optional encoding
+            load_optional_mb_encoding_at(ctx, inst, 2, "x4", "x5")?;
+            ctx.emitter.instruction("ldr x3, [sp], #16");                       // restore the case mode for the runtime helper
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the source string for the runtime helper
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "mb_convert_case", "rax", "rdx")?;
+            ctx.emitter.instruction("push rax");                                // preserve the source string pointer while materializing the case mode
+            ctx.emitter.instruction("push rdx");                                // preserve the source string length while materializing the case mode
+            load_as_int(ctx, mode, "mb_convert_case mode")?;
+            ctx.emitter.instruction("push rax");                                // preserve the case mode while loading the optional encoding
+            load_optional_mb_encoding_at(ctx, inst, 2, "r8", "r9")?;
+            ctx.emitter.instruction("pop rdi");                                 // restore the case mode for the runtime helper
+            ctx.emitter.instruction("pop rdx");                                 // restore the source string length for the runtime helper
+            ctx.emitter.instruction("pop rax");                                 // restore the source string pointer for the runtime helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mb_convert_case");
+    store_if_result(ctx, inst)
+}
+
 /// Loads the nullable optional `mb_strlen()` encoding into a pointer/length pair.
 pub(super) fn load_optional_mb_strlen_encoding(
     ctx: &mut FunctionContext<'_>,
@@ -187,7 +220,18 @@ pub(super) fn load_optional_mb_strlen_encoding(
     ptr_reg: &str,
     len_reg: &str,
 ) -> Result<()> {
-    let Some(encoding) = inst.operands.get(1).copied() else {
+    load_optional_mb_encoding_at(ctx, inst, 1, ptr_reg, len_reg)
+}
+
+/// Loads a nullable optional encoding operand into a pointer/length pair.
+fn load_optional_mb_encoding_at(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    index: usize,
+    ptr_reg: &str,
+    len_reg: &str,
+) -> Result<()> {
+    let Some(encoding) = inst.operands.get(index).copied() else {
         abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
         abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
         return Ok(());
@@ -197,7 +241,7 @@ pub(super) fn load_optional_mb_strlen_encoding(
         abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
         return Ok(());
     }
-    load_value_as_string_to_regs(ctx, encoding, "mb_strlen encoding", ptr_reg, len_reg)
+    load_value_as_string_to_regs(ctx, encoding, "mbstring encoding", ptr_reg, len_reg)
 }
 
 /// Lowers `md5(data, binary?)` through the shared crypto-backed runtime helper.
