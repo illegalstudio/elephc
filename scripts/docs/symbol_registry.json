@@ -20808,6 +20808,24 @@
       "extension": false,
       "internal": false,
       "module": "core",
+      "name": "PHP_INT_SIZE",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "core",
       "name": "PHP_MAJOR_VERSION",
       "route": "predefined",
       "since": null,

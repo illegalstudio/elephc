@@ -312,6 +312,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("PHP_FLOAT_MIN", Core, ConstValue::Float(f64::MIN_POSITIVE)),
     constant!("PHP_INT_MAX", Core, ConstValue::Int(i64::MAX)),
     constant!("PHP_INT_MIN", Core, ConstValue::Int(i64::MIN)),
+    constant!("PHP_INT_SIZE", Core, ConstValue::Int(8)),
     constant!("PHP_MAJOR_VERSION", Core, ConstValue::TargetDependent(ConstType::Int)),
     constant!("PHP_MINOR_VERSION", Core, ConstValue::TargetDependent(ConstType::Int)),
     constant!("PHP_OS", Core, ConstValue::TargetDependent(ConstType::Str)),
