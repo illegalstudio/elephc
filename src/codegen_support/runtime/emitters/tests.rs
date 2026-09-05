@@ -69,6 +69,16 @@ fn test_runtime_can_gate_mb_strlen_helper() {
         },
     );
     assert!(included.output().contains("__rt_mb_strlen:"));
+    assert!(included.output().contains("__rt_mb_strwidth:"));
+}
+
+/// Verifies the iconv-backed `mb_strwidth()` helper is omitted when unused.
+#[test]
+fn test_runtime_can_gate_mb_strwidth_helper() {
+    let target = Target::new(Platform::MacOS, Arch::AArch64);
+    let mut omitted = Emitter::new(target);
+    emit_runtime(&mut omitted, RuntimeFeatures::none());
+    assert!(!omitted.output().contains("__rt_mb_strwidth:"));
 }
 
 /// Verifies that Linux x86_64 uses the shared runtime surface.

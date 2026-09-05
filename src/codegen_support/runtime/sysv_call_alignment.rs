@@ -170,6 +170,10 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "__rt_mb_strlen",
         "shares a tail between the framed body and a frameless early-out",
     ),
+    (
+        "__rt_mb_strwidth",
+        "shares a tail between the framed body and a frameless early-out",
+    ),
 ];
 
 /// The release chain a curl handle travels into the C bridge. These may NEVER appear in

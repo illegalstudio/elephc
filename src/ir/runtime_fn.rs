@@ -586,6 +586,7 @@ pub enum RuntimeFnId {
     Ltrim,
     MbEregMatch,
     MbStrlen,
+    MbStrwidth,
     Md5,
     NumberFormat,
     Ord,
@@ -1540,7 +1541,9 @@ impl RuntimeFnId {
                 BuiltinRequirement::Bridge("elephc_iconv"),
                 BuiltinRequirement::MacOsLibrary("iconv"),
             ],
-            RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
+            RuntimeFnId::MbStrlen | RuntimeFnId::MbStrwidth => {
+                &[BuiltinRequirement::MacOsLibrary("iconv")]
+            }
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::StreamSocketEnableCrypto => &[BuiltinRequirement::Bridge("elephc_tls")],
@@ -1594,9 +1597,9 @@ impl RuntimeFnId {
         )
     }
 
-    /// Returns whether this operation requires the optional multibyte-length runtime.
+    /// Returns whether this operation requires the optional multibyte length/width runtime.
     pub const fn uses_mb_strlen_runtime(self) -> bool {
-        matches!(self, RuntimeFnId::MbStrlen)
+        matches!(self, RuntimeFnId::MbStrlen | RuntimeFnId::MbStrwidth)
     }
 
     /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
@@ -2462,6 +2465,7 @@ impl RuntimeFnId {
             RuntimeFnId::Ltrim => "ltrim",
             RuntimeFnId::MbEregMatch => "mb_ereg_match",
             RuntimeFnId::MbStrlen => "mb_strlen",
+            RuntimeFnId::MbStrwidth => "mb_strwidth",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Octdec => "octdec",

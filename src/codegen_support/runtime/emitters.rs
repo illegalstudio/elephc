@@ -113,6 +113,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_crc32(emitter);
     if features.mb_strlen {
         strings::emit_mb_strlen(emitter);
+        strings::emit_mb_strwidth(emitter);
     }
     strings::emit_iconv(emitter);
     strings::emit_hash(emitter);
