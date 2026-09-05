@@ -585,7 +585,7 @@ fn emit_iconv_aarch64(emitter: &mut Emitter, errno_function: &str) {
 }
 
 /// Emits destination-capacity growth and UTF-8 append helpers used by the walker.
-pub(super) fn emit_helpers_aarch64(emitter: &mut Emitter) {
+fn emit_helpers_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_strtoupper_ensure");
     emitter.instruction("ldr x10, [sp, #40]");                                  // load the number of destination bytes already written
     emitter.instruction("ldr x11, [sp, #32]");                                  // load the reserved destination capacity
