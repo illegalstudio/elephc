@@ -232,6 +232,7 @@ pub(super) fn scan_class_shell(stmt: &Stmt) -> Usage {
 struct Scanner<'a> {
     usage: Usage,
     variable_classes: HashMap<String, HashSet<String>>,
+    variable_callables: HashMap<String, HashSet<String>>,
     definitely_non_object_variables: HashSet<String>,
     invalidated_variables: HashSet<String>,
     current_class: Option<String>,
