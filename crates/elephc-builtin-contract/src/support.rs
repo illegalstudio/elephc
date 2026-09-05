@@ -372,7 +372,7 @@ mod tests {
         // The shared INI helper is internal but participates in both runtime registries.
         // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
         // through forwarding homes (see `eval_support`).
-        assert_eq!(eval_registry, 682 + curl_surface);
+        assert_eq!(eval_registry, 683 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -397,7 +397,7 @@ mod tests {
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
-        assert_eq!(aot_registry, 737);
+        assert_eq!(aot_registry, 738);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 409 + curl_surface);
@@ -447,7 +447,7 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 85);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 595 + curl_surface);
+        assert_eq!(interpreter_adapter, 596 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own.
         assert_eq!(unsupported, 464);
