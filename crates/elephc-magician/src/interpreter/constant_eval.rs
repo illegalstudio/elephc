@@ -119,6 +119,14 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "STR_PAD_LEFT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_LEFT)),
         "STR_PAD_RIGHT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_RIGHT)),
         "STR_PAD_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_BOTH)),
+        "MB_CASE_UPPER" => Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_UPPER)),
+        "MB_CASE_LOWER" => Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_LOWER)),
+        "MB_CASE_TITLE" => Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_TITLE)),
+        "MB_CASE_FOLD" => Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_FOLD)),
+        "MB_CASE_UPPER_SIMPLE" => Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_UPPER_SIMPLE)),
+        "MB_CASE_LOWER_SIMPLE" => Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_LOWER_SIMPLE)),
+        "MB_CASE_TITLE_SIMPLE" => Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_TITLE_SIMPLE)),
+        "MB_CASE_FOLD_SIMPLE" => Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_FOLD_SIMPLE)),
         "COUNT_NORMAL" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_NORMAL)),
         "COUNT_RECURSIVE" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_RECURSIVE)),
         "PHP_ROUND_HALF_UP" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_UP)),
@@ -294,5 +302,9 @@ mod curl_constant_fallback_tests {
             eval_predefined_constant_value("PHP_INT_MAX"),
             Some(EvalPredefinedConstant::Int(i64::MAX))
         ));
+        assert_eq!(
+            eval_predefined_constant_value("MB_CASE_TITLE"),
+            Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_TITLE))
+        );
     }
 }
