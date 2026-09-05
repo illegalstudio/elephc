@@ -95,23 +95,6 @@ pub fn inject_if_used(
     crate::pdo_prelude::inject_bridge_externs(combined)
 }
 
-/// Returns the mysqli prelude PHP fragments as `(label, source)` pairs, for
-/// source-level scans (the prelude parity gates). Test-only, like the fragments
-/// themselves: the compilation path builds the surface with
-/// `build::mysqli_declarations`, and the oracle below is what keeps the two
-/// equal, so a gate over the text is a gate over what ships.
-#[cfg(test)]
-pub fn fragment_sources() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("mysqli_prelude(constants)", constants::SRC),
-        ("mysqli_prelude(exception)", exception::SRC),
-        ("mysqli_prelude(connection)", connection::SRC),
-        ("mysqli_prelude(result)", result::SRC),
-        ("mysqli_prelude(statement)", statement::SRC),
-        ("mysqli_prelude(procedural)", procedural::SRC),
-    ]
-}
-
 /// Returns the complete assembled mysqli prelude PHP for one version, for the
 /// transcription driver (`synthetic_class::transcribe::tests`) and the oracle.
 #[cfg(test)]
