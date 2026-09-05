@@ -40,6 +40,39 @@ fn execute_program_dispatches_mb_strlen_builtin() {
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `mb_strtolower()` matches UTF-8, byte-encoding, callable, and error behavior.
+#[test]
+fn execute_program_dispatches_mb_strtolower_builtin() {
+    let program = parse_fragment(
+        r#"echo mb_strtolower("Hello WORLD"); echo ":";
+	echo mb_strtolower(string: "HÉLLO", encoding: "UTF-8"); echo ":";
+	echo mb_strtolower("İSTANBUL"); echo ":";
+	echo mb_strtolower("ΟΣ"); echo ":";
+	echo mb_strtolower("ABC", "8bit"); echo ":";
+	echo call_user_func("mb_strtolower", "BG-Red"); echo ":";
+	echo call_user_func_array("mb_strtolower", ["string" => "MiXeD", "encoding" => null]); echo ":";
+	try {
+	    mb_strtolower("abc", "definitely-not-an-encoding");
+	} catch (ValueError $error) {
+	    echo "caught";
+	}
+	echo ":";
+	return function_exists("mb_strtolower") && is_callable("mb_strtolower");"#
+            .as_bytes(),
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "hello world:héllo:i\u{0307}stanbul:ος:abc:bg-red:mixed:caught:"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `explode()` and `implode()` bridge byte strings and arrays.
 #[test]
 fn execute_program_dispatches_explode_implode_builtins() {
