@@ -79,6 +79,30 @@ fn test_core_get_class_vars_aot_defaults_and_visibility() {
     assert_eq!(out, "41s:--:42pTs");
 }
 
+/// Verifies a boxed class-default extract does not erase later object argument typing.
+#[test]
+fn test_core_class_vars_mixed_extract_preserves_methods_object_type() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreMixedVarsSource {
+            public int $x = 1;
+            public int $bar = 7;
+        }
+        class CoreMixedMethodsTarget {
+            public function m(): void {}
+        }
+
+        $a = get_class_vars("CoreMixedVarsSource")["x"];
+        echo $a, ":", implode(",", get_class_methods(new CoreMixedMethodsTarget())), "|";
+
+        $obj = new CoreMixedMethodsTarget();
+        $x = get_class_vars(CoreMixedVarsSource::class)["bar"];
+        echo $x, ":", implode(",", get_class_methods($obj));
+        "#,
+    );
+    assert_eq!(out, "1:m|7:m");
+}
+
 /// Verifies runtime class-name strings and concrete object subclasses select AOT metadata.
 #[test]
 fn test_core_class_introspection_aot_dynamic_inputs() {

@@ -46,6 +46,14 @@ pub(super) fn lower_class_introspection(
             target.effects(),
             Some(expr.span),
         );
+        let class_name_temp = ctx.declare_owned_hidden_temp(PhpType::Str);
+        store_value_into_temp(
+            ctx,
+            &class_name_temp,
+            PhpType::Str,
+            class_name,
+            expr.span,
+        );
         release_owned_call_arg_temporaries(
             ctx,
             &[argument.value],
@@ -53,7 +61,7 @@ pub(super) fn lower_class_introspection(
             &ReturnArgAlias::Unknown,
             expr.span,
         );
-        class_name
+        take_owned_temp(ctx, &class_name_temp, expr.span)
     } else {
         argument
     };
@@ -114,7 +122,10 @@ fn lower_dynamic_class_introspection(
     name: LoweredValue,
     expr: &Expr,
 ) -> LoweredValue {
-    let name_temp = ctx.declare_owned_hidden_temp(PhpType::Str);
+    // Dispatch reads the candidate name once per known class. A one-shot OwnedTemp would make
+    // every read look like an ownership transfer and free a runtime-derived name after the first
+    // failed comparison, so keep one ordinary hidden-slot owner for the whole dispatch chain.
+    let name_temp = ctx.declare_hidden_temp(PhpType::Str);
     store_value_into_temp(ctx, &name_temp, PhpType::Str, name, expr.span);
     let name_var = Expr::new(ExprKind::Variable(name_temp.clone()), expr.span);
     let result_type = kind.result_type();
