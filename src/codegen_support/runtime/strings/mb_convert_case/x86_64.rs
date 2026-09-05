@@ -445,6 +445,8 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mb_cc_map_full_upper_x86");                    // full uppercase may expand
     emitter.instruction("cmp rcx, 2");                                          // MB_CASE_TITLE
     emitter.instruction("je __rt_mb_cc_map_full_title_x86");                    // title uses titlecase or lowercase
+    emitter.instruction("cmp rcx, 3");                                          // MB_CASE_FOLD
+    emitter.instruction("je __rt_mb_cc_map_full_fold_x86");                     // full case fold may expand ß and ligatures
     emitter.label("__rt_mb_cc_map_full_lower_x86");
     abi::emit_symbol_address(emitter, "rsi", "_mb_cc_full_lower");
     emitter.instruction("mov edi, eax");                                        // look up a 1:N lowercase expansion
@@ -453,6 +455,19 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_mb_cc_emit_mapped_x86");                      // emit the expansion
     abi::emit_symbol_address(emitter, "rsi", "_mb_cc_simple_lower");
     emitter.instruction("mov edi, DWORD PTR [rbp - 80]");                       // fall back to the 1:1 lowercase table
+    emitter.instruction("call __rt_mb_cc_simple_lookup_x86");                   // rax = mapped or original code
+    emitter.instruction("mov DWORD PTR [rbp - 244], eax");                      // store the single mapped code
+    emitter.instruction("mov QWORD PTR [rbp - 232], 1");                        // one output code point
+    emitter.instruction("jmp __rt_mb_cc_emit_mapped_x86");                      // encode the mapped scalar
+
+    emitter.label("__rt_mb_cc_map_full_fold_x86");
+    abi::emit_symbol_address(emitter, "rsi", "_mb_cc_full_fold");
+    emitter.instruction("mov edi, eax");                                        // look up a 1:N case-fold expansion
+    emitter.instruction("call __rt_mb_cc_full_lookup_x86");                     // rax = mapped length or zero
+    emitter.instruction("test rax, rax");                                       // did a 1:N fold mapping hit?
+    emitter.instruction("jnz __rt_mb_cc_emit_mapped_x86");                      // emit the expansion
+    abi::emit_symbol_address(emitter, "rsi", "_mb_cc_simple_lower");
+    emitter.instruction("mov edi, DWORD PTR [rbp - 80]");                       // fold falls back to 1:1 lowercase
     emitter.instruction("call __rt_mb_cc_simple_lookup_x86");                   // rax = mapped or original code
     emitter.instruction("mov DWORD PTR [rbp - 244], eax");                      // store the single mapped code
     emitter.instruction("mov QWORD PTR [rbp - 232], 1");                        // one output code point

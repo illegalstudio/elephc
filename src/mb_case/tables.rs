@@ -45,6 +45,8 @@ pub(crate) struct CaseTables {
     pub full_lower: Vec<FullMap>,
     /// 1:N titlecase expansions.
     pub full_title: Vec<FullMap>,
+    /// 1:N case-fold expansions (`MB_CASE_FOLD`).
+    pub full_fold: Vec<FullMap>,
 }
 
 /// Returns the process-wide AOT case-mapping tables.
@@ -62,6 +64,7 @@ fn build_case_tables() -> CaseTables {
     let mut full_upper = Vec::new();
     let mut full_lower = Vec::new();
     let mut full_title = Vec::new();
+    let mut full_fold = Vec::new();
 
     for code in 0u32..=0x10FFFF {
         let Some(ch) = char::from_u32(code) else {
@@ -92,6 +95,10 @@ fn build_case_tables() -> CaseTables {
             &mut simple_title,
             &mut full_title,
         );
+        let folded = super::casefold_chars(ch);
+        if folded.len() > 1 {
+            push_maps(code, collect_full(folded, code), code, &mut Vec::new(), &mut full_fold);
+        }
     }
 
     let _ = (MB_CASE_UPPER, MB_CASE_LOWER, MB_CASE_TITLE);
@@ -104,6 +111,7 @@ fn build_case_tables() -> CaseTables {
         full_upper,
         full_lower,
         full_title,
+        full_fold,
     }
 }
 

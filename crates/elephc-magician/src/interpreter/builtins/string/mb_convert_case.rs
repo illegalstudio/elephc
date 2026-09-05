@@ -274,7 +274,8 @@ fn map_codepoint(code: u32, mode: i64, title_mode: bool) -> Vec<u32> {
     };
     match mode {
         MB_CASE_UPPER => collect_full(ch.to_uppercase(), code),
-        MB_CASE_LOWER | MB_CASE_FOLD => collect_full(ch.to_lowercase(), code),
+        MB_CASE_LOWER => collect_full(ch.to_lowercase(), code),
+        MB_CASE_FOLD => collect_full(casefold_chars(ch), code),
         MB_CASE_TITLE => {
             if title_mode {
                 collect_full(ch.to_lowercase(), code)
@@ -283,7 +284,8 @@ fn map_codepoint(code: u32, mode: i64, title_mode: bool) -> Vec<u32> {
             }
         }
         MB_CASE_UPPER_SIMPLE => vec![simple_or_self(ch.to_uppercase(), code)],
-        MB_CASE_LOWER_SIMPLE | MB_CASE_FOLD_SIMPLE => vec![simple_or_self(ch.to_lowercase(), code)],
+        MB_CASE_LOWER_SIMPLE => vec![simple_or_self(ch.to_lowercase(), code)],
+        MB_CASE_FOLD_SIMPLE => vec![simple_or_self(casefold_chars(ch), code)],
         MB_CASE_TITLE_SIMPLE => {
             if title_mode {
                 vec![simple_or_self(ch.to_lowercase(), code)]
@@ -292,6 +294,20 @@ fn map_codepoint(code: u32, mode: i64, title_mode: bool) -> Vec<u32> {
             }
         }
         _ => vec![code],
+    }
+}
+
+/// Returns the Unicode full case-fold mapping for `ch`.
+fn casefold_chars(ch: char) -> Vec<char> {
+    match ch {
+        'ß' => vec!['s', 's'],
+        'ﬀ' => vec!['f', 'f'],
+        'ﬁ' => vec!['f', 'i'],
+        'ﬂ' => vec!['f', 'l'],
+        'ﬃ' => vec!['f', 'f', 'i'],
+        'ﬄ' => vec!['f', 'f', 'l'],
+        'ﬅ' | 'ﬆ' => vec!['s', 't'],
+        _ => ch.to_lowercase().collect(),
     }
 }
 

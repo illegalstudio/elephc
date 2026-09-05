@@ -71,7 +71,8 @@ fn map_codepoint(code: u32, mode: i64, title_mode: bool) -> Vec<u32> {
     };
     match mode {
         MB_CASE_UPPER => collect_full(ch.to_uppercase(), code),
-        MB_CASE_LOWER | MB_CASE_FOLD => collect_full(ch.to_lowercase(), code),
+        MB_CASE_LOWER => collect_full(ch.to_lowercase(), code),
+        MB_CASE_FOLD => collect_full(casefold_chars(ch), code),
         MB_CASE_TITLE => {
             if title_mode {
                 collect_full(ch.to_lowercase(), code)
@@ -80,9 +81,8 @@ fn map_codepoint(code: u32, mode: i64, title_mode: bool) -> Vec<u32> {
             }
         }
         MB_CASE_UPPER_SIMPLE => vec![simple_or_self(ch.to_uppercase(), code)],
-        MB_CASE_LOWER_SIMPLE | MB_CASE_FOLD_SIMPLE => {
-            vec![simple_or_self(ch.to_lowercase(), code)]
-        }
+        MB_CASE_LOWER_SIMPLE => vec![simple_or_self(ch.to_lowercase(), code)],
+        MB_CASE_FOLD_SIMPLE => vec![simple_or_self(casefold_chars(ch), code)],
         MB_CASE_TITLE_SIMPLE => {
             if title_mode {
                 vec![simple_or_self(ch.to_lowercase(), code)]
@@ -159,6 +159,23 @@ pub(super) fn titlecase_chars(ch: char) -> Vec<char> {
             out.truncate(3);
             out
         }
+    }
+}
+
+/// Returns the Unicode full case-fold mapping for `ch`.
+///
+/// Full case fold matches lowercase except for expansions such as `ß` → `ss`
+/// and the alphabetic ligatures, which PHP's `MB_CASE_FOLD` applies.
+pub(super) fn casefold_chars(ch: char) -> Vec<char> {
+    match ch {
+        'ß' => vec!['s', 's'],
+        'ﬀ' => vec!['f', 'f'],
+        'ﬁ' => vec!['f', 'i'],
+        'ﬂ' => vec!['f', 'l'],
+        'ﬃ' => vec!['f', 'f', 'i'],
+        'ﬄ' => vec!['f', 'f', 'l'],
+        'ﬅ' | 'ﬆ' => vec!['s', 't'],
+        _ => ch.to_lowercase().collect(),
     }
 }
 
@@ -333,6 +350,8 @@ mod tests {
         assert_eq!(convert_utf8("straße".as_bytes(), MB_CASE_UPPER_SIMPLE), "STRAßE".as_bytes());
         assert_eq!(convert_utf8("ß".as_bytes(), MB_CASE_TITLE), b"Ss");
         assert_eq!(convert_utf8("ǆungla".as_bytes(), MB_CASE_TITLE), "ǅungla".as_bytes());
+        assert_eq!(convert_utf8("Straße".as_bytes(), MB_CASE_LOWER), "straße".as_bytes());
+        assert_eq!(convert_utf8("Straße".as_bytes(), MB_CASE_FOLD), "strasse".as_bytes());
     }
 
     /// Verifies Case_Ignorable includes apostrophe and excludes quotation marks.

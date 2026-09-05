@@ -28,6 +28,7 @@ pub(super) fn emit_case_tables(emitter: &mut Emitter) {
     emit_full_table(emitter, "_mb_cc_full_upper", &tables.full_upper);
     emit_full_table(emitter, "_mb_cc_full_lower", &tables.full_lower);
     emit_full_table(emitter, "_mb_cc_full_title", &tables.full_title);
+    emit_full_table(emitter, "_mb_cc_full_fold", &tables.full_fold);
 }
 
 /// Emits a count-prefixed inclusive range table.

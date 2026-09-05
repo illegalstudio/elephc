@@ -436,12 +436,26 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x1, __rt_mb_cc_map_full_upper");                   // MB_CASE_UPPER
     emitter.instruction("cmp x1, #2");                                          // MB_CASE_TITLE
     emitter.instruction("b.eq __rt_mb_cc_map_full_title");                      // title uses titlecase or lowercase
+    emitter.instruction("cmp x1, #3");                                          // MB_CASE_FOLD
+    emitter.instruction("b.eq __rt_mb_cc_map_full_fold");                       // full case fold may expand ß and ligatures
     emitter.label("__rt_mb_cc_map_full_lower");
     abi::emit_symbol_address(emitter, "x1", "_mb_cc_full_lower");
     emitter.instruction("bl __rt_mb_cc_full_lookup");                           // x0 = mapped length or zero
     emitter.instruction("cbnz x0, __rt_mb_cc_emit_mapped");                     // emit the expansion
     abi::emit_symbol_address(emitter, "x1", "_mb_cc_simple_lower");
     emitter.instruction("ldr w0, [x29, #-80]");                                 // fall back to the 1:1 lowercase table
+    emitter.instruction("bl __rt_mb_cc_simple_lookup");                         // x0 = mapped or original code
+    emitter.instruction("str w0, [x29, #-244]");                                // store the single mapped code
+    emitter.instruction("mov x8, #1");                                          // one output code point
+    emitter.instruction("str x8, [x29, #-232]");                                // persist map_len
+    emitter.instruction("b __rt_mb_cc_emit_mapped");                            // encode the mapped scalar
+
+    emitter.label("__rt_mb_cc_map_full_fold");
+    abi::emit_symbol_address(emitter, "x1", "_mb_cc_full_fold");
+    emitter.instruction("bl __rt_mb_cc_full_lookup");                           // x0 = mapped length or zero
+    emitter.instruction("cbnz x0, __rt_mb_cc_emit_mapped");                     // emit the expansion
+    abi::emit_symbol_address(emitter, "x1", "_mb_cc_simple_lower");
+    emitter.instruction("ldr w0, [x29, #-80]");                                 // fold falls back to 1:1 lowercase
     emitter.instruction("bl __rt_mb_cc_simple_lookup");                         // x0 = mapped or original code
     emitter.instruction("str w0, [x29, #-244]");                                // store the single mapped code
     emitter.instruction("mov x8, #1");                                          // one output code point
