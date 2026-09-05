@@ -352,6 +352,10 @@ mod tests {
         assert_eq!(convert_utf8("ǆungla".as_bytes(), MB_CASE_TITLE), "ǅungla".as_bytes());
         assert_eq!(convert_utf8("Straße".as_bytes(), MB_CASE_LOWER), "straße".as_bytes());
         assert_eq!(convert_utf8("Straße".as_bytes(), MB_CASE_FOLD), "strasse".as_bytes());
+        assert_eq!(
+            convert_latin1_bytes(&[b'h', b'i', 0xE9], MB_CASE_TITLE),
+            &[b'H', b'i', 0xC9]
+        );
     }
 
     /// Verifies Case_Ignorable includes apostrophe and excludes quotation marks.

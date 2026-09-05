@@ -302,9 +302,22 @@ mod curl_constant_fallback_tests {
             eval_predefined_constant_value("PHP_INT_MAX"),
             Some(EvalPredefinedConstant::Int(i64::MAX))
         ));
-        assert_eq!(
+    }
+
+    /// Verifies PHP `MB_CASE_*` integers resolve for Magician `mb_convert_case()`.
+    #[test]
+    fn mb_case_constants_resolve_through_the_predefined_constant_fallback() {
+        assert!(matches!(
             eval_predefined_constant_value("MB_CASE_TITLE"),
             Some(EvalPredefinedConstant::Int(EVAL_MB_CASE_TITLE))
-        );
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("MB_CASE_UPPER"),
+            Some(EvalPredefinedConstant::Int(0))
+        ));
+        assert!(matches!(
+            eval_predefined_constant_value("MB_CASE_FOLD_SIMPLE"),
+            Some(EvalPredefinedConstant::Int(7))
+        ));
     }
 }
