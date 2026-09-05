@@ -474,7 +474,16 @@ fn test_error_preg_match_four_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes exactly 2 arguments",
+        "preg_match_all() takes between 2 and 4 arguments",
+    );
+}
+
+/// Verifies that `preg_match_all()` rejects non-variable output arguments for `$matches`.
+#[test]
+fn test_error_preg_match_all_matches_must_be_variable() {
+    expect_error(
+        r#"<?php preg_match_all("/test/", "test", []);"#,
+        "preg_match_all(): Argument #3 ($matches) could not be passed by reference",
     );
 }
 
