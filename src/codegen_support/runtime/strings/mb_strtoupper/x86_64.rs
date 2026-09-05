@@ -8,7 +8,11 @@
 //! - Encoding dispatch matches `mb_strlen`: omitted/null and UTF-8/UTF8 use the UTF-8
 //!   walker, `8bit`/`binary`/`7bit` are ASCII-only, and other names go through iconv.
 //! - UTF-8 uses Unicode full case mapping and copies malformed bytes through unchanged.
-//! - `push rbp` plus `sub rsp, 256` keeps every `call` 16-byte aligned.
+//! - `push rbp` plus `sub rsp, 256` keeps framed `call`s 16-byte aligned. Frameless
+//!   private helpers (`ensure`, `iconv_free_temps`) pad with `sub rsp, 8` around nested
+//!   calls so the SysV audit walks them as aligned when entered in isolation. The
+//!   unknown-encoding path uses `mov rsp, rbp` / `pop rbp` instead of `leave` because
+//!   the audit models those writes and not `leave`.
 
 use crate::codegen_support::{
     abi,
@@ -95,7 +99,8 @@ pub(super) fn emit_mb_strtoupper_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the uppercase string
 
     emitter.label("__rt_mb_strtoupper_unknown_encoding_x86");
-    emitter.instruction("leave");                                               // release the helper frame before throwing ValueError
+    emitter.instruction("mov rsp, rbp");                                        // release the 256-byte frame (walker models this; `leave` does not)
+    emitter.instruction("pop rbp");                                             // restore the caller frame before the ValueError sequence
     value_error::emit_throw_value_error_x86_64(
         emitter,
         "_mb_strtoupper_unknown_encoding_msg",
@@ -536,6 +541,7 @@ fn emit_iconv_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mb_strtoupper_finish_x86");                   // publish the encoded uppercase string
 
     emitter.label("__rt_mb_strtoupper_iconv_free_temps_x86");
+    emitter.instruction("sub rsp, 8");                                          // frameless helper: pad so nested heap_free calls are SysV-aligned
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // decode buffer
     emitter.instruction("call __rt_heap_free");                                 // release the decode temporary
     emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // uppercase buffer
@@ -543,6 +549,7 @@ fn emit_iconv_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_mb_strtoupper_iconv_free_done_x86");           // skip when mapping never allocated
     emitter.instruction("call __rt_heap_free");                                 // release the uppercase temporary
     emitter.label("__rt_mb_strtoupper_iconv_free_done_x86");
+    emitter.instruction("add rsp, 8");                                          // drop the SysV alignment pad
     emitter.instruction("ret");                                                 // return to the iconv path
 }
 
@@ -560,7 +567,9 @@ fn emit_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl rsi, 1");                                          // double the destination capacity
     emitter.instruction("add rsi, 16");                                         // plus a small extra so tiny strings can grow
     emitter.instruction("mov QWORD PTR [rbp - 40], rsi");                       // persist the new capacity before the grow call
+    emitter.instruction("sub rsp, 8");                                          // frameless helper: pad so concat_grow is SysV-aligned
     emitter.instruction("call __rt_concat_grow");                               // replace the destination with a larger owned buffer
+    emitter.instruction("add rsp, 8");                                          // drop the SysV alignment pad
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // persist the grown destination pointer
     emitter.label("__rt_mb_strtoupper_ensure_done_x86");
     emitter.instruction("ret");                                                 // return to the UTF-8 walker
