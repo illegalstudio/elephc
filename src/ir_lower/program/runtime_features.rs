@@ -15,6 +15,7 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     let features = lowered_runtime_features(module);
     module.required_runtime_features.regex |= features.regex;
     module.required_runtime_features.mb_strlen |= features.mb_strlen;
+    module.required_runtime_features.mb_strtoupper |= features.mb_strtoupper;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
@@ -46,6 +47,7 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
                         features.mb_strlen |= target.uses_mb_strlen_runtime();
+                        features.mb_strtoupper |= target.uses_mb_strtoupper_runtime();
                         features.phar_archive |= target.publishes_phar_symbols()
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=

@@ -586,6 +586,7 @@ pub enum RuntimeFnId {
     Ltrim,
     MbEregMatch,
     MbStrlen,
+    MbStrtoupper,
     Md5,
     NumberFormat,
     Ord,
@@ -1540,7 +1541,9 @@ impl RuntimeFnId {
                 BuiltinRequirement::Bridge("elephc_iconv"),
                 BuiltinRequirement::MacOsLibrary("iconv"),
             ],
-            RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
+            RuntimeFnId::MbStrlen | RuntimeFnId::MbStrtoupper => {
+                &[BuiltinRequirement::MacOsLibrary("iconv")]
+            }
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::StreamSocketEnableCrypto => &[BuiltinRequirement::Bridge("elephc_tls")],
@@ -1597,6 +1600,11 @@ impl RuntimeFnId {
     /// Returns whether this operation requires the optional multibyte-length runtime.
     pub const fn uses_mb_strlen_runtime(self) -> bool {
         matches!(self, RuntimeFnId::MbStrlen)
+    }
+
+    /// Returns whether this operation requires the optional multibyte-uppercase runtime.
+    pub const fn uses_mb_strtoupper_runtime(self) -> bool {
+        matches!(self, RuntimeFnId::MbStrtoupper)
     }
 
     /// Returns the scope-cleanup kind stamped into the resource this operation boxes.
@@ -1967,6 +1975,9 @@ impl RuntimeFnId {
                 // releasing the reservation afterwards, so the result is caller-owned and can
                 // never alias the subject, the pair array, or the byte lists.
                 | RuntimeFnId::Strtr
+                // `mb_strtoupper()` writes a freshly reserved concat/heap string and never
+                // returns a slice of its subject, so the result cannot alias an argument.
+                | RuntimeFnId::MbStrtoupper
                 // Strstr's result is `string|false`, so its lowering boxes BOTH arms into a
                 // fresh Mixed cell and `__rt_mixed_from_value` persists (copies) the string
                 // payload — it no longer hands back a borrowed slice of the haystack. Leaving
@@ -2462,6 +2473,7 @@ impl RuntimeFnId {
             RuntimeFnId::Ltrim => "ltrim",
             RuntimeFnId::MbEregMatch => "mb_ereg_match",
             RuntimeFnId::MbStrlen => "mb_strlen",
+            RuntimeFnId::MbStrtoupper => "mb_strtoupper",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Octdec => "octdec",

@@ -198,6 +198,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_strrev` | Reverse string (byte-wise) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_grapheme_strrev` | Reverse a UTF-8 string by grapheme cluster for PHP 8.6 `grapheme_strrev()`; returns false on malformed UTF-8 | `x1`/`x2` | `x1`/`x2` |
 | `__rt_mb_strlen` | Multibyte-aware string length for `mb_strlen()` (emitted only for programs that use it) | `x1`/`x2` | `x0` |
+| `__rt_mb_strtoupper` | Encoding-aware Unicode uppercase for `mb_strtoupper()` (emitted only for programs that use it) | `x1`/`x2` + optional encoding | `x1`/`x2` |
 | `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
 | `__rt_stripos` | Find substring, ASCII case-insensitive | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
@@ -949,14 +950,14 @@ These helpers implement PHP 8.1-style cooperative coroutines. They are emitted b
 
 **File:** `src/codegen_support/runtime/emitters.rs`
 
-The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. Each runtime module owns the shared helper surface and dispatches internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI setup. A `RuntimeFeatures` argument gates the optional groups: the regex family and `__rt_mb_strlen` are emitted only for programs that use them, the eval bridge/scope helpers only when the final EIR module requires them, and the `--web` flag selects the web-aware bodies of `__rt_stdout_write`, `__rt_php_input`, `__rt_http_response_code`, and `__rt_header`.
+The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. Each runtime module owns the shared helper surface and dispatches internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI setup. A `RuntimeFeatures` argument gates the optional groups: the regex family, `__rt_mb_strlen`, and `__rt_mb_strtoupper` are emitted only for programs that use them, the eval bridge/scope helpers only when the final EIR module requires them, and the `--web` flag selects the web-aware bodies of `__rt_stdout_write`, `__rt_php_input`, `__rt_http_response_code`, and `__rt_header`.
 
 ```rust
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // diagnostics: runtime warning emission and @ suppression state
     // numeric: PHP float-to-int coercion and shared rounding-mode decoding
     // strings: itoa, resource display/stdout, ftoa, concat, atoi, equality, formatting, trim/mask,
-    // search/replace, explode/implode, hashing, encoding, sscanf, mb_strlen (gated), ...
+    // search/replace, explode/implode, hashing, encoding, sscanf, mb_strlen/mb_strtoupper (gated), ...
     // bcmath: exact-decimal bridge marshalling and catchable error translation
     // callables: dynamic is_callable() fallback, callable-descriptor release, Closure::bind
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, serialize/unserialize, regex (gated)

@@ -286,7 +286,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StrWordCount,
     /// Dispatches the whole `iconv*` extension family.
     Iconv,
-    /// Dispatches `strlen(...)` and `mb_strlen(...)`.
+    /// Dispatches `strlen(...)`, `mb_strlen(...)`, and `mb_strtoupper(...)`.
     Strlen,
     /// Dispatches `str_repeat(...)`.
     StrRepeat,
@@ -676,6 +676,13 @@ impl EvalValuesHook {
                     [value] => eval_mb_strlen_result(*value, None, context, values),
                     [value, encoding] => {
                         eval_mb_strlen_result(*value, Some(*encoding), context, values)
+                    }
+                    _ => Err(EvalStatus::RuntimeFatal),
+                },
+                "mb_strtoupper" => match evaluated_args {
+                    [value] => eval_mb_strtoupper_result(*value, None, context, values),
+                    [value, encoding] => {
+                        eval_mb_strtoupper_result(*value, Some(*encoding), context, values)
                     }
                     _ => Err(EvalStatus::RuntimeFatal),
                 },

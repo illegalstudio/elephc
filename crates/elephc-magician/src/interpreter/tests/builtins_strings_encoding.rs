@@ -40,6 +40,36 @@ fn execute_program_dispatches_mb_strlen_builtin() {
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `mb_strtoupper()` matches encoding, Unicode mapping, callable, and error behavior.
+#[test]
+fn execute_program_dispatches_mb_strtoupper_builtin() {
+    let program = parse_fragment(
+        r#"echo mb_strtoupper("hello"); echo ":";
+	echo mb_strtoupper(string: "héllo", encoding: "8bit"); echo ":";
+	echo mb_strtoupper("straße", null); echo ":";
+	echo call_user_func("mb_strtoupper", "日本語"); echo ":";
+	echo call_user_func_array("mb_strtoupper", ["string" => "héllo", "encoding" => "UTF-8"]); echo ":";
+	echo bin2hex(mb_strtoupper(chr(128), "UTF-8")); echo ":";
+	echo bin2hex(mb_strtoupper(chr(104) . chr(0) . chr(233) . chr(0), "UTF-16LE")); echo ":";
+	try {
+	    mb_strtoupper("abc", "definitely-not-an-encoding");
+	} catch (ValueError $error) {
+	    echo "caught";
+	}
+	echo ":";
+	return function_exists("mb_strtoupper") && is_callable("mb_strtoupper");"#
+            .as_bytes(),
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "HELLO:HéLLO:STRASSE:日本語:HÉLLO:80:4800c900:caught:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `explode()` and `implode()` bridge byte strings and arrays.
 #[test]
 fn execute_program_dispatches_explode_implode_builtins() {

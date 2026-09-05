@@ -71,6 +71,38 @@ fn test_runtime_can_gate_mb_strlen_helper() {
     assert!(included.output().contains("__rt_mb_strlen:"));
 }
 
+/// Verifies `__rt_mb_strtoupper` is feature-gated and the AArch64 ensure helper preserves LR.
+#[test]
+fn test_mb_strtoupper_runtime_is_feature_gated() {
+    let target = Target::new(Platform::MacOS, Arch::AArch64);
+    let mut omitted = Emitter::new(target);
+    emit_runtime(&mut omitted, RuntimeFeatures::none());
+    assert!(!omitted.output().contains("__rt_mb_strtoupper:"));
+
+    let mut included = Emitter::new(target);
+    emit_runtime(
+        &mut included,
+        RuntimeFeatures {
+            mb_strtoupper: true,
+            ..RuntimeFeatures::none()
+        },
+    );
+    let asm = included.output();
+    assert!(asm.contains("__rt_mb_strtoupper:"));
+    assert!(asm.contains("__rt_mb_case_upper:"));
+    let ensure = asm
+        .split("__rt_mb_strtoupper_ensure:")
+        .nth(1)
+        .and_then(|rest| rest.split("__rt_mb_strtoupper_put_utf8:").next())
+        .expect("ensure helper should be emitted before put_utf8");
+    assert!(
+        ensure.contains("stp x29, x30, [sp, #-16]!")
+            && ensure.contains("bl __rt_concat_grow")
+            && ensure.contains("ldp x29, x30, [sp], #16"),
+        "AArch64 ensure must preserve LR across concat_grow so 1-byte inputs return"
+    );
+}
+
 /// Verifies that Linux x86_64 uses the shared runtime surface.
 #[test]
 fn test_linux_x86_64_runtime_uses_shared_surface() {

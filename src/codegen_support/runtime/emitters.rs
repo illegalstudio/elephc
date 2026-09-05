@@ -114,6 +114,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     if features.mb_strlen {
         strings::emit_mb_strlen(emitter);
     }
+    if features.mb_strtoupper {
+        strings::emit_mb_strtoupper(emitter);
+    }
     strings::emit_iconv(emitter);
     strings::emit_hash(emitter);
     strings::emit_hash_hmac(emitter);

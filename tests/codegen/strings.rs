@@ -85,3 +85,62 @@ try {
     );
     assert_eq!(out, "3:caught");
 }
+
+/// Verifies `mb_strtoupper()` applies Unicode full mapping across ASCII, Latin-1, and ß.
+#[test]
+fn test_mb_strtoupper_unicode_mapping() {
+    let out = compile_and_run(
+        "<?php echo mb_strtoupper('hello'), ':', mb_strtoupper('héllo'), ':', mb_strtoupper('straße'), ':', mb_strtoupper('日本語'), ':', mb_strtoupper('');",
+    );
+    assert_eq!(out, "HELLO:HÉLLO:STRASSE:日本語:");
+}
+
+/// Verifies `mb_strtoupper()` accepts PHP's optional nullable encoding and byte-oriented aliases.
+#[test]
+fn test_mb_strtoupper_encoding_argument() {
+    let out = compile_and_run(
+        r#"<?php
+echo mb_strtoupper("héllo", "UTF-8"), ":";
+echo mb_strtoupper("héllo", "8bit"), ":";
+echo mb_strtoupper(string: "日本語", encoding: null), ":";
+$encoding = $argc > 0 ? "binary" : "UTF-8";
+echo mb_strtoupper("héllo", $encoding), ":";
+$utf16 = "\x68\x00\xE9\x00";
+$upper16 = mb_strtoupper($utf16, "UTF-16LE");
+echo bin2hex($upper16), ":";
+$upper = mb_strtoupper(...);
+echo $upper("héllo", "8bit");"#,
+    );
+    assert_eq!(out, "HÉLLO:HéLLO:日本語:HéLLO:4800c900:HéLLO");
+}
+
+/// Verifies malformed and truncated UTF-8 is copied through unchanged.
+#[test]
+fn test_mb_strtoupper_malformed_utf8() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(mb_strtoupper("\x80", "UTF-8")), ":";
+echo bin2hex(mb_strtoupper("\xC0\xAF", "UTF-8")), ":";
+echo bin2hex(mb_strtoupper("\xE2\x82", "UTF-8")), ":";
+echo bin2hex(mb_strtoupper("\xED\xA0\x80", "UTF-8")), ":";
+echo bin2hex(mb_strtoupper("a\x80b", "UTF-8"));"#,
+    );
+    assert_eq!(out, "80:c0af:e282:eda080:418042");
+}
+
+/// Verifies namespaced/case-insensitive lookup and unknown-encoding `ValueError` behavior.
+#[test]
+fn test_mb_strtoupper_namespace_and_invalid_encoding() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+echo Mb_StRtOuPpEr("hello"), ":";
+$encoding = $argc > 0 ? "definitely-not-an-encoding" : "UTF-8";
+try {
+    mb_strtoupper("abc", $encoding);
+} catch (\ValueError $error) {
+    echo "caught";
+}"#,
+    );
+    assert_eq!(out, "HELLO:caught");
+}

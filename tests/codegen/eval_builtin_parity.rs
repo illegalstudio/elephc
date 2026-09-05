@@ -151,6 +151,24 @@ eval($source);
     assert_eq!(out, "6:2");
 }
 
+/// Verifies dynamic eval links and dispatches Magician's encoding-aware `mb_strtoupper()` path.
+#[test]
+fn test_eval_mb_strtoupper_encoding_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$source = 'echo mb_strtoupper("héllo", "8bit");
+echo ":";
+echo mb_strtoupper("straße");
+echo ":";
+$utf16 = chr(104) . chr(0) . chr(233) . chr(0);
+echo bin2hex(mb_strtoupper($utf16, "UTF-16LE"));';
+eval($source);
+"#,
+    );
+
+    assert_eq!(out, "HéLLO:STRASSE:4800c900");
+}
+
 /// Verifies eval preg builtins use PCRE2 features that Rust regex did not support.
 #[test]
 fn test_eval_preg_uses_pcre2_lookaround_semantics() {

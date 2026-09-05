@@ -22,6 +22,9 @@ pub(super) fn lower(
         RuntimeFnId::MbStrlen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_strlen(ctx, inst)
         }),
+        RuntimeFnId::MbStrtoupper => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_strtoupper(ctx, inst)
+        }),
         RuntimeFnId::Md5 => Some({
             crate::codegen::lower_inst::builtins::strings::lower_md5(ctx, inst)
         }),
