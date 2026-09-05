@@ -6,7 +6,9 @@
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - `preg_match()` captures currently support direct local `$matches` variables.
+//! - `preg_match()` and `preg_match_all()` captures currently support direct local
+//!   `$matches` variables. `preg_match_all()` also accepts `PREG_PATTERN_ORDER`,
+//!   `PREG_SET_ORDER`, `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`.
 //! - `preg_replace_callback()` supports static string callbacks and descriptor-backed
 //!   callable values through a regex-specific callback wrapper.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
@@ -62,16 +64,33 @@ pub(crate) fn lower_mb_ereg_match(
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_match_all(pattern, subject)` through the shared regex runtime helper.
+/// Lowers `preg_match_all(pattern, subject, &$matches?, flags?)` through the regex helpers.
 pub(crate) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "preg_match_all", 2)?;
+    super::ensure_arg_count_between(inst, "preg_match_all", 2, 4)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
+    let matches_slot = inst
+        .operands
+        .get(2)
+        .copied()
+        .map(|value| optional_matches_local_slot(ctx, value))
+        .transpose()?
+        .flatten();
+    let flags = inst.operands.get(3).copied();
     load_pattern_and_subject(ctx, pattern, subject)?;
-    abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => load_flags_arg(ctx, flags, "x5")?,
+        Arch::X86_64 => load_flags_arg(ctx, flags, "r8")?,
+    }
+    if let Some(slot) = matches_slot {
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
+        store_matches_array(ctx, slot)?;
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
+    }
     super::store_if_result(ctx, inst)
 }
 
@@ -480,6 +499,37 @@ fn load_mb_ereg_match_args(
     }
 }
 
+/// Returns the local slot represented by a `preg_match_all()` `$matches` operand.
+///
+/// Named-argument lowering may materialize the default empty array when `$matches`
+/// was omitted. That non-local operand is treated as count-only rather than a
+/// capture destination.
+fn optional_matches_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<LocalSlotId>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if inst_ref.op != Op::LoadLocal {
+        return Ok(None);
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "preg_match_all matches load missing local slot",
+        ));
+    };
+    Ok(Some(slot))
+}
+
 /// Returns the local slot represented by a `preg_match()` `$matches` operand.
 fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalSlotId> {
     let value_ref = ctx
@@ -606,13 +656,13 @@ fn load_limit_arg(ctx: &mut FunctionContext<'_>, limit: Option<ValueId>, reg: &s
     require_integer_like(ctx.load_value_to_reg(limit, reg)?, "preg_split limit")
 }
 
-/// Loads the optional `preg_split()` flags, using PHP's default `0`.
+/// Loads an optional preg flags integer, using PHP's default `0`.
 fn load_flags_arg(ctx: &mut FunctionContext<'_>, flags: Option<ValueId>, reg: &str) -> Result<()> {
     let Some(flags) = flags else {
         abi::emit_load_int_immediate(ctx.emitter, reg, 0);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_reg(flags, reg)?, "preg_split flags")
+    require_integer_like(ctx.load_value_to_reg(flags, reg)?, "preg flags")
 }
 
 /// Verifies that a regex string operand is statically string-shaped.

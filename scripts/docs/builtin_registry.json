@@ -61830,6 +61830,20 @@
           "name": "subject",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": [],
+          "name": "matches",
+          "optional": true,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 2,
@@ -61839,7 +61853,7 @@
     },
     "area": "Regex",
     "canonical_name": "preg_match_all",
-    "description": "Performs a global regular expression match and returns the number of matches.",
+    "description": "Performs a global regular expression match, optionally filling `$matches`, and returns the number of matches.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "regex",
@@ -61882,7 +61896,7 @@
       ],
       "required_param_count": 2,
       "runtime_builtin_id": null,
-      "signature_override_reason": "additional-by-reference-output",
+      "signature_override_reason": null,
       "supported": true,
       "variadic": null
     },
@@ -61909,7 +61923,7 @@
     },
     "name": "preg_match_all",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "positional_regex",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -61947,7 +61961,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "preg_match_all"
       ],
@@ -61961,7 +61975,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": true
       }
     },
     "sig": {
@@ -61979,6 +61994,20 @@
           "name": "subject",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": "[]",
+          "name": "matches",
+          "optional": true,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "int",

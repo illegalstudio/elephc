@@ -989,6 +989,7 @@ and 0.x validation rather than by speculative pass work.
 - [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [x] Installation / packaging documentation for the supported host platforms — macOS Homebrew, source builds, release artifacts, native toolchain requirements, and managed native dependency prerequisites are covered in `docs/getting-started/installation.md`
+- [x] `preg_match_all()` by-ref `$matches` plus `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL` on AOT and Magician
 
 ## Later 0.x product tracks
 

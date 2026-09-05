@@ -87,7 +87,7 @@ for a complete project.
 | Function | Signature | Description |
 |---|---|---|
 | `preg_match()` | `preg_match($pattern, $subject, &$matches = null): int` | Test regex match (1 or 0); optional `$matches` receives the full match and capture groups |
-| `preg_match_all()` | `preg_match_all($pattern, $subject): int` | Count all non-overlapping matches |
+| `preg_match_all()` | `preg_match_all($pattern, $subject, &$matches = [], $flags = 0): int` | Count all non-overlapping matches; optional `$matches` receives numbered groups |
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string` | Replace all regex matches; `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): string` | Replace all regex matches with the callback return value; callback receives `array<string>` matches |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array` | Split string by regex; supports no-empty, delimiter-capture, offset-capture, and positive limits |
@@ -116,6 +116,20 @@ Other trailing modifiers are currently not mapped to PCRE2 flags.
 is the full match, and `$matches[1]` onward contain compiled numbered capture
 groups. Unmatched interior captures are empty strings; trailing unmatched groups
 are omitted.
+
+`preg_match_all()` supports the same by-reference `$matches` parameter and the
+PHP flags Termwind uses for width and trim styling:
+
+| Constant | Behavior |
+|---|---|
+| `PREG_PATTERN_ORDER` (default) | `$matches[group][match]` |
+| `PREG_SET_ORDER` | `$matches[match][group]` |
+| `PREG_OFFSET_CAPTURE` | Each cell is `[value, offset]` |
+| `PREG_UNMATCHED_AS_NULL` | Unmatched groups are `null` (offset `-1` with offset capture) |
+
+A successful compile with zero matches still materializes one empty row per
+compiled numbered group under `PREG_PATTERN_ORDER`. Named capture keys are not
+populated.
 
 `preg_replace()` expands `$0`..`$99` and `\0`..`\99` to captured groups.
 Unmatched optional groups and missing groups expand to an empty string.

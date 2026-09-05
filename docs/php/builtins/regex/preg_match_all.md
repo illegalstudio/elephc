@@ -1,6 +1,6 @@
 ---
 title: "preg_match_all()"
-description: "Performs a global regular expression match and returns the number of matches."
+description: "Performs a global regular expression match, optionally filling `$matches`, and returns the number of matches."
 sidebar:
   order: 401
 ---
@@ -8,14 +8,16 @@ sidebar:
 ## preg_match_all()
 
 ```php
-function preg_match_all(string $pattern, string $subject): int
+function preg_match_all(string $pattern, string $subject, mixed $matches = [], int $flags = 0): int
 ```
 
-Performs a global regular expression match and returns the number of matches.
+Performs a global regular expression match, optionally filling `$matches`, and returns the number of matches.
 
 **Parameters**:
 - `$pattern` (`string`)
 - `$subject` (`string`)
+- `$matches` (`mixed`), passed by reference, default `[]`, optional
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `int`
 
