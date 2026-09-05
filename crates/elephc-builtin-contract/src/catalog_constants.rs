@@ -78,7 +78,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("ENT_XHTML", Standard, ConstValue::Int(32)),
     constant!("ENT_XML1", Standard, ConstValue::Int(16)),
     constant!("EXIF_USE_MBSTRING", Exif, ConstValue::Int(0), route: Prelude),
-    constant!("E_ALL", Core, ConstValue::Int(32767)),
+    constant!("E_ALL", Core, ConstValue::TargetDependent(ConstType::Int)),
     constant!("E_COMPILE_ERROR", Core, ConstValue::Int(64)),
     constant!("E_COMPILE_WARNING", Core, ConstValue::Int(128)),
     constant!("E_CORE_ERROR", Core, ConstValue::Int(16)),

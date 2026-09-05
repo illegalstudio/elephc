@@ -25,7 +25,8 @@ use crate::types::PhpType;
 /// read through `types::predefined_constants`): fixed values are materialized as literals
 /// straight from their contract, while the TARGET- AND PROFILE-DEPENDENT ones
 /// (`ConstValue::TargetDependent`: `PHP_OS`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
-/// `DIRECTORY_SEPARATOR`, the platform-specific `FNM_*` flags, `ICONV_IMPL` / `ICONV_VERSION`)
+/// `DIRECTORY_SEPARATOR`, `E_ALL`, the platform-specific `FNM_*` flags,
+/// `ICONV_IMPL` / `ICONV_VERSION`)
 /// are computed here under their catalogued names. The version surface reads the compilation's
 /// `--php-version` profile and `--web` mode from the codegen thread-local pair
 /// (`compile_php_version` / `compile_is_web_sapi`) rather than from a parameter, because this
@@ -67,6 +68,7 @@ pub(crate) fn collect_constants(
         ("PHP_MINOR_VERSION", int_const(i64::from(php_version.minor()))),
         ("PHP_RELEASE_VERSION", int_const(i64::from(php_version.release()))),
         ("PHP_EXTRA_VERSION", str_const(php_version.extra_version().to_string())),
+        ("E_ALL", int_const(php_version.error_reporting_mask())),
         (
             "PHP_SAPI",
             str_const(
@@ -181,6 +183,13 @@ mod tests {
         assert_eq!(int_constant(&linux, "FNM_PATHNAME"), 1);
         assert_eq!(int_constant(&linux, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&linux, "FNM_CASEFOLD"), 16);
+    }
+
+    /// Verifies the prescanned `E_ALL` literal follows the selected PHP profile.
+    #[test]
+    fn test_error_all_follows_php_profile() {
+        let default_profile = collect_constants(&vec![], Platform::Linux);
+        assert_eq!(int_constant(&default_profile, "E_ALL"), 30_719);
     }
 
     /// Verifies every catalogued constant the compiler registers gets a value here, on every

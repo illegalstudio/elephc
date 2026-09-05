@@ -146,6 +146,7 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         "PHP_RELEASE_VERSION" => EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION),
         "PHP_EXTRA_VERSION" => EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION),
         "PHP_SAPI" => EvalPredefinedConstant::String(EVAL_PHP_SAPI),
+        "E_ALL" => EvalPredefinedConstant::Int(crate::eval_php_profile::eval_all_error_mask()),
         "DIRECTORY_SEPARATOR" => EvalPredefinedConstant::String("/"),
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
         "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
