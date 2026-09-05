@@ -9,6 +9,7 @@
 //! - Result is reserved through `__rt_concat_reserve` and returned in `x1`/`x2`.
 //! - `map_len` at `[x29, #-232]` and the emit index at `[x29, #-228]` are packed
 //!   32-bit slots so a 64-bit store cannot overlap the neighboring word.
+//! - `__rt_mb_cc_apply` and `__rt_mb_cc_sigma_ahead` save `x30` across nested `bl`.
 
 use super::{MAX_ENCODING_NAME_LEN, RESERVE_MULTIPLIER};
 use crate::codegen_support::{
@@ -408,6 +409,7 @@ fn emit_decode_aarch64(emitter: &mut Emitter) {
 /// Emits case mapping, title-state updates, final-sigma, and output encoding.
 fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_cc_apply");
+    emitter.instruction("str x30, [sp, #-16]!");                                // keep the convert-loop return address across nested bl
     emitter.instruction("ldr w0, [x29, #-80]");                                 // load the decoded scalar
     emitter.instruction("mov w8, #0x03A3");                                     // Greek capital sigma
     emitter.instruction("cmp w0, w8");                                          // is this Greek capital sigma?
@@ -551,9 +553,11 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_cc_store_title");
     emitter.instruction("str x0, [x29, #-56]");                                 // title_mode becomes is_cased of this scalar
     emitter.label("__rt_mb_cc_apply_ret");
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore the convert-loop return address
     emitter.instruction("ret");                                                 // return to the convert loop
 
     emitter.label("__rt_mb_cc_sigma_ahead");
+    emitter.instruction("str x30, [sp, #-16]!");                                // keep apply's return address across decode and range lookups
     emitter.instruction("ldr x8, [x29, #-48]");                                 // start the lookahead after the current unit
     emitter.instruction("ldr x9, [x29, #-96]");                                 // load the current consume count
     emitter.instruction("add x8, x8, x9");                                      // skip the current sigma
@@ -598,9 +602,11 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_mb_cc_cased");
     emitter.instruction("bl __rt_mb_cc_in_range");                              // x0 = 1 when the peek is cased
     emitter.instruction("eor x0, x0, #1");                                      // final sigma when the next letter is not cased
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore apply's return address
     emitter.instruction("ret");                                                 // return the lookahead answer
     emitter.label("__rt_mb_cc_sigma_yes");
     emitter.instruction("mov x0, #1");                                          // EOF / raw units make this sigma final
+    emitter.instruction("ldr x30, [sp], #16");                                  // restore apply's return address
     emitter.instruction("ret");                                                 // return true
 }
 

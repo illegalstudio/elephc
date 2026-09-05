@@ -9,6 +9,7 @@
 //! - Result is reserved through `__rt_concat_reserve` and published with `__rt_concat_publish`.
 //! - `map_len` at `[rbp-232]` and the emit index at `[rbp-228]` are packed 32-bit
 //!   slots so a 64-bit store cannot overlap the neighboring word.
+//! - Apply and sigma-ahead pad `rsp` by 8 so nested `call` sites stay System V aligned.
 
 use super::{MAX_ENCODING_NAME_LEN, RESERVE_MULTIPLIER};
 use crate::codegen_support::{
@@ -418,6 +419,7 @@ fn emit_decode_x86_64(emitter: &mut Emitter) {
 /// Emits case mapping, title-state updates, final-sigma, and output encoding.
 fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_cc_apply_x86");
+    emitter.instruction("sub rsp, 8");                                          // keep nested calls 16-byte aligned from this frameless entry
     emitter.instruction("mov eax, DWORD PTR [rbp - 80]");                       // load the decoded scalar
     emitter.instruction("cmp eax, 0x03A3");                                     // is this Greek capital sigma?
     emitter.instruction("jne __rt_mb_cc_map_x86");                              // ordinary scalars use the mapping tables
@@ -561,9 +563,11 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_cc_store_title_x86");
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // title_mode becomes is_cased of this scalar
     emitter.label("__rt_mb_cc_apply_ret_x86");
+    emitter.instruction("add rsp, 8");                                          // release the nested-call alignment pad
     emitter.instruction("ret");                                                 // return to the convert loop
 
     emitter.label("__rt_mb_cc_sigma_ahead_x86");
+    emitter.instruction("sub rsp, 8");                                          // keep nested calls 16-byte aligned from this frameless entry
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // start the lookahead after the current unit
     emitter.instruction("add rax, QWORD PTR [rbp - 96]");                       // skip the current sigma
     emitter.instruction("mov QWORD PTR [rbp - 152], rax");                      // peek offset
@@ -586,11 +590,11 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop QWORD PTR [rbp - 48]");                            // restore the real source offset
     emitter.instruction("cmp r8, 1");                                           // a raw unit ends the word
     emitter.instruction("je __rt_mb_cc_sigma_yes_x86");                         // malformed bytes count as a word boundary
-    emitter.instruction("push r10");                                            // preserve the peeked consume count
+    emitter.instruction("mov QWORD PTR [rbp - 160], r10");                      // spill the peeked consume count without changing rsp
     emitter.instruction("mov edi, r9d");                                        // test Case_Ignorable on the peeked scalar
     abi::emit_symbol_address(emitter, "rsi", "_mb_cc_ignorable");
     emitter.instruction("call __rt_mb_cc_in_range_x86");                        // rax = 1 when the peek is ignorable
-    emitter.instruction("pop r10");                                             // restore the peeked consume count
+    emitter.instruction("mov r10, QWORD PTR [rbp - 160]");                      // restore the peeked consume count
     emitter.instruction("test rax, rax");                                       // skip Case_Ignorable marks
     emitter.instruction("jz __rt_mb_cc_sigma_cased_x86");                       // a non-ignorable peek decides the word
     emitter.instruction("add QWORD PTR [rbp - 152], r10");                      // advance the peek offset past the mark
@@ -600,9 +604,11 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rsi", "_mb_cc_cased");
     emitter.instruction("call __rt_mb_cc_in_range_x86");                        // rax = 1 when the peek is cased
     emitter.instruction("xor rax, 1");                                          // final sigma when the next letter is not cased
+    emitter.instruction("add rsp, 8");                                          // release the nested-call alignment pad
     emitter.instruction("ret");                                                 // return the lookahead answer
     emitter.label("__rt_mb_cc_sigma_yes_x86");
     emitter.instruction("mov rax, 1");                                          // EOF / raw units make this sigma final
+    emitter.instruction("add rsp, 8");                                          // release the nested-call alignment pad
     emitter.instruction("ret");                                                 // return true
 }
 
