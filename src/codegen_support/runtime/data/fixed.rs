@@ -13,7 +13,8 @@ use super::{
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
-    MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    MB_STRLEN_UNKNOWN_ENCODING_MSG, MB_STRIMWIDTH_START_RANGE_MSG,
+    MB_STRIMWIDTH_UNKNOWN_ENCODING_MSG, MB_STRIMWIDTH_WIDTH_RANGE_MSG,
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
     OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
@@ -550,6 +551,26 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _mb_strlen_unknown_encoding_msg\n_mb_strlen_unknown_encoding_msg:\n    .ascii {:?}\n",
         MB_STRLEN_UNKNOWN_ENCODING_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _mb_strimwidth_unknown_encoding_msg\n_mb_strimwidth_unknown_encoding_msg:\n    .ascii {:?}\n",
+        MB_STRIMWIDTH_UNKNOWN_ENCODING_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _mb_strimwidth_start_range_msg\n_mb_strimwidth_start_range_msg:\n    .ascii {:?}\n",
+        MB_STRIMWIDTH_START_RANGE_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _mb_strimwidth_width_range_msg\n_mb_strimwidth_width_range_msg:\n    .ascii {:?}\n",
+        MB_STRIMWIDTH_WIDTH_RANGE_MSG
+    ));
+    out.push_str(".p2align 2\n.globl _mb_eaw_table\n_mb_eaw_table:\n");
+    for (begin, end) in crate::codegen_support::runtime::strings::mb_eaw::MB_EAW_RANGES {
+        out.push_str(&format!("    .long 0x{begin:x}, 0x{end:x}\n"));
+    }
+    out.push_str(&format!(
+        ".globl _mb_eaw_table_count\n_mb_eaw_table_count:\n    .quad {}\n",
+        crate::codegen_support::runtime::strings::mb_eaw::MB_EAW_RANGES.len()
     ));
     out.push_str(".globl _mb_strlen_utf8_name\n_mb_strlen_utf8_name:\n    .asciz \"UTF-8\"\n");
     out.push_str(".globl _mb_strlen_utf8_alias\n_mb_strlen_utf8_alias:\n    .asciz \"UTF8\"\n");

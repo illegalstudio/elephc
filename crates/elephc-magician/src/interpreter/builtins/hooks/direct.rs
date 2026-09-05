@@ -205,6 +205,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Range,
     /// Dispatches `mb_ereg_match(...)`.
     MbEregMatch,
+    /// Dispatches `mb_strimwidth(...)`.
+    MbStrimwidth,
     /// Dispatches `preg_match(...)`.
     PregMatch,
     /// Dispatches `preg_match_all(...)`.
@@ -453,6 +455,7 @@ impl EvalDirectHook {
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
             Self::Round => eval_builtin_round(args, context, scope, values),
             Self::MbEregMatch => eval_builtin_mb_ereg_match(args, context, scope, values),
+            Self::MbStrimwidth => eval_builtin_mb_strimwidth(args, context, scope, values),
             Self::PregMatch => eval_builtin_preg_match(args, context, scope, values),
             Self::PregMatchAll => eval_builtin_preg_match_all(args, context, scope, values),
             Self::PregReplace => eval_builtin_preg_replace(args, context, scope, values),

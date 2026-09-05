@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **515 / 2030** (25%).
+Overall builtin coverage: **516 / 2030** (25%).
 
 ## Builtin coverage by PHP module
 
@@ -38,7 +38,7 @@ Overall builtin coverage: **515 / 2030** (25%).
 | `json` | 5 / 5 | 100% | 5 | 5 |
 | `ldap` | 0 / 55 | 0% | 0 | 0 |
 | `libxml` | 0 / 8 | 0% | 0 | 0 |
-| `mbstring` | 2 / 65 | 3% | 2 | 2 |
+| `mbstring` | 3 / 65 | 5% | 3 | 3 |
 | `mysqli`† | 0 / 106 | 0% | 0 | 0 |
 | `openssl` | 4 / 66 | 6% | 4 | 4 |
 | `pcntl` | 0 / 25 | 0% | 0 | 0 |

@@ -60,6 +60,12 @@ expect_builtin_arity_error!(
     "mb_strlen() takes 1 or 2 arguments"
 );
 
+expect_builtin_arity_error!(
+    test_error_mb_strimwidth_wrong_args,
+    "<?php mb_strimwidth('abc');",
+    "mb_strimwidth() takes 3 to 5 arguments"
+);
+
 /// Verifies the OpenSSL IV-length helper rejects a missing cipher name.
 #[test]
 fn test_error_openssl_cipher_iv_length_wrong_args() {
@@ -102,6 +108,33 @@ fn test_error_mb_strlen_encoding_type() {
     expect_error(
         "<?php mb_strlen('abc', 123);",
         "mb_strlen() encoding argument must be string or null",
+    );
+}
+
+/// Verifies that `mb_strimwidth()` rejects a statically non-string value argument.
+#[test]
+fn test_error_mb_strimwidth_string_type() {
+    expect_error(
+        "<?php mb_strimwidth([1, 2], 0, 1);",
+        "mb_strimwidth() string argument must be string",
+    );
+}
+
+/// Verifies that `mb_strimwidth()` rejects a statically non-string trim marker.
+#[test]
+fn test_error_mb_strimwidth_marker_type() {
+    expect_error(
+        "<?php mb_strimwidth('abc', 0, 1, 123);",
+        "mb_strimwidth() trim_marker argument must be string",
+    );
+}
+
+/// Verifies that `mb_strimwidth()` accepts only string or null encoding arguments.
+#[test]
+fn test_error_mb_strimwidth_encoding_type() {
+    expect_error(
+        "<?php mb_strimwidth('abc', 0, 1, '', 123);",
+        "mb_strimwidth() encoding argument must be string or null",
     );
 }
 

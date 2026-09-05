@@ -19,6 +19,9 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::MbStrimwidth => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_mb_strimwidth(ctx, inst)
+        }),
         RuntimeFnId::MbStrlen => Some({
             crate::codegen::lower_inst::builtins::strings::lower_mb_strlen(ctx, inst)
         }),

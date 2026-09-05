@@ -151,6 +151,23 @@ eval($source);
     assert_eq!(out, "6:2");
 }
 
+/// Verifies dynamic eval links and dispatches Magician's `mb_strimwidth()` path.
+#[test]
+fn test_eval_mb_strimwidth_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$source = 'echo mb_strimwidth("hello", 0, 4, "...");
+echo ":";
+echo mb_strimwidth("日本語", 0, 4, "…", "UTF-8");
+echo ":";
+echo mb_strimwidth("héllo", 0, 3, "", "8bit");';
+eval($source);
+"#,
+    );
+
+    assert_eq!(out, "h...:日…:hé");
+}
+
 /// Verifies eval preg builtins use PCRE2 features that Rust regex did not support.
 #[test]
 fn test_eval_preg_uses_pcre2_lookaround_semantics() {
