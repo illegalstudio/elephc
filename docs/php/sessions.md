@@ -71,24 +71,26 @@ Use `session_status()` to check the current state.
 
 ## Function reference
 
-This table explains the semantics of the most used functions. The complete list of
-session functions elephc provides, with their exact signatures, is the generated
-[Functions](#functions) section at the end of this page.
+This table explains what the most used functions do. Exact signatures are not repeated
+here: the generated [Functions](#functions) section at the end of this page is the
+authoritative list of every session function elephc provides, straight from the shared
+catalog (`session_start()` deliberately takes `mixed $options` so a non-array argument
+raises PHP's `TypeError` at runtime instead of failing the compile).
 
-| Function | Signature | Description |
-|---|---|---|
-| `session_start()` | `session_start(array $options = []): bool` | Start a new or resume an existing session. Returns `true` on success. |
-| `session_id()` | `session_id(?string $id = null): string\|false` | Get or set the current session ID. With no active session the getter normally returns an empty string. With a string, sets the ID before `session_start()`. |
-| `session_name()` | `session_name(?string $name = null): string\|false` | Get or set the session name (used as the cookie name). Default is `PHPSESSID`. Must be called before `session_start()`. |
-| `session_status()` | `session_status(): int` | Returns `PHP_SESSION_NONE` or `PHP_SESSION_ACTIVE`. |
-| `session_save_path()` | `session_save_path(?string $path = null): string\|false` | Get or set the configured files-handler path. An empty configured value resolves to `sys_get_temp_dir()` when opened. |
-| `session_write_close()` | `session_write_close(): bool` | Write session data and end the session. Called automatically at handler end. |
-| `session_regenerate_id()` | `session_regenerate_id(bool $delete_old = false): bool` | Generate a new session ID, optionally deleting the old session file. |
-| `session_unset()` | `session_unset(): bool` | Unset all `$_SESSION` variables (the array stays, values are removed). |
-| `session_destroy()` | `session_destroy(): bool` | Destroy the session. Does not unset `$_SESSION` — call `session_unset()` first if needed. |
-| `session_set_cookie_params()` | `session_set_cookie_params(array\|int $options_or_lifetime, ...): bool` | Set session cookie parameters. The array form supports lifetime, path, domain, secure, httponly, and samesite, plus partitioned on PHP 8.5; the positional form matches PHP's five arguments. |
-| `session_get_cookie_params()` | `session_get_cookie_params(): array` | Returns the current session cookie parameters as an associative array. |
-| `session_start()` options | | Accepts the supported `session.*` runtime directives without the `session.` prefix, plus `read_and_close`. |
+| Function | Description |
+|---|---|
+| `session_start()` | Start a new or resume an existing session. Returns `true` on success. |
+| `session_id()` | Get or set the current session ID. With no active session the getter normally returns an empty string. With a string, sets the ID before `session_start()`. |
+| `session_name()` | Get or set the session name (used as the cookie name). Default is `PHPSESSID`. Must be called before `session_start()`. |
+| `session_status()` | Returns `PHP_SESSION_NONE` or `PHP_SESSION_ACTIVE`. |
+| `session_save_path()` | Get or set the configured files-handler path. An empty configured value resolves to `sys_get_temp_dir()` when opened. |
+| `session_write_close()` | Write session data and end the session. Called automatically at handler end. |
+| `session_regenerate_id()` | Generate a new session ID, optionally deleting the old session file. |
+| `session_unset()` | Unset all `$_SESSION` variables (the array stays, values are removed). |
+| `session_destroy()` | Destroy the session. Does not unset `$_SESSION` — call `session_unset()` first if needed. |
+| `session_set_cookie_params()` | Set session cookie parameters. The array form supports lifetime, path, domain, secure, httponly, and samesite, plus partitioned on PHP 8.5; the positional form matches PHP's five arguments. |
+| `session_get_cookie_params()` | Returns the current session cookie parameters as an associative array. |
+| `session_start()` options | Accepts the supported `session.*` runtime directives without the `session.` prefix, plus `read_and_close`. |
 
 ## Cookie handling
 
