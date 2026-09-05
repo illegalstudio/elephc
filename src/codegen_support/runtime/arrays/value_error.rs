@@ -6,6 +6,7 @@
 //! - `crate::codegen_support::runtime::arrays::array_filter`.
 //! - `crate::codegen_support::runtime::arrays::array_filter_refcounted`.
 //! - `crate::codegen_support::runtime::strings::mb_strlen`.
+//! - `crate::codegen_support::runtime::strings::mb_strtolower`.
 //!
 //! Key details:
 //! - The emitted sequence does not return; it publishes `_exc_value` and enters the unwinder.

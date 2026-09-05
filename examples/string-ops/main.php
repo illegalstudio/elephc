@@ -27,6 +27,8 @@ echo "index[99]: [" . $str[99] . "]\n";
 // Case
 echo "\n--- Case ---\n";
 echo "strtolower: " . strtolower($str) . "\n";
+echo "mb_strtolower: " . mb_strtolower("HÉLLO") . "\n";
+echo "mb_strtolower 8bit: " . bin2hex(mb_strtolower("HÉLLO", "8bit")) . "\n";
 echo "strtoupper: " . strtoupper($str) . "\n";
 echo "ucfirst: " . ucfirst("hello") . "\n";
 echo "lcfirst: " . lcfirst("HELLO") . "\n";

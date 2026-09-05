@@ -85,3 +85,77 @@ try {
     );
     assert_eq!(out, "3:caught");
 }
+
+/// Verifies `mb_strtolower()` applies PHP 8.5 UTF-8 lowercase, including 1:N maps.
+#[test]
+fn test_mb_strtolower_utf8_lowercase() {
+    let out = compile_and_run(
+        r#"<?php
+echo mb_strtolower("Hello WORLD"), ":";
+echo mb_strtolower("HÉLLO"), ":";
+echo mb_strtolower("日本語"), ":";
+echo mb_strtolower("İSTANBUL"), ":";
+echo mb_strtolower("ß"), ":";
+echo mb_strtolower("BG-Red");"#,
+    );
+    assert_eq!(out, "hello world:héllo:日本語:i\u{0307}stanbul:ß:bg-red");
+}
+
+/// Verifies `mb_strtolower()` encoding aliases, named/null arguments, and callables.
+#[test]
+fn test_mb_strtolower_encoding_and_callable() {
+    let out = compile_and_run(
+        r#"<?php
+echo mb_strtolower("HÉLLO", "UTF-8"), ":";
+echo mb_strtolower("HÉLLO", "UTF8"), ":";
+echo bin2hex(mb_strtolower("HÉLLO", "8bit")), ":";
+echo mb_strtolower(string: "BG-Red", encoding: null), ":";
+$encoding = $argc > 0 ? "binary" : "UTF-8";
+echo mb_strtolower("ABC", $encoding), ":";
+$lower = mb_strtolower(...);
+echo $lower("MiXeD");"#,
+    );
+    assert_eq!(out, "héllo:héllo:68c3896c6c6f:bg-red:abc:mixed");
+}
+
+/// Verifies Final_Sigma: end-of-word capital sigma becomes `ς`, otherwise `σ`.
+#[test]
+fn test_mb_strtolower_final_sigma() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(mb_strtolower("ΟΣ")), ":";
+echo bin2hex(mb_strtolower("Σ")), ":";
+echo bin2hex(mb_strtolower("ΣΑ")), ":";
+echo mb_strtolower("ΟΣ"), ":";
+echo bin2hex(mb_strtolower("Α" . "\u{0300}" . "Σ"));"#,
+    );
+    assert_eq!(out, "cebfcf82:cf83:cf83ceb1:ος:ceb1cc80cf82");
+}
+
+/// Verifies malformed UTF-8 bytes are copied unchanged and reset Final_Sigma lookbehind.
+#[test]
+fn test_mb_strtolower_malformed_utf8() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(mb_strtolower("\x80ABC")), ":";
+echo bin2hex(mb_strtolower("A\x80Σ"));"#,
+    );
+    assert_eq!(out, "80616263:6180cf83");
+}
+
+/// Verifies namespaced/case-insensitive lookup and unknown-encoding `ValueError` behavior.
+#[test]
+fn test_mb_strtolower_namespace_and_invalid_encoding() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+echo Mb_StRtOlOwEr("HÉLLO"), ":";
+$encoding = $argc > 0 ? "definitely-not-an-encoding" : "UTF-8";
+try {
+    mb_strtolower("abc", $encoding);
+} catch (\ValueError $error) {
+    echo "caught";
+}"#,
+    );
+    assert_eq!(out, "héllo:caught");
+}

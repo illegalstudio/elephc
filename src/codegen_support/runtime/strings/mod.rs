@@ -89,6 +89,7 @@ mod sha1;
 mod crc32;
 mod iconv;
 mod mb_strlen;
+mod mb_strtolower;
 mod hash;
 pub(crate) mod hash_algos;
 mod hash_context;
@@ -263,6 +264,8 @@ pub use crc32::emit_crc32;
 /// Emit mb_strlen UTF-8 code-point-count helper.
 pub use iconv::emit_iconv;
 pub use mb_strlen::emit_mb_strlen;
+/// Emit mb_strtolower UTF-8 full-lowercase helper.
+pub use mb_strtolower::emit_mb_strtolower;
 /// Emit SHA1 hash helper.
 pub use hash::emit_hash;
 /// Emit generic hash helper.

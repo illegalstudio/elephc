@@ -586,6 +586,7 @@ pub enum RuntimeFnId {
     Ltrim,
     MbEregMatch,
     MbStrlen,
+    MbStrtolower,
     Md5,
     NumberFormat,
     Ord,
@@ -1953,6 +1954,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
+                // `mb_strtolower()` writes a freshly reserved UTF-8 (or ASCII-byte) result
+                // through `__rt_concat_reserve` / `__rt_concat_publish`, so the returned
+                // string never aliases the subject or the encoding name.
+                | RuntimeFnId::MbStrtolower
                 // Every `str_word_count()` shape allocates its own result: format 0 is a plain
                 // integer, format 1 pushes persisted copies into a brand-new indexed array, and
                 // format 2 persists each word before inserting it into a brand-new hash. Nothing
@@ -2462,6 +2467,7 @@ impl RuntimeFnId {
             RuntimeFnId::Ltrim => "ltrim",
             RuntimeFnId::MbEregMatch => "mb_ereg_match",
             RuntimeFnId::MbStrlen => "mb_strlen",
+            RuntimeFnId::MbStrtolower => "mb_strtolower",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Octdec => "octdec",

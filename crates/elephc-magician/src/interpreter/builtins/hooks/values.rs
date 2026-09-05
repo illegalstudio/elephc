@@ -288,6 +288,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Iconv,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
+    /// Dispatches `mb_strtolower(...)`.
+    MbStrtolower,
     /// Dispatches `str_repeat(...)`.
     StrRepeat,
     /// Dispatches `strval(...)`.
@@ -680,6 +682,13 @@ impl EvalValuesHook {
                     _ => Err(EvalStatus::RuntimeFatal),
                 },
                 "strlen" => one_arg(evaluated_args, values, eval_strlen_result),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
+            Self::MbStrtolower => match evaluated_args {
+                [value] => eval_mb_strtolower_result(*value, None, context, values),
+                [value, encoding] => {
+                    eval_mb_strtolower_result(*value, Some(*encoding), context, values)
+                }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StrRepeat => two_args(evaluated_args, values, eval_str_repeat_result),
