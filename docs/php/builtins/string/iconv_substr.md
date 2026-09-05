@@ -8,7 +8,7 @@ sidebar:
 ## iconv_substr()
 
 ```php
-function iconv_substr(string $string, int $offset, int $length = null, string $encoding = null): mixed
+function iconv_substr(string $string, int $offset, ?int $length = null, ?string $encoding = null): mixed
 ```
 
 Extracts a character-indexed slice of a string.
@@ -16,8 +16,8 @@ Extracts a character-indexed slice of a string.
 **Parameters**:
 - `$string` (`string`)
 - `$offset` (`int`)
-- `$length` (`int`), default `null`, optional
-- `$encoding` (`string`), default `null`, optional
+- `$length` (`?int`), default `null`, optional
+- `$encoding` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

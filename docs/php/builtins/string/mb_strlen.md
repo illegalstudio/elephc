@@ -8,14 +8,14 @@ sidebar:
 ## mb_strlen()
 
 ```php
-function mb_strlen(string $string, string $encoding = null): int
+function mb_strlen(string $string, ?string $encoding = null): int
 ```
 
 Returns the character count of a string in the requested encoding.
 
 **Parameters**:
 - `$string` (`string`)
-- `$encoding` (`string`), default `null`, optional
+- `$encoding` (`?string`), default `null`, optional
 
 **Returns**: `int`
 

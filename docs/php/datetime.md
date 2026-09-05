@@ -398,7 +398,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`checkdate()`](./builtins/date/checkdate.md) | `(int $month, int $day, int $year): bool` | `bool` | ✓ | ✓ |
-| [`date()`](./builtins/date/date.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
+| [`date()`](./builtins/date/date.md) | `(string $format, ?int $timestamp = null): string` | `string` | ✓ | ✓ |
 | [`date_add()`](./builtins/date/date_add.md) | `(mixed $object, mixed $interval): mixed` | `mixed` | ✓ | ✓ |
 | [`date_create()`](./builtins/date/date_create.md) | `(string $datetime = 'now', mixed $timezone = null): mixed` | `mixed` | ✓ | ✓ |
 | [`date_create_from_format()`](./builtins/date/date_create_from_format.md) | `(string $format, string $datetime, mixed $timezone = null): mixed` | `mixed` | ✓ | ✓ |
@@ -426,15 +426,15 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`date_timestamp_set()`](./builtins/date/date_timestamp_set.md) | `(mixed $object, int $timestamp): mixed` | `mixed` | ✓ | ✓ |
 | [`date_timezone_get()`](./builtins/date/date_timezone_get.md) | `(mixed $object): mixed` | `mixed` | ✓ | ✓ |
 | [`date_timezone_set()`](./builtins/date/date_timezone_set.md) | `(mixed $object, mixed $timezone): mixed` | `mixed` | ✓ | ✓ |
-| [`getdate()`](./builtins/date/getdate.md) | `(int $timestamp = null): array` | `array` | ✓ | ✓ |
-| [`gmdate()`](./builtins/date/gmdate.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
+| [`getdate()`](./builtins/date/getdate.md) | `(?int $timestamp = null): array` | `array` | ✓ | ✓ |
+| [`gmdate()`](./builtins/date/gmdate.md) | `(string $format, ?int $timestamp = null): string` | `string` | ✓ | ✓ |
 | [`gmmktime()`](./builtins/date/gmmktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`gmstrftime()`](./builtins/date/gmstrftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`idate()`](./builtins/date/idate.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`localtime()`](./builtins/date/localtime.md) | `(int $timestamp = -1, bool $associative = false): array` | `array` | ✓ | ✓ |
 | [`mktime()`](./builtins/date/mktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`strftime()`](./builtins/date/strftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
-| [`strtotime()`](./builtins/date/strtotime.md) | `(string $datetime, int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`strtotime()`](./builtins/date/strtotime.md) | `(string $datetime, ?int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`time()`](./builtins/date/time.md) | `(): int` | `int` | ✓ | ✓ |
 | [`timezone_abbreviations_list()`](./builtins/date/timezone_abbreviations_list.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_identifiers_list()`](./builtins/date/timezone_identifiers_list.md) | `(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array` | `array` | ✓ | ✓ |

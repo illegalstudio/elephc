@@ -8,7 +8,7 @@ sidebar:
 ## mb_ereg_match()
 
 ```php
-function mb_ereg_match(string $pattern, string $subject, string $options = null): bool
+function mb_ereg_match(string $pattern, string $subject, ?string $options = null): bool
 ```
 
 Tests whether a regex pattern matches the beginning of a string (multibyte).
@@ -16,7 +16,7 @@ Tests whether a regex pattern matches the beginning of a string (multibyte).
 **Parameters**:
 - `$pattern` (`string`)
 - `$subject` (`string`)
-- `$options` (`string`), default `null`, optional
+- `$options` (`?string`), default `null`, optional
 
 **Returns**: `bool`
 

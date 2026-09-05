@@ -8,7 +8,7 @@ sidebar:
 ## substr()
 
 ```php
-function substr(string $string, int $offset, int $length = null): string
+function substr(string $string, int $offset, ?int $length = null): string
 ```
 
 Returns a portion of a string specified by the offset and length.
@@ -16,7 +16,7 @@ Returns a portion of a string specified by the offset and length.
 **Parameters**:
 - `$string` (`string`)
 - `$offset` (`int`)
-- `$length` (`int`), default `null`, optional
+- `$length` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

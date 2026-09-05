@@ -10606,7 +10606,7 @@
           "default": null,
           "name": "baseTimestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -10717,7 +10717,7 @@
           "default": "null",
           "name": "baseTimestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "int",
@@ -20106,7 +20106,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -20147,7 +20147,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -20248,7 +20248,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -20414,7 +20414,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -20455,7 +20455,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -20555,7 +20555,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "int",
@@ -20588,7 +20588,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -20629,7 +20629,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -20730,7 +20730,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -20763,7 +20763,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -20804,7 +20804,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -20906,7 +20906,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "array",
@@ -21072,7 +21072,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -21113,7 +21113,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -21214,7 +21214,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -21247,7 +21247,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -21288,7 +21288,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -21389,7 +21389,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -21422,7 +21422,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -21463,7 +21463,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -21564,7 +21564,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -21604,7 +21604,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 3,
@@ -21652,7 +21652,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 3,
@@ -21760,7 +21760,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -21954,7 +21954,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 0,
@@ -21981,7 +21981,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 0,
@@ -22068,7 +22068,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "int",
@@ -22094,7 +22094,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -22128,7 +22128,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -22222,7 +22222,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -22255,7 +22255,7 @@
           "default": null,
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -22296,7 +22296,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -22397,7 +22397,7 @@
           "default": "null",
           "name": "scale",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -32938,7 +32938,7 @@
           "default": null,
           "name": "option",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -32972,7 +32972,7 @@
           "default": "null",
           "name": "option",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -33017,7 +33017,7 @@
           "default": "null",
           "name": "option",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",
@@ -33036,7 +33036,7 @@
           "default": null,
           "name": "url",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -33063,7 +33063,7 @@
           "default": "null",
           "name": "url",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -33101,7 +33101,7 @@
           "default": "null",
           "name": "url",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "CurlHandle",
@@ -33673,7 +33673,7 @@
           "default": null,
           "name": "queued_messages",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -33707,7 +33707,7 @@
           "default": "null",
           "name": "queued_messages",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -33752,7 +33752,7 @@
           "default": "null",
           "name": "queued_messages",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",
@@ -35673,7 +35673,7 @@
           "default": null,
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -35707,7 +35707,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -35809,7 +35809,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -41960,7 +41960,7 @@
           "default": null,
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -42001,7 +42001,7 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -42111,7 +42111,7 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -48929,7 +48929,7 @@
           "default": null,
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 0,
@@ -48956,7 +48956,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 0,
@@ -49051,7 +49051,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "array",
@@ -50659,7 +50659,7 @@
           "default": null,
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -50693,7 +50693,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -50795,7 +50795,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -54866,7 +54866,7 @@
           "default": null,
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -54907,7 +54907,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -55017,7 +55017,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -55050,7 +55050,7 @@
           "default": null,
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -55091,7 +55091,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -55201,7 +55201,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -55574,7 +55574,7 @@
           "default": null,
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -55608,7 +55608,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -55711,7 +55711,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -55751,7 +55751,7 @@
           "default": null,
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -55799,7 +55799,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -55916,7 +55916,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -55949,7 +55949,7 @@
           "default": null,
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -55990,7 +55990,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -56100,7 +56100,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -56133,14 +56133,14 @@
           "default": null,
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -56181,14 +56181,14 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -56298,14 +56298,14 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -71309,7 +71309,7 @@
           "default": null,
           "name": "associative",
           "optional": true,
-          "type": "bool"
+          "type": "?bool"
         },
         {
           "by_ref": false,
@@ -71357,7 +71357,7 @@
           "default": "null",
           "name": "associative",
           "optional": true,
-          "type": "bool"
+          "type": "?bool"
         },
         {
           "by_ref": false,
@@ -71474,7 +71474,7 @@
           "default": "null",
           "name": "associative",
           "optional": true,
-          "type": "bool"
+          "type": "?bool"
         },
         {
           "by_ref": false,
@@ -74453,7 +74453,7 @@
           "default": null,
           "name": "options",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -74494,7 +74494,7 @@
           "default": "null",
           "name": "options",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -74606,7 +74606,7 @@
           "default": "null",
           "name": "options",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "bool",
@@ -74632,7 +74632,7 @@
           "default": null,
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -74666,7 +74666,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -74774,7 +74774,7 @@
           "default": "null",
           "name": "encoding",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "int",
@@ -86993,7 +86993,7 @@
           "default": null,
           "name": "extension",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -87020,7 +87020,7 @@
           "default": "null",
           "name": "extension",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -87099,7 +87099,7 @@
           "default": "null",
           "name": "extension",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "string|false",
@@ -92922,7 +92922,7 @@
           "default": null,
           "name": "prompt",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -92949,7 +92949,7 @@
           "default": "null",
           "name": "prompt",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -93045,7 +93045,7 @@
           "default": "null",
           "name": "prompt",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -100926,7 +100926,7 @@
           "default": null,
           "name": "characters",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -100967,7 +100967,7 @@
           "default": "null",
           "name": "characters",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -101062,7 +101062,7 @@
           "default": "null",
           "name": "characters",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "array|int",
@@ -102743,7 +102743,7 @@
           "default": null,
           "name": "option_name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -102791,7 +102791,7 @@
           "default": "null",
           "name": "option_name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -102907,7 +102907,7 @@
           "default": "null",
           "name": "option_name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -103109,7 +103109,7 @@
           "default": null,
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -103157,7 +103157,7 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -103274,7 +103274,7 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -104020,7 +104020,7 @@
           "default": null,
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -104061,7 +104061,7 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -104171,7 +104171,7 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -110313,7 +110313,7 @@
           "default": null,
           "name": "baseTimestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -110347,7 +110347,7 @@
           "default": "null",
           "name": "baseTimestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -110450,7 +110450,7 @@
           "default": "null",
           "name": "baseTimestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",
@@ -110604,7 +110604,7 @@
           "default": null,
           "name": "to",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -110645,7 +110645,7 @@
           "default": "null",
           "name": "to",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 2,
@@ -110741,7 +110741,7 @@
           "default": "null",
           "name": "to",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "string",
@@ -110893,7 +110893,7 @@
           "default": null,
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -110934,7 +110934,7 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 2,
@@ -111026,7 +111026,7 @@
           "default": "null",
           "name": "length",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "string",
@@ -113068,14 +113068,14 @@
           "default": null,
           "name": "mtime",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "atime",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -113109,14 +113109,14 @@
           "default": "null",
           "name": "mtime",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "atime",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -113219,14 +113219,14 @@
           "default": "null",
           "name": "mtime",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "atime",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "bool",
@@ -114226,7 +114226,7 @@
           "default": null,
           "name": "mask",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 0,
@@ -114253,7 +114253,7 @@
           "default": "null",
           "name": "mask",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 0,
@@ -114348,7 +114348,7 @@
           "default": "null",
           "name": "mask",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "int",

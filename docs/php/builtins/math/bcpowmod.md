@@ -8,7 +8,7 @@ sidebar:
 ## bcpowmod()
 
 ```php
-function bcpowmod(string $num, string $exponent, string $modulus, int $scale = null): string
+function bcpowmod(string $num, string $exponent, string $modulus, ?int $scale = null): string
 ```
 
 Returns an arbitrary-precision integral modular power.
@@ -17,7 +17,7 @@ Returns an arbitrary-precision integral modular power.
 - `$num` (`string`)
 - `$exponent` (`string`)
 - `$modulus` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bccomp(string $num1, string $num2, int $scale = null): int
+function bccomp(string $num1, string $num2, ?int $scale = null): int
 ```
 
 ## What the type checker enforces

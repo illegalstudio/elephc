@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function readline(string $prompt = null): mixed
+function readline(?string $prompt = null): mixed
 ```
 
 ## What the type checker enforces

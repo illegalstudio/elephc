@@ -41,7 +41,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function mb_ereg_match(string $pattern, string $subject, string $options = null): bool
+function mb_ereg_match(string $pattern, string $subject, ?string $options = null): bool
 ```
 
 ## What the type checker enforces

@@ -8,7 +8,7 @@ sidebar:
 ## bcadd()
 
 ```php
-function bcadd(string $num1, string $num2, int $scale = null): string
+function bcadd(string $num1, string $num2, ?int $scale = null): string
 ```
 
 Adds two arbitrary-precision decimal numbers.
@@ -16,7 +16,7 @@ Adds two arbitrary-precision decimal numbers.
 **Parameters**:
 - `$num1` (`string`)
 - `$num2` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

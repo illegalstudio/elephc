@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcdivmod(string $num1, string $num2, int $scale = null): array
+function bcdivmod(string $num1, string $num2, ?int $scale = null): array
 ```
 
 ## What the type checker enforces

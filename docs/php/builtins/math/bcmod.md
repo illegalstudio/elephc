@@ -8,7 +8,7 @@ sidebar:
 ## bcmod()
 
 ```php
-function bcmod(string $num1, string $num2, int $scale = null): string
+function bcmod(string $num1, string $num2, ?int $scale = null): string
 ```
 
 Returns the remainder of arbitrary-precision decimal division.
@@ -16,7 +16,7 @@ Returns the remainder of arbitrary-precision decimal division.
 **Parameters**:
 - `$num1` (`string`)
 - `$num2` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

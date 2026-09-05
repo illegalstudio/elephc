@@ -8,13 +8,13 @@ sidebar:
 ## phpversion()
 
 ```php
-function phpversion(string $extension = null): string|false
+function phpversion(?string $extension = null): string|false
 ```
 
 Returns the targeted PHP language version, or one extension's version.
 
 **Parameters**:
-- `$extension` (`string`), default `null`, optional
+- `$extension` (`?string`), default `null`, optional
 
 **Returns**: `string|false`
 

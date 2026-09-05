@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_get_contents(resource $stream, int $length = null, int $offset = -1): mixed
+function stream_get_contents(resource $stream, ?int $length = null, int $offset = -1): mixed
 ```
 
 ## What the type checker enforces

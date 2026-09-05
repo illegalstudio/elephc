@@ -8,7 +8,7 @@ sidebar:
 ## strtr()
 
 ```php
-function strtr(string $string, array|string $from, string $to = null): string
+function strtr(string $string, array|string $from, ?string $to = null): string
 ```
 
 Translates bytes pairwise, or applies longest-match-first replacement pairs.
@@ -16,7 +16,7 @@ Translates bytes pairwise, or applies longest-match-first replacement pairs.
 **Parameters**:
 - `$string` (`string`)
 - `$from` (`array|string`)
-- `$to` (`string`), default `null`, optional
+- `$to` (`?string`), default `null`, optional
 
 **Returns**: `string`
 

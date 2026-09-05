@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function umask(int $mask = null): int
+function umask(?int $mask = null): int
 ```
 
 ## What the type checker enforces

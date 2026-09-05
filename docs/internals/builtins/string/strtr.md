@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function strtr(string $string, array|string $from, string $to = null): string
+function strtr(string $string, array|string $from, ?string $to = null): string
 ```
 
 ## What the type checker enforces

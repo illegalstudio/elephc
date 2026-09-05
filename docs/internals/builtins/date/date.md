@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function date(string $format, int $timestamp = null): string
+function date(string $format, ?int $timestamp = null): string
 ```
 
 ## What the type checker enforces

@@ -8,7 +8,7 @@ sidebar:
 ## iconv_strrpos()
 
 ```php
-function iconv_strrpos(string $haystack, string $needle, string $encoding = null): mixed
+function iconv_strrpos(string $haystack, string $needle, ?string $encoding = null): mixed
 ```
 
 Finds the last character position of a needle in a string.
@@ -16,7 +16,7 @@ Finds the last character position of a needle in a string.
 **Parameters**:
 - `$haystack` (`string`)
 - `$needle` (`string`)
-- `$encoding` (`string`), default `null`, optional
+- `$encoding` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

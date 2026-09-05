@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_context_set_option(resource $context, string $wrapper_or_options, string $option_name = null, mixed $value = null): bool
+function stream_context_set_option(resource $context, string $wrapper_or_options, ?string $option_name = null, mixed $value = null): bool
 ```
 
 ## What the type checker enforces

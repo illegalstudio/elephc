@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function getdate(int $timestamp = null): array
+function getdate(?int $timestamp = null): array
 ```
 
 ## What the type checker enforces

@@ -8,7 +8,7 @@ sidebar:
 ## iconv_strpos()
 
 ```php
-function iconv_strpos(string $haystack, string $needle, int $offset = 0, string $encoding = null): mixed
+function iconv_strpos(string $haystack, string $needle, int $offset = 0, ?string $encoding = null): mixed
 ```
 
 Finds the first character position of a needle in a string.
@@ -17,7 +17,7 @@ Finds the first character position of a needle in a string.
 - `$haystack` (`string`)
 - `$needle` (`string`)
 - `$offset` (`int`), default `0`, optional
-- `$encoding` (`string`), default `null`, optional
+- `$encoding` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

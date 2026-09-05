@@ -8,7 +8,7 @@ sidebar:
 ## bcsub()
 
 ```php
-function bcsub(string $num1, string $num2, int $scale = null): string
+function bcsub(string $num1, string $num2, ?int $scale = null): string
 ```
 
 Subtracts two arbitrary-precision decimal numbers.
@@ -16,7 +16,7 @@ Subtracts two arbitrary-precision decimal numbers.
 **Parameters**:
 - `$num1` (`string`)
 - `$num2` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

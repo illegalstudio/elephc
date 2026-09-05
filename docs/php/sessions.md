@@ -71,6 +71,10 @@ Use `session_status()` to check the current state.
 
 ## Function reference
 
+This table explains the semantics of the most used functions. The complete list of
+session functions elephc provides, with their exact signatures, is the generated
+[Functions](#functions) section at the end of this page.
+
 | Function | Signature | Description |
 |---|---|---|
 | `session_start()` | `session_start(array $options = []): bool` | Start a new or resume an existing session. Returns `true` on success. |

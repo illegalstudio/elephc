@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcpowmod(string $num, string $exponent, string $modulus, int $scale = null): string
+function bcpowmod(string $num, string $exponent, string $modulus, ?int $scale = null): string
 ```
 
 ## What the type checker enforces

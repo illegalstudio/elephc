@@ -8,14 +8,14 @@ sidebar:
 ## gmdate()
 
 ```php
-function gmdate(string $format, int $timestamp = null): string
+function gmdate(string $format, ?int $timestamp = null): string
 ```
 
 Formats a GMT/UTC date and time.
 
 **Parameters**:
 - `$format` (`string`)
-- `$timestamp` (`int`), default `null`, optional
+- `$timestamp` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

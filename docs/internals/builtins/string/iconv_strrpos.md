@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function iconv_strrpos(string $haystack, string $needle, string $encoding = null): mixed
+function iconv_strrpos(string $haystack, string $needle, ?string $encoding = null): mixed
 ```
 
 ## What the type checker enforces

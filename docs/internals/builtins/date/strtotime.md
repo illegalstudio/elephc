@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function strtotime(string $datetime, int $baseTimestamp = null): mixed
+function strtotime(string $datetime, ?int $baseTimestamp = null): mixed
 ```
 
 ## What the type checker enforces

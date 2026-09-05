@@ -14,7 +14,7 @@ sidebar:
 | [`cal_info()`](./date/cal_info.md) | `(int $calendar = -1): array` | `array` | ✓ | ✓ |
 | [`cal_to_jd()`](./date/cal_to_jd.md) | `(int $calendar, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`checkdate()`](./date/checkdate.md) | `(int $month, int $day, int $year): bool` | `bool` | ✓ | ✓ |
-| [`date()`](./date/date.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
+| [`date()`](./date/date.md) | `(string $format, ?int $timestamp = null): string` | `string` | ✓ | ✓ |
 | [`date_add()`](./date/date_add.md) | `(mixed $object, mixed $interval): mixed` | `mixed` | ✓ | ✓ |
 | [`date_create()`](./date/date_create.md) | `(string $datetime = 'now', mixed $timezone = null): mixed` | `mixed` | ✓ | ✓ |
 | [`date_create_from_format()`](./date/date_create_from_format.md) | `(string $format, string $datetime, mixed $timezone = null): mixed` | `mixed` | ✓ | ✓ |
@@ -45,9 +45,9 @@ sidebar:
 | [`easter_date()`](./date/easter_date.md) | `(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int` | `int` | ✓ | ✓ |
 | [`easter_days()`](./date/easter_days.md) | `(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int` | `int` | ✓ | ✓ |
 | [`frenchtojd()`](./date/frenchtojd.md) | `(int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
-| [`getdate()`](./date/getdate.md) | `(int $timestamp = null): array` | `array` | ✓ | ✓ |
+| [`getdate()`](./date/getdate.md) | `(?int $timestamp = null): array` | `array` | ✓ | ✓ |
 | [`gettimeofday()`](./date/gettimeofday.md) | `(bool $as_float = false): mixed` | `mixed` | ✓ | ✓ |
-| [`gmdate()`](./date/gmdate.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
+| [`gmdate()`](./date/gmdate.md) | `(string $format, ?int $timestamp = null): string` | `string` | ✓ | ✓ |
 | [`gmmktime()`](./date/gmmktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`gmstrftime()`](./date/gmstrftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`gregoriantojd()`](./date/gregoriantojd.md) | `(int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
@@ -67,7 +67,7 @@ sidebar:
 | [`mktime()`](./date/mktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`strftime()`](./date/strftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`strptime()`](./date/strptime.md) | `(string $timestamp, string $format): mixed` | `mixed` | ✓ | ✓ |
-| [`strtotime()`](./date/strtotime.md) | `(string $datetime, int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`strtotime()`](./date/strtotime.md) | `(string $datetime, ?int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`time()`](./date/time.md) | `(): int` | `int` | ✓ | ✓ |
 | [`timezone_abbreviations_list()`](./date/timezone_abbreviations_list.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_identifiers_list()`](./date/timezone_identifiers_list.md) | `(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array` | `array` | ✓ | ✓ |

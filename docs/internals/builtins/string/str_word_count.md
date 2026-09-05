@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function str_word_count(string $string, int $format = 0, string $characters = null): array|int
+function str_word_count(string $string, int $format = 0, ?string $characters = null): array|int
 ```
 
 ## What the type checker enforces

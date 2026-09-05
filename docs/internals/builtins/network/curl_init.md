@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function curl_init(string $url = null): CurlHandle
+function curl_init(?string $url = null): CurlHandle
 ```
 
 ## What the type checker enforces

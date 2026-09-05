@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function mb_strlen(string $string, string $encoding = null): int
+function mb_strlen(string $string, ?string $encoding = null): int
 ```
 
 ## What the type checker enforces

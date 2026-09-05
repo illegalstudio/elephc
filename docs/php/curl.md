@@ -9,7 +9,9 @@ elephc implements PHP's `ext/curl` — all 35 functions, all 6 classes, and all 
 constants — on top of a **statically pinned libcurl 8.21.0** built by elephc's own
 managed-native-package system. There is no dependency on a system, Homebrew, or
 distro libcurl: the archive is compiled from a checksum-pinned tarball, linked
-into your binary, and travels with it.
+into your binary, and travels with it. The [compatibility table](./compatibility.md)
+counts 34 of the 35 functions: `curl_file_create()` is a plain prelude alias of the
+`CURLFile` constructor and carries no shared contract of its own.
 
 The pinned stack is:
 
@@ -969,15 +971,15 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`curl_error()`](./builtins/network/curl_error.md) | `(CurlHandle $handle): string` | `string` | ✓ | ✓ |
 | [`curl_escape()`](./builtins/network/curl_escape.md) | `(CurlHandle $handle, string $string): string` | `string` | ✓ | ✓ |
 | [`curl_exec()`](./builtins/network/curl_exec.md) | `(CurlHandle $handle): string|bool` | `string|bool` | ✓ | ✓ |
-| [`curl_getinfo()`](./builtins/network/curl_getinfo.md) | `(CurlHandle $handle, int $option = null): mixed` | `mixed` | ✓ | ✓ |
-| [`curl_init()`](./builtins/network/curl_init.md) | `(string $url = null): CurlHandle` | `CurlHandle` | ✓ | ✓ |
+| [`curl_getinfo()`](./builtins/network/curl_getinfo.md) | `(CurlHandle $handle, ?int $option = null): mixed` | `mixed` | ✓ | ✓ |
+| [`curl_init()`](./builtins/network/curl_init.md) | `(?string $url = null): CurlHandle` | `CurlHandle` | ✓ | ✓ |
 | [`curl_multi_add_handle()`](./builtins/network/curl_multi_add_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
 | [`curl_multi_close()`](./builtins/network/curl_multi_close.md) | `(CurlMultiHandle $multi_handle): void` | `void` | ✓ | ✓ |
 | [`curl_multi_errno()`](./builtins/network/curl_multi_errno.md) | `(CurlMultiHandle $multi_handle): int` | `int` | ✓ | ✓ |
 | [`curl_multi_exec()`](./builtins/network/curl_multi_exec.md) | `(CurlMultiHandle $multi_handle, int $still_running): int` | `int` | ✓ | ✓ |
 | [`curl_multi_get_handles()`](./builtins/network/curl_multi_get_handles.md) | `(CurlMultiHandle $multi_handle): array` | `array` | ✓ | ✓ |
 | [`curl_multi_getcontent()`](./builtins/network/curl_multi_getcontent.md) | `(mixed $handle): ?string` | `?string` | ✓ | ✓ |
-| [`curl_multi_info_read()`](./builtins/network/curl_multi_info_read.md) | `(CurlMultiHandle $multi_handle, int $queued_messages = null): mixed` | `mixed` | ✓ | ✓ |
+| [`curl_multi_info_read()`](./builtins/network/curl_multi_info_read.md) | `(CurlMultiHandle $multi_handle, ?int $queued_messages = null): mixed` | `mixed` | ✓ | ✓ |
 | [`curl_multi_init()`](./builtins/network/curl_multi_init.md) | `(): CurlMultiHandle` | `CurlMultiHandle` | ✓ | ✓ |
 | [`curl_multi_remove_handle()`](./builtins/network/curl_multi_remove_handle.md) | `(CurlMultiHandle $multi_handle, mixed $handle): int` | `int` | ✓ | ✓ |
 | [`curl_multi_select()`](./builtins/network/curl_multi_select.md) | `(CurlMultiHandle $multi_handle, float $timeout = 1.0): int` | `int` | ✓ | ✓ |

@@ -8,14 +8,14 @@ sidebar:
 ## bcsqrt()
 
 ```php
-function bcsqrt(string $num, int $scale = null): string
+function bcsqrt(string $num, ?int $scale = null): string
 ```
 
 Returns the square root of an arbitrary-precision decimal number.
 
 **Parameters**:
 - `$num` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

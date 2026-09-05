@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcscale(int $scale = null): int
+function bcscale(?int $scale = null): int
 ```
 
 ## What the type checker enforces

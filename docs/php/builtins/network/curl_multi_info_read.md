@@ -8,14 +8,14 @@ sidebar:
 ## curl_multi_info_read()
 
 ```php
-function curl_multi_info_read(CurlMultiHandle $multi_handle, int $queued_messages = null): mixed
+function curl_multi_info_read(CurlMultiHandle $multi_handle, ?int $queued_messages = null): mixed
 ```
 
 Gets information about the current transfers.
 
 **Parameters**:
 - `$multi_handle` (`CurlMultiHandle`)
-- `$queued_messages` (`int`), passed by reference, default `null`, optional
+- `$queued_messages` (`?int`), passed by reference, default `null`, optional
 
 **Returns**: `mixed`
 

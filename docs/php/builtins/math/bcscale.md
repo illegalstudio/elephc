@@ -8,13 +8,13 @@ sidebar:
 ## bcscale()
 
 ```php
-function bcscale(int $scale = null): int
+function bcscale(?int $scale = null): int
 ```
 
 Gets or sets the process-wide default BCMath scale.
 
 **Parameters**:
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `int`
 

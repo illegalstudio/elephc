@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function curl_getinfo(CurlHandle $handle, int $option = null): mixed
+function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed
 ```
 
 ## What the type checker enforces

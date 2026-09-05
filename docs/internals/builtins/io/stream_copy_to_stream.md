@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_copy_to_stream(resource $from, resource $to, int $length = null, int $offset = -1): mixed
+function stream_copy_to_stream(resource $from, resource $to, ?int $length = null, int $offset = -1): mixed
 ```
 
 ## What the type checker enforces

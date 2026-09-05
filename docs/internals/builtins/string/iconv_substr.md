@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function iconv_substr(string $string, int $offset, int $length = null, string $encoding = null): mixed
+function iconv_substr(string $string, int $offset, ?int $length = null, ?string $encoding = null): mixed
 ```
 
 ## What the type checker enforces

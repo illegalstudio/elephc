@@ -41,7 +41,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_strtotime_raw(string $datetime, int $baseTimestamp = null): int
+function __elephc_strtotime_raw(string $datetime, ?int $baseTimestamp = null): int
 ```
 
 ## What the type checker enforces

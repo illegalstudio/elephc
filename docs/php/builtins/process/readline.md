@@ -8,13 +8,13 @@ sidebar:
 ## readline()
 
 ```php
-function readline(string $prompt = null): mixed
+function readline(?string $prompt = null): mixed
 ```
 
 Reads a line from the user's terminal.
 
 **Parameters**:
-- `$prompt` (`string`), default `null`, optional
+- `$prompt` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 
