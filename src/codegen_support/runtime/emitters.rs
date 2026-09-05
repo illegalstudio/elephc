@@ -104,6 +104,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_hex2bin(emitter);
     strings::emit_htmlspecialchars(emitter);
     strings::emit_html_entity_decode(emitter);
+    strings::emit_strip_tags(emitter);
     strings::emit_urlencode(emitter);
     strings::emit_urldecode(emitter);
     strings::emit_rawurlencode(emitter);

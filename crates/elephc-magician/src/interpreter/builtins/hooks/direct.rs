@@ -253,6 +253,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PtrWriteString,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
+    /// Dispatches `strip_tags(...)`.
+    StripTags,
     /// Dispatches `sin(...)`.
     Sin,
     /// Dispatches `sinh(...)`.
@@ -485,6 +487,7 @@ impl EvalDirectHook {
                 "stripslashes" => eval_builtin_stripslashes(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::StripTags => eval_builtin_strip_tags(args, context, scope, values),
             Self::Sprintf => eval_builtin_sprintf(args, context, scope, values),
             Self::Sscanf => eval_builtin_sscanf(args, context, scope, values),
             Self::StringCase => match name {

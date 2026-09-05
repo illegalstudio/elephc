@@ -508,6 +508,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`str_word_count()`](./builtins/string/str_word_count.md) | `(string $string, int $format = 0, string $characters = null): array|int` | `array|int` | ✓ | ✓ |
 | [`strcasecmp()`](./builtins/string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`strcmp()`](./builtins/string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`strip_tags()`](./builtins/string/strip_tags.md) | `(string $string, mixed $allowed_tags = null): string` | `string` | ✓ | ✓ |
 | [`stripos()`](./builtins/string/stripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stripslashes()`](./builtins/string/stripslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strlen()`](./builtins/string/strlen.md) | `(string $string): int` | `int` | ✓ | ✓ |

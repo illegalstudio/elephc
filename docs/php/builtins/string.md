@@ -84,6 +84,7 @@ sidebar:
 | [`str_word_count()`](./string/str_word_count.md) | `(string $string, int $format = 0, string $characters = null): array|int` | `array|int` | ✓ | ✓ |
 | [`strcasecmp()`](./string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`strcmp()`](./string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`strip_tags()`](./string/strip_tags.md) | `(string $string, mixed $allowed_tags = null): string` | `string` | ✓ | ✓ |
 | [`stripos()`](./string/stripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stripslashes()`](./string/stripslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strlen()`](./string/strlen.md) | `(string $string): int` | `int` | ✓ | ✓ |

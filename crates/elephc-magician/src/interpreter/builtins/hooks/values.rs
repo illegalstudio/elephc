@@ -258,6 +258,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Settype,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
+    /// Dispatches `strip_tags(...)`.
+    StripTags,
     /// Dispatches `sin(...)`.
     Sin,
     /// Dispatches `sinh(...)`.
@@ -567,6 +569,7 @@ impl EvalValuesHook {
                 "stripslashes" => eval_stripslashes_result(value, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
+            Self::StripTags => eval_strip_tags_values_result(evaluated_args, context, values),
             Self::Sprintf => eval_sprintf_result(evaluated_args, context, values),
             Self::Sscanf => eval_sscanf_values_result(evaluated_args, values),
             Self::StringCase => one_arg(evaluated_args, values, |value, values| match name {

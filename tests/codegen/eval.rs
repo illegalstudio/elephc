@@ -7075,6 +7075,22 @@ echo ":"; echo function_exists("html_entity_decode");');
     );
 }
 
+/// Verifies eval `strip_tags()` strips tags, honors allow-lists, and dispatches as a callable.
+#[test]
+fn test_eval_dispatches_strip_tags_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strip_tags("<p>Hello <b>World</b></p>"); echo ":";
+echo strip_tags("<p>Hello <b>World</b></p>", "<p>"); echo ":";
+echo strip_tags("<p>Hello <b>World</b></p>", ["p"]); echo ":";
+echo strip_tags("1 < 2"); echo ":";
+echo call_user_func("strip_tags", "<x>y</x>"); echo ":";
+echo function_exists("strip_tags");');
+"#,
+    );
+    assert_eq!(out, "Hello World:<p>Hello World</p>:<p>Hello World</p>:1 < 2:y:1");
+}
+
 /// Verifies eval URL codec builtins encode, decode, and dispatch as callables.
 #[test]
 fn test_eval_dispatches_url_codec_builtin_calls() {

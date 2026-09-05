@@ -96,6 +96,7 @@ pub mod str_starts_with;
 pub mod str_word_count;
 pub mod strcasecmp;
 pub mod strcmp;
+pub mod strip_tags;
 pub mod stripslashes;
 pub mod strlen;
 pub mod strncasecmp;

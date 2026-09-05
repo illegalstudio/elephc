@@ -1243,3 +1243,49 @@ echo strlen($raw), "|", strlen($out), "|", md5($out);
     );
     assert_eq!(out, "100000|228997|e5e2d387e026fd978522763ba791144f");
 }
+
+/// Verifies PHP 8.5 `strip_tags()` strips tags, comments, PHP, and NULs, keeps
+/// `1 < 2`, discards unclosed tags, honors string/array allow-lists, and
+/// matches Termwind's `strip_tags($html) === $html` plain-text check.
+#[test]
+fn test_strip_tags() {
+    let out = compile_and_run(
+        r#"<?php
+echo strip_tags("<p>Hello <b>World</b></p>");
+echo "|";
+echo strip_tags("plain");
+echo "|";
+echo strip_tags("a<!-- hide -->b");
+echo "|";
+echo strip_tags("a<?php echo 1; ?>b");
+echo "|";
+echo strip_tags("hello<b");
+echo "|";
+echo strip_tags("1 < 2");
+echo "|";
+echo strip_tags("<p>Hello <b>World</b></p>", "<p>");
+echo "|";
+echo strip_tags("<BR/>hi</br>", "<br>");
+echo "|";
+echo strip_tags("<p class=\"x\">Hi</p>", "<p>");
+echo "|";
+echo strip_tags("<p>Hello <b>World</b></p>", ["p"]);
+echo "|";
+echo strip_tags("<p>Hi</p>") === "<p>Hi</p>" ? "tagged" : "plain";
+echo "|";
+echo STRIP_TAGS("<b>x</b>");
+echo "|";
+echo \strip_tags("<i>y</i>");
+echo "|";
+echo strip_tags(string: "<em>z</em>");
+echo "|";
+echo strip_tags("<p>A</p><b>B</b>", allowed_tags: "<p>");
+echo "|";
+echo strip_tags("a\0b<c>");
+"#,
+    );
+    assert_eq!(
+        out,
+        "Hello World|plain|ab|ab|hello|1 < 2|<p>Hello World</p>|<BR/>hi</br>|<p class=\"x\">Hi</p>|<p>Hello World</p>|plain|x|y|z|<p>A</p>B|ab"
+    );
+}
