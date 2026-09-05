@@ -191,7 +191,7 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
     curl_surface!(
         "curl_multi_get_handles",
         [param!("multi_handle", Mixed)],
-        Mixed,
+        Array,
         "Returns the cURL handles currently attached to a cURL multi handle.",
         since: Php85
     ),
@@ -268,7 +268,7 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
     ),
     curl_surface!(
         "curl_setopt_array",
-        [param!("handle", Mixed), param!("options", Mixed)],
+        [param!("handle", Mixed), param!("options", Array)],
         Bool,
         "Sets multiple options for a cURL transfer."
     ),
@@ -287,7 +287,7 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
     curl_surface!("curl_share_init", [], Mixed, "Initializes a cURL share handle."),
     curl_surface!(
         "curl_share_init_persistent",
-        [param!("share_options", Mixed)],
+        [param!("share_options", Array)],
         Mixed,
         "Initializes a persistent cURL share handle.",
         since: Php85

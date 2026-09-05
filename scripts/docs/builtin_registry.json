@@ -34573,7 +34573,7 @@
           "default": null,
           "name": "options",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         }
       ],
       "required_param_count": 2,
@@ -34607,7 +34607,7 @@
           "default": null,
           "name": "options",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         }
       ],
       "required_param_count": 2,
@@ -34899,7 +34899,7 @@
           "default": null,
           "name": "share_options",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         }
       ],
       "required_param_count": 1,
@@ -34926,7 +34926,7 @@
           "default": null,
           "name": "share_options",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         }
       ],
       "required_param_count": 1,
