@@ -368,9 +368,10 @@ fn emit_mb_strimwidth_walkers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_mb_strimwidth_take_done");                   // take the whole suffix
     emitter.instruction("stp x4, x8, [sp, #-16]!");                             // preserve origin and remaining budget
     emitter.instruction("stp x6, x30, [sp, #-16]!");                            // preserve the end pointer and return address
-    emitter.instruction("mov x9, x5");                                          // remember the cursor before this character
+    emitter.instruction("stp x5, xzr, [sp, #-16]!");                            // preserve the cursor before this character
     emitter.instruction("bl __rt_mb_strimwidth_next");                          // x7 = codepoint, x5 tentatively advanced
-    emitter.instruction("stp x9, x5, [sp, #-16]!");                             // preserve the pre/post-decode cursors
+    emitter.instruction("ldr x9, [sp]");                                        // reload the pre-decode cursor; next clobbers x9
+    emitter.instruction("stp x9, x5, [sp]");                                    // remember pre/post-decode cursors for the width check
     emitter.instruction("mov x0, x7");                                          // look up the candidate character width
     emitter.instruction("bl __rt_mb_strimwidth_char_width");                    // x0 = 1 or 2
     emitter.instruction("ldp x9, x5, [sp], #16");                               // restore the pre/post-decode cursors
@@ -526,7 +527,7 @@ fn emit_mb_strimwidth_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r13");                                            // preserve callee-saved r13
     emitter.instruction("push r14");                                            // preserve callee-saved r14
     emitter.instruction("push r15");                                            // preserve callee-saved r15
-    emitter.instruction("sub rsp, 192");                                        // reserve argument spills and the encoding-name buffer
+    emitter.instruction("sub rsp, 200");                                        // reserve spills, encoding name, and 8-byte SysV call padding
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // spill the source string pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], rdx");                       // spill the source string length
     emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // spill the signed start offset
@@ -698,7 +699,7 @@ fn emit_mb_strimwidth_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_publish");                            // publish the concat-scratch write offset
 
     emitter.label("__rt_mb_strimwidth_return_x86");
-    emitter.instruction("add rsp, 192");                                        // release the argument-spill area
+    emitter.instruction("add rsp, 200");                                        // release the argument-spill area
     emitter.instruction("pop r15");                                             // restore callee-saved r15
     emitter.instruction("pop r14");                                             // restore callee-saved r14
     emitter.instruction("pop r13");                                             // restore callee-saved r13
@@ -708,7 +709,7 @@ fn emit_mb_strimwidth_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the trimmed string pointer/length
 
     emitter.label("__rt_mb_strimwidth_unknown_encoding_x86");
-    emitter.instruction("add rsp, 192");                                        // release the helper frame before throwing
+    emitter.instruction("add rsp, 200");                                        // release the helper frame before throwing
     emitter.instruction("pop r15");                                             // restore callee-saved r15
     emitter.instruction("pop r14");                                             // restore callee-saved r14
     emitter.instruction("pop r13");                                             // restore callee-saved r13
@@ -722,7 +723,7 @@ fn emit_mb_strimwidth_x86_64(emitter: &mut Emitter) {
     );
 
     emitter.label("__rt_mb_strimwidth_start_error_x86");
-    emitter.instruction("add rsp, 192");                                        // release the helper frame before throwing
+    emitter.instruction("add rsp, 200");                                        // release the helper frame before throwing
     emitter.instruction("pop r15");                                             // restore callee-saved r15
     emitter.instruction("pop r14");                                             // restore callee-saved r14
     emitter.instruction("pop r13");                                             // restore callee-saved r13
@@ -736,7 +737,7 @@ fn emit_mb_strimwidth_x86_64(emitter: &mut Emitter) {
     );
 
     emitter.label("__rt_mb_strimwidth_width_error_x86");
-    emitter.instruction("add rsp, 192");                                        // release the helper frame before throwing
+    emitter.instruction("add rsp, 200");                                        // release the helper frame before throwing
     emitter.instruction("pop r15");                                             // restore callee-saved r15
     emitter.instruction("pop r14");                                             // restore callee-saved r14
     emitter.instruction("pop r13");                                             // restore callee-saved r13
@@ -811,6 +812,7 @@ fn emit_mb_strimwidth_walkers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbx");                                            // preserve callee-saved rbx
     emitter.instruction("push r12");                                            // preserve the scan pointer owner
     emitter.instruction("push r13");                                            // preserve the end pointer owner
+    emitter.instruction("sub rsp, 8");                                          // keep the in-loop push+call on a 16-byte boundary
     emitter.instruction("mov r12, rdi");                                        // r12 = scan pointer
     emitter.instruction("lea r13, [rdi + rsi]");                                // r13 = one-past-end pointer
     emitter.instruction("mov rbx, rdi");                                        // remember the origin for the returned offset
@@ -828,6 +830,7 @@ fn emit_mb_strimwidth_walkers_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mb_strimwidth_skip_done_x86");
     emitter.instruction("mov rax, r12");                                        // current pointer minus origin
     emitter.instruction("sub rax, rbx");                                        // return the consumed byte count
+    emitter.instruction("add rsp, 8");                                          // release the SysV call-alignment pad
     emitter.instruction("pop r13");                                             // restore r13
     emitter.instruction("pop r12");                                             // restore r12
     emitter.instruction("pop rbx");                                             // restore rbx
