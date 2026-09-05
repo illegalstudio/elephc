@@ -135,6 +135,7 @@ fn emit_mb_strimwidth_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mb_strimwidth_strwidth");                      // x0 = total display width
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload the negative width
     emitter.instruction("add x9, x9, x0");                                      // PHP adds the whole-string width first
+    emitter.instruction("str x9, [sp, #24]");                                   // persist before skip/strwidth clobber x9
     emitter.instruction("ldr x10, [sp, #16]");                                  // load the resolved start
     emitter.instruction("cbz x10, __rt_mb_strimwidth_neg_width_checked");       // start 0 has no prefix width to subtract
     emitter.instruction("mov x0, x19");                                         // skip the prefix so we can measure it
@@ -146,6 +147,7 @@ fn emit_mb_strimwidth_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x19");                                         // prefix starts at the source pointer
     emitter.instruction("mov x2, x21");                                         // pass the width mode
     emitter.instruction("bl __rt_mb_strimwidth_strwidth");                      // x0 = prefix display width
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the width the walkers clobbered
     emitter.instruction("sub x9, x9, x0");                                      // subtract the skipped prefix width
     emitter.label("__rt_mb_strimwidth_neg_width_checked");
     emitter.instruction("cmp x9, #0");                                          // did the adjusted width underflow?
