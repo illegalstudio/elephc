@@ -9,7 +9,7 @@
 //! - Inventory nodes are append-only so descriptor reuse cannot erase closed resources.
 //! - Nodes store PHP id, native payload, subtype, and close state independently.
 //! - Returned hashes use integer PHP resource ids as keys and raw tag-9 values.
-//! - Reset closes any still-open owned handles before freeing every raw node.
+//! - Reset closes still-open owned handles, but preserves fd 0, 1, and 2 aliases.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -71,6 +71,8 @@ fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("b __rt_resource_inventory_reset_free");                // other resource kinds have no inventory-owned destructor
     emitter.label("__rt_resource_inventory_reset_stream");
     emitter.instruction("ldr x0, [x9, #16]");                                   // load the native descriptor payload
+    emitter.instruction("cmp x0, #2");                                          // standard-stream aliases never own fd 0, 1, or 2
+    emitter.instruction("b.ls __rt_resource_inventory_reset_free");             // preserve process stdio across web requests
     emitter.instruction("mov x10, #0x40000000");                                // synthetic and closed sentinels start at this unsigned value
     emitter.instruction("cmp x0, x10");                                         // skip synthetic or invalid descriptors
     emitter.instruction("b.hs __rt_resource_inventory_reset_free");             // no operating-system handle is owned
@@ -371,6 +373,8 @@ fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");          // other resource kinds have no inventory-owned destructor
     emitter.label("__rt_resource_inventory_reset_stream_x86");
     emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");                       // load the native descriptor payload
+    emitter.instruction("cmp rdi, 2");                                          // standard-stream aliases never own fd 0, 1, or 2
+    emitter.instruction("jbe __rt_resource_inventory_reset_free_x86");          // preserve process stdio across web requests
     emitter.instruction("cmp rdi, 0x40000000");                                 // reject synthetic or invalid descriptors
     emitter.instruction("jae __rt_resource_inventory_reset_free_x86");          // no operating-system handle is owned
     abi::emit_call_label(emitter, "close");
@@ -709,6 +713,35 @@ mod tests {
                 asm.contains("#32]") || asm.contains("+ 32]"),
                 "missing closed-node guard for {target:?}"
             );
+        }
+    }
+
+    /// Verifies leaked stream aliases cannot close process stdio during request reset.
+    #[test]
+    fn reset_preserves_standard_stream_aliases_on_both_architectures() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_resource_inventory(&mut emitter, RuntimeFeatures::none());
+            let asm = emitter.output();
+            match target.arch {
+                Arch::AArch64 => {
+                    assert!(asm.contains("cmp x0, #2"), "{target:?}");
+                    assert!(
+                        asm.contains("b.ls __rt_resource_inventory_reset_free"),
+                        "{target:?}"
+                    );
+                }
+                Arch::X86_64 => {
+                    assert!(asm.contains("cmp rdi, 2"), "{target:?}");
+                    assert!(
+                        asm.contains("jbe __rt_resource_inventory_reset_free_x86"),
+                        "{target:?}"
+                    );
+                }
+            }
         }
     }
 }
