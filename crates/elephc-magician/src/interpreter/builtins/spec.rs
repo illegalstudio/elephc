@@ -13,8 +13,8 @@
 //! - Hook enums keep calls monomorphized over `RuntimeValueOps`.
 
 use elephc_builtin_contract::{
-    eval_execution, eval_signature, lookup_id, BuiltinId, DefaultSpec, EvalExecution, ParamSpec,
-    RuntimeBuiltinId,
+    eval_execution, eval_signature, lookup_constant, lookup_id, BuiltinId, ConstValue, DefaultSpec,
+    EvalExecution, ParamSpec, RuntimeBuiltinId,
 };
 
 pub(in crate::interpreter) use super::hooks::{EvalDirectHook, EvalValuesHook};
@@ -174,8 +174,12 @@ impl EvalBuiltinSpec {
             .map(|param| param.name)
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let execution = eval_execution(contract)
-            .expect("eval builtin binding must reference an eval-supported shared contract");
+        let execution = eval_execution(contract).unwrap_or_else(|| {
+            panic!(
+                "eval builtin binding for {} from {} must reference an eval-supported shared contract",
+                contract.name, binding.home_file
+            )
+        });
 
         Self {
             name: contract.name,
@@ -260,12 +264,18 @@ fn eval_default_value(default: DefaultSpec) -> EvalBuiltinDefaultValue {
             EvalBuiltinDefaultValue::Int(crate::eval_php_profile::eval_all_error_mask())
         }
         DefaultSpec::EmptyArray => EvalBuiltinDefaultValue::EmptyArray,
-        // Only prelude-provided contracts declare these, and none of them has an eval
-        // registry binding (see `elephc_builtin_contract::eval_support`).
-        DefaultSpec::Constant(name) => panic!(
-            "DefaultSpec::Constant({name:?}) reached an eval registry binding; only \
-             prelude-provided contracts may declare a constant default"
-        ),
+        DefaultSpec::Constant(name) => match lookup_constant(name).map(|constant| constant.value) {
+            Some(ConstValue::Null) => EvalBuiltinDefaultValue::Null,
+            Some(ConstValue::Bool(value)) => EvalBuiltinDefaultValue::Bool(value),
+            Some(ConstValue::Int(value)) => EvalBuiltinDefaultValue::Int(value),
+            Some(ConstValue::Float(value)) => EvalBuiltinDefaultValue::Float(value),
+            Some(ConstValue::Str(value)) => EvalBuiltinDefaultValue::String(value),
+            Some(ConstValue::StreamResource(_) | ConstValue::TargetDependent(_)) | None => panic!(
+                "DefaultSpec::Constant({name:?}) reached an eval registry binding without a fixed scalar constant"
+            ),
+        },
+        // Only prelude-provided contracts declare expression defaults, and none of them has
+        // an eval registry binding (see `elephc_builtin_contract::eval_support`).
         DefaultSpec::Expr(source) => panic!(
             "DefaultSpec::Expr({source:?}) reached an eval registry binding; only \
              prelude-provided contracts may declare a non-literal default"
