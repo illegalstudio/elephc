@@ -16,48 +16,30 @@ pub mod traits;
 mod array_keys;
 /// Array storage-representation conversions shared by checking and lowering.
 mod array_storage;
-/// PHP array extension integer constants.
-pub(crate) mod array_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
-/// `ext/curl` integer constants (`CURLOPT_*`, `CURLINFO_*`, `CURLE_*`, `CURL_*`, ...),
-/// generated from the frozen `scripts/docs/curl_surface.json` surface.
-pub(crate) mod curl_constants;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
-/// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).
-pub(crate) mod date_constants;
-/// `ENT_*` HTML-escaping flag constants shared by checker and codegen.
-pub(crate) mod ent_constants;
-/// PHP `E_*` error-level integer constants (`error_reporting` bitmask levels).
-pub(crate) mod error_constants;
 /// C FFI type mapping utilities.
 mod ffi;
-/// JSON literal constant type inference.
-pub(crate) mod json_constants;
-/// PHP math integer constants (`PHP_ROUND_HALF_*` rounding modes).
-pub(crate) mod math_constants;
-/// OpenSSL option constants shared by checker and codegen.
-pub(crate) mod openssl_constants;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
 /// PHP type model and type environment for tracking variable types.
 mod model;
-/// Preg/PCRE flag constants shared by checker and codegen.
-pub(crate) mod preg_constants;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
 /// Type checker result types and the `check` entry point.
 mod result;
 /// Class, interface, enum, and FFI schema definitions.
 mod schema;
-/// `ext/session` integer constants (`PHP_SESSION_*`).
-pub(crate) mod session_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
+/// Target-dependent values of `ICONV_IMPL` / `ICONV_VERSION`.
 pub(crate) mod iconv_constants;
-pub(crate) mod stream_constants;
-pub(crate) mod string_constants;
+/// The compiler's view over the shared builtin class catalog.
+pub(crate) mod builtin_classes;
+/// The compiler's view over the shared global-constant catalog.
+pub(crate) mod predefined_constants;
 /// Type checker diagnostics and warnings.
 mod warnings;
 

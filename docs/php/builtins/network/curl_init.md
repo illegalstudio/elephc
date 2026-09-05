@@ -2,19 +2,19 @@
 title: "curl_init()"
 description: "Initializes a cURL session."
 sidebar:
-  order: 341
+  order: 636
 ---
 
 ## curl_init()
 
 ```php
-function curl_init(string $url = null): CurlHandle
+function curl_init(?string $url = null): CurlHandle
 ```
 
 Initializes a cURL session.
 
 **Parameters**:
-- `$url` (`string`), default `null`, optional
+- `$url` (`?string`), default `null`, optional
 
 **Returns**: `CurlHandle`
 

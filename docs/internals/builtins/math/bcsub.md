@@ -2,7 +2,7 @@
 title: "bcsub() — internals"
 description: "Compiler internals for bcsub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 280
+  order: 564
 ---
 
 ## `bcsub()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcsub(string $num1, string $num2, int $scale = null): string
+function bcsub(string $num1, string $num2, ?int $scale = null): string
 ```
 
 ## What the type checker enforces

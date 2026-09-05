@@ -2,7 +2,7 @@
 title: "bcpow() — internals"
 description: "Compiler internals for bcpow(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 275
+  order: 559
 ---
 
 ## `bcpow()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcpow(string $num, string $exponent, int $scale = null): string
+function bcpow(string $num, string $exponent, ?int $scale = null): string
 ```
 
 ## What the type checker enforces

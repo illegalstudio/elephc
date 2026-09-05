@@ -2,7 +2,7 @@
 title: "substr() — internals"
 description: "Compiler internals for substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 511
+  order: 806
 ---
 
 ## `substr()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function substr(string $string, int $offset, int $length = null): string
+function substr(string $string, int $offset, ?int $length = null): string
 ```
 
 ## What the type checker enforces

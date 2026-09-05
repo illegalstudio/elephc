@@ -37,6 +37,8 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         // raw address their check hook returns. Rendering it as `mixed` would document a lie.
         TypeSpec::Ptr => "pointer".to_string(),
         TypeSpec::Callable => "callable".to_string(),
+        TypeSpec::Array => "array".to_string(),
+        TypeSpec::Nullable(inner) => format!("?{}", type_spec_str(inner)),
     }
 }
 
@@ -53,6 +55,13 @@ fn area_str(area: Area) -> &'static str {
         Area::Spl => "spl",
         Area::Pointers => "pointers",
         Area::Curl => "curl",
+        Area::Date => "date",
+        Area::Calendar => "calendar",
+        Area::Mysqli => "mysqli",
+        Area::Pdo => "pdo",
+        Area::Web => "web",
+        Area::Image => "image",
+        Area::Opcache => "opcache",
     }
 }
 
@@ -66,6 +75,8 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
         DefaultSpec::Str(v) => json!(v),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
         DefaultSpec::EmptyArray => json!([]),
+        DefaultSpec::Constant(name) => json!({ "constant": name }),
+        DefaultSpec::Expr(source) => json!({ "expr": source }),
     }
 }
 
@@ -251,6 +262,8 @@ fn build_json(include_internal: bool) -> Value {
         out.push(json!({
             "name": spec.name,
             "area": area_str(spec.area),
+            "module": spec.module.php_name(),
+            "since": spec.since.map(|version| version.as_str()),
             "internal": spec.internal,
             "extension": spec.extension,
             "params": params,

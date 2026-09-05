@@ -15,20 +15,20 @@ sidebar:
 | [`atan()`](./math/atan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan2()`](./math/atan2.md) | `(float $y, float $x): float` | `float` | ✓ | ✓ |
 | [`base_convert()`](./math/base_convert.md) | `(string $num, int $from_base, int $to_base): string` | `string` | ✓ | ✓ |
-| [`bcadd()`](./math/bcadd.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcadd()`](./math/bcadd.md) | `(string $num1, string $num2, ?int $scale = null): string` | `string` | ✓ | ✓ |
 | [`bcceil()`](./math/bcceil.md) | `(string $num): string` | `string` | ✓ | ✓ |
-| [`bccomp()`](./math/bccomp.md) | `(string $num1, string $num2, int $scale = null): int` | `int` | ✓ | ✓ |
-| [`bcdiv()`](./math/bcdiv.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
-| [`bcdivmod()`](./math/bcdivmod.md) | `(string $num1, string $num2, int $scale = null): array` | `array` | ✓ | ✓ |
+| [`bccomp()`](./math/bccomp.md) | `(string $num1, string $num2, ?int $scale = null): int` | `int` | ✓ | ✓ |
+| [`bcdiv()`](./math/bcdiv.md) | `(string $num1, string $num2, ?int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcdivmod()`](./math/bcdivmod.md) | `(string $num1, string $num2, ?int $scale = null): array` | `array` | ✓ | ✓ |
 | [`bcfloor()`](./math/bcfloor.md) | `(string $num): string` | `string` | ✓ | ✓ |
-| [`bcmod()`](./math/bcmod.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
-| [`bcmul()`](./math/bcmul.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
-| [`bcpow()`](./math/bcpow.md) | `(string $num, string $exponent, int $scale = null): string` | `string` | ✓ | ✓ |
-| [`bcpowmod()`](./math/bcpowmod.md) | `(string $num, string $exponent, string $modulus, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcmod()`](./math/bcmod.md) | `(string $num1, string $num2, ?int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcmul()`](./math/bcmul.md) | `(string $num1, string $num2, ?int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcpow()`](./math/bcpow.md) | `(string $num, string $exponent, ?int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcpowmod()`](./math/bcpowmod.md) | `(string $num, string $exponent, string $modulus, ?int $scale = null): string` | `string` | ✓ | ✓ |
 | [`bcround()`](./math/bcround.md) | `(string $num, int $precision = 0, int $mode = 1): string` | `string` | ✓ | ✓ |
-| [`bcscale()`](./math/bcscale.md) | `(int $scale = null): int` | `int` | ✓ | ✓ |
-| [`bcsqrt()`](./math/bcsqrt.md) | `(string $num, int $scale = null): string` | `string` | ✓ | ✓ |
-| [`bcsub()`](./math/bcsub.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcscale()`](./math/bcscale.md) | `(?int $scale = null): int` | `int` | ✓ | ✓ |
+| [`bcsqrt()`](./math/bcsqrt.md) | `(string $num, ?int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcsub()`](./math/bcsub.md) | `(string $num1, string $num2, ?int $scale = null): string` | `string` | ✓ | ✓ |
 | [`bindec()`](./math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | — |
 | [`ceil()`](./math/ceil.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clamp()`](./math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` | ✓ | ✓ |

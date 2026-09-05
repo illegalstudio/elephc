@@ -2,19 +2,19 @@
 title: "getdate()"
 description: "Returns date/time information."
 sidebar:
-  order: 102
+  order: 219
 ---
 
 ## getdate()
 
 ```php
-function getdate(int $timestamp = null): array
+function getdate(?int $timestamp = null): array
 ```
 
 Returns date/time information.
 
 **Parameters**:
-- `$timestamp` (`int`), default `null`, optional
+- `$timestamp` (`?int`), default `null`, optional
 
 **Returns**: `array`
 

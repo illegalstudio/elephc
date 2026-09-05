@@ -2,7 +2,7 @@
 title: "bcmod() — internals"
 description: "Compiler internals for bcmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 273
+  order: 557
 ---
 
 ## `bcmod()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcmod(string $num1, string $num2, int $scale = null): string
+function bcmod(string $num1, string $num2, ?int $scale = null): string
 ```
 
 ## What the type checker enforces

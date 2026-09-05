@@ -2,7 +2,7 @@
 title: "stream_get_wrappers() — internals"
 description: "Compiler internals for stream_get_wrappers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 232
+  order: 374
 ---
 
 ## `stream_get_wrappers()` — internals

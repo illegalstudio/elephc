@@ -2,7 +2,7 @@
 title: "iconv_mime_decode() — internals"
 description: "Compiler internals for iconv_mime_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 452
+  order: 747
 ---
 
 ## `iconv_mime_decode()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function iconv_mime_decode(string $string, int $mode = 0, string $encoding = null): mixed
+function iconv_mime_decode(string $string, int $mode = 0, ?string $encoding = null): mixed
 ```
 
 ## What the type checker enforces

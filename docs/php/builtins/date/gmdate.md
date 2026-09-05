@@ -2,20 +2,20 @@
 title: "gmdate()"
 description: "Formats a GMT/UTC date and time."
 sidebar:
-  order: 103
+  order: 221
 ---
 
 ## gmdate()
 
 ```php
-function gmdate(string $format, int $timestamp = null): string
+function gmdate(string $format, ?int $timestamp = null): string
 ```
 
 Formats a GMT/UTC date and time.
 
 **Parameters**:
 - `$format` (`string`)
-- `$timestamp` (`int`), default `null`, optional
+- `$timestamp` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

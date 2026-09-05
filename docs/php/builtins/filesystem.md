@@ -61,6 +61,6 @@ sidebar:
 | [`sys_get_temp_dir()`](./filesystem/sys_get_temp_dir.md) | `(): string` | `string` | ✓ | ✓ |
 | [`tempnam()`](./filesystem/tempnam.md) | `(string $directory, string $prefix): string` | `string` | ✓ | ✓ |
 | [`tmpfile()`](./filesystem/tmpfile.md) | `(): mixed` | `mixed` | ✓ | ✓ |
-| [`touch()`](./filesystem/touch.md) | `(string $filename, int $mtime = null, int $atime = null): bool` | `bool` | ✓ | ✓ |
-| [`umask()`](./filesystem/umask.md) | `(int $mask = null): int` | `int` | ✓ | ✓ |
+| [`touch()`](./filesystem/touch.md) | `(string $filename, ?int $mtime = null, ?int $atime = null): bool` | `bool` | ✓ | ✓ |
+| [`umask()`](./filesystem/umask.md) | `(?int $mask = null): int` | `int` | ✓ | ✓ |
 | [`unlink()`](./filesystem/unlink.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |

@@ -81,6 +81,24 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     to continue against a default-feature build rather than let a stale prebuilt
     binary regenerate a different, smaller catalog.
     """
+    cmd = list(_gen_builtins_command(repo))
+    proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.exit(
+            "gen_builtins failed "
+            "(build it with `cargo build --example gen_builtins --features curl`):\n"
+            + proc.stderr
+        )
+    try:
+        entries = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        sys.exit(f"gen_builtins produced invalid JSON: {exc}")
+    _require_canonical_configuration(entries)
+    return entries
+
+
+def _gen_builtins_command(repo: Path) -> list[str]:
+    """Return the exporter command line (prebuilt binary if fresh, else ``cargo run``)."""
     cmd: list[str]
     source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
     source_inputs.extend((repo / "crates").rglob("Cargo.toml"))
@@ -101,19 +119,7 @@ def run_gen_builtins(repo: Path) -> list[dict]:
             "cargo", "run", "--quiet", "--features", "curl", "--example", "gen_builtins", "--",
             "--include-internal",
         ]
-    proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
-    if proc.returncode != 0:
-        sys.exit(
-            "gen_builtins failed "
-            "(build it with `cargo build --example gen_builtins --features curl`):\n"
-            + proc.stderr
-        )
-    try:
-        entries = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-        sys.exit(f"gen_builtins produced invalid JSON: {exc}")
-    _require_canonical_configuration(entries)
-    return entries
+    return cmd
 
 
 # Every feature-gated catalog slice the canonical documentation configuration must
@@ -443,6 +449,9 @@ def _render_default(value, optional: bool) -> Optional[str]:
         return str(value)
     if isinstance(value, list):
         return "[]"
+    if isinstance(value, dict):
+        # `{"constant": NAME}` names a global constant; `{"expr": SRC}` is verbatim PHP.
+        return value.get("constant") or value.get("expr") or str(value)
     if isinstance(value, str):
         if value in ("PHP_INT_MAX", "PHP_INT_MIN"):
             return value
@@ -543,6 +552,32 @@ PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
         "hash",
         "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
     ),
+    # Prelude-provided contracts seeded from the built prelude declarations live in
+    # catalog_data.rs; each area maps to the prelude (or preludes) declaring it.
+    "image": ("image_prelude.rs", "image", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "web": ("web_prelude/build.rs", "web", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "mysqli": (
+        ("mysqli_prelude/build/procedural.rs", "mysqli_prelude/build/exception.rs"),
+        "mysqli",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "pdo": ("pdo_prelude/build.rs", "PDO", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "date": ("tz_prelude.rs", "tz", "crates/elephc-builtin-contract/src/catalog_data.rs"),
+    "types": (
+        "var_export_prelude.rs",
+        "var_export",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "system": (
+        "version_prelude.rs",
+        "version",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "opcache": (
+        "opcache_prelude/build.rs",
+        "OPcache",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
 }
 
 
@@ -602,8 +637,14 @@ def resolve_non_registry_lowering(
                 f"pointing at the wrong file with the wrong prose."
             ) from None
         lowering.sig_file = sig_file
-        prelude = repo / "src" / source
-        match = find_prelude_declaration(read(prelude), canonical)
+        sources = (source,) if isinstance(source, str) else source
+        prelude, match = None, None
+        for candidate in sources:
+            prelude = repo / "src" / candidate
+            match = find_prelude_declaration(read(prelude), canonical)
+            if match is not None:
+                break
+        source = "/".join(sources) if match is None else str(prelude.relative_to(repo / "src"))
         if match is None:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is not declared by src/{source}. "
@@ -615,6 +656,17 @@ def resolve_non_registry_lowering(
         lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1
         lowering.codegen_function = canonical
         lowering.notes.append(f"Implemented by the compiler-injected {label} prelude.")
+    elif kind == "name-resolver-rewrite":
+        rewriter = repo / "src" / "name_resolver" / "expressions.rs"
+        text = read(rewriter)
+        needle = re.search(rf'"{re.escape(canonical)}"', text)
+        lowering.codegen_file = str(rewriter.relative_to(repo))
+        lowering.codegen_line = text[: needle.start()].count("\n") + 1 if needle else None
+        lowering.codegen_function = "rewrite_date_procedural_call"
+        lowering.notes.append(
+            "Rewritten by the name resolver into a constructor or method call on the "
+            "corresponding builtin class before type checking."
+        )
     elif kind == "language-construct":
         lowering.notes.append("Lowered through the compiler's dedicated language-construct path.")
     elif kind == "dedicated-syntax":
@@ -734,6 +786,8 @@ def build_registry(repo: Path) -> list[Builtin]:
                 eval_only=not bool(aot_support.get("supported")),
                 is_extension=bool(entry.get("extension")),
                 semantics=entry.get("semantics"),
+                module=entry["module"],
+                since=entry.get("since"),
             )
         )
 
@@ -742,8 +796,22 @@ def build_registry(repo: Path) -> list[Builtin]:
     return builtins
 
 
+def run_gen_symbols(repo: Path) -> dict:
+    """Return the shared class-like and constant catalogs via ``gen_builtins --symbols``."""
+    cmd = list(_gen_builtins_command(repo))
+    cmd[cmd.index("--include-internal")] = "--symbols"
+    proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.exit("gen_builtins --symbols failed:\n" + proc.stderr)
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+        sys.exit(f"gen_builtins --symbols produced invalid JSON: {exc}")
+
+
 def main_with(repo_root: Path, out: Path) -> int:
-    """Build the registry from ``repo_root`` and write the JSON registry to ``out``."""
+    """Build the registries from ``repo_root``: the function registry to ``out`` and the
+    class/constant symbol registry to ``symbol_registry.json`` beside it."""
     builtins = build_registry(repo_root)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
@@ -751,6 +819,14 @@ def main_with(repo_root: Path, out: Path) -> int:
         encoding="utf-8",
     )
     print(f"Wrote {len(builtins)} builtins to {out}", file=sys.stderr)
+    symbols = run_gen_symbols(repo_root)
+    symbols_out = out.parent / "symbol_registry.json"
+    symbols_out.write_text(json.dumps(symbols, indent=2, sort_keys=True), encoding="utf-8")
+    print(
+        f"Wrote {len(symbols['classes'])} classes and {len(symbols['constants'])} constants "
+        f"to {symbols_out}",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -776,6 +852,8 @@ def _builtin_to_dict(b: Builtin) -> dict:
         "in_catalog": b.in_catalog,
         "is_internal": b.is_internal,
         "is_extension": b.is_extension,
+        "module": b.module,
+        "since": b.since,
         "description": b.description,
         "examples": b.examples,
         "sig": {

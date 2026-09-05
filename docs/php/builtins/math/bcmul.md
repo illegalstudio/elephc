@@ -2,13 +2,13 @@
 title: "bcmul()"
 description: "Multiplies two arbitrary-precision decimal numbers."
 sidebar:
-  order: 274
+  order: 558
 ---
 
 ## bcmul()
 
 ```php
-function bcmul(string $num1, string $num2, int $scale = null): string
+function bcmul(string $num1, string $num2, ?int $scale = null): string
 ```
 
 Multiplies two arbitrary-precision decimal numbers.
@@ -16,7 +16,7 @@ Multiplies two arbitrary-precision decimal numbers.
 **Parameters**:
 - `$num1` (`string`)
 - `$num2` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

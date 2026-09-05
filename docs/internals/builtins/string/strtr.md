@@ -2,7 +2,7 @@
 title: "strtr() — internals"
 description: "Compiler internals for strtr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 510
+  order: 805
 ---
 
 ## `strtr()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function strtr(string $string, array|string $from, string $to = null): string
+function strtr(string $string, array|string $from, ?string $to = null): string
 ```
 
 ## What the type checker enforces

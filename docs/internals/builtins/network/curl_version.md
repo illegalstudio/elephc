@@ -2,7 +2,7 @@
 title: "curl_version() — internals"
 description: "Compiler internals for curl_version(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 367
+  order: 662
 ---
 
 ## `curl_version()` — internals

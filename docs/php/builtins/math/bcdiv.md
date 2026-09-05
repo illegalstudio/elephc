@@ -2,13 +2,13 @@
 title: "bcdiv()"
 description: "Divides two arbitrary-precision decimal numbers."
 sidebar:
-  order: 270
+  order: 554
 ---
 
 ## bcdiv()
 
 ```php
-function bcdiv(string $num1, string $num2, int $scale = null): string
+function bcdiv(string $num1, string $num2, ?int $scale = null): string
 ```
 
 Divides two arbitrary-precision decimal numbers.
@@ -16,7 +16,7 @@ Divides two arbitrary-precision decimal numbers.
 **Parameters**:
 - `$num1` (`string`)
 - `$num2` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

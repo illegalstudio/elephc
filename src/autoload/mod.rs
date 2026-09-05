@@ -30,85 +30,6 @@ use crate::span::Span;
 
 use walk::{collect_declared_fqns, collect_reference_points};
 
-/// Built-in class-like names that exist in every PHP environment (e.g. `Exception`,
-/// `stdClass`, `Iterator`). Seeded into the declared FQN set so references to these
-/// types are never treated as autoload demands.
-const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
-    "ArgumentCountError",
-    "ArrayAccess",
-    "AppendIterator",
-    "ArrayIterator",
-    "ArrayObject",
-    "AssertionError",
-    "BadFunctionCallException",
-    "BadMethodCallException",
-    "CachingIterator",
-    "CallbackFilterIterator",
-    "Countable",
-    "DivisionByZeroError",
-    "DomainException",
-    "EmptyIterator",
-    "Error",
-    "ArithmeticError",
-    "UnhandledMatchError",
-    "Exception",
-    "Fiber",
-    "FiberError",
-    "Generator",
-    "InternalIterator",
-    "InvalidArgumentException",
-    "Iterator",
-    "IteratorAggregate",
-    "IteratorIterator",
-    "JsonException",
-    "JsonSerializable",
-    "LengthException",
-    "LimitIterator",
-    "LogicException",
-    "MultipleIterator",
-    "NoRewindIterator",
-    "OutOfBoundsException",
-    "OutOfRangeException",
-    "OuterIterator",
-    "OverflowException",
-    "ParentIterator",
-    "RangeException",
-    "RecursiveArrayIterator",
-    "RecursiveCallbackFilterIterator",
-    "RecursiveFilterIterator",
-    "RecursiveIterator",
-    "RecursiveIteratorIterator",
-    "ReflectionAttribute",
-    "ReflectionClass",
-    "ReflectionObject",
-    "ReflectionClassConstant",
-    "ReflectionEnumBackedCase",
-    "ReflectionEnumUnitCase",
-    "ReflectionFunction",
-    "ReflectionMethod",
-    "ReflectionNamedType",
-    "ReflectionParameter",
-    "ReflectionProperty",
-    "ReflectionUnionType",
-    "ReflectionIntersectionType",
-    "RuntimeException",
-    "SeekableIterator",
-    "SortDirection",
-    "SplDoublyLinkedList",
-    "SplFixedArray",
-    "SplObserver",
-    "SplQueue",
-    "SplStack",
-    "SplSubject",
-    "Stringable",
-    "Throwable",
-    "Traversable",
-    "TypeError",
-    "UnderflowException",
-    "UnexpectedValueException",
-    "ValueError",
-    "stdClass",
-];
 
 /// Run the autoload pass over a fully resolver+name_resolver-processed
 /// program. For every canonical class reference that isn't declared in
@@ -235,7 +156,9 @@ pub fn collect_aliases(program: Program) -> Program {
 /// to types like `Exception`, `stdClass`, and `Iterator` are never treated as
 /// autoload demands. Called at the start of each autoload iteration.
 fn seed_builtin_declared_fqns(declared: &mut HashSet<String>) {
-    for name in BUILTIN_CLASS_LIKE_NAMES {
+    // Every catalogued builtin class-like (`Exception`, `stdClass`, `Iterator`, `PDO`, ...)
+    // is seeded into the declared FQN set so references to it are never autoload demands.
+    for name in crate::types::builtin_classes::builtin_class_like_names() {
         declared.insert((*name).to_string());
     }
 }

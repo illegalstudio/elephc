@@ -1760,3 +1760,17 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     emitter.label_global(&module.target.extern_symbol(name));
 }
+
+#[cfg(test)]
+mod catalog_tests {
+    /// Every throwable this helper can materialize is a catalogued builtin class.
+    #[test]
+    fn throwable_list_is_a_subset_of_the_class_catalog() {
+        for name in super::BUILTIN_THROWABLE_CONSTRUCTOR_CLASSES {
+            assert!(
+                elephc_builtin_contract::lookup_class(name).is_some(),
+                "{name} is not in the shared class catalog"
+            );
+        }
+    }
+}

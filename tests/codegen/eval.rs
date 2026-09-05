@@ -6626,17 +6626,18 @@ echo function_exists("rand"); echo function_exists("mt_rand"); echo function_exi
     );
 }
 
-/// Verifies eval `spl_classes()` exposes the same static SPL class list as native code.
+/// Verifies eval `spl_classes()` exposes the same `ext/spl` class list as native code (the
+/// shared catalog's SPL module: `Exception` is SPL's `LogicException` parent but is Core).
 #[test]
 fn test_eval_dispatches_spl_classes_builtin_calls() {
     let out = compile_and_run(
         r#"<?php
 eval('$names = spl_classes();
-echo count($names) . ":" . $names[0] . ":" . $names[55] . ":";
-echo (in_array("Exception", $names) ? "exception" : "bad") . ":";
+echo count($names) . ":" . $names[0] . ":" . $names[53] . ":";
+echo (in_array("LogicException", $names) ? "exception" : "bad") . ":";
 echo (in_array("SplDoublyLinkedList", $names) ? "list" : "bad") . ":";
 $call = call_user_func("spl_classes");
-echo (in_array("Throwable", $call) ? "call" : "bad") . ":";
+echo (in_array("SplStack", $call) ? "call" : "bad") . ":";
 $spread = call_user_func_array("spl_classes", []);
 echo (count($spread) === count($names) ? "spread" : "bad") . ":";
 echo function_exists("spl_classes"); echo is_callable("spl_classes");');
@@ -6644,7 +6645,7 @@ echo function_exists("spl_classes"); echo is_callable("spl_classes");');
     );
     assert_eq!(
         out,
-        "61:AppendIterator:Throwable:exception:list:call:spread:11"
+        "54:AppendIterator:UnexpectedValueException:exception:list:call:spread:11"
     );
 }
 

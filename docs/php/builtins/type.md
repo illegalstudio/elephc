@@ -37,3 +37,4 @@ sidebar:
 | [`is_string()`](./type/is_string.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`settype()`](./type/settype.md) | `(mixed $var, string $type): bool` | `bool` | ✓ | ✓ |
 | [`strval()`](./type/strval.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
+| [`var_export()`](./type/var_export.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | — |

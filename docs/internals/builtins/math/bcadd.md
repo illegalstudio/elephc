@@ -2,7 +2,7 @@
 title: "bcadd() — internals"
 description: "Compiler internals for bcadd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 267
+  order: 551
 ---
 
 ## `bcadd()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcadd(string $num1, string $num2, int $scale = null): string
+function bcadd(string $num1, string $num2, ?int $scale = null): string
 ```
 
 ## What the type checker enforces

@@ -251,6 +251,16 @@ fn eval_default_value(default: DefaultSpec) -> EvalBuiltinDefaultValue {
         DefaultSpec::Str(value) => EvalBuiltinDefaultValue::String(value),
         DefaultSpec::IntMax => EvalBuiltinDefaultValue::Int(i64::MAX),
         DefaultSpec::EmptyArray => EvalBuiltinDefaultValue::EmptyArray,
+        // Only prelude-provided contracts declare these, and none of them has an eval
+        // registry binding (see `elephc_builtin_contract::eval_support`).
+        DefaultSpec::Constant(name) => panic!(
+            "DefaultSpec::Constant({name:?}) reached an eval registry binding; only \
+             prelude-provided contracts may declare a constant default"
+        ),
+        DefaultSpec::Expr(source) => panic!(
+            "DefaultSpec::Expr({source:?}) reached an eval registry binding; only \
+             prelude-provided contracts may declare a non-literal default"
+        ),
     }
 }
 

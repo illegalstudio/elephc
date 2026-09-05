@@ -2,7 +2,7 @@
 title: "curl_getinfo() — internals"
 description: "Compiler internals for curl_getinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 340
+  order: 635
 ---
 
 ## `curl_getinfo()` — internals
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function curl_getinfo(CurlHandle $handle, int $option = null): mixed
+function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed
 ```
 
 ## What the type checker enforces

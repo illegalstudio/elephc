@@ -2,7 +2,7 @@
 title: "__elephc_strtotime_raw() — internals"
 description: "Compiler internals for __elephc_strtotime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 631
+  order: 957
 ---
 
 ## `__elephc_strtotime_raw()` — internals
@@ -41,7 +41,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function __elephc_strtotime_raw(string $datetime, int $baseTimestamp = null): int
+function __elephc_strtotime_raw(string $datetime, ?int $baseTimestamp = null): int
 ```
 
 ## What the type checker enforces

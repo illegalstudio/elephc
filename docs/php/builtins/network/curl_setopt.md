@@ -2,7 +2,7 @@
 title: "curl_setopt()"
 description: "Sets an option for a cURL transfer."
 sidebar:
-  order: 356
+  order: 651
 ---
 
 ## curl_setopt()

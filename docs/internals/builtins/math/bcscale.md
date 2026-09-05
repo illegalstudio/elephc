@@ -2,7 +2,7 @@
 title: "bcscale() — internals"
 description: "Compiler internals for bcscale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 278
+  order: 562
 ---
 
 ## `bcscale()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcscale(int $scale = null): int
+function bcscale(?int $scale = null): int
 ```
 
 ## What the type checker enforces

@@ -2,19 +2,19 @@
 title: "umask()"
 description: "Changes the current umask."
 sidebar:
-  order: 164
+  order: 306
 ---
 
 ## umask()
 
 ```php
-function umask(int $mask = null): int
+function umask(?int $mask = null): int
 ```
 
 Changes the current umask.
 
 **Parameters**:
-- `$mask` (`int`), default `null`, optional
+- `$mask` (`?int`), default `null`, optional
 
 **Returns**: `int`
 

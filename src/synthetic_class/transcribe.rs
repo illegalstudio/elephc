@@ -20,11 +20,16 @@
 //!   a starting point for review rather than a finished file.
 //! - Two-word `else if` needs no special handling here: it reaches the AST as an `If` nested
 //!   in the `else` body, so emitting the tree as-is reproduces it exactly.
+//! - A parameter the PHP body never reads gets `.keep_unread_params()`: the builders otherwise
+//!   synthesize `$_unused = $p;`, and a parse-parity oracle would report that statement as a
+//!   divergence. The decision is taken from the parse with the builder's own predicate
+//!   (`synthetic_class::unread_params`), so it cannot disagree with what `build()` would do.
 
 use crate::parser::ast::{
     AttributeGroup, BinOp, CType, CastType, Expr, ExprKind, Program, StaticReceiver, Stmt,
     StmtKind, TypeExpr, Visibility,
 };
+use crate::synthetic_class::unread_params;
 
 /// Emits builder calls for every declaration in `program`, one per line-group.
 pub fn transcribe(program: &Program) -> String {
@@ -113,6 +118,19 @@ fn lit(value: &str) -> String {
     format!("{:?}", value)
 }
 
+/// Emits the variadic-tail call for a function or method: `.variadic(...)` for a by-value
+/// tail (`mixed ...$args`), `.variadic_by_ref(...)` for a by-reference one (`&...$vars`, the
+/// shape of `mysqli_stmt::bind_param` / `bind_result`). The two are separate builder calls
+/// rather than a flag argument so a transcription reads like the PHP it came from.
+fn variadic_call(tail: &str, by_ref: bool, element_type: &Option<TypeExpr>, depth: usize) -> String {
+    let element = match element_type {
+        Some(ty) => format!("Some({})", ty_expr(ty)),
+        None => "None".to_string(),
+    };
+    let call = if by_ref { "variadic_by_ref" } else { "variadic" };
+    format!("\n{}.{}({}, {})", pad(depth), call, lit(tail), element)
+}
+
 /// Emits one top-level declaration.
 fn decl(stmt: &Stmt, depth: usize) -> String {
     match &stmt.kind {
@@ -127,21 +145,16 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
             by_ref_return,
             body,
         } => {
-            assert!(!variadic_by_ref, "a by-ref variadic is not modelled: {name}");
             assert!(!by_ref_return, "a by-ref return is not modelled: {name}");
             let mut out = format!("{}function({})", pad(depth), lit(name));
             out.push_str(&params_calls(params, param_attributes, depth + 1));
             if let Some(tail) = variadic {
-                let element = match variadic_type {
-                    Some(ty) => format!("Some({})", ty_expr(ty)),
-                    None => "None".to_string(),
-                };
-                out.push_str(&format!(
-                    "\n{}.variadic({}, {})",
-                    pad(depth + 1),
-                    lit(tail),
-                    element
-                ));
+                out.push_str(&variadic_call(tail, *variadic_by_ref, variadic_type, depth + 1));
+            } else {
+                assert!(!variadic_by_ref, "a by-ref flag without a variadic tail: {name}");
+            }
+            if !unread_params(params, body).is_empty() {
+                out.push_str(&format!("\n{}.keep_unread_params()", pad(depth + 1)));
             }
             if let Some(ty) = return_type {
                 out.push_str(&format!("\n{}.returns({})", pad(depth + 1), ty_expr(ty)));
@@ -280,11 +293,6 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                     "abstract methods are not modelled: {}",
                     class_method.name
                 );
-                assert!(
-                    !class_method.variadic_by_ref,
-                    "a by-ref variadic is not modelled: {}",
-                    class_method.name
-                );
                 // This arm reads fields off the struct by name rather than destructuring it,
                 // so an unmodelled one is dropped WITHOUT a word — the same shape that once
                 // swallowed `variadic` on a function and silently changed its arity. These
@@ -319,16 +327,21 @@ fn decl(stmt: &Stmt, depth: usize) -> String {
                     depth + 3,
                 ));
                 if let Some(tail) = &class_method.variadic {
-                    let element = match &class_method.variadic_type {
-                        Some(ty) => format!("Some({})", ty_expr(ty)),
-                        None => "None".to_string(),
-                    };
-                    m.push_str(&format!(
-                        "\n{}.variadic({}, {})",
-                        pad(depth + 3),
-                        lit(tail),
-                        element
+                    m.push_str(&variadic_call(
+                        tail,
+                        class_method.variadic_by_ref,
+                        &class_method.variadic_type,
+                        depth + 3,
                     ));
+                } else {
+                    assert!(
+                        !class_method.variadic_by_ref,
+                        "a by-ref flag without a variadic tail: {}",
+                        class_method.name
+                    );
+                }
+                if !unread_params(&class_method.params, &class_method.body).is_empty() {
+                    m.push_str(&format!("\n{}.keep_unread_params()", pad(depth + 3)));
                 }
                 if let Some(ty) = &class_method.return_type {
                     m.push_str(&format!("\n{}.returns({})", pad(depth + 3), ty_expr(ty)));
@@ -1278,6 +1291,23 @@ mod tests {
                 std::env::var("ELEPHC_TRANSCRIBE_IN").expect("ELEPHC_TRANSCRIBE_IN"),
             )
             .expect("must read the source"),
+            // The FULL assembled mysqli source for one profile — the fragments are
+            // concatenated after a single `<?php` header and version-gated there, so
+            // feeding a fragment on its own would transcribe an unshippable subset.
+            // `ELEPHC_TRANSCRIBE_VERSION` selects the profile (default: the newest,
+            // which carries every gated member so the conditionals can be added by hand).
+            "mysqli" => {
+                let version = std::env::var("ELEPHC_TRANSCRIBE_VERSION")
+                    .ok()
+                    .map(|spelling| {
+                        crate::php_version::PhpVersion::ALL
+                            .into_iter()
+                            .find(|candidate| candidate.spelling() == spelling)
+                            .unwrap_or_else(|| panic!("unknown PHP version {spelling}"))
+                    })
+                    .unwrap_or(crate::php_version::PhpVersion::Php86);
+                crate::mysqli_prelude::assembled_source_for_version(version)
+            }
             other => panic!("unknown prelude {other}"),
         };
         let tokens = crate::lexer::tokenize(&source).expect("prelude must tokenize");

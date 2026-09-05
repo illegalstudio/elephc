@@ -2,7 +2,7 @@
 title: "iconv_strlen() — internals"
 description: "Compiler internals for iconv_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 456
+  order: 751
 ---
 
 ## `iconv_strlen()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function iconv_strlen(string $string, string $encoding = null): mixed
+function iconv_strlen(string $string, ?string $encoding = null): mixed
 ```
 
 ## What the type checker enforces

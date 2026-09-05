@@ -2,7 +2,7 @@
 title: "readline() — internals"
 description: "Compiler internals for readline(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 394
+  order: 689
 ---
 
 ## `readline()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function readline(string $prompt = null): mixed
+function readline(?string $prompt = null): mixed
 ```
 
 ## What the type checker enforces

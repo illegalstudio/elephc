@@ -2,20 +2,20 @@
 title: "iconv_strlen()"
 description: "Returns the character count of a string in the requested encoding."
 sidebar:
-  order: 456
+  order: 751
 ---
 
 ## iconv_strlen()
 
 ```php
-function iconv_strlen(string $string, string $encoding = null): mixed
+function iconv_strlen(string $string, ?string $encoding = null): mixed
 ```
 
 Returns the character count of a string in the requested encoding.
 
 **Parameters**:
 - `$string` (`string`)
-- `$encoding` (`string`), default `null`, optional
+- `$encoding` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

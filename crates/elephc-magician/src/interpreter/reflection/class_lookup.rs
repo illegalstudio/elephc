@@ -435,48 +435,34 @@ pub(super) fn eval_reflection_builtin_class_is_iterable(class_name: &str) -> boo
 }
 
 /// Returns whether one reflected class-like name belongs to compiler-injected metadata.
+///
+/// Every class-like the shared catalog knows (SPL, Core interfaces and throwables, date/time,
+/// Reflection, prelude classes, ...) is a builtin. The only name outside the catalog is the
+/// compiler's own `AppendIterator` storage helper, which user code never declares.
 pub(super) fn eval_reflection_class_like_is_internal(class_name: &str) -> bool {
     let trimmed = class_name.trim_start_matches('\\');
-    if EVAL_SPL_CLASS_NAMES
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(trimmed))
-    {
-        return true;
+    elephc_builtin_contract::lookup_class(trimmed).is_some()
+        || trimmed.eq_ignore_ascii_case(UNCATALOGUED_INTERNAL_CLASS)
+}
+
+/// The one compiler helper class reflection treats as internal without a catalog entry.
+const UNCATALOGUED_INTERNAL_CLASS: &str = "__ElephcAppendIteratorArrayIterator";
+
+#[cfg(test)]
+mod internal_class_tests {
+    use super::*;
+
+    /// Verifies the internal predicate follows the catalog: catalogued builtins and the one
+    /// helper are internal, and the helper really has no catalog entry to fall back on.
+    #[test]
+    fn internal_predicate_follows_the_class_catalog() {
+        for name in ["Iterator", "\\Exception", "ReflectionClass", "Fiber", "SortDirection", "PDO"] {
+            assert!(eval_reflection_class_like_is_internal(name), "{name}");
+        }
+        assert!(eval_reflection_class_like_is_internal(UNCATALOGUED_INTERNAL_CLASS));
+        assert!(elephc_builtin_contract::lookup_class(UNCATALOGUED_INTERNAL_CLASS).is_none());
+        assert!(!eval_reflection_class_like_is_internal("EvalUserClass"));
     }
-    matches!(
-        trimmed.to_ascii_lowercase().as_str(),
-        "__elephcappenditeratorarrayiterator"
-            | "fiber"
-            | "fibererror"
-            | "generator"
-            | "internaliterator"
-            | "jsonexception"
-            | "phar"
-            | "phardata"
-            | "pharfileinfo"
-            | "php_user_filter"
-            | "reflectionattribute"
-            | "reflectionclass"
-            | "reflectionclassconstant"
-            | "reflectionenum"
-            | "reflectionenumbackedcase"
-            | "reflectionenumunitcase"
-            | "reflectionexception"
-            | "reflectionfunction"
-            | "reflectionintersectiontype"
-            | "reflectionmethod"
-            | "reflectionnamedtype"
-            | "reflectionparameter"
-            | "reflectionproperty"
-            | "reflectionuniontype"
-            | "sortdirection"
-            | "splheap"
-            | "splmaxheap"
-            | "splminheap"
-            | "splobjectstorage"
-            | "splpriorityqueue"
-            | "stdclass"
-    )
 }
 
 /// Computes PHP's `ReflectionClass::getModifiers()` bitmask for eval metadata.

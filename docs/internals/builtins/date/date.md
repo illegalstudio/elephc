@@ -2,7 +2,7 @@
 title: "date() — internals"
 description: "Compiler internals for date(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 99
+  order: 188
 ---
 
 ## `date()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function date(string $format, int $timestamp = null): string
+function date(string $format, ?int $timestamp = null): string
 ```
 
 ## What the type checker enforces

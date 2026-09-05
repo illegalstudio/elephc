@@ -706,6 +706,9 @@ version = "0.1.0"
 [[package]]
 name = "elephc-builtin-contract"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "elephc-crypto"

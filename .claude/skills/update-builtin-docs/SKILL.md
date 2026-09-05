@@ -15,13 +15,17 @@ Use the repo root as the working directory.
    link the elephc-magician dev-dependency):
 
 ```bash
-cargo build --example gen_builtins
+cargo build --example gen_builtins --features curl
 ```
 
-2. Regenerate the JSON registry and Markdown pages:
+2. Regenerate the JSON registries (functions, plus classes and constants in
+   `symbol_registry.json`), the Markdown pages, the generated "Functions" blocks in
+   the module pages, and the PHP comparison page:
 
 ```bash
 python3 scripts/docs/extract_builtins.py --render --force
+python3 scripts/docs/gen_module_sections.py
+python3 scripts/docs/gen_php_comparison.py
 ```
 
 3. Run the docs audits used by CI:
@@ -35,7 +39,7 @@ python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
 4. Inspect generated changes before reporting or committing:
 
 ```bash
-git status --short -- docs/php/builtins.md docs/php/builtins docs/internals/builtins scripts/docs/builtin_registry.json
+git status --short -- docs/php docs/internals/builtins scripts/docs/builtin_registry.json scripts/docs/symbol_registry.json
 git diff --check
 ```
 

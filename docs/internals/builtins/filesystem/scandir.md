@@ -2,7 +2,7 @@
 title: "scandir() — internals"
 description: "Compiler internals for scandir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 157
+  order: 299
 ---
 
 ## `scandir()` — internals

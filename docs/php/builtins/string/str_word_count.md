@@ -2,13 +2,13 @@
 title: "str_word_count()"
 description: "Counts the words in a string, or returns them as a list or byte-offset map."
 sidebar:
-  order: 495
+  order: 790
 ---
 
 ## str_word_count()
 
 ```php
-function str_word_count(string $string, int $format = 0, string $characters = null): array|int
+function str_word_count(string $string, int $format = 0, ?string $characters = null): array|int
 ```
 
 Counts the words in a string, or returns them as a list or byte-offset map.
@@ -16,7 +16,7 @@ Counts the words in a string, or returns them as a list or byte-offset map.
 **Parameters**:
 - `$string` (`string`)
 - `$format` (`int`), default `0`, optional
-- `$characters` (`string`), default `null`, optional
+- `$characters` (`?string`), default `null`, optional
 
 **Returns**: `array|int`
 

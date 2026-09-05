@@ -2,7 +2,7 @@
 title: "phpversion() — internals"
 description: "Compiler internals for phpversion(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 328
+  order: 622
 ---
 
 ## `phpversion()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function phpversion(string $extension = null): string|false
+function phpversion(?string $extension = null): string|false
 ```
 
 ## What the type checker enforces

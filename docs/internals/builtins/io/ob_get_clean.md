@@ -2,7 +2,7 @@
 title: "ob_get_clean() — internals"
 description: "Compiler internals for ob_get_clean(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 202
+  order: 344
 ---
 
 ## `ob_get_clean()` — internals

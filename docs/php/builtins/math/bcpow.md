@@ -2,13 +2,13 @@
 title: "bcpow()"
 description: "Raises an arbitrary-precision decimal number to an integral power."
 sidebar:
-  order: 275
+  order: 559
 ---
 
 ## bcpow()
 
 ```php
-function bcpow(string $num, string $exponent, int $scale = null): string
+function bcpow(string $num, string $exponent, ?int $scale = null): string
 ```
 
 Raises an arbitrary-precision decimal number to an integral power.
@@ -16,7 +16,7 @@ Raises an arbitrary-precision decimal number to an integral power.
 **Parameters**:
 - `$num` (`string`)
 - `$exponent` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

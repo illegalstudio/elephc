@@ -2436,3 +2436,17 @@ fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
     let symbol = module.target.extern_symbol(name);
     emitter.label_global(&symbol);
 }
+
+#[cfg(test)]
+mod catalog_tests {
+    /// Every throwable this helper can materialize is a catalogued builtin class.
+    #[test]
+    fn throwable_list_is_a_subset_of_the_class_catalog() {
+        for name in super::BUILTIN_THROWABLE_METHOD_CLASSES {
+            assert!(
+                elephc_builtin_contract::lookup_class(name).is_some(),
+                "{name} is not in the shared class catalog"
+            );
+        }
+    }
+}

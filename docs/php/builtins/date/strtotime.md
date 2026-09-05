@@ -2,20 +2,20 @@
 title: "strtotime()"
 description: "Parses an English textual datetime description into a Unix timestamp."
 sidebar:
-  order: 109
+  order: 241
 ---
 
 ## strtotime()
 
 ```php
-function strtotime(string $datetime, int $baseTimestamp = null): mixed
+function strtotime(string $datetime, ?int $baseTimestamp = null): mixed
 ```
 
 Parses an English textual datetime description into a Unix timestamp.
 
 **Parameters**:
 - `$datetime` (`string`)
-- `$baseTimestamp` (`int`), default `null`, optional
+- `$baseTimestamp` (`?int`), default `null`, optional
 
 **Returns**: `mixed`
 

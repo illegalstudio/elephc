@@ -15,7 +15,7 @@ sidebar:
 | [`feof()`](./io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fflush()`](./io/fflush.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fgetc()`](./io/fgetc.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`fgetcsv()`](./io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ','): mixed` | `mixed` | ✓ | ✓ |
+| [`fgetcsv()`](./io/fgetcsv.md) | `(resource $stream, ?int $length = null, string $separator = ','): mixed` | `mixed` | ✓ | ✓ |
 | [`fgets()`](./io/fgets.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`file()`](./io/file.md) | `(string $filename, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
@@ -65,12 +65,12 @@ sidebar:
 | [`stream_context_get_options()`](./io/stream_context_get_options.md) | `(resource $context): array` | `array` | ✓ | ✓ |
 | [`stream_context_get_params()`](./io/stream_context_get_params.md) | `(resource $context): array` | `array` | ✓ | ✓ |
 | [`stream_context_set_default()`](./io/stream_context_set_default.md) | `(array $options): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_context_set_option()`](./io/stream_context_set_option.md) | `(resource $context, string $wrapper_or_options, string $option_name = null, mixed $value = null): bool` | `bool` | ✓ | ✓ |
+| [`stream_context_set_option()`](./io/stream_context_set_option.md) | `(resource $context, string $wrapper_or_options, ?string $option_name = null, mixed $value = null): bool` | `bool` | ✓ | ✓ |
 | [`stream_context_set_params()`](./io/stream_context_set_params.md) | `(resource $context, array $params): bool` | `bool` | ✓ | ✓ |
-| [`stream_copy_to_stream()`](./io/stream_copy_to_stream.md) | `(resource $from, resource $to, int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_copy_to_stream()`](./io/stream_copy_to_stream.md) | `(resource $from, resource $to, ?int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_filter_register()`](./io/stream_filter_register.md) | `(string $filter_name, string $class): bool` | `bool` | ✓ | ✓ |
 | [`stream_filter_remove()`](./io/stream_filter_remove.md) | `(resource $stream_filter): bool` | `bool` | ✓ | ✓ |
-| [`stream_get_contents()`](./io/stream_get_contents.md) | `(resource $stream, int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_get_contents()`](./io/stream_get_contents.md) | `(resource $stream, ?int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_get_filters()`](./io/stream_get_filters.md) | `(): array` | `array` | ✓ | ✓ |
 | [`stream_get_line()`](./io/stream_get_line.md) | `(resource $stream, int $length, string $ending = ''): string` | `string` | ✓ | ✓ |
 | [`stream_get_meta_data()`](./io/stream_get_meta_data.md) | `(resource $stream): array` | `array` | ✓ | ✓ |

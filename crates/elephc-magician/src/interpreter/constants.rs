@@ -11,21 +11,6 @@
 
 use std::sync::atomic::AtomicU64;
 
-/// Requests raw binary output from the OpenSSL compatibility builtins.
-pub(super) const EVAL_OPENSSL_RAW_DATA: i64 = 1;
-
-/// Disables block-cipher padding in the OpenSSL compatibility builtins.
-pub(super) const EVAL_OPENSSL_ZERO_PADDING: i64 = 2;
-
-/// Prevents zero-padding short cipher keys in the OpenSSL compatibility builtins.
-pub(super) const EVAL_OPENSSL_DONT_ZERO_PAD_KEY: i64 = 4;
-
-/// Rejects encoded-words that RFC 2047 would not allow at that position.
-pub(super) const EVAL_ICONV_MIME_DECODE_STRICT: i64 = 1;
-
-/// Keeps undecodable MIME text verbatim instead of failing the whole call.
-pub(super) const EVAL_ICONV_MIME_DECODE_CONTINUE_ON_ERROR: i64 = 2;
-
 /// `parse_url()` component selector for the scheme.
 pub(super) const EVAL_PHP_URL_SCHEME: i64 = 0;
 /// `parse_url()` component selector for the host.
@@ -117,73 +102,18 @@ pub(super) const EVAL_STREAM_FILTERS: &[&str] = &[
     "bzip2.decompress",
 ];
 
-/// SPL/core type names reported by eval `spl_classes()`.
-///
-/// Mirrors `src/codegen/builtins/spl/mod.rs::SPL_CLASS_NAMES` so dynamic eval
-/// exposes the same static registry snapshot as native code.
-pub(super) const EVAL_SPL_CLASS_NAMES: &[&str] = &[
-    "AppendIterator",
-    "ArrayAccess",
-    "ArrayIterator",
-    "ArrayObject",
-    "BadFunctionCallException",
-    "BadMethodCallException",
-    "CachingIterator",
-    "CallbackFilterIterator",
-    "Countable",
-    "DomainException",
-    "DirectoryIterator",
-    "EmptyIterator",
-    "Error",
-    "Exception",
-    "FilterIterator",
-    "FilesystemIterator",
-    "GlobIterator",
-    "InfiniteIterator",
-    "InvalidArgumentException",
-    "Iterator",
-    "IteratorAggregate",
-    "IteratorIterator",
-    "JsonSerializable",
-    "LengthException",
-    "LimitIterator",
-    "LogicException",
-    "MultipleIterator",
-    "NoRewindIterator",
-    "OuterIterator",
-    "OutOfBoundsException",
-    "OutOfRangeException",
-    "OverflowException",
-    "ParentIterator",
-    "RangeException",
-    "RecursiveArrayIterator",
-    "RecursiveCachingIterator",
-    "RecursiveCallbackFilterIterator",
-    "RecursiveDirectoryIterator",
-    "RecursiveFilterIterator",
-    "RecursiveIterator",
-    "RecursiveIteratorIterator",
-    "RecursiveRegexIterator",
-    "RegexIterator",
-    "RuntimeException",
-    "SeekableIterator",
-    "SplDoublyLinkedList",
-    "SplFixedArray",
-    "SplFileInfo",
-    "SplFileObject",
-    "SplObserver",
-    "SplQueue",
-    "SplStack",
-    "SplSubject",
-    "SplTempFileObject",
-    "Stringable",
-    "Throwable",
-    "Traversable",
-    "TypeError",
-    "UnderflowException",
-    "UnexpectedValueException",
-    "ValueError",
-];
+/// Class-like names the shared catalog attributes to `ext/spl`, as eval `spl_classes()` reports
+/// them and as reflection treats them (compiler-injected, not eval-declared).
+pub(super) fn eval_spl_class_names() -> &'static [&'static str] {
+    static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        elephc_builtin_contract::classes()
+            .iter()
+            .filter(|class| class.module == elephc_builtin_contract::PhpModule::Spl && !class.internal)
+            .map(|class| class.name)
+            .collect()
+    })
+}
 
 /// Full English month names used by eval `date()`.
 pub(super) const EVAL_MONTH_NAMES: &[&str; 12] = &[
@@ -258,27 +188,18 @@ pub(super) const EVAL_PATHINFO_BASENAME: i64 = 2;
 pub(super) const EVAL_PATHINFO_EXTENSION: i64 = 4;
 pub(super) const EVAL_PATHINFO_FILENAME: i64 = 8;
 pub(super) const EVAL_PATHINFO_ALL: i64 = 15;
-pub(super) const EVAL_FNM_NOESCAPE: i64 = 1;
-pub(super) const EVAL_FNM_PATHNAME: i64 = 2;
+// `fnmatch(3)` flag values follow the platform Magician is linked into, exactly like the
+// compiler's per-target table in `codegen_support::prescan`: Apple libc spells NOESCAPE 1 /
+// PATHNAME 2, glibc the other way round. The catalog marks both `TargetDependent`.
+pub(super) const EVAL_FNM_NOESCAPE: i64 = if cfg!(target_os = "macos") { 1 } else { 2 };
+pub(super) const EVAL_FNM_PATHNAME: i64 = if cfg!(target_os = "macos") { 2 } else { 1 };
 pub(super) const EVAL_FNM_PERIOD: i64 = 4;
 pub(super) const EVAL_FNM_CASEFOLD: i64 = 16;
-pub(super) const EVAL_LOCK_SH: i64 = 1;
-pub(super) const EVAL_LOCK_EX: i64 = 2;
-pub(super) const EVAL_LOCK_UN: i64 = 3;
-pub(super) const EVAL_LOCK_NB: i64 = 4;
 pub(super) const EVAL_ARRAY_FILTER_USE_VALUE: i64 = 0;
 pub(super) const EVAL_ARRAY_FILTER_USE_BOTH: i64 = 1;
 pub(super) const EVAL_ARRAY_FILTER_USE_KEY: i64 = 2;
-/// `str_pad()` pads on the left of the input.
-pub(super) const EVAL_STR_PAD_LEFT: i64 = 0;
-/// `str_pad()` pads on the right of the input, which is PHP's default.
-pub(super) const EVAL_STR_PAD_RIGHT: i64 = 1;
-/// `str_pad()` splits the padding across both sides of the input.
-pub(super) const EVAL_STR_PAD_BOTH: i64 = 2;
 pub(super) const EVAL_COUNT_NORMAL: i64 = 0;
 pub(super) const EVAL_COUNT_RECURSIVE: i64 = 1;
-/// `round()` breaks exact `.5` ties away from zero, which is PHP's default.
-pub(super) const EVAL_PHP_ROUND_HALF_UP: i64 = 1;
 /// `round()` breaks exact `.5` ties toward zero.
 pub(super) const EVAL_PHP_ROUND_HALF_DOWN: i64 = 2;
 /// `round()` breaks exact `.5` ties toward the nearest even digit.
@@ -292,16 +213,11 @@ pub(super) const EVAL_PREG_PATTERN_ORDER: i64 = 1;
 pub(super) const EVAL_PREG_SET_ORDER: i64 = 2;
 pub(super) const EVAL_PREG_OFFSET_CAPTURE: i64 = 256;
 pub(super) const EVAL_PREG_UNMATCHED_AS_NULL: i64 = 512;
-pub(super) const EVAL_JSON_ERROR_NONE: i64 = 0;
 pub(super) const EVAL_JSON_ERROR_DEPTH: i64 = 1;
-pub(super) const EVAL_JSON_ERROR_STATE_MISMATCH: i64 = 2;
 pub(super) const EVAL_JSON_ERROR_CTRL_CHAR: i64 = 3;
 pub(super) const EVAL_JSON_ERROR_SYNTAX: i64 = 4;
 pub(super) const EVAL_JSON_ERROR_UTF8: i64 = 5;
-pub(super) const EVAL_JSON_ERROR_RECURSION: i64 = 6;
 pub(super) const EVAL_JSON_ERROR_INF_OR_NAN: i64 = 7;
-pub(super) const EVAL_JSON_ERROR_UNSUPPORTED_TYPE: i64 = 8;
-pub(super) const EVAL_JSON_ERROR_INVALID_PROPERTY_NAME: i64 = 9;
 pub(super) const EVAL_JSON_ERROR_UTF16: i64 = 10;
 pub(super) const EVAL_JSON_HEX_TAG: i64 = 1;
 pub(super) const EVAL_JSON_HEX_AMP: i64 = 2;

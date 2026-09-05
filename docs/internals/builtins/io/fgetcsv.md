@@ -2,7 +2,7 @@
 title: "fgetcsv() — internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 172
+  order: 314
 ---
 
 ## `fgetcsv()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function fgetcsv(resource $stream, int $length = null, string $separator = ','): mixed
+function fgetcsv(resource $stream, ?int $length = null, string $separator = ','): mixed
 ```
 
 ## What the type checker enforces

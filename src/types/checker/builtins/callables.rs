@@ -17,7 +17,6 @@
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, StaticReceiver};
-use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::canonical_builtin_function_name;
@@ -1442,9 +1441,9 @@ fn callback_declares_at_least_two_params(callback: &Expr) -> bool {
 fn static_array_filter_mode_value(expr: &Expr) -> Option<i64> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(*value),
-        ExprKind::ConstRef(name) => ARRAY_INT_CONSTANTS
-            .iter()
-            .find_map(|(constant, value)| (*constant == name.as_str()).then_some(*value)),
+        ExprKind::ConstRef(name) => {
+            crate::types::predefined_constants::int_constant_value(name.as_str())
+        }
         _ => None,
     }
 }

@@ -2,13 +2,13 @@
 title: "iconv_mime_decode()"
 description: "Decodes one MIME header field into the requested character encoding."
 sidebar:
-  order: 452
+  order: 747
 ---
 
 ## iconv_mime_decode()
 
 ```php
-function iconv_mime_decode(string $string, int $mode = 0, string $encoding = null): mixed
+function iconv_mime_decode(string $string, int $mode = 0, ?string $encoding = null): mixed
 ```
 
 Decodes one MIME header field into the requested character encoding.
@@ -16,7 +16,7 @@ Decodes one MIME header field into the requested character encoding.
 **Parameters**:
 - `$string` (`string`)
 - `$mode` (`int`), default `0`, optional
-- `$encoding` (`string`), default `null`, optional
+- `$encoding` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

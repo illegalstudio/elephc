@@ -2,7 +2,7 @@
 title: "ob_get_status() — internals"
 description: "Compiler internals for ob_get_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 207
+  order: 349
 ---
 
 ## `ob_get_status()` — internals

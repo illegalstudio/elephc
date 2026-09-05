@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Snapshot the local PHP binary's internal function list into php_baseline.json.
+"""Snapshot the local PHP binary's internal functions, classes and constants into php_baseline.json.
 
 Run manually when pinning or bumping the PHP baseline version (requires a local
 PHP binary). CI never runs this: the snapshot is committed, so the comparison
@@ -19,7 +19,7 @@ from pathlib import Path
 
 OUTPUT = Path(__file__).resolve().parent / "php_baseline.json"
 
-# Extensions bundled with php-src 8.4 — its in-tree ext/ directory minus the
+# Extensions bundled with php-src 8.5 — its in-tree ext/ directory minus the
 # Windows-only (com_dotnet) and test-harness (dl_test, skeleton, zend_test)
 # entries — plus the two surfaces Reflection reports under other names:
 # "core" (Zend) and "zend opcache". The snapshot keeps ONLY functions owned by
@@ -27,9 +27,10 @@ OUTPUT = Path(__file__).resolve().parent / "php_baseline.json"
 # contaminate the baseline, whatever they are named. Bundled extensions the
 # local PHP does not load are recorded in the snapshot's "missing_bundled"
 # field so an incomplete local build is visible in review instead of silently
-# shrinking PHP's surface.
+# shrinking PHP's surface. PHP 8.5 added `uri` (RFC 3986 / WHATWG URL API) and
+# `lexbor` (the HTML parser behind ext/uri and ext/dom).
 BUNDLED_EXTENSIONS = frozenset({
-    "core", "zend opcache",
+    "core", "zend opcache", "uri", "lexbor",
     "bcmath", "bz2", "calendar", "ctype", "curl", "date", "dba", "dom",
     "enchant", "exif", "ffi", "fileinfo", "filter", "ftp", "gd", "gettext",
     "gmp", "hash", "iconv", "intl", "json", "ldap", "libxml", "mbstring",
@@ -43,20 +44,49 @@ BUNDLED_EXTENSIONS = frozenset({
 })
 
 PHP_PROGRAM = r"""
-$map = [];
+$functions = [];
 foreach (get_defined_functions()["internal"] as $f) {
     $r = new ReflectionFunction($f);
     $ext = $r->getExtensionName();
-    $map[strtolower($f)] = $ext === false ? "core" : strtolower($ext);
+    $functions[strtolower($f)] = $ext === false ? "core" : strtolower($ext);
 }
-ksort($map);
+ksort($functions);
+// Classes and constants are attributed to their owning extension by
+// ReflectionExtension, the same authority PHP uses for ReflectionFunction.
+$classes = [];
+$constants = [];
+$encode = function ($value) {
+    if (is_float($value)) {
+        if (is_nan($value)) return ["float" => "NAN"];
+        if (is_infinite($value)) return ["float" => $value > 0 ? "INF" : "-INF"];
+        return $value;
+    }
+    if (is_resource($value)) return ["resource" => get_resource_type($value)];
+    if (is_object($value)) return ["object" => get_class($value)];
+    return $value;
+};
+foreach (get_loaded_extensions() as $extName) {
+    $ext = strtolower($extName);
+    $r = new ReflectionExtension($extName);
+    foreach ($r->getClasses() as $c) {
+        $kind = $c->isInterface() ? "interface" : ($c->isEnum() ? "enum" : ($c->isTrait() ? "trait" : "class"));
+        $classes[strtolower($c->getName())] = ["name" => $c->getName(), "kind" => $kind, "extension" => $ext];
+    }
+    foreach ($r->getConstants() as $name => $value) {
+        $constants[$name] = ["extension" => $ext, "value" => $encode($value)];
+    }
+}
+ksort($classes);
+ksort($constants);
 $exts = array_map("strtolower", get_loaded_extensions());
 sort($exts);
 echo json_encode([
     "php_version" => PHP_VERSION,
     "extensions" => $exts,
-    "functions" => $map,
-], JSON_UNESCAPED_SLASHES);
+    "functions" => $functions,
+    "classes" => $classes,
+    "constants" => $constants,
+], JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
 """
 
 
@@ -89,6 +119,14 @@ def main() -> int:
         if ext in BUNDLED_EXTENSIONS
     }
     n_dropped = original_funcs - len(kept_funcs)
+    kept_classes = {
+        key: entry for key, entry in raw["classes"].items()
+        if entry["extension"] in BUNDLED_EXTENSIONS
+    }
+    kept_constants = {
+        name: entry for name, entry in raw["constants"].items()
+        if entry["extension"] in BUNDLED_EXTENSIONS
+    }
 
     data = {
         "php_version": raw["php_version"],
@@ -96,10 +134,13 @@ def main() -> int:
         "extensions": kept_exts,
         "missing_bundled": missing_bundled,
         "functions": kept_funcs,
+        "classes": kept_classes,
+        "constants": kept_constants,
     }
     OUTPUT.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        f"wrote {OUTPUT} (PHP {data['php_version']}, {len(kept_funcs)} functions; "
+        f"wrote {OUTPUT} (PHP {data['php_version']}, {len(kept_funcs)} functions, "
+        f"{len(kept_classes)} classes, {len(kept_constants)} constants; "
         f"dropped {n_dropped} functions from {len(dropped_exts)} non-bundled extensions"
         + (f": {', '.join(dropped_exts)}" if dropped_exts else "")
         + ")"

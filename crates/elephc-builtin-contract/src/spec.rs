@@ -10,7 +10,7 @@
 //!   inventory submissions and generated runtime metadata.
 //! - Compiler/EvalIR hooks and concrete runtime symbols do not belong here.
 
-use crate::BuiltinId;
+use crate::{BuiltinId, PhpModule, PhpVersion};
 
 /// Functional area used for catalog organization and documentation routing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -37,6 +37,21 @@ pub enum Area {
     /// `curl_*` names are elephc-PHP wrappers declared by the curl prelude,
     /// and these are the raw `__elephc_curl_*` entry points they call.
     Curl,
+    /// Date and time surfaces: the `date_*` / `timezone_*` procedural family the name
+    /// resolver rewrites onto the DateTime classes, and the tz prelude.
+    Date,
+    /// `ext/calendar` procedural functions, rewritten onto the synthetic calendar bodies.
+    Calendar,
+    /// `ext/mysqli` procedural functions declared by the mysqli prelude.
+    Mysqli,
+    /// PDO procedural functions declared by the PDO prelude.
+    Pdo,
+    /// `--web` surfaces declared by the web prelude: sessions, cookies, ini access.
+    Web,
+    /// Image surfaces declared by the image prelude: GD, Exif, Imagick, Gmagick, Cairo.
+    Image,
+    /// `opcache_*` compatibility surface declared by the OPcache prelude.
+    Opcache,
 }
 
 /// Describes how a PHP-visible catalog entry reaches executable behavior.
@@ -50,6 +65,9 @@ pub enum BuiltinKind {
     DedicatedSyntax,
     /// Function supplied by an injected elephc-PHP prelude.
     PreludeProvided,
+    /// PHP function the name resolver rewrites into a constructor or method call on a builtin
+    /// class before type checking (the `date_*` and `cal_*` procedural families).
+    NameResolverRewrite,
 }
 
 /// Backend-neutral PHP type spelling used by builtin signatures.
@@ -65,6 +83,10 @@ pub enum TypeSpec {
     Bool,
     /// PHP `mixed` or a shape refined by a backend-specific checker.
     Mixed,
+    /// PHP `array` (element shape left to the backend checker).
+    Array,
+    /// PHP nullable type `?T`.
+    Nullable(&'static TypeSpec),
     /// PHP `void` in return position.
     Void,
     /// elephc `pointer` — a raw address, not a PHP type.
@@ -102,6 +124,10 @@ pub enum DefaultSpec {
     IntMax,
     /// Empty indexed array.
     EmptyArray,
+    /// A named global constant used as the default (`IMG_BILINEAR_FIXED`, `E_USER_NOTICE`).
+    Constant(&'static str),
+    /// Verbatim PHP source of a non-literal default expression a prelude declares.
+    Expr(&'static str),
 }
 
 /// Whether one PHP parameter receives a value or caller-addressable storage.
@@ -186,12 +212,19 @@ pub struct BuiltinContract {
     pub name: &'static str,
     /// Functional catalog area.
     pub area: Area,
+    /// PHP module (php-src extension) that owns this name, or `Elephc` for elephc-only surfaces.
+    pub module: PhpModule,
+    /// First PHP minor release that ships this name, when newer than the oldest supported
+    /// profile (PHP 8.0); `None` means every supported profile has it.
+    pub since: Option<PhpVersion>,
     /// Function, construct, dedicated syntax, or prelude surface classification.
     pub kind: BuiltinKind,
     /// Fixed parameters in PHP source order.
     pub params: &'static [ParamSpec],
     /// PHP-visible variadic parameter name, when present.
     pub variadic: Option<&'static str>,
+    /// Whether the variadic parameter is declared by reference (`&...$vars`).
+    pub variadic_by_ref: bool,
     /// Optional supported minimum-arity override.
     pub min_args: Option<usize>,
     /// Optional supported maximum-arity override.

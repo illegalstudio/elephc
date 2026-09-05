@@ -2,19 +2,19 @@
 title: "readline()"
 description: "Reads a line from the user's terminal."
 sidebar:
-  order: 394
+  order: 689
 ---
 
 ## readline()
 
 ```php
-function readline(string $prompt = null): mixed
+function readline(?string $prompt = null): mixed
 ```
 
 Reads a line from the user's terminal.
 
 **Parameters**:
-- `$prompt` (`string`), default `null`, optional
+- `$prompt` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

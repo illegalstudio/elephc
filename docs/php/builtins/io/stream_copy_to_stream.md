@@ -2,13 +2,13 @@
 title: "stream_copy_to_stream()"
 description: "Copies data from one stream to another."
 sidebar:
-  order: 224
+  order: 366
 ---
 
 ## stream_copy_to_stream()
 
 ```php
-function stream_copy_to_stream(resource $from, resource $to, int $length = null, int $offset = -1): mixed
+function stream_copy_to_stream(resource $from, resource $to, ?int $length = null, int $offset = -1): mixed
 ```
 
 Copies data from one stream to another.
@@ -16,7 +16,7 @@ Copies data from one stream to another.
 **Parameters**:
 - `$from` (`resource`)
 - `$to` (`resource`)
-- `$length` (`int`), default `null`, optional
+- `$length` (`?int`), default `null`, optional
 - `$offset` (`int`), default `-1`, optional
 
 **Returns**: `mixed`

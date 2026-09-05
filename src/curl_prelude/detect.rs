@@ -87,17 +87,11 @@ const CURL_FUNCTIONS: &[&str] = &[
     "curl_share_init_persistent",
 ];
 
-/// The six OOP classes of PHP's curl surface. `CurlSharePersistentHandle` is 8.5-only and
-/// `CURLStringFile` is 8.1+, but detection is version-independent: naming any of them is
-/// enough to want the prelude, and the prelude itself decides what to declare.
-const CURL_CLASSES: &[&str] = &[
-    "CurlHandle",
-    "CurlMultiHandle",
-    "CurlShareHandle",
-    "CurlSharePersistentHandle",
-    "CURLFile",
-    "CURLStringFile",
-];
+/// The `ext/curl` class-likes, from the shared class catalog (`CurlHandle`, `CurlMultiHandle`,
+/// `CurlShareHandle`, `CurlSharePersistentHandle`, `CURLFile`, `CURLStringFile`).
+fn curl_classes() -> &'static [&'static str] {
+    crate::types::builtin_classes::class_names_in_module(elephc_builtin_contract::PhpModule::Curl)
+}
 
 /// The four frozen constant prefixes from the task brief.
 const CURL_CONSTANT_PREFIXES: &[&str] = &["CURLOPT_", "CURLINFO_", "CURLE_", "CURL_"];
@@ -109,7 +103,7 @@ pub(super) fn program_uses_curl(program: &[Stmt]) -> bool {
     crate::name_resolver::resolve_with_additional_global_symbols(
         program.to_vec(),
         CURL_FUNCTIONS,
-        CURL_CLASSES,
+        curl_classes(),
     )
     .is_ok_and(|resolved| resolved.iter().any(stmt_refs_curl))
 }
@@ -125,7 +119,7 @@ fn name_is_curl_function(name: &Name) -> bool {
 /// Returns whether a resolved name is one of curl's global classes. Class names are
 /// case-insensitive, but a name with namespace segments is unrelated to the global surface.
 fn name_is_curl_class(name: &Name) -> bool {
-    CURL_CLASSES
+    curl_classes()
         .iter()
         .any(|candidate| crate::name_resolver::is_additional_global_symbol(name, candidate))
 }
@@ -661,7 +655,7 @@ mod tests {
     /// calls a curl function.
     #[test]
     fn detects_every_class_type_hint() {
-        for class in CURL_CLASSES {
+        for class in curl_classes() {
             let source = format!("<?php function f({class} $c): bool {{ return true; }}");
             assert!(
                 program_uses_curl(&parse(&source)),

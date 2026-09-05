@@ -2,7 +2,7 @@
 title: "fopen() — internals"
 description: "Compiler internals for fopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 178
+  order: 320
 ---
 
 ## `fopen()` — internals

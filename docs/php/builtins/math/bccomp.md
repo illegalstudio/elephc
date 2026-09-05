@@ -2,13 +2,13 @@
 title: "bccomp()"
 description: "Compares two arbitrary-precision decimal numbers."
 sidebar:
-  order: 269
+  order: 553
 ---
 
 ## bccomp()
 
 ```php
-function bccomp(string $num1, string $num2, int $scale = null): int
+function bccomp(string $num1, string $num2, ?int $scale = null): int
 ```
 
 Compares two arbitrary-precision decimal numbers.
@@ -16,7 +16,7 @@ Compares two arbitrary-precision decimal numbers.
 **Parameters**:
 - `$num1` (`string`)
 - `$num2` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `int`
 

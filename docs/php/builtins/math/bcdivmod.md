@@ -2,13 +2,13 @@
 title: "bcdivmod()"
 description: "Returns the quotient and remainder of arbitrary-precision division."
 sidebar:
-  order: 271
+  order: 555
 ---
 
 ## bcdivmod()
 
 ```php
-function bcdivmod(string $num1, string $num2, int $scale = null): array
+function bcdivmod(string $num1, string $num2, ?int $scale = null): array
 ```
 
 Returns the quotient and remainder of arbitrary-precision division.
@@ -16,7 +16,7 @@ Returns the quotient and remainder of arbitrary-precision division.
 **Parameters**:
 - `$num1` (`string`)
 - `$num2` (`string`)
-- `$scale` (`int`), default `null`, optional
+- `$scale` (`?int`), default `null`, optional
 
 **Returns**: `array`
 

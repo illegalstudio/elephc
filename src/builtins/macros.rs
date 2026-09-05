@@ -92,6 +92,10 @@ macro_rules! builtin {
                         id: elephc_builtin_contract::BuiltinId::from_canonical_name($name),
                         name: $name,
                         area: $crate::builtins::spec::Area::$area,
+                        // An inline contract is, by construction, outside the shared
+                        // catalog, so it can only describe an elephc-only surface.
+                        module: elephc_builtin_contract::PhpModule::Elephc,
+                        since: None,
                         kind: elephc_builtin_contract::BuiltinKind::Function,
                         params: {
                             const PARAMS: &[$crate::builtins::spec::ParamSpec] =
@@ -99,6 +103,7 @@ macro_rules! builtin {
                             PARAMS
                         },
                         variadic: builtin!(@opt_str $($variadic)?),
+                        variadic_by_ref: false,
                         max_args: builtin!(@opt_usize $($max_args)?),
                         min_args: builtin!(@opt_usize $($min_args)?),
                         arity_error: builtin!(@opt_str $($arity_error)?),

@@ -2,7 +2,7 @@
 title: "iconv_substr() — internals"
 description: "Compiler internals for iconv_substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 459
+  order: 754
 ---
 
 ## `iconv_substr()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function iconv_substr(string $string, int $offset, int $length = null, string $encoding = null): mixed
+function iconv_substr(string $string, int $offset, ?int $length = null, ?string $encoding = null): mixed
 ```
 
 ## What the type checker enforces

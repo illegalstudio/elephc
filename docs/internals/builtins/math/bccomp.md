@@ -2,7 +2,7 @@
 title: "bccomp() — internals"
 description: "Compiler internals for bccomp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 269
+  order: 553
 ---
 
 ## `bccomp()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bccomp(string $num1, string $num2, int $scale = null): int
+function bccomp(string $num1, string $num2, ?int $scale = null): int
 ```
 
 ## What the type checker enforces

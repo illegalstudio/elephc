@@ -29,9 +29,9 @@ fn php_visible_extension_builtins() -> Vec<String> {
 
 /// Every injected prelude's declarations, as the AST the pipeline really injects.
 ///
-/// Most are built in Rust. `curl_prelude` and the mysqli fragments still tokenize and
-/// parse PHP text at injection time, so this function parses them exactly as the pipeline
-/// does and keeps both surfaces inside the same structural audits.
+/// All are built in Rust except `curl_prelude`, which still tokenizes and parses PHP text
+/// at injection time; this function parses it exactly as the pipeline does so both kinds of
+/// surface sit inside the same structural audits.
 fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program)> {
     let mut built = vec![
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
@@ -75,6 +75,14 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             "opcache_prelude(state)",
             crate::opcache_prelude::build::state_helper_decls(),
         ),
+        ("opcache_prelude(api)", opcache_api_program()),
+        (
+            "opcache_prelude(cli-ini)",
+            vec![
+                crate::opcache_prelude::build::cli_ini_get_decl(),
+                crate::opcache_prelude::build::cli_ini_set_decl(),
+            ],
+        ),
         (
             "web_prelude",
             crate::web_prelude::build::web_declarations(
@@ -84,22 +92,51 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
     ];
-    // The mysqli prelude is a second bridge surface whose PHP fragments are
-    // parsed (not built as Rust AST like the others), so parse each fragment and
-    // scan it too — the gate must cover mysqli's `__elephc_*` internal-alias
-    // discipline. The shared `elephc_pdo` extern block declares only symbols and
-    // calls nothing, and the PDO build above already carries it, so it needs no
-    // separate entry.
-    for &(name, src) in crate::mysqli_prelude::fragment_sources() {
-        // Fragments carry no `<?php` header (they are concatenated after one in
-        // `source_for_version`), so add it before tokenizing this one on its own.
-        let source = format!("<?php\n{src}");
-        let tokens = crate::lexer::tokenize(&source).expect("mysqli fragment must tokenize");
-        let program =
-            crate::parser::parse_internal(&tokens).expect("mysqli fragment must parse");
-        built.push((name, program));
-    }
+    // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
+    // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`
+    // extern block declares only symbols and calls nothing, and the PDO build above already
+    // carries it, so it needs no separate entry.
+    built.push((
+        "mysqli_prelude",
+        crate::mysqli_prelude::build::mysqli_declarations(crate::php_version::PhpVersion::default()),
+    ));
     built
+}
+
+/// The eight PHP-visible `opcache_*` declarations, obtained by injecting the OPcache prelude
+/// into a program that references every one of them (the injector declares on demand, so
+/// no single builder returns the whole surface).
+fn opcache_api_program() -> crate::parser::ast::Program {
+    let source = "<?php opcache_get_configuration(); opcache_reset(); opcache_get_status(); \
+                  opcache_is_script_cached('a.php'); opcache_invalidate('a.php'); \
+                  opcache_compile_file('a.php'); opcache_is_script_cached_in_file_cache('a.php'); \
+                  opcache_jit_blacklist(null);";
+    let tokens = crate::lexer::tokenize(source).expect("opcache probe must tokenize");
+    let program = crate::parser::parse(&tokens).expect("opcache probe must parse");
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    let (program, _sites) = crate::opcache_prelude::inject_if_used(
+        program,
+        crate::php_version::PhpVersion::Php85,
+        false,
+        None,
+        &[],
+        &[],
+        None,
+        false,
+        &mut inventory,
+    );
+    // Keep the injected declarations only: the probe's own call statements are not prelude
+    // code and must not enter the call-site audits.
+    program
+        .into_iter()
+        .filter(|stmt| {
+            matches!(
+                stmt.kind,
+                crate::parser::ast::StmtKind::FunctionDecl { .. }
+                    | crate::parser::ast::StmtKind::Synthetic(_)
+            )
+        })
+        .collect()
 }
 
 /// Parses `CURL_PRELUDE_SRC` exactly as `curl_prelude::inject_if_used_for_version` does.
@@ -136,22 +173,20 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
         .collect()
 }
 
-/// The preludes whose PHP-visible surface the shared builtin catalog claims, each with
-/// whether this build's catalog actually publishes that surface.
+/// Every injected prelude, each with whether this build's catalog publishes its PHP surface.
 ///
-/// The curl slice is feature-gated (`catalog_curl.rs`), so with the root `curl` feature
-/// off the catalog does not claim the curl prelude's PHP surface AT ALL and
-/// "declared implies contracted" is simply not an invariant of that configuration —
-/// asserting it there would fail on all thirty-four names for no defect. See
-/// `catalog_hosted_preludes_declare_no_uncontracted_php_function` for why the other
-/// preludes in `prelude_sources` are not in this list in any configuration.
+/// The shared catalog claims every prelude's PHP-visible functions (hash, curl, mysqli, PDO,
+/// web, image, OPcache, tz, var_export, version), so all of them are audited. The one
+/// exception is configuration-bound: the curl slice is feature-gated (`catalog_curl.rs`), so
+/// with the root `curl` feature off the catalog does not claim the curl prelude's surface at
+/// all and "declared implies contracted" is not an invariant of that configuration —
+/// asserting it there would fail on all thirty-four names for no defect.
 fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
     prelude_sources()
         .into_iter()
-        .filter_map(|(name, source)| match name {
-            "hash_prelude" => Some((name, source, true)),
-            "curl_prelude" => Some((name, source, cfg!(feature = "curl"))),
-            _ => None,
+        .map(|(name, source)| {
+            let published = name != "curl_prelude" || cfg!(feature = "curl");
+            (name, source, published)
         })
         .collect()
 }
@@ -166,7 +201,7 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
      interpreter::builtins::curl module doc. A contract would need an eval binding that \
      does not exist, or an EvalImplementationPending label that would be false because \
      eval() can already call it. Consequence, accepted: the PHP comparison page counts \
-     the curl module 32/33 rather than 33/33.",
+     the curl module 34/35 rather than 35/35.",
 )];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
@@ -182,9 +217,9 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
 /// model, so a prelude that grows a construct this audit cannot see fails loudly instead of
 /// silently leaving the net.
 ///
-/// `curl_prelude` and the mysqli fragments are parsed rather than built (see
-/// `injected_prelude_programs`); they are audited through the same AST path, because the gate
-/// is about what a prelude CALLS, not about how its declarations were produced.
+/// `curl_prelude` is parsed rather than built (see `injected_prelude_programs`); it is audited
+/// through the same AST path, because the gate is about what a prelude CALLS, not about how
+/// its declarations were produced.
 #[test]
 fn injected_preludes_never_call_php_visible_extension_builtins() {
     let extension_names = php_visible_extension_builtins();
@@ -300,12 +335,21 @@ fn prelude_contracts_match_their_injected_signatures() {
             })
             .collect::<Vec<_>>();
         let declaring = found.iter().map(|(prelude, _)| *prelude).collect::<Vec<_>>();
-        assert_eq!(
-            found.len(),
-            1,
-            "{} must be declared by exactly one prelude, found {declaring:?}",
+        assert!(
+            !found.is_empty(),
+            "{} has a prelude route but no prelude declares it",
             contract.name
         );
+        // Mode-exclusive preludes may each declare the same function (`ini_get` in the
+        // `--web` prelude and in the OPcache CLI shim); every declaration must then agree.
+        for (other, declared) in &found[1..] {
+            assert_eq!(
+                declared, &found[0].1,
+                "{} is declared differently by {} and {other}",
+                contract.name, found[0].0
+            );
+        }
+        let _ = &declaring;
 
         let (prelude, declared) = &found[0];
         let name = contract.name;
@@ -358,7 +402,10 @@ fn prelude_contracts_match_their_injected_signatures() {
             let actual = declared.last().expect("names matched, so a tail exists");
             let at = format!("{name}(...${variadic}) in {prelude}");
             assert!(actual.variadic, "{at}: must be declared `...${variadic}`");
-            assert!(!actual.by_ref, "{at}: contract has no by-reference variadic");
+            assert_eq!(
+                actual.by_ref, contract.variadic_by_ref,
+                "{at}: by-reference marker on the variadic"
+            );
             assert_eq!(actual.default, None, "{at}: a variadic takes no default");
         }
 
@@ -484,12 +531,14 @@ fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
 
 /// Returns whether a prelude's declared PHP type is the contract's neutral type.
 ///
-/// `TypeSpec` has no object, array or union vocabulary, so every non-scalar surface is
-/// spelled `Mixed` in the catalog and the prelude is free to declare `CurlHandle`,
-/// `array`, `mixed` or a union for it. The check is therefore compatibility, not
-/// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared as a
-/// scalar in the prelude, because a scalar is precisely what the catalog can express and
-/// deliberately did not. A leading `?` is stripped: nullability is carried by the
+/// `TypeSpec` spells the scalars, `array`, `callable`, `ptr` and `?T` exactly, so each of
+/// those must match the declaration; it has no object or union vocabulary, so a class-typed
+/// or union surface is `Mixed` in the catalog and the prelude is free to declare
+/// `CurlHandle`, `mixed` or a union for it. The check is therefore compatibility, not
+/// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared with a
+/// spelling the catalog can express (a scalar, `array`, `callable` or `ptr`), because that
+/// spelling is precisely what the catalog deliberately did not say. A leading `?` is stripped
+/// and a `Nullable` contract compares its inner type: nullability is also carried by the
 /// parameter's default, which is compared separately.
 fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
     let declared = declared.trim().trim_start_matches('?').trim();
@@ -505,10 +554,13 @@ fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
         // rather than like `Mixed`.
         TypeSpec::Ptr => "ptr",
         TypeSpec::Callable => "callable",
+        TypeSpec::Array => "array",
+        // `declared` already had its `?` stripped above, so compare the inner type.
+        TypeSpec::Nullable(inner) => return php_type_matches(*inner, declared),
         TypeSpec::Mixed => {
             return !matches!(
                 declared,
-                "int" | "float" | "string" | "bool" | "ptr" | "callable"
+                "int" | "float" | "string" | "bool" | "ptr" | "callable" | "array"
             );
         }
     };
@@ -530,8 +582,14 @@ fn default_matches(expected: &DefaultSpec, declared: &str) -> bool {
         DefaultSpec::Str(value) => {
             declared == format!("\"{value}\"") || declared == format!("'{value}'")
         }
-        DefaultSpec::IntMax => declared == "PHP_INT_MAX",
+        // A built prelude carries the folded literal; PHP text spells the constant.
+        DefaultSpec::IntMax => declared == "PHP_INT_MAX" || declared.parse::<i64>() == Ok(i64::MAX),
         DefaultSpec::EmptyArray => declared == "[]" || declared.replace(' ', "") == "array()",
+        DefaultSpec::Constant(name) => declared == *name,
+        DefaultSpec::Expr(source) => {
+            declared.split_whitespace().collect::<String>()
+                == source.split_whitespace().collect::<String>()
+        }
     }
 }
 
@@ -545,6 +603,8 @@ fn default_text(default: &DefaultSpec) -> String {
         DefaultSpec::Str(value) => format!("\"{value}\""),
         DefaultSpec::IntMax => "PHP_INT_MAX".to_string(),
         DefaultSpec::EmptyArray => "[]".to_string(),
+        DefaultSpec::Constant(name) => (*name).to_string(),
+        DefaultSpec::Expr(source) => (*source).to_string(),
     }
 }
 
@@ -555,13 +615,12 @@ fn default_text(default: &DefaultSpec) -> String {
 /// invisible to BOTH parity suites and to the generated documentation, because every one
 /// of them iterates `contracts()`. Without this test that omission is silent.
 ///
-/// SCOPE. Only the preludes whose PHP surface the shared catalog claims IN THIS BUILD are
-/// audited (see `catalog_hosted_preludes`). `pdo_prelude`, `tz_prelude`,
-/// `var_export_prelude`, `image_prelude` and `web_prelude` ship PHP-visible functions that
-/// have no shared contracts AT ALL by design (`var_export`, `imagecreate`, `setcookie`,
-/// `session_*`, `pdo_drivers`, `timezone_*` — verified: none of them appears in
-/// `contracts()`), so "declared implies contracted" is simply not their invariant and
-/// asserting it here would be wrong rather than strict.
+/// SCOPE. Every prelude is audited: `var_export`, `imagecreate*`, `setcookie`,
+/// `session_*`, `pdo_drivers`, `timezone_*`, `opcache_*` and the rest all carry shared
+/// `PreludeProvided` contracts now, so "declared implies contracted" holds for each prelude
+/// in `prelude_sources`. The only exclusions are `UNCONTRACTED_PRELUDE_DECLARATIONS` (with a
+/// recorded reason) and the curl prelude in a build whose catalog does not publish the curl
+/// slice (see `catalog_hosted_preludes`).
 #[test]
 fn catalog_hosted_preludes_declare_no_uncontracted_php_function() {
     let mut audited = 0usize;
@@ -597,20 +656,19 @@ fn catalog_hosted_preludes_declare_no_uncontracted_php_function() {
             );
         }
     }
-    assert_eq!(
-        audited,
-        if cfg!(feature = "curl") { 2 } else { 1 },
-        "the hash prelude is always audited; the curl prelude whenever its catalog slice \
-         is published"
+    assert!(
+        audited >= 12,
+        "every injected prelude is catalog-hosted and audited, saw only {audited}"
     );
 }
 
 /// Verifies the prelude parameter parser reads every PHP passing form it may meet.
 ///
-/// The catalog has no variadic prelude contract today, so the variadic and by-reference
-/// variadic arms cannot be exercised by real data — and a parser that silently mis-reads
-/// `int &...$rest` as a fixed `$rest` would make the first such contract fail for a
-/// confusing reason instead of a real one. These are the forms PHP can spell.
+/// The catalog has exactly one by-reference variadic prelude contract today
+/// (`mysqli_stmt_bind_param(..., mixed &...$vars)`, `variadic_by_ref: true`), so the
+/// signature audit exercises that arm through real data once; the remaining forms are
+/// pinned here so a parser that silently mis-reads `int &...$rest` as a fixed `$rest`
+/// fails for a real reason instead of a confusing one. These are the forms PHP can spell.
 #[test]
 fn prelude_parameters_parse_every_php_passing_form() {
     let cases: &[(&str, PreludeParam)] = &[
@@ -712,4 +770,97 @@ fn php_visible_declarations(source: &str) -> Vec<String> {
         .filter(|name| !name.is_empty() && !name.starts_with("__elephc_"))
         .map(str::to_string)
         .collect()
+}
+
+/// Migration tool, not an audit: dumps every PHP-visible function each injected prelude
+/// declares, with its declared signature, as JSON — the seed for their shared contracts.
+///
+/// Runs only when `ELEPHC_CONTRACT_SEED_OUT` names the output path, exactly like
+/// `synthetic_class::transcribe::tests::dump_prelude_on_request`. Once the contracts exist the
+/// two-way prelude audits above own the invariant; this dump is how a new prelude surface gets
+/// its first draft without hand-transcribing hundreds of signatures.
+#[test]
+fn dump_prelude_contract_seed_on_request() {
+    let Ok(out) = std::env::var("ELEPHC_CONTRACT_SEED_OUT") else {
+        return;
+    };
+    use crate::parser::ast::{Expr, Stmt, StmtKind, TypeExpr};
+
+    fn type_text(ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Int => "int".to_string(),
+            TypeExpr::Float => "float".to_string(),
+            TypeExpr::Bool => "bool".to_string(),
+            TypeExpr::False => "false".to_string(),
+            TypeExpr::Str => "string".to_string(),
+            TypeExpr::Void => "void".to_string(),
+            TypeExpr::Never => "never".to_string(),
+            TypeExpr::Iterable => "iterable".to_string(),
+            TypeExpr::Array(_) => "array".to_string(),
+            TypeExpr::Ptr(_) => "ptr".to_string(),
+            TypeExpr::Buffer(_) => "buffer".to_string(),
+            TypeExpr::Named(name) => name.as_str().to_string(),
+            TypeExpr::Nullable(inner) => format!("?{}", type_text(inner)),
+            TypeExpr::Union(members) => members.iter().map(type_text).collect::<Vec<_>>().join("|"),
+            TypeExpr::Intersection(members) => {
+                members.iter().map(type_text).collect::<Vec<_>>().join("&")
+            }
+        }
+    }
+    fn default_text(expr: &Expr) -> String {
+        crate::synthetic_class::print::print_expr(expr)
+    }
+    fn collect(stmts: &[Stmt], prelude: &str, out: &mut Vec<serde_json::Value>) {
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::FunctionDecl {
+                    name,
+                    params,
+                    variadic,
+                    variadic_by_ref,
+                    variadic_type,
+                    return_type,
+                    by_ref_return,
+                    ..
+                } => {
+                    let params: Vec<serde_json::Value> = params
+                        .iter()
+                        .map(|(name, ty, default, by_ref)| {
+                            serde_json::json!({
+                                "name": name,
+                                "type": ty.as_ref().map(type_text),
+                                "default": default.as_ref().map(default_text),
+                                "by_ref": by_ref,
+                            })
+                        })
+                        .collect();
+                    out.push(serde_json::json!({
+                        "prelude": prelude,
+                        "name": name,
+                        "params": params,
+                        "variadic": variadic,
+                        "variadic_by_ref": variadic_by_ref,
+                        "variadic_type": variadic_type.as_ref().map(type_text),
+                        "returns": return_type.as_ref().map(type_text),
+                        "by_ref_return": by_ref_return,
+                    }));
+                }
+                StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
+                    collect(body, prelude, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut records = Vec::new();
+    for (prelude, program) in injected_prelude_programs() {
+        collect(&program, prelude, &mut records);
+    }
+    std::fs::write(
+        &out,
+        serde_json::to_string_pretty(&records).expect("serialize seed"),
+    )
+    .expect("write seed");
+    eprintln!("wrote {} prelude function declarations to {out}", records.len());
 }

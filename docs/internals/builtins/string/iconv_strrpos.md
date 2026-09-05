@@ -2,7 +2,7 @@
 title: "iconv_strrpos() — internals"
 description: "Compiler internals for iconv_strrpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 458
+  order: 753
 ---
 
 ## `iconv_strrpos()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function iconv_strrpos(string $haystack, string $needle, string $encoding = null): mixed
+function iconv_strrpos(string $haystack, string $needle, ?string $encoding = null): mixed
 ```
 
 ## What the type checker enforces

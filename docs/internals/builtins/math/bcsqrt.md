@@ -2,7 +2,7 @@
 title: "bcsqrt() — internals"
 description: "Compiler internals for bcsqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 279
+  order: 563
 ---
 
 ## `bcsqrt()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcsqrt(string $num, int $scale = null): string
+function bcsqrt(string $num, ?int $scale = null): string
 ```
 
 ## What the type checker enforces

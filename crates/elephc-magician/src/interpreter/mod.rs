@@ -18,7 +18,6 @@ mod builtins;
 mod constant_eval;
 mod constants;
 mod control;
-mod curl_constants;
 mod dynamic_functions;
 mod expressions;
 mod include_exec;

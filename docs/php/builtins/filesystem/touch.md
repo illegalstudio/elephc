@@ -2,21 +2,21 @@
 title: "touch()"
 description: "Sets access and modification time of a file."
 sidebar:
-  order: 163
+  order: 305
 ---
 
 ## touch()
 
 ```php
-function touch(string $filename, int $mtime = null, int $atime = null): bool
+function touch(string $filename, ?int $mtime = null, ?int $atime = null): bool
 ```
 
 Sets access and modification time of a file.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$mtime` (`int`), default `null`, optional
-- `$atime` (`int`), default `null`, optional
+- `$mtime` (`?int`), default `null`, optional
+- `$atime` (`?int`), default `null`, optional
 
 **Returns**: `bool`
 

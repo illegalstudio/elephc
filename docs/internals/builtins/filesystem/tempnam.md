@@ -2,7 +2,7 @@
 title: "tempnam() — internals"
 description: "Compiler internals for tempnam(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 161
+  order: 303
 ---
 
 ## `tempnam()` — internals

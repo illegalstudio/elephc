@@ -14,14 +14,21 @@
 //!   interpreter into the compiler binary.
 
 use elephc_builtin_contract::{
-    aot_signature_profile, aot_support, contracts, eval_signature, eval_support, lookup, Area,
-    AotSignatureOverrideReason, BackendImplementation, BackendSupport, BuiltinContract,
-    BuiltinKind, BuiltinSignature, DefaultSpec, TypeSpec, UnsupportedReason,
+    aot_class_support, aot_constant_support, aot_signature_profile, aot_support, classes,
+    constants, contracts, eval_class_support, eval_constant_support, eval_signature,
+    eval_support, lookup, Area, AotSignatureOverrideReason, BackendImplementation,
+    BackendSupport, BuiltinContract, BuiltinKind, BuiltinSignature, ConstValue, ConstantRoute,
+    DefaultSpec, TypeSpec, UnsupportedReason,
 };
 use serde_json::{json, Value};
 
-/// Prints the complete dual-backend builtin catalog as formatted JSON.
+/// Prints the complete dual-backend builtin catalog as formatted JSON, or with `--symbols`
+/// the shared class-like and global-constant catalogs.
 fn main() {
+    if std::env::args().any(|argument| argument == "--symbols") {
+        print_symbol_catalogs();
+        return;
+    }
     let include_internal = std::env::args().any(|argument| argument == "--include-internal");
     let value = if include_internal {
         elephc::builtins::docs::export_builtins_json_all()
@@ -88,11 +95,14 @@ fn contract_record_json(contract: &BuiltinContract) -> Value {
     json!({
         "name": contract.name,
         "area": area_name(contract.area),
+        "module": contract.module.php_name(),
+        "since": contract.since.map(|version| version.as_str()),
         "surface_kind": kind_name(contract.kind),
         "internal": contract.internal,
         "extension": contract.extension,
         "params": signature_params_json(signature),
         "variadic": signature.variadic,
+        "variadic_by_ref": contract.variadic_by_ref,
         "returns": type_name(contract.returns),
         "by_ref_return": contract.by_ref_return,
         "min_args": contract.min_args,
@@ -235,23 +245,27 @@ fn default_json(default: DefaultSpec) -> Value {
         DefaultSpec::Str(value) => json!(value),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
         DefaultSpec::EmptyArray => json!([]),
+        DefaultSpec::Constant(name) => json!({ "constant": name }),
+        DefaultSpec::Expr(source) => json!({ "expr": source }),
     }
 }
 
 /// Returns the documentation spelling for a neutral PHP type.
-fn type_name(ty: TypeSpec) -> &'static str {
+fn type_name(ty: TypeSpec) -> String {
     match ty {
-        TypeSpec::Int => "int",
-        TypeSpec::Float => "float",
-        TypeSpec::Str => "string",
-        TypeSpec::Bool => "bool",
-        TypeSpec::Mixed => "mixed",
-        TypeSpec::Void => "void",
+        TypeSpec::Int => "int".to_string(),
+        TypeSpec::Float => "float".to_string(),
+        TypeSpec::Str => "string".to_string(),
+        TypeSpec::Bool => "bool".to_string(),
+        TypeSpec::Mixed => "mixed".to_string(),
+        TypeSpec::Void => "void".to_string(),
         // elephc extensions to the neutral spelling. Without these the generated pages would
         // document `mixed` for a raw address — the same wrong answer the declaration itself
         // used to give, moved one step downstream into the docs.
-        TypeSpec::Ptr => "pointer",
-        TypeSpec::Callable => "callable",
+        TypeSpec::Ptr => "pointer".to_string(),
+        TypeSpec::Callable => "callable".to_string(),
+        TypeSpec::Array => "array".to_string(),
+        TypeSpec::Nullable(inner) => format!("?{}", type_name(*inner)),
     }
 }
 
@@ -268,6 +282,13 @@ fn area_name(area: Area) -> &'static str {
         Area::Spl => "spl",
         Area::Pointers => "pointers",
         Area::Curl => "curl",
+        Area::Date => "date",
+        Area::Calendar => "calendar",
+        Area::Mysqli => "mysqli",
+        Area::Pdo => "pdo",
+        Area::Web => "web",
+        Area::Image => "image",
+        Area::Opcache => "opcache",
     }
 }
 
@@ -278,6 +299,7 @@ fn kind_name(kind: BuiltinKind) -> &'static str {
         BuiltinKind::LanguageConstruct => "language-construct",
         BuiltinKind::DedicatedSyntax => "dedicated-syntax",
         BuiltinKind::PreludeProvided => "prelude-provided",
+        BuiltinKind::NameResolverRewrite => "name-resolver-rewrite",
     }
 }
 
@@ -288,6 +310,10 @@ fn implementation_name(implementation: BackendImplementation) -> &'static str {
         BackendImplementation::LanguageConstruct => "language-construct",
         BackendImplementation::DedicatedSyntax => "dedicated-syntax",
         BackendImplementation::Prelude => "prelude",
+        BackendImplementation::CheckerInjected => "checker-injected",
+        BackendImplementation::LanguageIntrinsic => "language-intrinsic",
+        BackendImplementation::Interpreter => "interpreter",
+        BackendImplementation::NameResolverRewrite => "name-resolver-rewrite",
     }
 }
 
@@ -313,4 +339,80 @@ fn merge_json(mut base: Value, extension: Value) -> Value {
     let extension = extension.as_object().expect("extension JSON must be an object");
     base.extend(extension.clone());
     Value::Object(base.clone())
+}
+
+/// Prints `{"classes": [...], "constants": [...]}`: every shared class-like and global-constant
+/// contract with its module, first PHP version, backend routes, and value.
+fn print_symbol_catalogs() {
+    let classes: Vec<Value> = classes()
+        .iter()
+        .map(|class| {
+            json!({
+                "name": class.name,
+                "kind": class.kind.keyword(),
+                "module": class.module.php_name(),
+                "bundled": class.module.is_bundled(),
+                "since": class.since.map(|version| version.as_str()),
+                "aot": route_json(aot_class_support(class)),
+                "eval": route_json(eval_class_support(class)),
+                "extension": class.extension,
+                "internal": class.internal,
+                "php_manual": class.php_manual,
+            })
+        })
+        .collect();
+    let constants: Vec<Value> = constants()
+        .iter()
+        .map(|constant| {
+            json!({
+                "name": constant.name,
+                "module": constant.module.php_name(),
+                "bundled": constant.module.is_bundled(),
+                "since": constant.since.map(|version| version.as_str()),
+                "value": const_value_json(constant.value),
+                "route": match constant.route {
+                    ConstantRoute::Predefined => "predefined",
+                    ConstantRoute::Prelude => "prelude",
+                    ConstantRoute::Dynamic => "dynamic",
+                },
+                "aot": route_json(aot_constant_support(constant)),
+                "eval": route_json(eval_constant_support(constant)),
+                "extension": constant.extension,
+                "internal": constant.internal,
+            })
+        })
+        .collect();
+    let value = json!({ "classes": classes, "constants": constants });
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value).expect("serialize symbol catalogs JSON")
+    );
+}
+
+/// Renders one backend route as `{"supported": bool, "kind" | "reason": ...}`.
+fn route_json(support: BackendSupport) -> Value {
+    match support {
+        BackendSupport::Implemented(implementation) => json!({
+            "supported": true,
+            "kind": implementation_name(implementation),
+        }),
+        BackendSupport::Unsupported(reason) => json!({
+            "supported": false,
+            "reason": unsupported_reason_name(reason),
+        }),
+    }
+}
+
+/// Renders a catalogued constant value; target-dependent values carry only their type.
+fn const_value_json(value: ConstValue) -> Value {
+    match value {
+        ConstValue::Int(value) => json!(value),
+        ConstValue::Float(value) if value.is_finite() => json!(value),
+        ConstValue::Float(value) => json!({ "float": format!("{value}") }),
+        ConstValue::Str(value) => json!(value),
+        ConstValue::Bool(value) => json!(value),
+        ConstValue::Null => Value::Null,
+        ConstValue::StreamResource(fd) => json!({ "resource": "stream", "fd": fd }),
+        ConstValue::TargetDependent(ty) => json!({ "target_dependent": format!("{ty:?}").to_ascii_lowercase() }),
+    }
 }

@@ -2,7 +2,7 @@
 title: "curl_multi_info_read() — internals"
 description: "Compiler internals for curl_multi_info_read(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 348
+  order: 643
 ---
 
 ## `curl_multi_info_read()` — internals
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function curl_multi_info_read(CurlMultiHandle $multi_handle, int $queued_messages = null): mixed
+function curl_multi_info_read(CurlMultiHandle $multi_handle, ?int $queued_messages = null): mixed
 ```
 
 ## What the type checker enforces

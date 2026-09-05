@@ -2,7 +2,7 @@
 title: "mb_ereg_match() — internals"
 description: "Compiler internals for mb_ereg_match(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 399
+  order: 694
 ---
 
 ## `mb_ereg_match()` — internals
@@ -41,7 +41,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function mb_ereg_match(string $pattern, string $subject, string $options = null): bool
+function mb_ereg_match(string $pattern, string $subject, ?string $options = null): bool
 ```
 
 ## What the type checker enforces

@@ -2,7 +2,7 @@
 title: "stream_copy_to_stream() — internals"
 description: "Compiler internals for stream_copy_to_stream(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 224
+  order: 366
 ---
 
 ## `stream_copy_to_stream()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_copy_to_stream(resource $from, resource $to, int $length = null, int $offset = -1): mixed
+function stream_copy_to_stream(resource $from, resource $to, ?int $length = null, int $offset = -1): mixed
 ```
 
 ## What the type checker enforces

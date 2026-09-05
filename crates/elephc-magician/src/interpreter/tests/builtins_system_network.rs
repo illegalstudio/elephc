@@ -461,16 +461,16 @@ return function_exists("stream_supports_lock");"#,
     assert_eq!(values.output, "local:lock:call:spread:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval `spl_classes()` returns the native-compatible SPL type snapshot.
+/// Verifies eval `spl_classes()` returns the shared catalog's `ext/spl` class list.
 #[test]
 fn execute_program_dispatches_spl_classes_builtin() {
     let program = parse_fragment(
         br#"$names = spl_classes();
-echo count($names) . ":" . $names[0] . ":" . $names[55] . ":";
-echo (in_array("Exception", $names) ? "exception" : "bad") . ":";
+echo count($names) . ":" . $names[0] . ":" . $names[53] . ":";
+echo (in_array("LogicException", $names) ? "exception" : "bad") . ":";
 echo (in_array("SplDoublyLinkedList", $names) ? "list" : "bad") . ":";
 $call = call_user_func("spl_classes");
-echo (in_array("Throwable", $call) ? "call" : "bad") . ":";
+echo (in_array("SplStack", $call) ? "call" : "bad") . ":";
 $spread = call_user_func_array("spl_classes", []);
 echo (count($spread) === count($names) ? "spread" : "bad") . ":";
 echo function_exists("spl_classes");
@@ -484,7 +484,7 @@ return is_callable("spl_classes");"#,
 
     assert_eq!(
         values.output,
-        "61:AppendIterator:Throwable:exception:list:call:spread:1"
+        "54:AppendIterator:UnexpectedValueException:exception:list:call:spread:1"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

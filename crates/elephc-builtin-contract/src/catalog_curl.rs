@@ -33,7 +33,10 @@
 //!     `docs/php/builtins/network/`. The narrative contract (options, constants,
 //!     TLS/CA behaviour) stays hand-written in `docs/php/curl.md`.
 
-use crate::{Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec};
+use crate::{
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, PhpVersion,
+    TypeSpec,
+};
 
 /// Builds one by-value parameter, optionally with a PHP default.
 macro_rules! param {
@@ -49,6 +52,14 @@ macro_rules! param {
         ParamSpec {
             name: $name,
             ty: TypeSpec::$ty,
+            default: Some($default),
+            by_ref: false,
+        }
+    };
+    ($name:literal, ?$ty:ident = $default:expr) => {
+        ParamSpec {
+            name: $name,
+            ty: TypeSpec::Nullable(&TypeSpec::$ty),
             default: Some($default),
             by_ref: false,
         }
@@ -73,18 +84,29 @@ macro_rules! by_ref_param {
             by_ref: true,
         }
     };
+    ($name:literal, ?$ty:ident = $default:expr) => {
+        ParamSpec {
+            name: $name,
+            ty: TypeSpec::Nullable(&TypeSpec::$ty),
+            default: Some($default),
+            by_ref: true,
+        }
+    };
 }
 
 /// Builds one prelude-provided `ext/curl` contract.
 macro_rules! curl_surface {
-    ($name:literal, [$($param:expr),* $(,)?], $returns:ident, $summary:literal $(,)?) => {
+    ($name:literal, [$($param:expr),* $(,)?], $returns:ident, $summary:literal $(, since: $since:ident)? $(,)?) => {
         BuiltinContract {
             id: BuiltinId::from_canonical_name($name),
             name: $name,
             area: Area::Curl,
+            module: PhpModule::Curl,
+            since: curl_surface!(@since $($since)?),
             kind: BuiltinKind::PreludeProvided,
             params: &[$($param),*],
             variadic: None,
+            variadic_by_ref: false,
             min_args: None,
             max_args: None,
             arity_error: None,
@@ -99,6 +121,8 @@ macro_rules! curl_surface {
             requirements: &[],
         }
     };
+    (@since $since:ident) => { Some(PhpVersion::$since) };
+    (@since) => { None };
 }
 
 pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
@@ -142,14 +166,14 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
         "curl_getinfo",
         [
             param!("handle", Mixed),
-            param!("option", Int = DefaultSpec::Null),
+            param!("option", ?Int = DefaultSpec::Null),
         ],
         Mixed,
         "Gets information about the last transfer."
     ),
     curl_surface!(
         "curl_init",
-        [param!("url", Str = DefaultSpec::Null)],
+        [param!("url", ?Str = DefaultSpec::Null)],
         Mixed,
         "Initializes a cURL session."
     ),
@@ -183,8 +207,9 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
     curl_surface!(
         "curl_multi_get_handles",
         [param!("multi_handle", Mixed)],
-        Mixed,
-        "Returns the cURL handles currently attached to a cURL multi handle."
+        Array,
+        "Returns the cURL handles currently attached to a cURL multi handle.",
+        since: Php85
     ),
     // `?string` in the prelude; the catalog spells nullable string returns `Mixed`,
     // as `fgets`, `file_get_contents`, `readline` and `realpath` already do.
@@ -198,7 +223,7 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
         "curl_multi_info_read",
         [
             param!("multi_handle", Mixed),
-            by_ref_param!("queued_messages", Int = DefaultSpec::Null),
+            by_ref_param!("queued_messages", ?Int = DefaultSpec::Null),
         ],
         Mixed,
         "Gets information about the current transfers."
@@ -259,7 +284,7 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
     ),
     curl_surface!(
         "curl_setopt_array",
-        [param!("handle", Mixed), param!("options", Mixed)],
+        [param!("handle", Mixed), param!("options", Array)],
         Bool,
         "Sets multiple options for a cURL transfer."
     ),
@@ -278,9 +303,10 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
     curl_surface!("curl_share_init", [], Mixed, "Initializes a cURL share handle."),
     curl_surface!(
         "curl_share_init_persistent",
-        [param!("share_options", Mixed)],
+        [param!("share_options", Array)],
         Mixed,
-        "Initializes a persistent cURL share handle."
+        "Initializes a persistent cURL share handle.",
+        since: Php85
     ),
     curl_surface!(
         "curl_share_setopt",

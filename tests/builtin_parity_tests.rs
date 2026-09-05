@@ -67,11 +67,16 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             contract.name
         );
     }
-    assert_eq!(exceptional.len(), 13);
+    // Five language constructs, one dedicated-syntax surface, three eval-only reflection
+    // functions, the 293 prelude-provided functions outside `ext/curl` (four `hash_*` plus
+    // the mysqli, PDO, web, image, OPcache, tz, var_export and version preludes), and the
+    // 54 date/calendar functions the name resolver rewrites.
+    assert_eq!(exceptional.len(), 356);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
     let mut preludes = BTreeSet::new();
+    let mut rewrites = 0;
     let mut unsupported = 0;
     for contract in exceptional {
         match aot_support(contract) {
@@ -84,17 +89,26 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
             BackendSupport::Implemented(BackendImplementation::Prelude) => {
                 preludes.insert(contract.name);
             }
+            BackendSupport::Implemented(BackendImplementation::NameResolverRewrite) => {
+                rewrites += 1;
+            }
             BackendSupport::Unsupported(_) => unsupported += 1,
-            BackendSupport::Implemented(BackendImplementation::Registry) => unreachable!(),
+            BackendSupport::Implemented(
+                BackendImplementation::Registry
+                | BackendImplementation::CheckerInjected
+                | BackendImplementation::LanguageIntrinsic
+                | BackendImplementation::Interpreter,
+            ) => unreachable!("{} is a function contract", contract.name),
         }
     }
     assert_eq!(language_constructs, 5);
     assert_eq!(dedicated_syntax, 1);
     assert_eq!(unsupported, 3);
-    assert_eq!(
-        preludes,
-        BTreeSet::from(["hash_copy", "hash_final", "hash_init", "hash_update"])
-    );
+    assert_eq!(rewrites, 54);
+    assert_eq!(preludes.len(), 293);
+    for name in ["hash_copy", "hash_final", "hash_init", "hash_update"] {
+        assert!(preludes.contains(name), "{name} must keep its prelude route");
+    }
 
     let hash_init = contracts()
         .iter()

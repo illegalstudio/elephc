@@ -2,7 +2,7 @@
 title: "str_word_count() — internals"
 description: "Compiler internals for str_word_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 495
+  order: 790
 ---
 
 ## `str_word_count()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function str_word_count(string $string, int $format = 0, string $characters = null): array|int
+function str_word_count(string $string, int $format = 0, ?string $characters = null): array|int
 ```
 
 ## What the type checker enforces

@@ -2,20 +2,20 @@
 title: "curl_getinfo()"
 description: "Gets information about the last transfer."
 sidebar:
-  order: 340
+  order: 635
 ---
 
 ## curl_getinfo()
 
 ```php
-function curl_getinfo(CurlHandle $handle, int $option = null): mixed
+function curl_getinfo(CurlHandle $handle, ?int $option = null): mixed
 ```
 
 Gets information about the last transfer.
 
 **Parameters**:
 - `$handle` (`CurlHandle`)
-- `$option` (`int`), default `null`, optional
+- `$option` (`?int`), default `null`, optional
 
 **Returns**: `mixed`
 

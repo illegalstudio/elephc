@@ -12,7 +12,7 @@
 
 use crate::{
     eval_signature, runtime_builtin_id, Area, BuiltinContract, BuiltinId, BuiltinKind,
-    RuntimeBuiltinId,
+    ClassContract, ClassRoute, ConstantContract, ConstantRoute, RuntimeBuiltinId,
 };
 
 /// Backend whose support contract is being queried.
@@ -35,6 +35,16 @@ pub enum BackendImplementation {
     DedicatedSyntax,
     /// Injected elephc-PHP prelude backed by internal compiler builtins.
     Prelude,
+    /// Synthetic declaration the type checker injects and runtime metadata materializes
+    /// (builtin classes only).
+    CheckerInjected,
+    /// Engine-level type or predefined value the front end knows natively (builtin classes
+    /// and predefined constants only).
+    LanguageIntrinsic,
+    /// Interpreter-owned surface: Magician provides the class-like or constant itself.
+    Interpreter,
+    /// Name-resolver rewrite onto a builtin class (the `date_*` / `cal_*` families).
+    NameResolverRewrite,
 }
 
 /// Why a shared catalog surface is deliberately absent from one backend.
@@ -125,6 +135,7 @@ pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
         BuiltinKind::LanguageConstruct => BackendImplementation::LanguageConstruct,
         BuiltinKind::DedicatedSyntax => BackendImplementation::DedicatedSyntax,
         BuiltinKind::PreludeProvided => BackendImplementation::Prelude,
+        BuiltinKind::NameResolverRewrite => BackendImplementation::NameResolverRewrite,
     };
     BackendSupport::Implemented(implementation)
 }
@@ -140,8 +151,24 @@ pub fn eval_support(contract: &BuiltinContract) -> BackendSupport {
     {
         return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
     }
+    // Prelude-declared and name-resolver-rewritten functions exist in eval only where
+    // Magician re-implements them: the whole `ext/curl` surface and the hash prelude. The
+    // rest (mysqli, PDO, sessions, image, date/calendar procedural families) is an explicit,
+    // auditable absence rather than a missing binding.
+    if matches!(
+        contract.kind,
+        BuiltinKind::PreludeProvided | BuiltinKind::NameResolverRewrite
+    ) && !matches!(contract.area, Area::Curl)
+        && !EVAL_IMPLEMENTED_PRELUDE_SURFACES.contains(&contract.name)
+    {
+        return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
+    }
     BackendSupport::Implemented(BackendImplementation::Registry)
 }
+
+/// Prelude-provided surfaces outside `ext/curl` that Magician binds with its own eval homes.
+const EVAL_IMPLEMENTED_PRELUDE_SURFACES: &[&str] =
+    &["hash_copy", "hash_final", "hash_init", "hash_update"];
 
 /// Returns the documented execution route for an eval-supported contract.
 pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
@@ -190,6 +217,81 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
         reason,
     })
 }
+
+/// Returns the expected compiler route for one shared class-like contract.
+pub fn aot_class_support(class: &ClassContract) -> BackendSupport {
+    BackendSupport::Implemented(match class.aot {
+        ClassRoute::CheckerInjected => BackendImplementation::CheckerInjected,
+        ClassRoute::Prelude => BackendImplementation::Prelude,
+        ClassRoute::LanguageIntrinsic => BackendImplementation::LanguageIntrinsic,
+    })
+}
+
+/// Returns the expected Magician route for one shared class-like contract.
+///
+/// Magician does not declare builtin class-likes itself: `eval()` code sees the classes its
+/// HOST program registered — the checker-injected surface through runtime metadata
+/// (`Interpreter` route: the interpreter resolves them from that metadata) and prelude classes
+/// through the injected prelude (`Prelude` route). Names the interpreter cannot reach even
+/// when the host registers them are an explicit, auditable absence.
+pub fn eval_class_support(class: &ClassContract) -> BackendSupport {
+    if class.internal {
+        return BackendSupport::Unsupported(UnsupportedReason::InternalCompilerSurface);
+    }
+    if EVAL_CLASS_IMPLEMENTATION_PENDING
+        .iter()
+        .any(|name| class.id == BuiltinId::from_canonical_name(&name.to_ascii_lowercase()))
+    {
+        return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
+    }
+    // The compiler's curl prelude declares the curl handle classes in every build; Magician's
+    // native-class fallback for them exists only with its `curl` feature (see
+    // `crate::catalog_curl`'s module doc).
+    if class.module == crate::PhpModule::Curl && !cfg!(feature = "curl") {
+        return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
+    }
+    BackendSupport::Implemented(match class.aot {
+        ClassRoute::Prelude => BackendImplementation::Prelude,
+        ClassRoute::CheckerInjected | ClassRoute::LanguageIntrinsic => {
+            BackendImplementation::Interpreter
+        }
+    })
+}
+
+/// Returns the expected compiler route for one shared global constant contract.
+pub fn aot_constant_support(constant: &ConstantContract) -> BackendSupport {
+    BackendSupport::Implemented(match constant.route {
+        ConstantRoute::Predefined => BackendImplementation::LanguageIntrinsic,
+        ConstantRoute::Prelude => BackendImplementation::Prelude,
+        ConstantRoute::Dynamic => BackendImplementation::LanguageIntrinsic,
+    })
+}
+
+/// Returns the expected Magician route for one shared global constant contract.
+///
+/// Every predefined constant resolves in eval straight from the catalog value (target- and
+/// profile-dependent ones through Magician's own computation under the catalogued name).
+/// Prelude-declared and runtime-defined constants follow their owning mechanism, which eval
+/// does not inject.
+pub fn eval_constant_support(constant: &ConstantContract) -> BackendSupport {
+    if constant.internal {
+        return BackendSupport::Unsupported(UnsupportedReason::InternalCompilerSurface);
+    }
+    if matches!(constant.value, crate::ConstValue::StreamResource(_)) {
+        // `STDIN` / `STDOUT` / `STDERR` are resources the interpreter does not model yet.
+        return BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending);
+    }
+    match constant.route {
+        ConstantRoute::Predefined => BackendSupport::Implemented(BackendImplementation::Interpreter),
+        ConstantRoute::Prelude | ConstantRoute::Dynamic => {
+            BackendSupport::Unsupported(UnsupportedReason::EvalImplementationPending)
+        }
+    }
+}
+
+/// PHP-visible AOT class-likes that Magician does not declare yet. Seeded by the eval-side
+/// class audit; every name here fails `class_exists()` inside `eval()` today.
+const EVAL_CLASS_IMPLEMENTATION_PENDING: &[&str] = &[];
 
 /// Returns whether a function contract is intentionally available only in Magician.
 fn is_eval_only_reflection(id: BuiltinId) -> bool {
@@ -281,14 +383,20 @@ mod tests {
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(eval_registry, 484 + curl_surface);
-        assert_eq!(eval_internal, 82);
-        assert_eq!(eval_pending, 31);
+        // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
+        // image prelude declares for its own use.
+        assert_eq!(eval_internal, 99);
+        // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
+        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
+        assert_eq!(eval_pending, 357);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
         // entry points.
         assert_eq!(aot_registry, 584);
-        assert_eq!(aot_external, 10 + curl_surface);
+        // Ten constructs/dedicated-syntax/hash surfaces, the 343 prelude-provided and
+        // name-resolver-rewritten contracts, and the curl prelude when published.
+        assert_eq!(aot_external, 353 + curl_surface);
         assert_eq!(aot_unsupported, 3);
     }
 
@@ -337,7 +445,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463 + curl_surface);
-        assert_eq!(unsupported, 113);
+        assert_eq!(unsupported, 456);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

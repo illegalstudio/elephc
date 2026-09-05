@@ -2,7 +2,7 @@
 title: "curl_init() — internals"
 description: "Compiler internals for curl_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 341
+  order: 636
 ---
 
 ## `curl_init()` — internals
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function curl_init(string $url = null): CurlHandle
+function curl_init(?string $url = null): CurlHandle
 ```
 
 ## What the type checker enforces

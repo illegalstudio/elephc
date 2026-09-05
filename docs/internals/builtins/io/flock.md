@@ -2,7 +2,7 @@
 title: "flock() — internals"
 description: "Compiler internals for flock(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 177
+  order: 319
 ---
 
 ## `flock()` — internals

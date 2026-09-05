@@ -2,7 +2,7 @@
 title: "fsync() — internals"
 description: "Compiler internals for fsync(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 186
+  order: 328
 ---
 
 ## `fsync()` — internals

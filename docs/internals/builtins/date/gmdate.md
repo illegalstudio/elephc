@@ -2,7 +2,7 @@
 title: "gmdate() — internals"
 description: "Compiler internals for gmdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 103
+  order: 221
 ---
 
 ## `gmdate()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function gmdate(string $format, int $timestamp = null): string
+function gmdate(string $format, ?int $timestamp = null): string
 ```
 
 ## What the type checker enforces

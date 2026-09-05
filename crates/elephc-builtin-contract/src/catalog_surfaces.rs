@@ -11,7 +11,9 @@
 //!   not a registry binding.
 //! - Backend support is joined separately and must not be inferred from this file.
 
-use crate::{Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, TypeSpec};
+use crate::{
+    Area, BuiltinContract, BuiltinId, BuiltinKind, DefaultSpec, ParamSpec, PhpModule, TypeSpec,
+};
 
 macro_rules! param {
     ($name:literal, $ty:ident) => {
@@ -34,7 +36,7 @@ macro_rules! param {
 
 macro_rules! surface {
     (
-        $name:literal, $area:ident, $kind:ident,
+        $name:literal, $area:ident, $module:ident, $kind:ident,
         [$($param:expr),* $(,)?], $variadic:expr, $returns:ident,
         $summary:literal $(, extension: $extension:expr)?
     ) => {
@@ -42,9 +44,12 @@ macro_rules! surface {
             id: BuiltinId::from_canonical_name($name),
             name: $name,
             area: Area::$area,
+            module: PhpModule::$module,
+            since: None,
             kind: BuiltinKind::$kind,
             params: &[$($param),*],
             variadic: $variadic,
+            variadic_by_ref: false,
             min_args: None,
             max_args: None,
             arity_error: None,
@@ -67,6 +72,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "buffer_new",
         Pointers,
+        Elephc,
         DedicatedSyntax,
         [param!("length", Int)],
         None,
@@ -77,6 +83,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "die",
         System,
+        Core,
         LanguageConstruct,
         [param!("status", Int = DefaultSpec::Int(0))],
         None,
@@ -86,6 +93,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "empty",
         Types,
+        Core,
         LanguageConstruct,
         [param!("value", Mixed)],
         None,
@@ -95,6 +103,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "exit",
         System,
+        Core,
         LanguageConstruct,
         [param!("status", Int = DefaultSpec::Int(0))],
         None,
@@ -104,6 +113,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "get_called_class",
         Callables,
+        Core,
         Function,
         [],
         None,
@@ -113,6 +123,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "get_class_methods",
         Callables,
+        Core,
         Function,
         [param!("object_or_class", Mixed)],
         None,
@@ -122,6 +133,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "get_class_vars",
         Callables,
+        Core,
         Function,
         [param!("class", Mixed)],
         None,
@@ -131,6 +143,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "hash_copy",
         String,
+        Hash,
         PreludeProvided,
         [param!("context", Mixed)],
         None,
@@ -140,6 +153,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "hash_final",
         String,
+        Hash,
         PreludeProvided,
         [
             param!("context", Mixed),
@@ -152,6 +166,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "hash_init",
         String,
+        Hash,
         PreludeProvided,
         [
             param!("algo", Str),
@@ -165,6 +180,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "hash_update",
         String,
+        Hash,
         PreludeProvided,
         [param!("context", Mixed), param!("data", Str)],
         None,
@@ -174,6 +190,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "isset",
         Types,
+        Core,
         LanguageConstruct,
         [param!("var", Mixed)],
         Some("vars"),
@@ -183,6 +200,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
     surface!(
         "unset",
         Types,
+        Core,
         LanguageConstruct,
         [param!("var", Mixed)],
         Some("vars"),

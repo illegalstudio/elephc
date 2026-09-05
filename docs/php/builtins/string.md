@@ -38,14 +38,14 @@ sidebar:
 | [`htmlspecialchars()`](./string/htmlspecialchars.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
 | [`iconv()`](./string/iconv.md) | `(string $from_encoding, string $to_encoding, string $string): mixed` | `mixed` | ✓ | ✓ |
 | [`iconv_get_encoding()`](./string/iconv_get_encoding.md) | `(string $type = 'all'): mixed` | `mixed` | ✓ | ✓ |
-| [`iconv_mime_decode()`](./string/iconv_mime_decode.md) | `(string $string, int $mode = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
-| [`iconv_mime_decode_headers()`](./string/iconv_mime_decode_headers.md) | `(string $headers, int $mode = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_mime_decode()`](./string/iconv_mime_decode.md) | `(string $string, int $mode = 0, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_mime_decode_headers()`](./string/iconv_mime_decode_headers.md) | `(string $headers, int $mode = 0, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
 | [`iconv_mime_encode()`](./string/iconv_mime_encode.md) | `(string $field_name, string $field_value, mixed $options = []): mixed` | `mixed` | ✓ | ✓ |
 | [`iconv_set_encoding()`](./string/iconv_set_encoding.md) | `(string $type, string $encoding): bool` | `bool` | ✓ | ✓ |
-| [`iconv_strlen()`](./string/iconv_strlen.md) | `(string $string, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
-| [`iconv_strpos()`](./string/iconv_strpos.md) | `(string $haystack, string $needle, int $offset = 0, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
-| [`iconv_strrpos()`](./string/iconv_strrpos.md) | `(string $haystack, string $needle, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
-| [`iconv_substr()`](./string/iconv_substr.md) | `(string $string, int $offset, int $length = null, string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_strlen()`](./string/iconv_strlen.md) | `(string $string, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_strpos()`](./string/iconv_strpos.md) | `(string $haystack, string $needle, int $offset = 0, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_strrpos()`](./string/iconv_strrpos.md) | `(string $haystack, string $needle, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
+| [`iconv_substr()`](./string/iconv_substr.md) | `(string $string, int $offset, ?int $length = null, ?string $encoding = null): mixed` | `mixed` | ✓ | ✓ |
 | [`implode()`](./string/implode.md) | `(string $separator, array $array = null): string` | `string` | ✓ | ✓ |
 | [`inet_ntop()`](./string/inet_ntop.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`inet_pton()`](./string/inet_pton.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
@@ -54,7 +54,7 @@ sidebar:
 | [`lcfirst()`](./string/lcfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`long2ip()`](./string/long2ip.md) | `(int $ip): string` | `string` | ✓ | ✓ |
 | [`ltrim()`](./string/ltrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
-| [`mb_strlen()`](./string/mb_strlen.md) | `(string $string, string $encoding = null): int` | `int` | ✓ | ✓ |
+| [`mb_strlen()`](./string/mb_strlen.md) | `(string $string, ?string $encoding = null): int` | `int` | ✓ | ✓ |
 | [`md5()`](./string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`number_format()`](./string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
@@ -81,7 +81,7 @@ sidebar:
 | [`str_replace()`](./string/str_replace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
 | [`str_split()`](./string/str_split.md) | `(string $string, int $length = 1): array` | `array` | ✓ | ✓ |
 | [`str_starts_with()`](./string/str_starts_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
-| [`str_word_count()`](./string/str_word_count.md) | `(string $string, int $format = 0, string $characters = null): array|int` | `array|int` | ✓ | ✓ |
+| [`str_word_count()`](./string/str_word_count.md) | `(string $string, int $format = 0, ?string $characters = null): array|int` | `array|int` | ✓ | ✓ |
 | [`strcasecmp()`](./string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`strcmp()`](./string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`stripos()`](./string/stripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
@@ -96,8 +96,8 @@ sidebar:
 | [`strstr()`](./string/strstr.md) | `(string $haystack, string $needle, bool $before_needle = false): mixed` | `mixed` | ✓ | ✓ |
 | [`strtolower()`](./string/strtolower.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strtoupper()`](./string/strtoupper.md) | `(string $string): string` | `string` | ✓ | ✓ |
-| [`strtr()`](./string/strtr.md) | `(string $string, array|string $from, string $to = null): string` | `string` | ✓ | ✓ |
-| [`substr()`](./string/substr.md) | `(string $string, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
+| [`strtr()`](./string/strtr.md) | `(string $string, array|string $from, ?string $to = null): string` | `string` | ✓ | ✓ |
+| [`substr()`](./string/substr.md) | `(string $string, int $offset, ?int $length = null): string` | `string` | ✓ | ✓ |
 | [`substr_count()`](./string/substr_count.md) | `(string $haystack, string $needle, int $offset = 0, mixed $length = null): int` | `int` | ✓ | — |
 | [`substr_replace()`](./string/substr_replace.md) | `(string $string, string $replace, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
 | [`trim()`](./string/trim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |

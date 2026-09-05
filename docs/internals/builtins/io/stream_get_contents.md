@@ -2,7 +2,7 @@
 title: "stream_get_contents() — internals"
 description: "Compiler internals for stream_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 227
+  order: 369
 ---
 
 ## `stream_get_contents()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_get_contents(resource $stream, int $length = null, int $offset = -1): mixed
+function stream_get_contents(resource $stream, ?int $length = null, int $offset = -1): mixed
 ```
 
 ## What the type checker enforces

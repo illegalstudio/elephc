@@ -2,7 +2,7 @@
 title: "mb_strlen() — internals"
 description: "Compiler internals for mb_strlen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 468
+  order: 763
 ---
 
 ## `mb_strlen()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function mb_strlen(string $string, string $encoding = null): int
+function mb_strlen(string $string, ?string $encoding = null): int
 ```
 
 ## What the type checker enforces

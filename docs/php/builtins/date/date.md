@@ -2,20 +2,20 @@
 title: "date()"
 description: "Formats a local time/date."
 sidebar:
-  order: 99
+  order: 188
 ---
 
 ## date()
 
 ```php
-function date(string $format, int $timestamp = null): string
+function date(string $format, ?int $timestamp = null): string
 ```
 
 Formats a local time/date.
 
 **Parameters**:
 - `$format` (`string`)
-- `$timestamp` (`int`), default `null`, optional
+- `$timestamp` (`?int`), default `null`, optional
 
 **Returns**: `string`
 

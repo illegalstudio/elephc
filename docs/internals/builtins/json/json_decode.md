@@ -2,7 +2,7 @@
 title: "json_decode() — internals"
 description: "Compiler internals for json_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 256
+  order: 540
 ---
 
 ## `json_decode()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function json_decode(string $json, bool $associative = null, int $depth = 512, int $flags = 0): mixed
+function json_decode(string $json, ?bool $associative = null, int $depth = 512, int $flags = 0): mixed
 ```
 
 ## What the type checker enforces

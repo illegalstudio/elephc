@@ -71,20 +71,26 @@ Use `session_status()` to check the current state.
 
 ## Function reference
 
-| Function | Signature | Description |
-|---|---|---|
-| `session_start()` | `session_start(array $options = []): bool` | Start a new or resume an existing session. Returns `true` on success. |
-| `session_id()` | `session_id(?string $id = null): string\|false` | Get or set the current session ID. With no active session the getter normally returns an empty string. With a string, sets the ID before `session_start()`. |
-| `session_name()` | `session_name(?string $name = null): string\|false` | Get or set the session name (used as the cookie name). Default is `PHPSESSID`. Must be called before `session_start()`. |
-| `session_status()` | `session_status(): int` | Returns `PHP_SESSION_NONE` or `PHP_SESSION_ACTIVE`. |
-| `session_save_path()` | `session_save_path(?string $path = null): string\|false` | Get or set the configured files-handler path. An empty configured value resolves to `sys_get_temp_dir()` when opened. |
-| `session_write_close()` | `session_write_close(): bool` | Write session data and end the session. Called automatically at handler end. |
-| `session_regenerate_id()` | `session_regenerate_id(bool $delete_old = false): bool` | Generate a new session ID, optionally deleting the old session file. |
-| `session_unset()` | `session_unset(): bool` | Unset all `$_SESSION` variables (the array stays, values are removed). |
-| `session_destroy()` | `session_destroy(): bool` | Destroy the session. Does not unset `$_SESSION` — call `session_unset()` first if needed. |
-| `session_set_cookie_params()` | `session_set_cookie_params(array\|int $options_or_lifetime, ...): bool` | Set session cookie parameters. The array form supports lifetime, path, domain, secure, httponly, and samesite, plus partitioned on PHP 8.5; the positional form matches PHP's five arguments. |
-| `session_get_cookie_params()` | `session_get_cookie_params(): array` | Returns the current session cookie parameters as an associative array. |
-| `session_start()` options | | Accepts the supported `session.*` runtime directives without the `session.` prefix, plus `read_and_close`. |
+This table explains what the most used functions do. Exact signatures are not repeated
+here: the generated [Functions](#functions) section at the end of this page is the
+authoritative list of every session function elephc provides, straight from the shared
+catalog (`session_start()` deliberately takes `mixed $options` so a non-array argument
+raises PHP's `TypeError` at runtime instead of failing the compile).
+
+| Function | Description |
+|---|---|
+| `session_start()` | Start a new or resume an existing session. Returns `true` on success. |
+| `session_id()` | Get or set the current session ID. With no active session the getter normally returns an empty string. With a string, sets the ID before `session_start()`. |
+| `session_name()` | Get or set the session name (used as the cookie name). Default is `PHPSESSID`. Must be called before `session_start()`. |
+| `session_status()` | Returns `PHP_SESSION_NONE` or `PHP_SESSION_ACTIVE`. |
+| `session_save_path()` | Get or set the configured files-handler path. An empty configured value resolves to `sys_get_temp_dir()` when opened. |
+| `session_write_close()` | Write session data and end the session. Called automatically at handler end. |
+| `session_regenerate_id()` | Generate a new session ID, optionally deleting the old session file. |
+| `session_unset()` | Unset all `$_SESSION` variables (the array stays, values are removed). |
+| `session_destroy()` | Destroy the session. Does not unset `$_SESSION` — call `session_unset()` first if needed. |
+| `session_set_cookie_params()` | Set session cookie parameters. The array form supports lifetime, path, domain, secure, httponly, and samesite, plus partitioned on PHP 8.5; the positional form matches PHP's five arguments. |
+| `session_get_cookie_params()` | Returns the current session cookie parameters as an associative array. |
+| `session_start()` options | Accepts the supported `session.*` runtime directives without the `session.` prefix, plus `read_and_close`. |
 
 ## Cookie handling
 
@@ -402,3 +408,41 @@ standalone server binary.
   `false`. There is no `error_reporting`/`display_errors` layer, so these messages are
   always written. PHP's "headers already sent" warning genuinely cannot occur because
   output is buffered until the request completes.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`session_abort()`](./builtins/web/session_abort.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_cache_expire()`](./builtins/web/session_cache_expire.md) | `(?int $value = null): mixed` | `mixed` | ✓ | — |
+| [`session_cache_limiter()`](./builtins/web/session_cache_limiter.md) | `(?string $value = null): mixed` | `mixed` | ✓ | — |
+| [`session_commit()`](./builtins/web/session_commit.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_create_id()`](./builtins/web/session_create_id.md) | `(string $prefix = ''): mixed` | `mixed` | ✓ | — |
+| [`session_decode()`](./builtins/web/session_decode.md) | `(string $data): bool` | `bool` | ✓ | — |
+| [`session_destroy()`](./builtins/web/session_destroy.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_encode()`](./builtins/web/session_encode.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`session_gc()`](./builtins/web/session_gc.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`session_get_cookie_params()`](./builtins/web/session_get_cookie_params.md) | `(): array` | `array` | ✓ | — |
+| [`session_id()`](./builtins/web/session_id.md) | `(?string $id = null): mixed` | `mixed` | ✓ | — |
+| [`session_module_name()`](./builtins/web/session_module_name.md) | `(?string $module = null): mixed` | `mixed` | ✓ | — |
+| [`session_name()`](./builtins/web/session_name.md) | `(?string $name = null): mixed` | `mixed` | ✓ | — |
+| [`session_regenerate_id()`](./builtins/web/session_regenerate_id.md) | `(bool $delete_old = false): bool` | `bool` | ✓ | — |
+| [`session_register_shutdown()`](./builtins/web/session_register_shutdown.md) | `(): void` | `void` | ✓ | — |
+| [`session_reset()`](./builtins/web/session_reset.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_save_path()`](./builtins/web/session_save_path.md) | `(?string $path = null): mixed` | `mixed` | ✓ | — |
+| [`session_set_cookie_params()`](./builtins/web/session_set_cookie_params.md) | `(...$args): bool` | `bool` | ✓ | — |
+| [`session_set_save_handler()`](./builtins/web/session_set_save_handler.md) | `(mixed $handler_or_open = null, mixed $register_or_close = true, mixed $read = null, mixed $write = null, mixed $destroy = null, mixed $gc = null, mixed $create_sid = null, mixed $validate_id = null, mixed $update_timestamp = null): bool` | `bool` | ✓ | — |
+| [`session_start()`](./builtins/web/session_start.md) | `(mixed $options = []): bool` | `bool` | ✓ | — |
+| [`session_status()`](./builtins/web/session_status.md) | `(): int` | `int` | ✓ | — |
+| [`session_unset()`](./builtins/web/session_unset.md) | `(): bool` | `bool` | ✓ | — |
+| [`session_write_close()`](./builtins/web/session_write_close.md) | `(): bool` | `bool` | ✓ | — |
+
+Classes: `SessionHandler`, `SessionHandlerInterface`, `SessionIdInterface`, `SessionUpdateTimestampHandlerInterface`.
+
+Constants: `PHP_SESSION_ACTIVE`, `PHP_SESSION_DISABLED`, `PHP_SESSION_NONE`, `SID`.
+
+<!-- elephc:generated:symbols:end -->

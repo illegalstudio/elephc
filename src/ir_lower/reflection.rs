@@ -347,3 +347,29 @@ fn function_attribute_sources(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::BUILTIN_REFLECTION_CLASS_NAMES;
+
+    /// Pins this lowering list to the shared class catalog: it is exactly the `ext/reflection`
+    /// CLASSES minus `ReflectionException`, which is a throwable with no synthetic methods to
+    /// lower (the checker injects it with the other builtin throwables). The module's enum
+    /// (`PropertyHookType`) is injected by `builtin_enums` and has no methods either.
+    #[test]
+    fn reflection_class_list_matches_the_catalog() {
+        let mut expected: Vec<&str> = elephc_builtin_contract::classes()
+            .iter()
+            .filter(|class| {
+                class.module == elephc_builtin_contract::PhpModule::Reflection
+                    && class.kind == elephc_builtin_contract::ClassKind::Class
+                    && class.name != "ReflectionException"
+            })
+            .map(|class| class.name)
+            .collect();
+        expected.sort_unstable();
+        let mut actual: Vec<&str> = BUILTIN_REFLECTION_CLASS_NAMES.to_vec();
+        actual.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+}

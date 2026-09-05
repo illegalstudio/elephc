@@ -2,20 +2,20 @@
 title: "stream_get_contents()"
 description: "Reads remainder of a stream into a string."
 sidebar:
-  order: 227
+  order: 369
 ---
 
 ## stream_get_contents()
 
 ```php
-function stream_get_contents(resource $stream, int $length = null, int $offset = -1): mixed
+function stream_get_contents(resource $stream, ?int $length = null, int $offset = -1): mixed
 ```
 
 Reads remainder of a stream into a string.
 
 **Parameters**:
 - `$stream` (`resource`)
-- `$length` (`int`), default `null`, optional
+- `$length` (`?int`), default `null`, optional
 - `$offset` (`int`), default `-1`, optional
 
 **Returns**: `mixed`

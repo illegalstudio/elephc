@@ -2,7 +2,7 @@
 title: "mkdir()"
 description: "Makes a directory."
 sidebar:
-  order: 147
+  order: 289
 ---
 
 ## mkdir()

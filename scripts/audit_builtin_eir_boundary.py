@@ -33,6 +33,11 @@ SUPPORTED_TARGETS = [
     "linux-aarch64",
     "linux-x86_64",
 ]
+
+# Compiler-resident AOT routes a shared contract may declare instead of a `builtin!`
+# registry home: language constructs, dedicated syntax, injected-prelude declarations,
+# and the date/calendar procedural families the name resolver rewrites.
+NON_REGISTRY_ROUTES = {"language-construct", "dedicated-syntax", "prelude", "name-resolver-rewrite"}
 HOST_ONLY_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
 SOURCE_SUFFIXES = {".php", ".rs", ".snap"}
 
@@ -313,6 +318,7 @@ def build_inventory() -> dict[str, Any]:
             "language-construct": 5,
             "dedicated-syntax": 5,
             "prelude": 4,
+            "name-resolver-rewrite": 5,
         }.get(route, 0)
         compiler_resident.append(
             {
@@ -344,7 +350,7 @@ def build_inventory() -> dict[str, Any]:
             "invalid_non_registry_routes": sorted(
                 record["name"]
                 for record in compiler_resident
-                if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}
+                if record["kind"] not in NON_REGISTRY_ROUTES
             ),
             "inconsistent_eval_only_flags": sorted(
                 record["name"]
@@ -424,7 +430,7 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
             )
 
     for record in inventory["compiler_resident"]:
-        if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}:
+        if record["kind"] not in NON_REGISTRY_ROUTES:
             errors.append(f"{record['name']}: undeclared non-registry AOT route")
 
     # The optional `{` matches a BLOCK-BODIED match arm. rustfmt wraps an arm whose

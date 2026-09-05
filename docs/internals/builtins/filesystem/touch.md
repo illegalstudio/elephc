@@ -2,7 +2,7 @@
 title: "touch() — internals"
 description: "Compiler internals for touch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 163
+  order: 305
 ---
 
 ## `touch()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function touch(string $filename, int $mtime = null, int $atime = null): bool
+function touch(string $filename, ?int $mtime = null, ?int $atime = null): bool
 ```
 
 ## What the type checker enforces

@@ -16,3 +16,6 @@ crate-type = ["rlib"]
 # `src/catalog_curl.rs`'s module doc for the full rationale.
 [features]
 curl = []
+
+[dev-dependencies]
+serde_json = "1"

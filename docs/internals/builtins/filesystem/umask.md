@@ -2,7 +2,7 @@
 title: "umask() — internals"
 description: "Compiler internals for umask(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 164
+  order: 306
 ---
 
 ## `umask()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function umask(int $mask = null): int
+function umask(?int $mask = null): int
 ```
 
 ## What the type checker enforces

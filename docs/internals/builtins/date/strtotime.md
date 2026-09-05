@@ -2,7 +2,7 @@
 title: "strtotime() — internals"
 description: "Compiler internals for strtotime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 109
+  order: 241
 ---
 
 ## `strtotime()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function strtotime(string $datetime, int $baseTimestamp = null): mixed
+function strtotime(string $datetime, ?int $baseTimestamp = null): mixed
 ```
 
 ## What the type checker enforces

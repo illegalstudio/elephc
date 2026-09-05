@@ -16,7 +16,6 @@
 //! - `json_static_int_value` folds literals, known JSON constants, and bitwise ops.
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
-use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::PhpType;
 
 /// Returns `true` if `ty` is a valid type for the JSON string argument in
@@ -57,9 +56,9 @@ pub(crate) fn is_json_associative_arg_type(ty: &PhpType) -> bool {
 pub(crate) fn json_static_int_value(expr: &Expr) -> Option<i64> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(*value),
-        ExprKind::ConstRef(name) => JSON_INT_CONSTANTS
-            .iter()
-            .find_map(|(constant, value)| (*constant == name.as_str()).then_some(*value)),
+        ExprKind::ConstRef(name) => {
+            crate::types::predefined_constants::int_constant_value(name.as_str())
+        }
         ExprKind::Negate(inner) => json_static_int_value(inner).map(|value| -value),
         ExprKind::BinaryOp { left, op, right } => {
             let left = json_static_int_value(left)?;

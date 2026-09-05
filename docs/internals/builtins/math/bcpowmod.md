@@ -2,7 +2,7 @@
 title: "bcpowmod() — internals"
 description: "Compiler internals for bcpowmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 276
+  order: 560
 ---
 
 ## `bcpowmod()` — internals
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function bcpowmod(string $num, string $exponent, string $modulus, int $scale = null): string
+function bcpowmod(string $num, string $exponent, string $modulus, ?int $scale = null): string
 ```
 
 ## What the type checker enforces

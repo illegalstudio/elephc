@@ -829,3 +829,22 @@ while `opcache_get_configuration()['directives']` keeps registration order in
 both; `opcache_get_configuration()` returns its array even when the cache is
 disabled, in both; and `opcache_invalidate()` on an existing but uncached file
 returns `true` in both.
+
+<!-- elephc:generated:symbols:begin -->
+
+## Functions {#functions}
+
+Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py`; do not edit this section by hand. Each function links to its reference page.
+
+| Function | Signature | Returns | AOT | eval() |
+|---|---|---|:-:|:-:|
+| [`opcache_compile_file()`](./builtins/misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | — |
+| [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): array` | `array` | ✓ | — |
+| [`opcache_get_status()`](./builtins/misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | — |
+| [`opcache_invalidate()`](./builtins/misc/opcache_invalidate.md) | `(mixed $filename, mixed $force = false): bool` | `bool` | ✓ | — |
+| [`opcache_is_script_cached()`](./builtins/misc/opcache_is_script_cached.md) | `(mixed $filename): bool` | `bool` | ✓ | — |
+| [`opcache_is_script_cached_in_file_cache()`](./builtins/misc/opcache_is_script_cached_in_file_cache.md) | `(mixed $filename): bool` | `bool` | ✓ | — |
+| [`opcache_jit_blacklist()`](./builtins/misc/opcache_jit_blacklist.md) | `(mixed $closure): void` | `void` | ✓ | — |
+| [`opcache_reset()`](./builtins/misc/opcache_reset.md) | `(): bool` | `bool` | ✓ | — |
+
+<!-- elephc:generated:symbols:end -->

@@ -2,7 +2,7 @@
 title: "disk_free_space()"
 description: "Returns available space on filesystem or disk partition."
 sidebar:
-  order: 119
+  order: 261
 ---
 
 ## disk_free_space()

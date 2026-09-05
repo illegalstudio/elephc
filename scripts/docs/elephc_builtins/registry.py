@@ -32,6 +32,9 @@ AREAS: list[str] = [
     "Pointer",
     "Buffer",
     "Misc",
+    "Database",
+    "Web",
+    "Image",
 ]
 
 
@@ -67,6 +70,15 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     # generated pages and the CI drift gate alike. `extract.run_gen_builtins` refuses
     # to run against a default-feature exporter for exactly this reason.
     "curl": ("Network", "Network"),
+    # Prelude-provided and name-resolver-rewritten surfaces (contracts seeded from the
+    # built prelude declarations and PHP's own date/calendar signatures).
+    "date": ("Date", "Date"),
+    "calendar": ("Date", "Calendar"),
+    "mysqli": ("Database", "mysqli"),
+    "pdo": ("Database", "PDO"),
+    "web": ("Web", "Web"),
+    "image": ("Image", "Image"),
+    "opcache": ("Misc", "OPcache"),
 }
 
 
@@ -808,6 +820,12 @@ class Builtin:
     aot_support: Optional[dict] = None
     # True when only the eval interpreter exposes this builtin (no AOT support).
     eval_only: bool = False
+    # PHP module (php-src extension) owning the name per the shared contract, e.g.
+    # "standard", "curl", or "elephc" for elephc-only surfaces.
+    module: str = "elephc"
+    # First PHP minor that ships the name ("8.5"), or None when every supported
+    # profile has it.
+    since: Optional[str] = None
     # True for elephc extensions with no PHP equivalent (ptr_*, buffer_*,
     # class_attribute_*); `--strict-php` hides them from user programs.
     is_extension: bool = False
