@@ -401,7 +401,9 @@ compile-time constant, so it is unchanged by `curl_setopt($ch, CURLOPT_CAINFO,
 
 ## The function and class surface
 
-Every function PHP 8.5 exposes is implemented:
+All 35 functions PHP 8.5 exposes are implemented. 34 of them carry a shared contract
+and appear in the generated reference and the compatibility table; `curl_file_create`
+is a plain prelude alias of the `CURLFile` constructor with no contract of its own:
 
 | Group | Functions |
 |---|---|
