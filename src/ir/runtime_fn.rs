@@ -585,6 +585,7 @@ pub enum RuntimeFnId {
     Long2ip,
     Ltrim,
     MbEregMatch,
+    MbStrimwidth,
     MbStrlen,
     Md5,
     NumberFormat,
@@ -1128,6 +1129,11 @@ impl RuntimeFnId {
             | RuntimeFnId::ChunkSplit
             | RuntimeFnId::ParseUrl
             | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
+            RuntimeFnId::MbStrimwidth => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::MAY_THROW.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError
@@ -1421,6 +1427,7 @@ impl RuntimeFnId {
             | RuntimeFnId::IconvStrrpos
             | RuntimeFnId::IconvSubstr
             | RuntimeFnId::Md5
+            | RuntimeFnId::MbStrimwidth
             | RuntimeFnId::Sha1
             | RuntimeFnId::StreamSocketEnableCrypto => MonitoringPolicy::GenericTiming,
             _ => MonitoringPolicy::Unspecified,
@@ -1987,6 +1994,7 @@ impl RuntimeFnId {
                 // release of an owned `$replacement` argument, so `array_splice($a, 1, 2, [9])`
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
+                | RuntimeFnId::MbStrimwidth
                 | RuntimeFnId::ZvalUnpack
         ) {
             BuiltinResultOwnership::Fresh
@@ -2461,6 +2469,7 @@ impl RuntimeFnId {
             RuntimeFnId::Long2ip => "long2ip",
             RuntimeFnId::Ltrim => "ltrim",
             RuntimeFnId::MbEregMatch => "mb_ereg_match",
+            RuntimeFnId::MbStrimwidth => "mb_strimwidth",
             RuntimeFnId::MbStrlen => "mb_strlen",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",

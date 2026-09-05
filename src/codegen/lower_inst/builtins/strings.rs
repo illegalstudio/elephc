@@ -26,6 +26,7 @@ use super::{
 mod common;
 mod compression;
 mod hash;
+mod mb;
 mod network;
 mod parse_url;
 mod printf;
@@ -64,6 +65,7 @@ pub(crate) use hash::{
     lower_hash_final, lower_hash_hmac, lower_hash_init, lower_hash_update, lower_mb_strlen,
     lower_md5, lower_sha1,
 };
+pub(crate) use mb::lower_mb_strimwidth;
 pub(crate) use network::{lower_inet, lower_ip2long, lower_long2ip};
 pub(crate) use parse_url::lower_parse_url;
 pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprintf};

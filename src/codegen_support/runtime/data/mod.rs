@@ -219,3 +219,12 @@ pub(crate) const HASH_COPY_FINALIZED_CTX_MSG: &str =
 /// Catchable `\ValueError` message when `mb_strlen()` receives an unknown encoding name.
 pub(crate) const MB_STRLEN_UNKNOWN_ENCODING_MSG: &str =
     "mb_strlen(): Argument #2 ($encoding) must be a valid encoding";
+/// Catchable `\ValueError` message when `mb_strimwidth()` receives an unknown encoding name.
+pub(crate) const MB_STRIMWIDTH_UNKNOWN_ENCODING_MSG: &str =
+    "mb_strimwidth(): Argument #5 ($encoding) must be a valid encoding";
+/// Catchable `\ValueError` message when `mb_strimwidth()` `$start` is outside the string.
+pub(crate) const MB_STRIMWIDTH_START_RANGE_MSG: &str =
+    "mb_strimwidth(): Argument #2 ($start) is out of range";
+/// Catchable `\ValueError` message when a negative `mb_strimwidth()` `$width` underflows.
+pub(crate) const MB_STRIMWIDTH_WIDTH_RANGE_MSG: &str =
+    "mb_strimwidth(): Argument #3 ($width) is out of range";
