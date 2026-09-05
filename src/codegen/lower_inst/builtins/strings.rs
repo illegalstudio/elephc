@@ -62,7 +62,7 @@ pub(crate) use compression::{
 pub(crate) use hash::{
     lower_crc32, lower_hash, lower_hash_algos, lower_hash_copy, lower_hash_equals,
     lower_hash_final, lower_hash_hmac, lower_hash_init, lower_hash_update, lower_mb_strlen,
-    lower_md5, lower_sha1,
+    lower_mb_strtoupper, lower_md5, lower_sha1,
 };
 pub(crate) use network::{lower_inet, lower_ip2long, lower_long2ip};
 pub(crate) use parse_url::lower_parse_url;

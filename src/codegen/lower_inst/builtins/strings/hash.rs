@@ -180,6 +180,32 @@ pub(crate) fn lower_mb_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Lowers `mb_strtoupper(string, encoding = null)` through the multibyte runtime helper.
+///
+/// Argument materialization matches `mb_strlen()`: omitted/null encodings use a null pointer
+/// plus zero length so the helper can apply UTF-8 full case mapping.
+pub(crate) fn lower_mb_strtoupper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, "mb_strtoupper", 1, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "mb_strtoupper", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the source string while loading the optional encoding
+            load_optional_mb_strlen_encoding(ctx, inst, "x3", "x4")?;
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the source string for the runtime helper
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "mb_strtoupper", "rax", "rdx")?;
+            ctx.emitter.instruction("push rax");                                // preserve the source string pointer while loading the optional encoding
+            ctx.emitter.instruction("push rdx");                                // preserve the source string length while loading the optional encoding
+            load_optional_mb_strlen_encoding(ctx, inst, "r8", "r9")?;
+            ctx.emitter.instruction("pop rdx");                                 // restore the source string length for the runtime helper
+            ctx.emitter.instruction("pop rax");                                 // restore the source string pointer for the runtime helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mb_strtoupper");
+    store_if_result(ctx, inst)
+}
+
 /// Loads the nullable optional `mb_strlen()` encoding into a pointer/length pair.
 pub(super) fn load_optional_mb_strlen_encoding(
     ctx: &mut FunctionContext<'_>,

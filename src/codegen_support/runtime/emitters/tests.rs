@@ -71,6 +71,26 @@ fn test_runtime_can_gate_mb_strlen_helper() {
     assert!(included.output().contains("__rt_mb_strlen:"));
 }
 
+/// Verifies `__rt_mb_strtoupper` is omitted unless the program uses `mb_strtoupper()`.
+#[test]
+fn test_mb_strtoupper_runtime_is_feature_gated() {
+    let target = Target::new(Platform::MacOS, Arch::AArch64);
+    let mut omitted = Emitter::new(target);
+    emit_runtime(&mut omitted, RuntimeFeatures::none());
+    assert!(!omitted.output().contains("__rt_mb_strtoupper:"));
+
+    let mut included = Emitter::new(target);
+    emit_runtime(
+        &mut included,
+        RuntimeFeatures {
+            mb_strtoupper: true,
+            ..RuntimeFeatures::none()
+        },
+    );
+    assert!(included.output().contains("__rt_mb_strtoupper:"));
+    assert!(included.output().contains("__rt_mb_case_upper:"));
+}
+
 /// Verifies that Linux x86_64 uses the shared runtime surface.
 #[test]
 fn test_linux_x86_64_runtime_uses_shared_surface() {
