@@ -608,7 +608,7 @@ fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
 /// The renderers walk a dense indexed payload, so a hash operand is converted through the
 /// same extraction `array_values()` uses. That copy is a fresh owned array, which is why the
 /// caller has to release it once the join has read it.
-fn implode_hash_value_type(
+pub(super) fn implode_hash_value_type(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
     array_index: usize,

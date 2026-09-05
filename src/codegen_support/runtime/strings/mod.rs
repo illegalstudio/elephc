@@ -74,6 +74,7 @@ mod ip2long;
 mod long2ip;
 mod htmlspecialchars;
 mod html_entity_decode;
+mod strip_tags;
 mod urlencode;
 mod urldecode;
 mod rawurlencode;
@@ -236,6 +237,8 @@ pub use long2ip::emit_long2ip;
 pub use htmlspecialchars::emit_htmlspecialchars;
 /// Emit HTML special characters escaping.
 pub use html_entity_decode::emit_html_entity_decode;
+/// Emit PHP `strip_tags()` helper.
+pub use strip_tags::emit_strip_tags;
 /// Emit HTML entity decode helper.
 pub use urlencode::emit_urlencode;
 /// Emit URL encoding helper.
