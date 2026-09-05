@@ -37,6 +37,7 @@ mod linker;
 mod lexer;
 mod list_id_prelude;
 mod magic_constants;
+mod mb_case;
 mod name_resolver;
 #[allow(dead_code, unused_imports)]
 mod native_deps;

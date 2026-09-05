@@ -52,6 +52,8 @@ pub mod lexer;
 pub mod list_id_prelude;
 /// Magic constant substitution.
 pub mod magic_constants;
+/// PHP 8.5 `mb_convert_case()` Unicode case-mapping helpers and property tables.
+pub(crate) mod mb_case;
 /// Curated project-native dependency management and artifact resolution.
 #[doc(hidden)]
 pub mod native_deps;
