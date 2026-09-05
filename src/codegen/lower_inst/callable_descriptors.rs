@@ -24,17 +24,27 @@ pub(super) fn lower_first_class_callable_new(ctx: &mut FunctionContext<'_>, inst
             .sig
             .as_ref()
             .map(|sig| emit_runtime_callable_invoker_inline(ctx, sig, &[]));
-        let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
-            ctx.data,
-            &descriptor.entry_label,
-            Some(&target),
-            descriptor.kind,
-            descriptor.sig.as_ref(),
-            &[],
-            &[],
-            descriptor.invocation,
-            invoker_label.as_deref(),
-        );
+        let descriptor_label = match descriptor.entry_label.as_deref() {
+            Some(entry_label) => {
+                callable_descriptor::static_descriptor_with_optional_invoker_meta(
+                    ctx.data,
+                    entry_label,
+                    Some(&target),
+                    descriptor.kind,
+                    descriptor.sig.as_ref(),
+                    &[],
+                    &[],
+                    descriptor.invocation,
+                    invoker_label.as_deref(),
+                )
+            }
+            None => callable_descriptor::static_only_descriptor(
+                ctx.data,
+                &target,
+                descriptor.kind,
+                descriptor.invocation,
+            ),
+        };
         // `f(...)` produces a Closure in PHP and therefore consumes an object
         // handle, exactly like `function () {}` does. Give it the same runtime
         // descriptor storage so the handle can be bound at creation and returned
@@ -205,4 +215,3 @@ pub(super) fn emit_instance_method_first_class_callable(
     crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter);
     Ok(true)
 }
-

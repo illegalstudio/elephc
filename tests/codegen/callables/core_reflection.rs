@@ -140,3 +140,59 @@ fn test_core_class_introspection_aot_dynamic_invalid_names() {
 get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, string given", "")
     );
 }
+
+/// Verifies `get_class_vars()` uses AOT metadata through CUF, CUFA, and an FCC.
+#[test]
+fn test_core_get_class_vars_aot_callable_forms() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreCallableVars {
+            public int $plain = 7;
+            public array $items = [2, 4];
+            protected string $hidden = "no";
+        }
+        $fromCuf = call_user_func("get_class_vars", "CoreCallableVars");
+        $fromCufa = call_user_func_array("get_class_vars", ["class" => "CoreCallableVars"]);
+        $callback = get_class_vars(...);
+        $fromFcc = $callback("CoreCallableVars");
+        echo $fromCuf["plain"], $fromCuf["items"][1], ":",
+             $fromCufa["plain"], $fromCufa["items"][0], ":",
+             $fromFcc["plain"], $fromFcc["items"][1], ":",
+             isset($fromFcc["hidden"]) ? "bad" : "visible";
+        "#,
+    );
+    assert_eq!(out, "74:72:74:visible");
+}
+
+/// Verifies `get_class_methods()` callable forms preserve dynamic names and live results.
+#[test]
+fn test_core_get_class_methods_aot_callable_forms() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        class CoreCallableMethods {
+            public function alpha(): void {}
+            public static function beta(): void {}
+            private function hidden(): void {}
+        }
+        $name = "CoreCallableMethods";
+        $direct = get_class_methods("CoreCallableMethods");
+        $fromLiteralCuf = call_user_func("get_class_methods", "CoreCallableMethods");
+        $fromDynamicCuf = call_user_func("get_class_methods", $name);
+        $callback = get_class_methods(...);
+        $fromFcc = $callback($name);
+        echo implode(",", $direct), ":", implode(",", $fromLiteralCuf), ":",
+             implode(",", $fromDynamicCuf), ":", implode(",", $fromFcc), "\n";
+        var_export([$direct, $fromLiteralCuf]);
+        "#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(
+        out.stdout,
+        "alpha,beta:alpha,beta:alpha,beta:alpha,beta\narray (\n  0 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n  1 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n)"
+    );
+    assert_eq!(out.stderr, "");
+}
