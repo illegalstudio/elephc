@@ -1,7 +1,8 @@
 //! Purpose:
 //! Canonical contracts for every `ext/curl` global constant (`CURLOPT_*`, `CURLINFO_*`, `CURLE_*`,
 //! ...). GENERATED from the frozen `scripts/docs/curl_surface.json`; the
-//! `curl_constants_match_frozen_surface` test pins the two together. DO NOT HAND-EDIT.
+//! `curl_constants_match_frozen_surface` test in `crate::symbol_registry` pins the two
+//! together in both directions (every name and value). DO NOT HAND-EDIT.
 //!
 //! Called from:
 //! - `crate::symbol_registry` for validation and lookup.
@@ -10,9 +11,8 @@
 //! Key details:
 //! - Entries are sorted by exact name; the registry rejects any other order.
 //! - Always published, independent of the `curl` feature: constants are values, not calls, and
-//!   PHP programs mention them without linking libcurl (see `elephc::types::curl_constants`
-//!   history). Values are frozen against the pinned libcurl headers; `CURLINFO_LASTONE` is the
-//!   pinned 71 on purpose.
+//!   PHP programs mention them without linking libcurl. Values are frozen against the pinned
+//!   libcurl headers; `CURLINFO_LASTONE` is the pinned 71 on purpose.
 
 use crate::{
     BuiltinId, ConstValue, ConstantContract, ConstantRoute, PhpModule, PhpVersion,

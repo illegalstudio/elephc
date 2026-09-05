@@ -145,6 +145,38 @@ fn constant_index() -> &'static HashMap<&'static str, &'static ConstantContract>
 mod tests {
     use super::*;
 
+    /// Verifies the generated `catalog_constants_curl` table is byte-for-byte the frozen curl
+    /// surface (`scripts/docs/curl_surface.json`): same count, every name, every value, in
+    /// both directions. Drift between the two is a test failure, not a silent skew. It lives
+    /// here rather than in the generated file so regenerating the table cannot drop it.
+    #[test]
+    fn curl_constants_match_frozen_surface() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/docs/curl_surface.json");
+        let text = std::fs::read_to_string(path).expect("read scripts/docs/curl_surface.json");
+        let surface: serde_json::Value = serde_json::from_str(&text).expect("surface is JSON");
+        let mut expected: Vec<(String, i64)> = surface["constants"]
+            .as_object()
+            .expect("surface has a constants object")
+            .iter()
+            .map(|(name, value)| (name.clone(), value.as_i64().expect("int constant")))
+            .collect();
+        expected.sort_unstable();
+        let mut actual: Vec<(String, i64)> = crate::catalog_constants_curl::CURL_CONSTANTS
+            .iter()
+            .map(|constant| match constant.value {
+                crate::ConstValue::Int(value) => (constant.name.to_string(), value),
+                other => panic!("{} is not an int: {other:?}", constant.name),
+            })
+            .collect();
+        actual.sort_unstable();
+        assert_eq!(actual.len(), 689, "curl surface size changed; regenerate the table");
+        assert_eq!(actual, expected, "catalog_constants_curl.rs drifted from curl_surface.json");
+        for constant in crate::catalog_constants_curl::CURL_CONSTANTS {
+            assert_eq!(constant.module, crate::PhpModule::Curl, "{}", constant.name);
+            assert!(lookup_constant(constant.name).is_some(), "{} is published", constant.name);
+        }
+    }
+
     /// Verifies both catalogs validate and resolve representative names.
     #[test]
     fn class_and_constant_catalogs_validate_and_resolve() {
