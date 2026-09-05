@@ -361,6 +361,14 @@ pub(crate) fn compile(config: CliConfig) {
     };
     timings.record_since("curl-prelude", phase_started);
 
+    // Inject the Termwind-facing DOM HTML subset only when the program names a
+    // DOM class, so other binaries never carry the HTML walker. This is an
+    // interim prelude (choice B vs draft PR #654's native libxml stack).
+    crate::progress::phase("dom-html-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    timings.record_since("dom-html-prelude", phase_started);
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(
