@@ -56,6 +56,14 @@ macro_rules! param {
             by_ref: false,
         }
     };
+    ($name:literal, ?$ty:ident = $default:expr) => {
+        ParamSpec {
+            name: $name,
+            ty: TypeSpec::Nullable(&TypeSpec::$ty),
+            default: Some($default),
+            by_ref: false,
+        }
+    };
 }
 
 /// Builds one by-reference parameter, optionally with a PHP default.
@@ -72,6 +80,14 @@ macro_rules! by_ref_param {
         ParamSpec {
             name: $name,
             ty: TypeSpec::$ty,
+            default: Some($default),
+            by_ref: true,
+        }
+    };
+    ($name:literal, ?$ty:ident = $default:expr) => {
+        ParamSpec {
+            name: $name,
+            ty: TypeSpec::Nullable(&TypeSpec::$ty),
             default: Some($default),
             by_ref: true,
         }
@@ -150,14 +166,14 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
         "curl_getinfo",
         [
             param!("handle", Mixed),
-            param!("option", Int = DefaultSpec::Null),
+            param!("option", ?Int = DefaultSpec::Null),
         ],
         Mixed,
         "Gets information about the last transfer."
     ),
     curl_surface!(
         "curl_init",
-        [param!("url", Str = DefaultSpec::Null)],
+        [param!("url", ?Str = DefaultSpec::Null)],
         Mixed,
         "Initializes a cURL session."
     ),
@@ -207,7 +223,7 @@ pub(crate) static CURL_CONTRACTS: &[BuiltinContract] = &[
         "curl_multi_info_read",
         [
             param!("multi_handle", Mixed),
-            by_ref_param!("queued_messages", Int = DefaultSpec::Null),
+            by_ref_param!("queued_messages", ?Int = DefaultSpec::Null),
         ],
         Mixed,
         "Gets information about the current transfers."
