@@ -7,6 +7,8 @@
 //! Key details:
 //! - Arguments: `x1`/`x2` string, `x3` mode, `x4`/`x5` optional encoding.
 //! - Result is reserved through `__rt_concat_reserve` and returned in `x1`/`x2`.
+//! - `map_len` at `[x29, #-232]` and the emit index at `[x29, #-228]` are packed
+//!   32-bit slots so a 64-bit store cannot overlap the neighboring word.
 
 use super::{MAX_ENCODING_NAME_LEN, RESERVE_MULTIPLIER};
 use crate::codegen_support::{
@@ -425,7 +427,7 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov w8, #0x03C2");                                     // emit Greek final sigma
     emitter.instruction("str w8, [x29, #-244]");                                // store the mapped code
     emitter.instruction("mov x8, #1");                                          // one output code point
-    emitter.instruction("str x8, [x29, #-232]");                                // persist map_len
+    emitter.instruction("str w8, [x29, #-232]");                                // persist map_len
     emitter.instruction("b __rt_mb_cc_emit_mapped");                            // encode the final sigma
 
     emitter.label("__rt_mb_cc_map");
@@ -447,7 +449,7 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mb_cc_simple_lookup");                         // x0 = mapped or original code
     emitter.instruction("str w0, [x29, #-244]");                                // store the single mapped code
     emitter.instruction("mov x8, #1");                                          // one output code point
-    emitter.instruction("str x8, [x29, #-232]");                                // persist map_len
+    emitter.instruction("str w8, [x29, #-232]");                                // persist map_len
     emitter.instruction("b __rt_mb_cc_emit_mapped");                            // encode the mapped scalar
 
     emitter.label("__rt_mb_cc_map_full_fold");
@@ -459,7 +461,7 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mb_cc_simple_lookup");                         // x0 = mapped or original code
     emitter.instruction("str w0, [x29, #-244]");                                // store the single mapped code
     emitter.instruction("mov x8, #1");                                          // one output code point
-    emitter.instruction("str x8, [x29, #-232]");                                // persist map_len
+    emitter.instruction("str w8, [x29, #-232]");                                // persist map_len
     emitter.instruction("b __rt_mb_cc_emit_mapped");                            // encode the mapped scalar
 
     emitter.label("__rt_mb_cc_map_full_upper");
@@ -471,7 +473,7 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mb_cc_simple_lookup");                         // x0 = mapped or original code
     emitter.instruction("str w0, [x29, #-244]");                                // store the single mapped code
     emitter.instruction("mov x8, #1");                                          // one output code point
-    emitter.instruction("str x8, [x29, #-232]");                                // persist map_len
+    emitter.instruction("str w8, [x29, #-232]");                                // persist map_len
     emitter.instruction("b __rt_mb_cc_emit_mapped");                            // encode the mapped scalar
 
     emitter.label("__rt_mb_cc_map_full_title");
@@ -486,7 +488,7 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mb_cc_simple_lookup");                         // x0 = mapped or original code
     emitter.instruction("str w0, [x29, #-244]");                                // store the single mapped code
     emitter.instruction("mov x8, #1");                                          // one output code point
-    emitter.instruction("str x8, [x29, #-232]");                                // persist map_len
+    emitter.instruction("str w8, [x29, #-232]");                                // persist map_len
     emitter.instruction("b __rt_mb_cc_emit_mapped");                            // encode the mapped scalar
 
     emitter.label("__rt_mb_cc_map_simple");
@@ -511,14 +513,14 @@ fn emit_apply_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mb_cc_simple_lookup");                         // x0 = mapped or original code
     emitter.instruction("str w0, [x29, #-244]");                                // store the single mapped code
     emitter.instruction("mov x8, #1");                                          // one output code point
-    emitter.instruction("str x8, [x29, #-232]");                                // persist map_len
+    emitter.instruction("str w8, [x29, #-232]");                                // persist map_len
 
     emitter.label("__rt_mb_cc_emit_mapped");
     emitter.instruction("str wzr, [x29, #-228]");                               // output-code index starts at zero
     emitter.label("__rt_mb_cc_emit_mapped_loop");
     emitter.instruction("ldr w8, [x29, #-228]");                                // reload the output-code index
-    emitter.instruction("ldr x9, [x29, #-232]");                                // reload map_len
-    emitter.instruction("cmp x8, x9");                                          // emitted every mapped code point?
+    emitter.instruction("ldr w9, [x29, #-232]");                                // reload map_len
+    emitter.instruction("cmp w8, w9");                                          // emitted every mapped code point?
     emitter.instruction("b.hs __rt_mb_cc_update_title");                        // update title state after encoding
     emitter.instruction("sub x10, x29, #244");                                  // point at map0
     emitter.instruction("ldr w0, [x10, x8, lsl #2]");                           // load the next mapped code point
@@ -682,7 +684,7 @@ fn emit_table_helpers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mb_cc_full_loop");                              // continue the search
     emitter.label("__rt_mb_cc_full_hit");
     emitter.instruction("ldr w0, [x5, #4]");                                    // load the expansion length
-    emitter.instruction("str x0, [x29, #-232]");                                // store map_len
+    emitter.instruction("str w0, [x29, #-232]");                                // store map_len
     emitter.instruction("ldr w6, [x5, #8]");                                    // load mapped code 0
     emitter.instruction("str w6, [x29, #-244]");                                // store map0
     emitter.instruction("ldr w6, [x5, #12]");                                   // load mapped code 1

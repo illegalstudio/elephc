@@ -7,6 +7,8 @@
 //! Key details:
 //! - Arguments: `rax`/`rdx` string, `rdi` mode, `r8`/`r9` optional encoding.
 //! - Result is reserved through `__rt_concat_reserve` and published with `__rt_concat_publish`.
+//! - `map_len` at `[rbp-232]` and the emit index at `[rbp-228]` are packed 32-bit
+//!   slots so a 64-bit store cannot overlap the neighboring word.
 
 use super::{MAX_ENCODING_NAME_LEN, RESERVE_MULTIPLIER};
 use crate::codegen_support::{
@@ -433,7 +435,7 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // is this the last cased letter in the word?
     emitter.instruction("jz __rt_mb_cc_map_x86");                               // a later cased letter keeps capital/lowercase mapping
     emitter.instruction("mov DWORD PTR [rbp - 244], 0x03C2");                   // emit Greek final sigma
-    emitter.instruction("mov QWORD PTR [rbp - 232], 1");                        // one output code point
+    emitter.instruction("mov DWORD PTR [rbp - 232], 1");                        // one output code point
     emitter.instruction("jmp __rt_mb_cc_emit_mapped_x86");                      // encode the final sigma
 
     emitter.label("__rt_mb_cc_map_x86");
@@ -457,7 +459,7 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 80]");                       // fall back to the 1:1 lowercase table
     emitter.instruction("call __rt_mb_cc_simple_lookup_x86");                   // rax = mapped or original code
     emitter.instruction("mov DWORD PTR [rbp - 244], eax");                      // store the single mapped code
-    emitter.instruction("mov QWORD PTR [rbp - 232], 1");                        // one output code point
+    emitter.instruction("mov DWORD PTR [rbp - 232], 1");                        // one output code point
     emitter.instruction("jmp __rt_mb_cc_emit_mapped_x86");                      // encode the mapped scalar
 
     emitter.label("__rt_mb_cc_map_full_fold_x86");
@@ -470,7 +472,7 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 80]");                       // fold falls back to 1:1 lowercase
     emitter.instruction("call __rt_mb_cc_simple_lookup_x86");                   // rax = mapped or original code
     emitter.instruction("mov DWORD PTR [rbp - 244], eax");                      // store the single mapped code
-    emitter.instruction("mov QWORD PTR [rbp - 232], 1");                        // one output code point
+    emitter.instruction("mov DWORD PTR [rbp - 232], 1");                        // one output code point
     emitter.instruction("jmp __rt_mb_cc_emit_mapped_x86");                      // encode the mapped scalar
 
     emitter.label("__rt_mb_cc_map_full_upper_x86");
@@ -483,7 +485,7 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 80]");                       // fall back to the 1:1 uppercase table
     emitter.instruction("call __rt_mb_cc_simple_lookup_x86");                   // rax = mapped or original code
     emitter.instruction("mov DWORD PTR [rbp - 244], eax");                      // store the single mapped code
-    emitter.instruction("mov QWORD PTR [rbp - 232], 1");                        // one output code point
+    emitter.instruction("mov DWORD PTR [rbp - 232], 1");                        // one output code point
     emitter.instruction("jmp __rt_mb_cc_emit_mapped_x86");                      // encode the mapped scalar
 
     emitter.label("__rt_mb_cc_map_full_title_x86");
@@ -498,7 +500,7 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 80]");                       // fall back to the 1:1 titlecase table
     emitter.instruction("call __rt_mb_cc_simple_lookup_x86");                   // rax = mapped or original code
     emitter.instruction("mov DWORD PTR [rbp - 244], eax");                      // store the single mapped code
-    emitter.instruction("mov QWORD PTR [rbp - 232], 1");                        // one output code point
+    emitter.instruction("mov DWORD PTR [rbp - 232], 1");                        // one output code point
     emitter.instruction("jmp __rt_mb_cc_emit_mapped_x86");                      // encode the mapped scalar
 
     emitter.label("__rt_mb_cc_map_simple_x86");
@@ -525,17 +527,17 @@ fn emit_apply_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, DWORD PTR [rbp - 80]");                       // look up the 1:1 mapping
     emitter.instruction("call __rt_mb_cc_simple_lookup_x86");                   // rax = mapped or original code
     emitter.instruction("mov DWORD PTR [rbp - 244], eax");                      // store the single mapped code
-    emitter.instruction("mov QWORD PTR [rbp - 232], 1");                        // one output code point
+    emitter.instruction("mov DWORD PTR [rbp - 232], 1");                        // one output code point
 
     emitter.label("__rt_mb_cc_emit_mapped_x86");
-    emitter.instruction("mov QWORD PTR [rbp - 228], 0");                        // output-code index starts at zero
+    emitter.instruction("mov DWORD PTR [rbp - 228], 0");                        // output-code index starts at zero
     emitter.label("__rt_mb_cc_emit_mapped_loop_x86");
-    emitter.instruction("mov r11, QWORD PTR [rbp - 228]");                      // reload the output-code index
-    emitter.instruction("cmp r11, QWORD PTR [rbp - 232]");                      // emitted every mapped code point?
+    emitter.instruction("mov r11d, DWORD PTR [rbp - 228]");                     // reload the output-code index
+    emitter.instruction("cmp r11d, DWORD PTR [rbp - 232]");                     // emitted every mapped code point?
     emitter.instruction("jae __rt_mb_cc_update_title_x86");                     // update title state after encoding
     emitter.instruction("mov edi, DWORD PTR [rbp - 244 + r11 * 4]");            // load the next mapped code point
     emitter.instruction("call __rt_mb_cc_encode_x86");                          // write UTF-8 or a Latin-1 byte
-    emitter.instruction("inc QWORD PTR [rbp - 228]");                           // advance the output-code index
+    emitter.instruction("inc DWORD PTR [rbp - 228]");                           // advance the output-code index
     emitter.instruction("jmp __rt_mb_cc_emit_mapped_loop_x86");                 // encode the remaining mapped codes
 
     emitter.label("__rt_mb_cc_update_title_x86");
@@ -691,7 +693,7 @@ fn emit_table_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mb_cc_full_loop_x86");                        // continue the search
     emitter.label("__rt_mb_cc_full_hit_x86");
     emitter.instruction("mov eax, DWORD PTR [rsi + r9 + 4]");                   // load the expansion length
-    emitter.instruction("mov QWORD PTR [rbp - 232], rax");                      // store map_len
+    emitter.instruction("mov DWORD PTR [rbp - 232], eax");                      // store map_len
     emitter.instruction("mov r10d, DWORD PTR [rsi + r9 + 8]");                  // load mapped code 0
     emitter.instruction("mov DWORD PTR [rbp - 244], r10d");                     // store map0
     emitter.instruction("mov r10d, DWORD PTR [rsi + r9 + 12]");                 // load mapped code 1
