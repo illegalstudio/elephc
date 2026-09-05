@@ -265,6 +265,7 @@ fn eval_mb_strimwidth_encoding_error<T>(
 }
 
 /// Failures that PHP 8.5 reports as argument `ValueError`s for `mb_strimwidth()`.
+#[derive(Debug)]
 enum MbStrimwidthError {
     StartOutOfRange,
     WidthOutOfRange,

@@ -289,7 +289,7 @@ fn emit_mb_strimwidth_walkers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // character count starts at zero
     emitter.label("__rt_mb_strimwidth_count_loop");
     emitter.instruction("cmp x3, x4");                                          // scanned every byte?
-    emitter.instruction("b.hs __rt_mb_strimwidth_count_done");                   // return the accumulated count
+    emitter.instruction("b.hs __rt_mb_strimwidth_count_done");                  // return the accumulated count
     emitter.instruction("mov x5, x3");                                          // next-char input is the current pointer
     emitter.instruction("mov x6, x4");                                          // next-char end is the one-past-end pointer
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the count and return address
@@ -311,20 +311,20 @@ fn emit_mb_strimwidth_walkers_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #0");                                          // display width starts at zero
     emitter.label("__rt_mb_strimwidth_strwidth_loop");
     emitter.instruction("cmp x3, x4");                                          // scanned every byte?
-    emitter.instruction("b.hs __rt_mb_strimwidth_strwidth_done");                // return the accumulated width
+    emitter.instruction("b.hs __rt_mb_strimwidth_strwidth_done");               // return the accumulated width
     emitter.instruction("mov x5, x3");                                          // next-char input is the current pointer
     emitter.instruction("mov x6, x4");                                          // next-char end is the one-past-end pointer
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the width and return address
-        emitter.instruction("bl __rt_mb_strimwidth_next");                          // x7 = codepoint, x5 advances
-        emitter.instruction("stp x4, x5, [sp, #-16]!");                             // preserve the end pointer and advanced cursor
-        emitter.instruction("mov x0, x7");                                          // look up the consumed character's width
-        emitter.instruction("bl __rt_mb_strimwidth_char_width");                    // x0 = 1 or 2
-        emitter.instruction("mov x8, x0");                                          // stash the character width
-        emitter.instruction("ldp x4, x5, [sp], #16");                               // restore the end pointer and advanced cursor
-        emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the total width and return address
-        emitter.instruction("add x0, x0, x8");                                      // accumulate the character width
-        emitter.instruction("mov x3, x5");                                          // continue after the consumed character
-        emitter.instruction("b __rt_mb_strimwidth_strwidth_loop");                  // keep scanning
+    emitter.instruction("bl __rt_mb_strimwidth_next");                          // x7 = codepoint, x5 advances
+    emitter.instruction("stp x4, x5, [sp, #-16]!");                             // preserve the end pointer and advanced cursor
+    emitter.instruction("mov x0, x7");                                          // look up the consumed character's width
+    emitter.instruction("bl __rt_mb_strimwidth_char_width");                    // x0 = 1 or 2
+    emitter.instruction("mov x8, x0");                                          // stash the character width
+    emitter.instruction("ldp x4, x5, [sp], #16");                               // restore the end pointer and advanced cursor
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the total width and return address
+    emitter.instruction("add x0, x0, x8");                                      // accumulate the character width
+    emitter.instruction("mov x3, x5");                                          // continue after the consumed character
+    emitter.instruction("b __rt_mb_strimwidth_strwidth_loop");                  // keep scanning
     emitter.label("__rt_mb_strimwidth_strwidth_bytes");
     emitter.instruction("mov x0, x1");                                          // byte encodings have width equal to length
     emitter.label("__rt_mb_strimwidth_strwidth_done");
