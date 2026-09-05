@@ -33,7 +33,7 @@
 use crate::parser::ast::{Program, Stmt};
 use crate::php_version::PhpVersion;
 
-mod build;
+pub(crate) mod build;
 #[cfg(test)]
 mod connection;
 #[cfg(test)]

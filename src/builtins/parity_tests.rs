@@ -29,9 +29,9 @@ fn php_visible_extension_builtins() -> Vec<String> {
 
 /// Every injected prelude's declarations, as the AST the pipeline really injects.
 ///
-/// Most are built in Rust. `curl_prelude` and the mysqli fragments still tokenize and
-/// parse PHP text at injection time, so this function parses them exactly as the pipeline
-/// does and keeps both surfaces inside the same structural audits.
+/// All are built in Rust except `curl_prelude`, which still tokenizes and parses PHP text
+/// at injection time; this function parses it exactly as the pipeline does so both kinds of
+/// surface sit inside the same structural audits.
 fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program)> {
     let mut built = vec![
         ("hash_prelude", crate::hash_prelude::hash_declarations()),
@@ -92,21 +92,14 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
     ];
-    // The mysqli prelude is a second bridge surface whose PHP fragments are
-    // parsed (not built as Rust AST like the others), so parse each fragment and
-    // scan it too — the gate must cover mysqli's `__elephc_*` internal-alias
-    // discipline. The shared `elephc_pdo` extern block declares only symbols and
-    // calls nothing, and the PDO build above already carries it, so it needs no
-    // separate entry.
-    for &(name, src) in crate::mysqli_prelude::fragment_sources() {
-        // Fragments carry no `<?php` header (they are concatenated after one in
-        // `source_for_version`), so add it before tokenizing this one on its own.
-        let source = format!("<?php\n{src}");
-        let tokens = crate::lexer::tokenize(&source).expect("mysqli fragment must tokenize");
-        let program =
-            crate::parser::parse_internal(&tokens).expect("mysqli fragment must parse");
-        built.push((name, program));
-    }
+    // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
+    // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`
+    // extern block declares only symbols and calls nothing, and the PDO build above already
+    // carries it, so it needs no separate entry.
+    built.push((
+        "mysqli_prelude",
+        crate::mysqli_prelude::build::mysqli_declarations(crate::php_version::PhpVersion::default()),
+    ));
     built
 }
 
@@ -180,15 +173,14 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
         .collect()
 }
 
-/// The preludes whose PHP-visible surface the shared builtin catalog claims, each with
-/// whether this build's catalog actually publishes that surface.
+/// Every injected prelude, each with whether this build's catalog publishes its PHP surface.
 ///
-/// The curl slice is feature-gated (`catalog_curl.rs`), so with the root `curl` feature
-/// off the catalog does not claim the curl prelude's PHP surface AT ALL and
-/// "declared implies contracted" is simply not an invariant of that configuration —
-/// asserting it there would fail on all thirty-four names for no defect. See
-/// `catalog_hosted_preludes_declare_no_uncontracted_php_function` for why the other
-/// preludes in `prelude_sources` are not in this list in any configuration.
+/// The shared catalog claims every prelude's PHP-visible functions (hash, curl, mysqli, PDO,
+/// web, image, OPcache, tz, var_export, version), so all of them are audited. The one
+/// exception is configuration-bound: the curl slice is feature-gated (`catalog_curl.rs`), so
+/// with the root `curl` feature off the catalog does not claim the curl prelude's surface at
+/// all and "declared implies contracted" is not an invariant of that configuration —
+/// asserting it there would fail on all thirty-four names for no defect.
 fn catalog_hosted_preludes() -> Vec<(&'static str, String, bool)> {
     prelude_sources()
         .into_iter()
@@ -209,7 +201,7 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
      interpreter::builtins::curl module doc. A contract would need an eval binding that \
      does not exist, or an EvalImplementationPending label that would be false because \
      eval() can already call it. Consequence, accepted: the PHP comparison page counts \
-     the curl module 32/33 rather than 33/33.",
+     the curl module 34/35 rather than 35/35.",
 )];
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
@@ -225,9 +217,9 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
 /// model, so a prelude that grows a construct this audit cannot see fails loudly instead of
 /// silently leaving the net.
 ///
-/// `curl_prelude` and the mysqli fragments are parsed rather than built (see
-/// `injected_prelude_programs`); they are audited through the same AST path, because the gate
-/// is about what a prelude CALLS, not about how its declarations were produced.
+/// `curl_prelude` is parsed rather than built (see `injected_prelude_programs`); it is audited
+/// through the same AST path, because the gate is about what a prelude CALLS, not about how
+/// its declarations were produced.
 #[test]
 fn injected_preludes_never_call_php_visible_extension_builtins() {
     let extension_names = php_visible_extension_builtins();
@@ -621,13 +613,12 @@ fn default_text(default: &DefaultSpec) -> String {
 /// invisible to BOTH parity suites and to the generated documentation, because every one
 /// of them iterates `contracts()`. Without this test that omission is silent.
 ///
-/// SCOPE. Only the preludes whose PHP surface the shared catalog claims IN THIS BUILD are
-/// audited (see `catalog_hosted_preludes`). `pdo_prelude`, `tz_prelude`,
-/// `var_export_prelude`, `image_prelude` and `web_prelude` ship PHP-visible functions that
-/// have no shared contracts AT ALL by design (`var_export`, `imagecreate`, `setcookie`,
-/// `session_*`, `pdo_drivers`, `timezone_*` — verified: none of them appears in
-/// `contracts()`), so "declared implies contracted" is simply not their invariant and
-/// asserting it here would be wrong rather than strict.
+/// SCOPE. Every prelude is audited: `var_export`, `imagecreate*`, `setcookie`,
+/// `session_*`, `pdo_drivers`, `timezone_*`, `opcache_*` and the rest all carry shared
+/// `PreludeProvided` contracts now, so "declared implies contracted" holds for each prelude
+/// in `prelude_sources`. The only exclusions are `UNCONTRACTED_PRELUDE_DECLARATIONS` (with a
+/// recorded reason) and the curl prelude in a build whose catalog does not publish the curl
+/// slice (see `catalog_hosted_preludes`).
 #[test]
 fn catalog_hosted_preludes_declare_no_uncontracted_php_function() {
     let mut audited = 0usize;
