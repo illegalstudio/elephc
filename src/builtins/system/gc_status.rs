@@ -5,7 +5,7 @@
 //! - The builtin registry through `crate::builtins::system`.
 //!
 //! Key details:
-//! - Collector counters and timings come from typed GC controls backed by live runtime state.
+//! - Runtime counters, roots, and phase timings are live; unsupported buffer fields are literals.
 //! - The associative array is boxed as Mixed so direct and callable wrappers share one ABI.
 
 use crate::builtins::semantics::{
@@ -48,7 +48,7 @@ const fn status_effects() -> Effects {
     )
 }
 
-/// Builds the complete PHP 8 collector status array and boxes it for the declared Mixed result.
+/// Builds the PHP-shaped collector status array and boxes it for the declared Mixed result.
 fn lower(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,

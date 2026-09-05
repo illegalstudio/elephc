@@ -5,8 +5,8 @@
 //! - Checker, optimizer, ownership, and direct-call EIR specialization through the registry.
 //!
 //! Key details:
-//! - Direct calls, including runtime class-name strings, are materialized from class metadata.
-//! - Runtime-selected callable use is refused because class default expressions need EIR lowering.
+//! - Direct calls, literal `call_user_func` calls, and first-class callables use class metadata.
+//! - Runtime-selected callable targets remain unsupported because they cannot be specialized.
 
 use crate::builtins::semantics::{
     BuiltinArgumentLowering, BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering,
@@ -38,7 +38,7 @@ builtin! {
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: BuiltinArgumentLowering::Standard,
         callable: BuiltinCallablePolicy::StaticOnly(
-            "get_class_vars() requires direct EIR metadata lowering in AOT mode",
+            "get_class_vars() requires a statically resolved callable target in AOT mode",
         ),
         lowering: BuiltinLowering::Eir(lower_unreachable),
     },
@@ -65,12 +65,12 @@ fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
     })
 }
 
-/// Rejects any path that bypassed the direct-call class metadata specialization.
+/// Rejects any path that bypassed the statically resolved class metadata specialization.
 fn lower_unreachable(
     _ctx: &mut dyn BuiltinLoweringContext,
     _call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
     Err(BuiltinLoweringError::new(
-        "get_class_vars() bypassed its literal-class EIR specialization",
+        "get_class_vars() bypassed its statically resolved EIR specialization",
     ))
 }

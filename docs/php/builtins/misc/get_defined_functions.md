@@ -1,6 +1,6 @@
 ---
 title: "get_defined_functions()"
-description: "Returns internal and user-defined function names."
+description: "Returns internal and user-defined function names. Elephc has no disable_functions configuration, so exclude_disabled is accepted but does not change the result."
 sidebar:
   order: 336
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_defined_functions(bool $exclude_disabled = true): array
 ```
 
-Returns internal and user-defined function names.
+Returns internal and user-defined function names. Elephc has no disable_functions configuration, so exclude_disabled is accepted but does not change the result.
 
 **Parameters**:
 - `$exclude_disabled` (`bool`), default `true`, optional
