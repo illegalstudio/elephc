@@ -318,6 +318,24 @@ pub(super) const EVAL_JSON_PRESERVE_ZERO_FRACTION: i64 = 1024;
 pub(super) const EVAL_JSON_INVALID_UTF8_IGNORE: i64 = 1_048_576;
 pub(super) const EVAL_JSON_INVALID_UTF8_SUBSTITUTE: i64 = 2_097_152;
 pub(super) const EVAL_JSON_THROW_ON_ERROR: i64 = 4_194_304;
+/// `XML_SAVE_NO_DECL` — omit the XML declaration from `saveXML()`.
+pub(super) const EVAL_LIBXML_NOXMLDECL: i64 = 2;
+/// `HTML_PARSE_NODEFDTD` — do not add a default doctype.
+pub(super) const EVAL_LIBXML_HTML_NODEFDTD: i64 = 4;
+/// `XML_PARSE_NOERROR` — suppress parser error reports.
+pub(super) const EVAL_LIBXML_NOERROR: i64 = 32;
+/// `XML_PARSE_NOBLANKS` — drop whitespace-only text nodes.
+pub(super) const EVAL_LIBXML_NOBLANKS: i64 = 256;
+/// `XML_PARSE_COMPACT` — compact small text nodes.
+pub(super) const EVAL_LIBXML_COMPACT: i64 = 65536;
+/// Termwind-facing `LIBXML_*` flags, shared with the AOT `LIBXML_INT_CONSTANTS` table.
+pub(super) const EVAL_LIBXML_INT_CONSTANTS: &[(&str, i64)] = &[
+    ("LIBXML_NOXMLDECL", EVAL_LIBXML_NOXMLDECL),
+    ("LIBXML_HTML_NODEFDTD", EVAL_LIBXML_HTML_NODEFDTD),
+    ("LIBXML_NOERROR", EVAL_LIBXML_NOERROR),
+    ("LIBXML_NOBLANKS", EVAL_LIBXML_NOBLANKS),
+    ("LIBXML_COMPACT", EVAL_LIBXML_COMPACT),
+];
 pub(super) const EVAL_JSON_INF_OR_NAN_MESSAGE: &str = "Inf and NaN cannot be JSON encoded";
 pub(super) const EVAL_JSON_UTF8_MESSAGE: &str =
     "Malformed UTF-8 characters, possibly incorrectly encoded";

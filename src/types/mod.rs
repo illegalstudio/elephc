@@ -29,6 +29,8 @@ pub(crate) mod fibers;
 pub(crate) mod date_constants;
 /// `ENT_*` HTML-escaping flag constants shared by checker and codegen.
 pub(crate) mod ent_constants;
+/// Termwind-facing `LIBXML_*` parse/save flag constants shared by checker and codegen.
+pub(crate) mod libxml_constants;
 /// PHP `E_*` error-level integer constants (`error_reporting` bitmask levels).
 pub(crate) mod error_constants;
 /// C FFI type mapping utilities.
