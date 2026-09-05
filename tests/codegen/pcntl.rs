@@ -458,6 +458,52 @@ fn test_pcntl_signal_float_precision_loss_is_deprecated() {
     );
 }
 
+/// Emits cast warnings for non-representable signal floats and both diagnostics for NaN.
+#[test]
+fn test_pcntl_signal_nonrepresentable_float_diagnostics() {
+    let out = compile_and_run_capture(
+        r#"<?php
+        $n = $argc;
+        foreach ([INF * $n, NAN * $n, 1e20 * $n] as $signal) {
+            try { pcntl_sigprocmask(SIG_BLOCK, [$signal]); }
+            catch (ValueError $error) { echo "value|"; }
+        }"#,
+    );
+    assert_eq!(out.stdout, "value|value|value|");
+    assert!(
+        out.stderr
+            .contains("Warning: The float INF is not representable as an int, cast occurred"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains("Warning: The float NAN is not representable as an int, cast occurred"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains("Deprecated: Implicit conversion from float NAN to int loses precision"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains(
+            "Warning: The float 1.0E+20 is not representable as an int, cast occurred"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(out.stderr.matches("Warning: The float ").count(), 3);
+    assert_eq!(
+        out.stderr
+            .matches("Deprecated: Implicit conversion from float ")
+            .count(),
+        1
+    );
+}
+
 /// Throws `TypeError`, rather than a signal-range `ValueError`, for eval nonnumeric strings.
 #[test]
 fn test_pcntl_eval_signal_mask_rejects_nonnumeric_string_with_type_error() {

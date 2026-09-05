@@ -150,7 +150,10 @@ fn emit_float_bits_to_float_result(ctx: &mut FunctionContext<'_>, bits_reg: &str
 /// Truncates the double in the float-result register into the int-result register when it
 /// fits a PHP `int`, or jumps to `fail_label`. The fit test is `ZEND_DOUBLE_FITS_LONG`'s:
 /// ordered (not NaN), `< 2^63`, and `>= -2^63` — `-2^63` itself is representable.
-fn emit_float_result_fits_i64_or_jump(ctx: &mut FunctionContext<'_>, fail_label: &str) {
+pub(in crate::codegen::lower_inst) fn emit_float_result_fits_i64_or_jump(
+    ctx: &mut FunctionContext<'_>,
+    fail_label: &str,
+) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fcmp d0, d0");                             // NaN compares unordered with itself

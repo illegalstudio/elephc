@@ -36,7 +36,7 @@ pub(crate) fn lower_intval_base(ctx: &mut FunctionContext<'_>, inst: &Instructio
     match ctx.value_php_type(value)?.codegen_repr() {
         PhpType::Str => lower_intval_base_from_string(ctx, value, base)?,
         PhpType::Mixed => lower_intval_base_from_mixed(ctx, value, base)?,
-        _ => super::strings::load_as_int(ctx, value, "intval")?,
+        _ => super::strings::load_as_explicit_int(ctx, value, "intval")?,
     }
     store_if_result(ctx, inst)
 }
@@ -197,7 +197,7 @@ fn emit_settype_int_conversion(ctx: &mut FunctionContext<'_>, value: ValueId) ->
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
-            abi::emit_float_result_to_int_result(ctx.emitter);
+            super::strings::emit_explicit_float_result_to_int(ctx);
         }
         PhpType::Str => {
             ctx.load_value_to_result(value)?;

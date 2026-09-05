@@ -360,6 +360,53 @@ var_dump(intval($text, base: 16));
     );
 }
 
+/// Keeps explicit two-argument `intval()` silent for an in-range fractional float.
+#[test]
+fn test_intval_base_float_is_explicit_and_not_deprecated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$f = (0.1 + 0.2) * $argc;
+var_dump(intval($f, 8));
+"#,
+    );
+    assert_eq!(out.stdout, "int(0)\n");
+    assert_eq!(out.stderr, "");
+}
+
+/// Warns for non-representable explicit float casts without precision deprecations.
+#[test]
+fn test_explicit_float_to_int_warns_when_not_representable() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$n = $argc;
+foreach ([INF * $n, NAN * $n, 1e20 * $n] as $value) {
+    var_dump((int)$value);
+}
+"#,
+    );
+    assert_eq!(out.stdout, "int(0)\nint(0)\nint(7766279631452241920)\n");
+    assert!(
+        out.stderr
+            .contains("Warning: The float INF is not representable as an int, cast occurred"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains("Warning: The float NAN is not representable as an int, cast occurred"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains(
+            "Warning: The float 1.0E+20 is not representable as an int, cast occurred"
+        ),
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("Deprecated:"), "{}", out.stderr);
+}
+
 /// Verifies several `(string)` casts of a boxed `mixed` agree with PHP across every payload
 /// kind, including two different classes reached through `__toString`.
 ///

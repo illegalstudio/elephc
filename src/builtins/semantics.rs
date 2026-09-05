@@ -624,10 +624,7 @@ pub fn lower_registry_call(
         arg_types: &arg_types,
         span,
     };
-    let effects = match def.spec.semantics.effects {
-        BuiltinEffects::Static(effects) => effects,
-        BuiltinEffects::Shared(resolve) => resolve(&semantic_input),
-    };
+    let effects = resolve_builtin_effects(def, &semantic_input);
     let resolved_result_type = match def.spec.semantics.result_type {
         BuiltinResultType::Checked => result_type.clone(),
         BuiltinResultType::Declared => def.return_type.clone(),
@@ -656,6 +653,63 @@ pub fn lower_registry_call(
             effects,
             Some(span),
         )),
+    }
+}
+
+/// Resolves a builtin's declared effects and adds weak float-to-int diagnostics.
+pub fn resolve_builtin_effects(
+    def: &crate::builtins::registry::BuiltinDef,
+    input: &BuiltinSemanticInput<'_>,
+) -> Effects {
+    let mut effects = match def.spec.semantics.effects {
+        BuiltinEffects::Static(effects) => effects,
+        BuiltinEffects::Shared(resolve) => resolve(input),
+    };
+    let weak_float_int = def
+        .params
+        .iter()
+        .zip(input.arg_types.iter())
+        .enumerate()
+        .any(|(index, ((_, expected), actual))| {
+            php_type_accepts_int(expected)
+                && (php_type_may_be_float(actual)
+                    || input
+                        .args
+                        .get(index)
+                        .is_some_and(|arg| !expr_is_definitely_non_float(arg)))
+        });
+    if weak_float_int {
+        effects |= Effects::MAY_WARN | Effects::MAY_THROW;
+    }
+    effects
+}
+
+/// Returns whether an optimizer expression is certainly unable to produce a float.
+fn expr_is_definitely_non_float(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        crate::parser::ast::ExprKind::StringLiteral(_)
+            | crate::parser::ast::ExprKind::IntLiteral(_)
+            | crate::parser::ast::ExprKind::BoolLiteral(_)
+            | crate::parser::ast::ExprKind::Null
+    )
+}
+
+/// Returns whether a declared builtin parameter accepts an integer.
+fn php_type_accepts_int(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int => true,
+        PhpType::Union(members) => members.iter().any(php_type_accepts_int),
+        _ => false,
+    }
+}
+
+/// Returns whether an inferred argument can reach weak integer coercion as a float.
+fn php_type_may_be_float(ty: &PhpType) -> bool {
+    match ty.codegen_repr() {
+        PhpType::Float | PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(php_type_may_be_float),
+        _ => false,
     }
 }
 

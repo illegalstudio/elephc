@@ -10,6 +10,7 @@
 use super::*;
 
 const FLOAT_TO_INT_BITS_OFFSET: usize = 0;
+const FLOAT_TO_INT_VALUE_OFFSET: usize = 8;
 const FLOAT_TO_INT_FRAME_BYTES: usize = 16;
 const MIXED_TO_INT_CELL_OFFSET: usize = 0;
 const MIXED_TO_INT_FRAME_BYTES: usize = 16;
@@ -210,65 +211,232 @@ pub(super) fn load_as_float(ctx: &mut FunctionContext<'_>, value: ValueId, name:
     }
 }
 
-/// Truncates the float result to int and emits PHP's precision-loss deprecation when needed.
-pub(crate) fn emit_float_result_to_int_with_precision_deprecation(
+/// Converts a weak builtin float argument to int with PHP's diagnostics.
+pub(crate) fn emit_weak_float_result_to_int(
     ctx: &mut FunctionContext<'_>,
+    context: &str,
 ) {
+    let invalid = ctx.next_label("weak_float_to_int_invalid");
+    let exact = ctx.next_label("weak_float_to_int_exact");
     let done = ctx.next_label("weak_float_to_int_done");
     abi::emit_reserve_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    save_float_result_bits(ctx);
+    super::super::super::mixed_narrowing::emit_float_result_fits_i64_or_jump(ctx, &invalid);
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        FLOAT_TO_INT_VALUE_OFFSET,
+    );
+    restore_float_result_bits(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("fmov x9, d0");                             // preserve the exact float bits across diagnostic helpers
-            abi::emit_store_to_sp(ctx.emitter, "x9", FLOAT_TO_INT_BITS_OFFSET);
-            ctx.emitter.instruction("fcvtzs x10, d0");                          // truncate the weak integer argument toward zero
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", FLOAT_TO_INT_VALUE_OFFSET);
             ctx.emitter.instruction("scvtf d1, x10");                           // reconstruct the truncated value for an exactness check
             ctx.emitter.instruction("fcmp d0, d1");                             // detect fractional precision loss
-            ctx.emitter.instruction(&format!("b.eq {done}"));                   // integral floats require no deprecation
+            ctx.emitter.instruction(&format!("b.eq {exact}"));                  // integral floats require no deprecation
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("movq r10, xmm0");                          // preserve the exact float bits across diagnostic helpers
-            abi::emit_store_to_sp(ctx.emitter, "r10", FLOAT_TO_INT_BITS_OFFSET);
-            ctx.emitter.instruction("cvttsd2si r11, xmm0");                     // truncate the weak integer argument toward zero
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", FLOAT_TO_INT_VALUE_OFFSET);
             ctx.emitter.instruction("cvtsi2sd xmm1, r11");                      // reconstruct the truncated value for an exactness check
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // detect fractional precision loss
-            ctx.emitter.instruction(&format!("je {done}"));                     // integral floats require no deprecation
+            ctx.emitter.instruction(&format!("jp {invalid}"));                  // keep unordered values out of the equality branch
+            ctx.emitter.instruction(&format!("je {exact}"));                    // integral floats require no deprecation
         }
     }
-    emit_static_int_coercion_diagnostic(ctx, "Deprecated: Implicit conversion from float ");
+    emit_float_precision_deprecation(ctx);
+    ctx.emitter.label(&exact);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        FLOAT_TO_INT_VALUE_OFFSET,
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    super::super::super::exceptions::emit_type_error(
+        ctx,
+        &weak_float_type_error_message(context),
+    );
+    ctx.emitter.label(&done);
+}
+
+/// Converts an explicit float cast while warning for values outside the PHP int range.
+pub(crate) fn emit_explicit_float_result_to_int(ctx: &mut FunctionContext<'_>) {
+    emit_nonweak_float_result_to_int(ctx, false, false);
+}
+
+/// Converts a signal-set float with PHP's cast and precision diagnostics.
+pub(crate) fn emit_signal_float_result_to_int(ctx: &mut FunctionContext<'_>) {
+    emit_nonweak_float_result_to_int(ctx, true, true);
+}
+
+/// Converts a non-weak float, selecting whether fractional and NaN precision diagnostics apply.
+fn emit_nonweak_float_result_to_int(
+    ctx: &mut FunctionContext<'_>,
+    deprecate_fraction: bool,
+    deprecate_nan: bool,
+) {
+    let invalid = ctx.next_label("cast_float_to_int_invalid");
+    let exact = ctx.next_label("cast_float_to_int_exact");
+    let invalid_done = ctx.next_label("cast_float_to_int_invalid_done");
+    let done = ctx.next_label("cast_float_to_int_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    save_float_result_bits(ctx);
+    super::super::super::mixed_narrowing::emit_float_result_fits_i64_or_jump(ctx, &invalid);
+    abi::emit_store_to_sp(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        FLOAT_TO_INT_VALUE_OFFSET,
+    );
+    if deprecate_fraction {
+        restore_float_result_bits(ctx);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", FLOAT_TO_INT_VALUE_OFFSET);
+                ctx.emitter.instruction("scvtf d1, x10");                       // reconstruct the truncated signal for an exactness check
+                ctx.emitter.instruction("fcmp d0, d1");                         // detect fractional precision loss
+                ctx.emitter.instruction(&format!("b.eq {exact}"));              // integral finite values need no deprecation
+            }
+            Arch::X86_64 => {
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", FLOAT_TO_INT_VALUE_OFFSET);
+                ctx.emitter.instruction("cvtsi2sd xmm1, r11");                  // reconstruct the truncated signal for an exactness check
+                ctx.emitter.instruction("ucomisd xmm0, xmm1");                  // detect fractional precision loss
+                ctx.emitter.instruction(&format!("jp {invalid}"));              // keep NaN on the non-representable path
+                ctx.emitter.instruction(&format!("je {exact}"));                // integral finite values need no deprecation
+            }
+        }
+        emit_float_precision_deprecation(ctx);
+    }
+    ctx.emitter.label(&exact);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        FLOAT_TO_INT_VALUE_OFFSET,
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&invalid);
+    emit_float_not_representable_warning(ctx);
+    if deprecate_nan {
+        restore_float_result_bits(ctx);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("fcmp d0, d0");                         // only NaN receives the additional precision deprecation
+                ctx.emitter.instruction(&format!("b.vc {invalid_done}"));       // ordered infinities and extremes skip it
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("ucomisd xmm0, xmm0");                  // only NaN receives the additional precision deprecation
+                ctx.emitter.instruction(&format!("jnp {invalid_done}"));        // ordered infinities and extremes skip it
+            }
+        }
+        emit_float_precision_deprecation(ctx);
+    }
+    ctx.emitter.label(&invalid_done);
+    restore_float_result_bits(ctx);
+    abi::emit_float_result_to_int_result(ctx.emitter);
+    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    ctx.emitter.label(&done);
+}
+
+/// Saves the exact float result bits in the conversion scratch frame.
+fn save_float_result_bits(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("fmov x9, d0");                             // preserve the exact float bits across diagnostics
+            abi::emit_store_to_sp(ctx.emitter, "x9", FLOAT_TO_INT_BITS_OFFSET);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("movq r10, xmm0");                          // preserve the exact float bits across diagnostics
+            abi::emit_store_to_sp(ctx.emitter, "r10", FLOAT_TO_INT_BITS_OFFSET);
+        }
+    }
+}
+
+/// Restores the exact saved float bits into the target float result register.
+fn restore_float_result_bits(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", FLOAT_TO_INT_BITS_OFFSET);
-            ctx.emitter.instruction("fmov d0, x9");                             // restore the original float for PHP display formatting
-            abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+            ctx.emitter.instruction("fmov d0, x9");                             // restore the original float payload
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", FLOAT_TO_INT_BITS_OFFSET);
-            ctx.emitter.instruction("movq xmm0, r10");                          // restore the original float for PHP display formatting
-            abi::emit_call_label(ctx.emitter, "__rt_ftoa");
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the formatted float pointer to the diagnostic helper
-            ctx.emitter.instruction("mov rsi, rdx");                            // pass the formatted float length to the diagnostic helper
+            ctx.emitter.instruction("movq xmm0, r10");                          // restore the original float payload
         }
+    }
+}
+
+/// Emits PHP's shortest-round-trip precision-loss deprecation for the saved float.
+fn emit_float_precision_deprecation(ctx: &mut FunctionContext<'_>) {
+    emit_static_int_coercion_diagnostic(ctx, "Deprecated: Implicit conversion from float ");
+    emit_saved_float_diagnostic_value(ctx);
+    emit_static_int_coercion_diagnostic(ctx, " to int loses precision\n");
+}
+
+/// Emits PHP's warning for an explicit float value outside the integer range.
+fn emit_float_not_representable_warning(ctx: &mut FunctionContext<'_>) {
+    emit_static_int_coercion_diagnostic(ctx, "Warning: The float ");
+    emit_saved_float_diagnostic_value(ctx);
+    emit_static_int_coercion_diagnostic(ctx, " is not representable as an int, cast occurred\n");
+}
+
+/// Formats the saved float with `__rt_ftoa_repr` and emits it as a diagnostic fragment.
+fn emit_saved_float_diagnostic_value(ctx: &mut FunctionContext<'_>) {
+    restore_float_result_bits(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa_repr");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the formatted float pointer to the diagnostic helper
+        ctx.emitter.instruction("mov rsi, rdx");                                // pass the formatted float length to the diagnostic helper
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
-    emit_static_int_coercion_diagnostic(ctx, " to int loses precision\n");
-    ctx.emitter.label(&done);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", FLOAT_TO_INT_BITS_OFFSET);
-            ctx.emitter.instruction("fmov d0, x9");                             // restore the float after optional diagnostics
-            abi::emit_float_result_to_int_result(ctx.emitter);
-        }
-        Arch::X86_64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", FLOAT_TO_INT_BITS_OFFSET);
-            ctx.emitter.instruction("movq xmm0, r10");                          // restore the float after optional diagnostics
-            abi::emit_float_result_to_int_result(ctx.emitter);
+}
+
+/// Builds the exact weak builtin argument TypeError from the shared builtin contract.
+fn weak_float_type_error_message(context: &str) -> String {
+    let mut words = context.split_whitespace();
+    let function_name = words.next().unwrap_or(context);
+    let hints = words.collect::<Vec<_>>();
+    if let Some(def) = crate::builtins::registry::lookup(function_name) {
+        let parameter = def
+            .params
+            .iter()
+            .enumerate()
+            .find(|(_, (name, _))| hints.iter().any(|hint| hint == name))
+            .or_else(|| {
+                def.params
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (_, ty))| php_type_accepts_int(ty))
+            });
+        if let Some((index, (parameter_name, _))) = parameter {
+            return format!(
+                "{}(): Argument #{} (${}) must be of type int, float given",
+                def.name,
+                index + 1,
+                parameter_name
+            );
         }
     }
-    abi::emit_release_temporary_stack(ctx.emitter, FLOAT_TO_INT_FRAME_BYTES);
+    format!("{function_name}(): Argument must be of type int, float given")
+}
+
+/// Returns whether a builtin contract type accepts an integer argument.
+fn php_type_accepts_int(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int => true,
+        PhpType::Union(members) => members.iter().any(php_type_accepts_int),
+        _ => false,
+    }
 }
 
 /// Casts a boxed weak integer argument while preserving float precision diagnostics.
-fn emit_mixed_weak_int(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+fn emit_mixed_weak_int(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+) -> Result<()> {
     let from_float = ctx.next_label("weak_mixed_to_int_float");
     let done = ctx.next_label("weak_mixed_to_int_done");
     load_value_to_first_int_arg(ctx, value)?;
@@ -292,15 +460,16 @@ fn emit_mixed_weak_int(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    abi::emit_release_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&from_float);
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction("fmov d0, x1"),                // move the unboxed float payload into the shared FP result register
         Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rdi"),              // move the unboxed float payload into the shared FP result register
     }
-    emit_float_result_to_int_with_precision_deprecation(ctx);
-    ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, MIXED_TO_INT_FRAME_BYTES);
+    emit_weak_float_result_to_int(ctx, context);
+    ctx.emitter.label(&done);
     Ok(())
 }
 
@@ -333,7 +502,39 @@ pub(crate) fn load_as_int(
             Ok(())
         }
         PhpType::Float => {
-            emit_float_result_to_int_with_precision_deprecation(ctx);
+            emit_weak_float_result_to_int(ctx, name);
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            Ok(())
+        }
+        PhpType::Str => {
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+            Ok(())
+        }
+        PhpType::Mixed | PhpType::Union(_) => emit_mixed_weak_int(ctx, value, name),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
+    }
+}
+
+/// Loads a concrete scalar as an explicit integer conversion without precision deprecations.
+pub(crate) fn load_as_explicit_int(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    name: &str,
+) -> Result<()> {
+    match ctx.load_value_to_result(value)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => Ok(()),
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            Ok(())
+        }
+        PhpType::Float => {
+            emit_explicit_float_result_to_int(ctx);
             Ok(())
         }
         PhpType::TaggedScalar => {
@@ -345,7 +546,9 @@ pub(crate) fn load_as_int(
             Ok(())
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            emit_mixed_weak_int(ctx, value)
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+            Ok(())
         }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",

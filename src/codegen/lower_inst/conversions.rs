@@ -104,7 +104,7 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
-            abi::emit_float_result_to_int_result(ctx.emitter);
+            super::builtins::strings::emit_explicit_float_result_to_int(ctx);
         }
         PhpType::Str => {
             ctx.load_value_to_result(value)?;

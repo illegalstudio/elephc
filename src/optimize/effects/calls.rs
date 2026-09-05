@@ -19,7 +19,6 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
     with_active_function_effects(|effects| effects.and_then(|effects| effects.get(name).copied()))
     .unwrap_or_else(|| {
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            let semantics = def.spec.semantics;
             let arg_types = semantic_optimizer_arg_types(def, args);
             let input = crate::builtins::semantics::BuiltinSemanticInput {
                 name: def.name,
@@ -27,10 +26,7 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
                 arg_types: &arg_types,
                 span: crate::span::Span::dummy(),
             };
-            let effects = match semantics.effects {
-                crate::builtins::semantics::BuiltinEffects::Static(effects) => effects,
-                crate::builtins::semantics::BuiltinEffects::Shared(resolve) => resolve(&input),
-            };
+            let effects = crate::builtins::semantics::resolve_builtin_effects(def, &input);
             if let Some((callback_index, intrinsic_effects)) = builtin_callback_effects(def) {
                 let callback_effect = args
                     .get(callback_index)

@@ -254,7 +254,7 @@ fn emit_loaded_signal_value_as_int(
                 Arch::AArch64 => ctx.emitter.instruction("fmov d0, x3"),        // move the loaded signal float into the shared FP result register
                 Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rcx"),      // move the loaded signal float into the shared FP result register
             }
-            super::strings::emit_float_result_to_int_with_precision_deprecation(ctx);
+            super::strings::emit_signal_float_result_to_int(ctx);
         }
         PhpType::TaggedScalar => {
             let null = ctx.next_label("pcntl_signal_tagged_null");
@@ -378,7 +378,7 @@ fn emit_loaded_mixed_signal_value_as_int(
         Arch::AArch64 => ctx.emitter.instruction("fmov d0, x1"),                // move the unboxed float payload into the shared FP result register
         Arch::X86_64 => ctx.emitter.instruction("movq xmm0, rdi"),              // move the unboxed float payload into the shared FP result register
     }
-    super::strings::emit_float_result_to_int_with_precision_deprecation(ctx);
+    super::strings::emit_signal_float_result_to_int(ctx);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&from_null);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
