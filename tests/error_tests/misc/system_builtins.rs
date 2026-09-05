@@ -474,7 +474,7 @@ fn test_error_preg_match_four_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes between 2 and 4 arguments",
+        "preg_match_all() takes 2 to 4 arguments",
     );
 }
 
