@@ -382,9 +382,10 @@ def render(
         "",
         "## Coverage by PHP module",
         "",
-        "Each cell counts the PHP-visible symbols elephc implements against the symbols the "
-        "module exposes in the baseline build, whatever mechanism elephc implements them "
-        "with. `—` marks a kind the module does not have.",
+        "Each cell counts the PHP-visible symbols a compiled elephc program has, against the "
+        "symbols the module exposes in the baseline build. Any compile-time route counts once "
+        "(registry builtin, injected prelude, name-resolver rewrite); symbols that exist only "
+        "inside `eval()` are listed separately below. `—` marks a kind the module does not have.",
         "",
         "| PHP module | Functions | Classes | Constants |",
         "|---|---|---|---|",
