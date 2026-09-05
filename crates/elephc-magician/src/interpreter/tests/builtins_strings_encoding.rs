@@ -40,6 +40,37 @@ fn execute_program_dispatches_mb_strlen_builtin() {
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `mb_strwidth()` matches width, encoding, callable, and error behavior.
+#[test]
+fn execute_program_dispatches_mb_strwidth_builtin() {
+    let program = parse_fragment(
+        r#"echo mb_strwidth("abc"); echo ":";
+	echo mb_strwidth(string: "héllo", encoding: "8bit"); echo ":";
+	echo mb_strwidth("日本語"); echo ":";
+	echo mb_strwidth("ａ"); echo ":";
+	echo call_user_func("mb_strwidth", "🐘"); echo ":";
+	echo call_user_func_array("mb_strwidth", ["string" => "héllo", "encoding" => "UTF-8"]); echo ":";
+	echo mb_strwidth(chr(128), "UTF-8"); echo ":";
+	echo mb_strwidth(chr(104) . chr(0) . chr(233) . chr(0), "UTF-16LE"); echo ":";
+	try {
+	    mb_strwidth("abc", "definitely-not-an-encoding");
+	} catch (ValueError $error) {
+	    echo "caught";
+	}
+	echo ":";
+	return function_exists("mb_strwidth") && is_callable("mb_strwidth");"#
+            .as_bytes(),
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:6:6:2:2:5:1:2:caught:");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `explode()` and `implode()` bridge byte strings and arrays.
 #[test]
 fn execute_program_dispatches_explode_implode_builtins() {
