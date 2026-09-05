@@ -33,6 +33,14 @@ fn declared_builtin_registry_derives_core_metadata() {
             Some(EvalBuiltinDefaultValue::Null)
         );
         assert_eq!(
+            eval_declared_builtin_param_names("mb_strtoupper"),
+            Some(["string", "encoding"].as_slice())
+        );
+        assert_eq!(
+            eval_declared_builtin_default_value("mb_strtoupper", 1),
+            Some(EvalBuiltinDefaultValue::Null)
+        );
+        assert_eq!(
             eval_declared_builtin_param_names("is_finite"),
             Some(["num"].as_slice())
         );
