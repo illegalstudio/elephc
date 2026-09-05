@@ -27,6 +27,8 @@ pub mod compiler_stack;
 pub mod conditional;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
 pub mod curl_prelude;
+/// Termwind-facing DOM HTML subset (`DOMDocument::loadHTML` and node walk).
+pub mod dom_html_prelude;
 /// Error and warning reporting.
 pub mod errors;
 mod eval_aot;
