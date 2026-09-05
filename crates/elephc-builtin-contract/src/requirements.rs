@@ -102,7 +102,7 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
     ) {
         return ZLIB;
     }
-    if matches_name(id, &["mb_strlen"]) {
+    if matches_name(id, &["mb_strlen", "mb_strwidth"]) {
         return ICONV_MACOS;
     }
     if matches_name(
