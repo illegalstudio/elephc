@@ -186,7 +186,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         [param!("exclude_disabled", Bool = DefaultSpec::Bool(true))],
         None,
         Mixed,
-        "Returns internal and user-defined function names."
+        "Returns internal and user-defined function names. Elephc has no disable_functions configuration, so exclude_disabled is accepted but does not change the result."
     ),
     surface!(
         "get_defined_vars",

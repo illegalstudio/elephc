@@ -412,9 +412,9 @@ impl CoreBuiltinOp {
             Self::TriggerError => 4,
             Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
-            | Self::GetDefinedFunctions
             | Self::GetDefinedVars
             | Self::GetIncludedFiles => 0,
+            Self::GetDefinedFunctions => 1,
         }
     }
 

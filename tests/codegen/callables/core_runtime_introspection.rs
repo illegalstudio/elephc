@@ -502,12 +502,14 @@ fn test_core_get_defined_functions_aot_inventories() {
         r#"<?php
         function UserThing(): void {}
         $defined = GeT_DeFiNeD_FuNcTiOnS();
+        $includeDisabled = get_defined_functions(exclude_disabled: false);
         echo in_array("strlen", $defined["internal"]) ? "I" : "i";
         echo in_array("userthing", $defined["user"]) ? "U" : "u";
+        echo $defined === $includeDisabled ? "S" : "x";
         echo count($defined) === 2 ? "2" : "x";
         "#,
     );
-    assert_eq!(out, "IU2");
+    assert_eq!(out, "IUS2");
 }
 
 /// Verifies AOT object introspection exposes public, protected, and private mangled keys.
@@ -553,17 +555,21 @@ fn test_core_get_included_files_aot_manifest_and_alias() {
                 "main.php",
                 r#"<?php
                 include "library.php";
+                require "required.php";
                 $included = get_included_files();
                 $required = GET_REQUIRED_FILES();
                 echo count($included), ":", count($required), ":";
-                echo basename($included[0]), ":", basename($included[1]);
+                echo basename($included[0]), ":", basename($included[1]), ":";
+                echo basename($included[2]), ":";
+                echo $included === $required ? "same" : "different";
                 "#,
             ),
             ("library.php", "<?php function included_helper(): int { return 1; }"),
+            ("required.php", "<?php function required_helper(): int { return 2; }"),
         ],
         "main.php",
     );
-    assert_eq!(out, "2:2:main.php:library.php");
+    assert_eq!(out, "3:3:main.php:library.php:required.php:same");
 }
 
 /// Verifies standard, implicit-context, live, and closed resources remain enumerable by PHP id.

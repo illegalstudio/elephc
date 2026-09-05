@@ -174,7 +174,15 @@ pub fn lower_core_builtin(
             vec![operand_or_const_bool(ctx, call, 0, false)]
         }
         CoreBuiltinOp::GetResources => vec![operand_or_const_null(ctx, call, 0)],
-        CoreBuiltinOp::GetDefinedFunctions | CoreBuiltinOp::GetIncludedFiles => Vec::new(),
+        CoreBuiltinOp::GetDefinedFunctions => {
+            vec![operand_or_const_bool(ctx, call, 0, true)]
+        }
+        CoreBuiltinOp::GetDefinedVars => {
+            return Err(BuiltinLoweringError::new(
+                "get_defined_vars() must use caller-scope EIR specialization",
+            ));
+        }
+        CoreBuiltinOp::GetIncludedFiles => Vec::new(),
         _ => call.operands.to_vec(),
     };
     Ok(ctx.emit_value(

@@ -8,7 +8,6 @@
 //! - Results declared as `mixed` are returned as owned boxed runtime cells.
 //! - Static compiler metadata is preferred over PHP-name-driven runtime dispatch.
 
-use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::ir::{CoreBuiltinOp, Immediate, Instruction};
 use crate::types::PhpType;
@@ -51,8 +50,14 @@ pub(super) fn lower_core_builtin(
         CoreBuiltinOp::SetExceptionHandler => handlers::lower_set_exception_handler(ctx, inst)?,
         CoreBuiltinOp::TriggerError => handlers::lower_trigger_error(ctx, inst)?,
         CoreBuiltinOp::GetDefinedConstants => constants::lower_get_defined_constants(ctx, inst)?,
-        CoreBuiltinOp::GetDefinedVars => emit_empty_mixed_hash(ctx)?,
-        CoreBuiltinOp::GetDefinedFunctions => introspection::lower_get_defined_functions(ctx)?,
+        CoreBuiltinOp::GetDefinedVars => {
+            return Err(CodegenIrError::invalid_module(
+                "get_defined_vars must be lowered from its caller scope",
+            ));
+        }
+        CoreBuiltinOp::GetDefinedFunctions => {
+            introspection::lower_get_defined_functions(ctx, inst)?
+        }
         CoreBuiltinOp::GetExtensionFuncs => {
             introspection::lower_get_extension_funcs(ctx, inst)?
         }
@@ -75,22 +80,6 @@ fn core_operation(inst: &Instruction) -> Result<CoreBuiltinOp> {
     CoreBuiltinOp::from_i64(*selector).ok_or_else(|| {
         CodegenIrError::invalid_module(format!("invalid core_builtin selector {selector}"))
     })
-}
-
-/// Allocates and boxes an empty associative Mixed array.
-fn emit_empty_mixed_hash(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x0", 16);
-            abi::emit_load_int_immediate(ctx.emitter, "x1", 7);
-        }
-        Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rdi", 16);
-            abi::emit_load_int_immediate(ctx.emitter, "rsi", 7);
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-    Ok(())
 }
 
 /// Boxes PHP null as a fresh Mixed result.
