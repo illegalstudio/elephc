@@ -1,11 +1,11 @@
 ---
-title: "curl_upkeep() — internals"
+title: "curl_upkeep() - internals"
 description: "Compiler internals for curl_upkeep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 366
+  order: 393
 ---
 
-## `curl_upkeep()` — internals
+## `curl_upkeep()` - internals
 
 ## Where it lives
 

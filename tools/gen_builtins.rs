@@ -234,6 +234,7 @@ fn default_json(default: DefaultSpec) -> Value {
         DefaultSpec::Float(value) => json!(value),
         DefaultSpec::Str(value) => json!(value),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
+        DefaultSpec::ErrorAll => json!("E_ALL"),
         DefaultSpec::EmptyArray => json!([]),
     }
 }
@@ -287,6 +288,7 @@ fn implementation_name(implementation: BackendImplementation) -> &'static str {
         BackendImplementation::Registry => "registry",
         BackendImplementation::LanguageConstruct => "language-construct",
         BackendImplementation::DedicatedSyntax => "dedicated-syntax",
+        BackendImplementation::CompilerTransform => "compiler-transform",
         BackendImplementation::Prelude => "prelude",
     }
 }
@@ -296,7 +298,6 @@ fn unsupported_reason_name(reason: UnsupportedReason) -> &'static str {
     match reason {
         UnsupportedReason::InternalCompilerSurface => "internal-compiler-surface",
         UnsupportedReason::EvalImplementationPending => "eval-implementation-pending",
-        UnsupportedReason::EvalOnlyReflection => "eval-only-reflection",
     }
 }
 

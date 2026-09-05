@@ -11,6 +11,7 @@
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::try_handlers::TRY_HANDLER_JMP_BUF_OFFSET;
 use crate::codegen_support::{abi, emit::Emitter};
+use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 
 /// Emits `__rt_throw_current`, the runtime helper that propagates an exception upward through
 /// the handler stack. Saves callee-saved registers, retrieves the top handler record from
@@ -93,7 +94,8 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
 
     // -- uncaught exceptions terminate the process with a fatal message --
     emitter.label("__rt_throw_current_uncaught");
-    emitter.instruction("b __rt_report_uncaught_exception");                    // report the Throwable's class and message, then exit 255 like PHP
+    emitter.instruction("b __rt_dispatch_uncaught_exception");                  // invoke a registered PHP handler or report the uncaught Throwable
+    emit_uncaught_exception_handler_aarch64(emitter);
 }
 
 /// Emits `__rt_throw_current` for Linux x86_64. Uses the System V AMD64 ABI: preserves rbp as
@@ -123,7 +125,116 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
 
     emitter.label("__rt_throw_current_uncaught");
-    emitter.instruction("jmp __rt_report_uncaught_exception");                  // report the Throwable's class and message, then exit 255 like PHP
+    emitter.instruction("jmp __rt_dispatch_uncaught_exception");                // invoke a registered PHP handler or report the uncaught Throwable
+    emit_uncaught_exception_handler_x86_64(emitter);
+}
+
+/// Emits the AArch64 terminal dispatcher for a registered PHP exception handler.
+fn emit_uncaught_exception_handler_aarch64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_dispatch_uncaught_exception");
+    abi::emit_load_symbol_to_reg(emitter, "x19", "_php_exception_handler_callable", 0);
+    emitter.instruction("cbnz x19, 1f");                                       // dispatch through the PHP handler when one is active
+    emitter.instruction("b __rt_report_uncaught_exception");                   // preserve the ordinary fatal report through a linkable branch
+    emitter.label("1");
+    abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_callable", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x22", "_php_exception_handler_value", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_value", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x21", "_exc_value", 0);
+
+    emitter.instruction("mov x0, #6");                                          // runtime tag 6 boxes the thrown object for the handler argument
+    emitter.instruction("mov x1, x21");                                         // pass the active Throwable payload
+    emitter.instruction("mov x2, #0");                                          // object values have no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // create the boxed Throwable argument
+    emitter.instruction("mov x20, x0");                                         // preserve the argument cell across array allocation
+    emitter.instruction("mov x0, #1");                                          // allocate one visible handler argument slot
+    emitter.instruction("mov x1, #8");                                          // indexed array elements begin with the generic runtime shape
+    emitter.instruction("bl __rt_array_new");                                   // create the descriptor invoker argument array
+    emitter.instruction("mov x1, x20");                                         // append the boxed Throwable cell
+    emitter.instruction("bl __rt_array_push_refcounted");                       // the array retains its own argument-cell owner
+    emitter.instruction("mov x21, x0");                                         // preserve the completed raw argument array
+    emitter.instruction("mov x0, x20");                                         // release the construction-time Mixed owner
+    emitter.instruction("bl __rt_decref_mixed");                                // leave ownership solely with the array
+    emitter.instruction("mov x0, #4");                                          // runtime tag 4 boxes the indexed argument array
+    emitter.instruction("mov x1, x21");                                         // pass the raw array payload
+    emitter.instruction("mov x2, #0");                                          // arrays have no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the argument container for the uniform invoker ABI
+    emitter.instruction("mov x20, x0");                                         // keep the boxed container across raw-array release
+    emitter.instruction("mov x0, x21");                                         // drop the raw array's construction owner
+    emitter.instruction("bl __rt_decref_any");                                  // the boxed container now owns the array
+
+    emitter.instruction(&format!("ldr x9, [x19, #{CALLABLE_DESC_INVOKER_OFFSET}]")); // load the handler's uniform invoker entry
+    emitter.instruction("cbnz x9, 2f");                                        // continue only with a valid uniform invoker
+    emitter.instruction("b __rt_report_uncaught_exception");                   // fall back to the safe fatal report through a linkable branch
+    emitter.label("2");
+    emitter.instruction("mov x0, x19");                                         // invoker argument 0 is the callable descriptor
+    emitter.instruction("mov x1, x20");                                         // invoker argument 1 is the boxed argument array
+    emitter.instruction("blr x9");                                              // execute the user exception handler exactly once
+    emitter.instruction("bl __rt_decref_mixed");                                // release the handler's boxed return value
+    emitter.instruction("mov x0, x20");                                         // release the boxed argument container
+    emitter.instruction("bl __rt_decref_mixed");                                // deep-release its retained Throwable argument
+    emitter.instruction("mov x0, x19");                                         // release the normalized handler descriptor owner
+    emitter.instruction("bl __rt_callable_descriptor_release");                 // static descriptors are ignored, runtime descriptors are decref'd
+    emitter.instruction("mov x0, x22");                                         // release the PHP-visible callback cell retained at registration
+    emitter.instruction("bl __rt_decref_mixed");                                // drop the callback value after terminal dispatch
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
+    emitter.instruction("bl __rt_decref_any");                                  // release the uncaught Throwable after the callback returns
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    emitter.instruction("bl __rt_ob_flush_all");                                // flush output produced by the terminal handler
+    abi::emit_exit(emitter, 0);
+}
+
+/// Emits the Linux x86_64 terminal dispatcher for a registered PHP exception handler.
+fn emit_uncaught_exception_handler_x86_64(emitter: &mut Emitter) {
+    emitter.label_global("__rt_dispatch_uncaught_exception");
+    emitter.instruction("and rsp, -16");                                        // establish SysV call alignment on the terminal path
+    abi::emit_load_symbol_to_reg(emitter, "r12", "_php_exception_handler_callable", 0);
+    emitter.instruction("test r12, r12");                                       // is a PHP exception handler registered?
+    emitter.instruction("jz __rt_report_uncaught_exception");                   // no, preserve the ordinary uncaught fatal report
+    abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_callable", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r13", "_php_exception_handler_value", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_php_exception_handler_value", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r15", "_exc_value", 0);
+
+    emitter.instruction("mov rax, 6");                                          // runtime tag 6 boxes the thrown object
+    emitter.instruction("mov rdi, r15");                                        // pass the active Throwable payload
+    emitter.instruction("xor esi, esi");                                        // object values have no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // create the boxed Throwable argument
+    emitter.instruction("mov r14, rax");                                        // preserve the argument cell across array allocation
+    emitter.instruction("mov edi, 1");                                          // allocate one visible handler argument slot
+    emitter.instruction("mov esi, 8");                                          // indexed array elements begin with the generic runtime shape
+    emitter.instruction("call __rt_array_new");                                 // create the descriptor invoker argument array
+    emitter.instruction("mov rdi, rax");                                        // append into the new raw array
+    emitter.instruction("mov rsi, r14");                                        // append the boxed Throwable cell
+    emitter.instruction("call __rt_array_push_refcounted");                     // the array retains its own argument-cell owner
+    emitter.instruction("mov r15, rax");                                        // preserve the completed raw argument array
+    emitter.instruction("mov rax, r14");                                        // release the construction-time Mixed owner
+    emitter.instruction("call __rt_decref_mixed");                              // leave ownership solely with the array
+    emitter.instruction("mov rax, 4");                                          // runtime tag 4 boxes the indexed argument array
+    emitter.instruction("mov rdi, r15");                                        // pass the raw array payload
+    emitter.instruction("xor esi, esi");                                        // arrays have no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the argument container for the uniform invoker ABI
+    emitter.instruction("mov r14, rax");                                        // keep the boxed container across raw-array release
+    emitter.instruction("mov rax, r15");                                        // drop the raw array's construction owner
+    emitter.instruction("call __rt_decref_any");                                // the boxed container now owns the array
+
+    emitter.instruction(&format!("mov r10, QWORD PTR [r12 + {CALLABLE_DESC_INVOKER_OFFSET}]")); // load the handler's uniform invoker entry
+    emitter.instruction("test r10, r10");                                       // reject malformed descriptors without an invoker
+    emitter.instruction("jz __rt_report_uncaught_exception");                   // fall back to the safe fatal report
+    emitter.instruction("mov rdi, r12");                                        // invoker argument 0 is the callable descriptor
+    emitter.instruction("mov rsi, r14");                                        // invoker argument 1 is the boxed argument array
+    emitter.instruction("call r10");                                            // execute the user exception handler exactly once
+    emitter.instruction("call __rt_decref_mixed");                              // release the handler's boxed return value
+    emitter.instruction("mov rax, r14");                                        // release the boxed argument container
+    emitter.instruction("call __rt_decref_mixed");                              // deep-release its retained Throwable argument
+    emitter.instruction("mov rax, r12");                                        // release the normalized handler descriptor owner
+    emitter.instruction("call __rt_callable_descriptor_release");               // static descriptors are ignored, runtime descriptors are decref'd
+    emitter.instruction("mov rax, r13");                                        // release the PHP-visible callback cell retained at registration
+    emitter.instruction("call __rt_decref_mixed");                              // drop the callback value after terminal dispatch
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
+    emitter.instruction("call __rt_decref_any");                                // release the uncaught Throwable after the callback returns
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    emitter.instruction("call __rt_ob_flush_all");                              // flush output produced by the terminal handler
+    abi::emit_exit(emitter, 0);
 }
 
 #[cfg(test)]

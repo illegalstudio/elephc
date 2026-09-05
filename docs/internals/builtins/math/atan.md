@@ -1,16 +1,16 @@
 ---
-title: "atan() — internals"
+title: "atan() - internals"
 description: "Compiler internals for atan(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 264
 ---
 
-## `atan()` — internals
+## `atan()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/atan.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/atan.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

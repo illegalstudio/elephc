@@ -1,16 +1,16 @@
 ---
-title: "usleep() — internals"
+title: "usleep() - internals"
 description: "Compiler internals for usleep(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 398
+  order: 425
 ---
 
-## `usleep()` — internals
+## `usleep()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/usleep.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/usleep.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

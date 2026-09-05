@@ -268,6 +268,7 @@ fn emit_lifecycle_exports(emitter: &mut Emitter, target: Target, heap_debug: boo
         emit_store_immediate_to_symbol(emitter, BOUNDARY_STATUS, STATUS_OK as i64);
         if lifecycle == "elephc_init" {
             crate::codegen::stack_guard::emit_stack_limit_init_call(emitter);
+            abi::emit_call_label(emitter, "__rt_gc_request_start");
             if heap_debug {
                 abi::emit_enable_heap_debug_flag(emitter);
             }

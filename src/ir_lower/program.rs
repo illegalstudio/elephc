@@ -80,6 +80,13 @@ pub(crate) fn lower(
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;
     let constants = crate::codegen::collect_constants(program, target.platform);
+    let builtin_constants = crate::codegen::collect_constants(&Vec::new(), target.platform);
+    module.user_defined_constants = constants
+        .keys()
+        .filter(|name| !builtin_constants.contains_key(*name))
+        .cloned()
+        .collect();
+    module.user_defined_constants.sort();
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);

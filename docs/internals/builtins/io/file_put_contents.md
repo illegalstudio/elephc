@@ -1,16 +1,16 @@
 ---
-title: "file_put_contents() — internals"
+title: "file_put_contents() - internals"
 description: "Compiler internals for file_put_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 176
 ---
 
-## `file_put_contents()` — internals
+## `file_put_contents()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_put_contents.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

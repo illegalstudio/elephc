@@ -1,11 +1,11 @@
 ---
-title: "curl_multi_add_handle() — internals"
+title: "curl_multi_add_handle() - internals"
 description: "Compiler internals for curl_multi_add_handle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 342
+  order: 369
 ---
 
-## `curl_multi_add_handle()` — internals
+## `curl_multi_add_handle()` - internals
 
 ## Where it lives
 

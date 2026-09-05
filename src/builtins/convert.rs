@@ -49,6 +49,10 @@ pub fn default_spec_to_expr(d: &DefaultSpec) -> Expr {
         DefaultSpec::Float(f) => Expr::new(ExprKind::FloatLiteral(*f), Span::dummy()),
         DefaultSpec::Str(s) => Expr::new(ExprKind::StringLiteral(s.to_string()), Span::dummy()),
         DefaultSpec::IntMax => Expr::new(ExprKind::IntLiteral(i64::MAX), Span::dummy()),
+        DefaultSpec::ErrorAll => Expr::new(
+            ExprKind::IntLiteral(crate::php_version::PhpVersion::default().error_reporting_mask()),
+            Span::dummy(),
+        ),
         DefaultSpec::EmptyArray => Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy()),
     }
 }

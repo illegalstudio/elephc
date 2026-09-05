@@ -1,16 +1,16 @@
 ---
-title: "array_reverse() — internals"
+title: "array_reverse() - internals"
 description: "Compiler internals for array_reverse(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 35
 ---
 
-## `array_reverse()` — internals
+## `array_reverse()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_reverse.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_reverse.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

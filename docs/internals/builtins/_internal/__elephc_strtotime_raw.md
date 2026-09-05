@@ -1,16 +1,16 @@
 ---
-title: "__elephc_strtotime_raw() — internals"
+title: "__elephc_strtotime_raw() - internals"
 description: "Compiler internals for __elephc_strtotime_raw(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 631
+  order: 658
 ---
 
-## `__elephc_strtotime_raw()` — internals
+## `__elephc_strtotime_raw()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_strtotime_raw.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_strtotime_raw.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

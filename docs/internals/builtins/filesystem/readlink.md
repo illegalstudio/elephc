@@ -1,16 +1,16 @@
 ---
-title: "readlink() — internals"
+title: "readlink() - internals"
 description: "Compiler internals for readlink(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 151
 ---
 
-## `readlink()` — internals
+## `readlink()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/readlink.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/readlink.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

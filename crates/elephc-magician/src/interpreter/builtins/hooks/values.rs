@@ -264,7 +264,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Sinh,
     /// Dispatches string ASCII case-conversion builtins.
     StringCase,
-    /// Dispatches string comparison builtins.
+    /// Dispatches byte-string comparisons with and without a length limit.
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
@@ -576,13 +576,23 @@ impl EvalValuesHook {
                 "ucfirst" => eval_ucfirst_result(value, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
-            Self::StringCompare => two_args(evaluated_args, values, |left, right, values| {
-                match name {
-                    "strcasecmp" => eval_strcasecmp_result(left, right, values),
-                    "strcmp" => eval_strcmp_result(left, right, values),
-                    _ => Err(EvalStatus::RuntimeFatal),
+            Self::StringCompare => match name {
+                "strcasecmp" => two_args(evaluated_args, values, eval_strcasecmp_result),
+                "strcmp" => two_args(evaluated_args, values, eval_strcmp_result),
+                "strncasecmp" => {
+                    let [left, right, length] = evaluated_args else {
+                        return Err(EvalStatus::RuntimeFatal);
+                    };
+                    eval_strncasecmp_result(*left, *right, *length, context, values)
                 }
-            }),
+                "strncmp" => {
+                    let [left, right, length] = evaluated_args else {
+                        return Err(EvalStatus::RuntimeFatal);
+                    };
+                    eval_strncmp_result(*left, *right, *length, context, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StringPosition => {
                 let (haystack, needle, offset) = match evaluated_args {
                     [haystack, needle] => (*haystack, *needle, None),

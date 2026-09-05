@@ -7526,6 +7526,24 @@ echo ":"; echo function_exists("microtime");');
     assert_eq!(out, "now:named:call:array:1");
 }
 
+/// Verifies eval GC builtins cross the live generated-runtime ABI on CI hosts.
+#[test]
+fn test_eval_dispatches_gc_builtins_through_runtime_hooks() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo gc_enabled() ? "on" : "bad"; echo ":";
+gc_disable(); echo gc_enabled() ? "bad" : "off"; echo ":";
+call_user_func("gc_enable"); echo gc_enabled() ? "on" : "bad"; echo ":";
+$status = call_user_func("gc_status");
+echo count($status) === 12 ? "shape" : "bad"; echo ":";
+echo $status["threshold"] === 0 && $status["buffer_size"] === 0 ? "unbuffered" : "bad"; echo ":";
+echo is_float($status["application_time"]) && $status["application_time"] >= 0.0 ? "timed" : "bad"; echo ":";
+echo call_user_func("gc_mem_caches") >= 0 ? "cache" : "bad";');
+"#,
+    );
+    assert_eq!(out, "on:off:on:shape:unbuffered:timed:cache");
+}
+
 /// Verifies eval realpath-cache builtins expose elephc's empty-cache convention.
 #[test]
 fn test_eval_dispatches_realpath_cache_builtin_calls() {
@@ -29355,4 +29373,31 @@ echo ":"; echo intval("42");');
 "#,
     );
     assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
+}
+
+/// Verifies eval receives the complete typed AOT Core constant inventory.
+#[test]
+fn test_eval_get_defined_constants_matches_aot_core_inventory() {
+    let out = compile_and_run(
+        r#"<?php
+$native = get_defined_constants(true)["Core"];
+$evaluated = eval('return get_defined_constants(true)["Core"];');
+$missing = 0;
+foreach ($native as $name => $value) {
+    if (!array_key_exists($name, $evaluated)) {
+        $missing++;
+    }
+}
+foreach ($evaluated as $name => $value) {
+    if (!array_key_exists($name, $native)) {
+        $missing++;
+    }
+}
+echo count($native) === count($evaluated) ? "count:" : "bad-count:";
+echo $missing === 0 ? "keys:" : "bad-keys:";
+echo $native["FNM_CASEFOLD"] === $evaluated["FNM_CASEFOLD"] ? "value:" : "bad-value:";
+echo get_resource_type($evaluated["STDOUT"]);
+"#,
+    );
+    assert_eq!(out, "count:keys:value:stream");
 }

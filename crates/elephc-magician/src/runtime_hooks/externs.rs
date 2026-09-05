@@ -17,6 +17,32 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Gets or replaces the native PHP error-reporting mask.
+    pub(super) fn __elephc_eval_error_reporting(replacement: i64, replace: u64) -> i64;
+    /// Installs an eval callback into the native user-error-handler stack.
+    pub(super) fn __elephc_eval_error_handler_set(
+        context: *const c_void,
+        callback: *mut RuntimeCell,
+        levels: i64,
+        previous_out: *mut *mut RuntimeCell,
+    ) -> i32;
+    /// Restores the prior native user-error-handler stack entry.
+    pub(super) fn __elephc_eval_error_handler_restore() -> i32;
+    /// Invokes the native user error handler with a boxed argument array.
+    pub(super) fn __elephc_eval_error_handler_dispatch(
+        level: i64,
+        args: *mut RuntimeCell,
+        result_out: *mut *mut RuntimeCell,
+        invoked_out: *mut u64,
+    ) -> i32;
+    /// Installs an eval callback into the native exception-handler stack.
+    pub(super) fn __elephc_eval_exception_handler_set(
+        context: *const c_void,
+        callback: *mut RuntimeCell,
+        previous_out: *mut *mut RuntimeCell,
+    ) -> i32;
+    /// Restores the prior native exception-handler stack entry.
+    pub(super) fn __elephc_eval_exception_handler_restore() -> i32;
     /// Calls one typed generated-runtime builtin over borrowed boxed arguments.
     pub(super) fn __elephc_runtime_builtin_call_v1(
         runtime_builtin_id: u32,
@@ -25,6 +51,12 @@ unsafe extern "C" {
         context: *const c_void,
         result_out: *mut *mut RuntimeCell,
     ) -> i32;
+    pub(super) fn __elephc_eval_gc_collect_cycles() -> i64;
+    pub(super) fn __elephc_eval_gc_disable() -> i64;
+    pub(super) fn __elephc_eval_gc_enable() -> i64;
+    pub(super) fn __elephc_eval_gc_enabled() -> i64;
+    pub(super) fn __elephc_eval_gc_mem_caches() -> i64;
+    pub(super) fn __elephc_eval_gc_status_metric(metric: u64) -> i64;
     pub(super) fn __elephc_eval_value_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_push(

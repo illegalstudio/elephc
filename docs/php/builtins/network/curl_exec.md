@@ -2,7 +2,7 @@
 title: "curl_exec()"
 description: "Performs a cURL session."
 sidebar:
-  order: 339
+  order: 366
 ---
 
 ## curl_exec()
@@ -21,9 +21,9 @@ Performs a cURL session.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_exec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_exec.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_exec.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_exec.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

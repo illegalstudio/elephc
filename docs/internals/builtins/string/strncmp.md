@@ -1,16 +1,16 @@
 ---
-title: "strncmp() — internals"
+title: "strncmp() - internals"
 description: "Compiler internals for strncmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 502
+  order: 529
 ---
 
-## `strncmp()` — internals
+## `strncmp()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strncmp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strncmp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -48,7 +48,10 @@ function strncmp(string $string1, string $string2, int $length): int
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/strncmp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strncmp.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

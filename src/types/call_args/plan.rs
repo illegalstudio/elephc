@@ -51,6 +51,7 @@ pub(crate) enum PlannedRegularArg {
 /// A resolved variadic argument entry collected from positional or named call-site values.
 #[derive(Clone)]
 pub(crate) struct PlannedVariadicArg {
+    pub(crate) source_index: usize,
     pub(crate) key: Option<String>,
     pub(crate) expr: Expr,
 }

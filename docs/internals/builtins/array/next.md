@@ -1,16 +1,16 @@
 ---
-title: "next() — internals"
+title: "next() - internals"
 description: "Compiler internals for next(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 61
 ---
 
-## `next()` — internals
+## `next()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/next.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/next.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

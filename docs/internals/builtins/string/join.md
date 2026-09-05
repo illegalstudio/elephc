@@ -1,16 +1,16 @@
 ---
-title: "join() — internals"
+title: "join() - internals"
 description: "Compiler internals for join(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 464
+  order: 491
 ---
 
-## `join()` — internals
+## `join()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/join.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/join.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

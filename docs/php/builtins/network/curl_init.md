@@ -2,7 +2,7 @@
 title: "curl_init()"
 description: "Initializes a cURL session."
 sidebar:
-  order: 341
+  order: 368
 ---
 
 ## curl_init()
@@ -21,9 +21,9 @@ Initializes a cURL session.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_init.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_init.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

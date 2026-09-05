@@ -49,6 +49,11 @@ pub(super) fn lower_static_callable_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
+            if let Some(value) =
+                lower_class_introspection(ctx, &function_name, callback_args, expr)
+            {
+                return Some(value);
+            }
             let sig = call_signature(
                 ctx,
                 &function_name,

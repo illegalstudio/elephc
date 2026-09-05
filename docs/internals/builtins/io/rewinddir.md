@@ -1,16 +1,16 @@
 ---
-title: "rewinddir() — internals"
+title: "rewinddir() - internals"
 description: "Compiler internals for rewinddir(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 214
 ---
 
-## `rewinddir()` — internals
+## `rewinddir()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rewinddir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rewinddir.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -1,16 +1,16 @@
 ---
-title: "file_exists() — internals"
+title: "file_exists() - internals"
 description: "Compiler internals for file_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 121
 ---
 
-## `file_exists()` — internals
+## `file_exists()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/file_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_exists.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

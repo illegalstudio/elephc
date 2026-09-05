@@ -352,6 +352,7 @@ fn is_builtin_global_constant(name: &str) -> bool {
         if matches!(
             name,
             "PHP_OS"
+                | "PHP_OS_FAMILY"
                 // The PHP version surface, baked per compilation from `--php-version` / `--web`
                 // by `codegen::prescan::collect_constants` — same mechanism as `PHP_OS`.
                 | "PHP_VERSION"
@@ -362,6 +363,10 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "PHP_EXTRA_VERSION"
                 | "PHP_SAPI"
                 | "SID"
+                | "PHP_INT_SIZE"
+                | "PHP_MAXPATHLEN"
+                | "DEBUG_BACKTRACE_PROVIDE_OBJECT"
+                | "DEBUG_BACKTRACE_IGNORE_ARGS"
                 | "PATHINFO_DIRNAME"
                 | "PATHINFO_BASENAME"
                 | "PATHINFO_EXTENSION"

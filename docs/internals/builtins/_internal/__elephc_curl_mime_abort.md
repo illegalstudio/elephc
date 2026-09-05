@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_mime_abort() — internals"
+title: "__elephc_curl_mime_abort() - internals"
 description: "Compiler internals for __elephc_curl_mime_abort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 571
+  order: 598
 ---
 
-## `__elephc_curl_mime_abort()` — internals
+## `__elephc_curl_mime_abort()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_mime_abort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_mime_abort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

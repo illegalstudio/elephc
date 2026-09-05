@@ -1,16 +1,16 @@
 ---
-title: "json_decode() — internals"
+title: "json_decode() - internals"
 description: "Compiler internals for json_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 256
 ---
 
-## `json_decode()` — internals
+## `json_decode()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/json_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/json_decode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

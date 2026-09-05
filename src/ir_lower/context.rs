@@ -190,6 +190,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub classes: &'m HashMap<String, ClassInfo>,
     pub enums: &'m HashMap<String, EnumInfo>,
     pub interfaces: &'m HashMap<String, InterfaceInfo>,
+    pub declared_trait_names: &'m [String],
+    pub declared_trait_methods:
+        &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
     pub packed_classes: &'m HashMap<String, PackedClassInfo>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
@@ -300,6 +303,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         classes: &'m HashMap<String, ClassInfo>,
         enums: &'m HashMap<String, EnumInfo>,
         interfaces: &'m HashMap<String, InterfaceInfo>,
+        declared_trait_names: &'m [String],
+        declared_trait_methods: &'m HashMap<String, HashMap<String, crate::ir::TraitMethodInfo>>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -354,6 +359,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             classes,
             enums,
             interfaces,
+            declared_trait_names,
+            declared_trait_methods,
             packed_classes,
             throw_access_sites,
             builtin_call_types,
@@ -815,6 +822,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns whether a local slot is definitely initialized at this point.
     pub(crate) fn slot_is_initialized(&self, slot: LocalSlotId) -> bool {
         self.initialized_slots.contains(&slot)
+    }
+
+    /// Returns definitely visible PHP locals in declaration order for scope introspection.
+    pub(crate) fn visible_local_names(&self) -> Vec<String> {
+        let mut locals = self
+            .local_slots
+            .iter()
+            .filter_map(|(name, slot)| {
+                let kind = self
+                    .local_kinds
+                    .get(name)
+                    .copied()
+                    .unwrap_or(LocalKind::PhpLocal);
+                (kind == LocalKind::PhpLocal
+                    && self.initialized_slots.contains(slot)
+                    && !matches!(self.local_types.get(name), Some(PhpType::Void | PhpType::Never)))
+                .then_some((slot.as_raw(), name.clone()))
+            })
+            .collect::<Vec<_>>();
+        locals.sort_by_key(|(slot, _)| *slot);
+        locals.into_iter().map(|(_, name)| name).collect()
     }
 
     /// Replaces the definitely-initialized local set after branch lowering or merge analysis.
@@ -3221,9 +3249,58 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, '_> {
+    /// Returns the source file associated with the enclosing lowered function.
+    fn source_path(&self) -> Option<&str> {
+        self.source_path.as_deref()
+    }
+
+    /// Reads the profile-resolved `E_ALL` literal installed during compiler prescan.
+    fn error_reporting_mask(&self) -> i64 {
+        self.constants
+            .get("E_ALL")
+            .and_then(|(value, _)| match value {
+                ExprKind::IntLiteral(mask) => Some(*mask),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                crate::php_version::PhpVersion::default().error_reporting_mask()
+            })
+    }
+
+    /// Loads each PHP-visible parameter through its current name binding.
+    fn current_frame_arguments(&mut self, span: Span) -> Vec<ValueId> {
+        let names = self
+            .builder
+            .function()
+            .signature
+            .as_ref()
+            .map(|signature| {
+                signature
+                    .params
+                    .iter()
+                    .map(|(name, _)| name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        names
+            .into_iter()
+            .map(|name| self.load_local(&name, Some(span)).value)
+            .collect()
+    }
+
     /// Returns PHP metadata already attached to an EIR operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
         self.builder.value_php_type(value)
+    }
+
+    /// Interns a class-name literal through the module data pool.
+    fn intern_class_name(&mut self, value: &str) -> DataId {
+        LoweringContext::intern_class_name(self, value)
+    }
+
+    /// Interns an ordinary string through the module data pool.
+    fn intern_string(&mut self, value: &str) -> DataId {
+        LoweringContext::intern_string(self, value)
     }
 
     /// Emits a backend-neutral builtin operation through the ordinary EIR builder path.
@@ -3248,6 +3325,18 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         crate::builtins::semantics::LoweredBuiltinValue {
             value: lowered.value,
         }
+    }
+
+    /// Emits a void backend-neutral builtin operation through the ordinary EIR builder path.
+    fn emit_void(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        effects: Effects,
+        span: Option<Span>,
+    ) {
+        LoweringContext::emit_void(self, op, operands, immediate, effects, span);
     }
 
     /// Emits a typed runtime call whose helper symbol and physical ABI remain backend-owned.

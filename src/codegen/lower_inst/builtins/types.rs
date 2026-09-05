@@ -17,6 +17,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
+use crate::parser::ast::Visibility;
 
 use super::super::super::context::FunctionContext;
 use super::super::predicates;
@@ -478,6 +479,173 @@ pub(crate) fn lower_get_object_vars(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `get_class_methods()` from the compiler's resolved class metadata.
+pub(crate) fn lower_get_class_methods(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "get_class_methods", 1)?;
+    let target = expect_operand(inst, 0)?;
+    let class_name = match ctx.value_php_type(target)?.codegen_repr() {
+        PhpType::Object(class_name) => class_name,
+        PhpType::Str => const_string_operand(ctx, target)?,
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "get_class_methods() from PHP type {:?}",
+                other,
+            )))
+        }
+    };
+    let names = visible_class_method_names(ctx, &class_name)?;
+    emit_string_array(ctx, &names)?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns method names visible from the current lexical class scope.
+fn visible_class_method_names(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Result<Vec<String>> {
+    let clean = class_name.trim_start_matches('\\');
+    if let Some((resolved_name, info)) = lookup_class_entry(ctx, clean) {
+        let mut names = info
+            .methods
+            .keys()
+            .chain(info.static_methods.keys())
+            .filter(|method| class_method_is_visible(ctx, resolved_name, info, method))
+            .cloned()
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        return Ok(names);
+    }
+    if let Some(info) = lookup_interface(ctx, clean) {
+        let mut names = info
+            .method_order
+            .iter()
+            .chain(info.static_method_order.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        return Ok(names);
+    }
+    if let Some(methods) = lookup_trait_methods(ctx, clean) {
+        let mut names = methods
+            .iter()
+            .filter(|(_, method)| method.visibility == Visibility::Public)
+            .map(|(_, method)| method.name.clone())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        return Ok(names);
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "get_class_methods() unknown class {}",
+        clean,
+    )))
+}
+
+/// Returns whether one resolved class method is visible from this EIR function.
+fn class_method_is_visible(
+    ctx: &FunctionContext<'_>,
+    lookup_class: &str,
+    info: &ClassInfo,
+    method: &str,
+) -> bool {
+    let (visibility, declaring_class) = if info.methods.contains_key(method) {
+        (
+            info.method_visibilities
+                .get(method)
+                .unwrap_or(&Visibility::Public),
+            info.method_declaring_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(lookup_class),
+        )
+    } else {
+        (
+            info.static_method_visibilities
+                .get(method)
+                .unwrap_or(&Visibility::Public),
+            info.static_method_declaring_classes
+                .get(method)
+                .map(String::as_str)
+                .unwrap_or(lookup_class),
+        )
+    };
+    member_is_visible(ctx, declaring_class, visibility)
+}
+
+/// Applies PHP public, protected, and private access rules to reflection output.
+fn member_is_visible(
+    ctx: &FunctionContext<'_>,
+    declaring_class: &str,
+    visibility: &Visibility,
+) -> bool {
+    match visibility {
+        Visibility::Public => true,
+        Visibility::Private => ctx.function.lexical_class.as_deref() == Some(declaring_class),
+        Visibility::Protected => ctx.function.lexical_class.as_deref().is_some_and(|current| {
+            current == declaring_class || class_is_descendant_of(ctx, current, declaring_class)
+        }),
+    }
+}
+
+/// Returns whether `class_name` descends from `ancestor` in resolved class metadata.
+fn class_is_descendant_of(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    ancestor: &str,
+) -> bool {
+    let mut current = lookup_class(ctx, class_name).and_then(|info| info.parent.as_deref());
+    while let Some(parent) = current {
+        if parent == ancestor {
+            return true;
+        }
+        current = lookup_class(ctx, parent).and_then(|info| info.parent.as_deref());
+    }
+    false
+}
+
+/// Looks up a class and preserves the canonical declaration name alongside its metadata.
+fn lookup_class_entry<'a>(
+    ctx: &'a FunctionContext<'_>,
+    name: &str,
+) -> Option<(&'a str, &'a ClassInfo)> {
+    let key = php_symbol_key(name);
+    ctx.module
+        .class_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .map(|(candidate, info)| (candidate.as_str(), info))
+}
+
+/// Looks up interface metadata by PHP's case-insensitive class-like naming rules.
+fn lookup_interface<'a>(
+    ctx: &'a FunctionContext<'_>,
+    name: &str,
+) -> Option<&'a crate::types::InterfaceInfo> {
+    let key = php_symbol_key(name);
+    ctx.module
+        .interface_infos
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .map(|(_, info)| info)
+}
+
+/// Looks up direct trait method metadata by PHP's case-insensitive naming rules.
+fn lookup_trait_methods<'a>(
+    ctx: &'a FunctionContext<'_>,
+    name: &str,
+) -> Option<&'a std::collections::HashMap<String, crate::ir::TraitMethodInfo>> {
+    let key = php_symbol_key(name);
+    ctx.module
+        .declared_trait_methods
+        .iter()
+        .find(|(candidate, _)| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .map(|(_, methods)| methods)
+}
+
 /// Lowers an explicit object-to-array cast to a fresh all-property hash projection.
 pub(crate) fn lower_object_array_cast(
     ctx: &mut FunctionContext<'_>,
@@ -540,6 +708,16 @@ fn emit_object_hash_projection(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_object_to_hash");
+    Ok(())
+}
+
+/// Projects every object property with PHP visibility-mangled keys and boxes the fresh hash.
+pub(crate) fn emit_mangled_object_vars(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    emit_object_hash_projection(ctx, value, true, -1)?;
     Ok(())
 }
 
@@ -782,10 +960,20 @@ pub(crate) fn lower_get_resource_type(
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
+    let raw_ty = ctx.raw_value_php_type(value)?;
     ctx.load_value_to_result(value)?;
-    match resource_type_name_shape(&ctx.raw_value_php_type(value)?) {
+    match resource_type_name_shape(&raw_ty) {
         ResourceTypeNameShape::Boxed => emit_boxed_resource_type_name(ctx),
         ResourceTypeNameShape::Unboxed => {
+            let subtype = match raw_ty {
+                PhpType::Resource(Some(ref kind)) if kind == "stream filter" => 9,
+                _ => 0,
+            };
+            let subtype_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x3",
+                Arch::X86_64 => "rcx",
+            };
+            abi::emit_load_int_immediate(ctx.emitter, subtype_reg, subtype);
             abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
         }
         ResourceTypeNameShape::Constant => emit_string_result(ctx, b"stream"),
@@ -873,9 +1061,11 @@ fn emit_boxed_resource_type_name_asm(
     emitter.label(resource_label);
     match emitter.target.arch {
         Arch::AArch64 => {
+            emitter.instruction("mov x3, x2");                                  // preserve the resource subtype for runtime name selection
             emitter.instruction("mov x0, x1");                                  // move the unboxed Mixed low payload into the integer result register
         }
         Arch::X86_64 => {
+            emitter.instruction("mov rcx, rdx");                                // preserve the resource subtype for runtime name selection
             emitter.instruction("mov rax, rdi");                                // move the unboxed Mixed low payload into the integer result register
         }
     }
@@ -1168,7 +1358,10 @@ fn declared_names(ctx: &FunctionContext<'_>, name: &str) -> Result<Vec<String>> 
 }
 
 /// Allocates an indexed string array and appends every declaration name.
-fn emit_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
+pub(in crate::codegen::lower_inst) fn emit_string_array(
+    ctx: &mut FunctionContext<'_>,
+    names: &[String],
+) -> Result<()> {
     let capacity = names.len().max(1);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -1255,7 +1448,7 @@ fn parent_of(ctx: &FunctionContext<'_>, class_name: &str) -> String {
 /// Returns a string literal value defined by a `ConstStr` operand.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
     optional_const_string_operand(ctx, value)?.ok_or_else(|| {
-        CodegenIrError::unsupported("get_parent_class with non-literal class name")
+        CodegenIrError::unsupported("builtin requires a compile-time string operand")
     })
 }
 
@@ -1275,7 +1468,7 @@ fn optional_const_string_operand(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::ConstStr {
+    if !matches!(inst_ref.op, Op::ConstStr | Op::ConstClassName) {
         return Ok(None);
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
@@ -1283,10 +1476,12 @@ fn optional_const_string_operand(
             "string literal operand has no data id",
         ));
     };
-    Ok(Some(ctx
-        .module
-        .data
-        .strings
+    let values = if inst_ref.op == Op::ConstClassName {
+        &ctx.module.data.class_names
+    } else {
+        &ctx.module.data.strings
+    };
+    Ok(Some(values
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
@@ -1328,6 +1523,7 @@ mod get_resource_type_asm_tests {
             "    mov x2, #6\n",
             "    b _gt_done\n",
             "_gt_resource:\n",
+            "    mov x3, x2\n",
             "    mov x0, x1\n",
             "    bl __rt_resource_type_name\n",
             "_gt_done:\n",
@@ -1349,6 +1545,7 @@ mod get_resource_type_asm_tests {
             "    mov rdx, 6\n",
             "    jmp _gt_done\n",
             "_gt_resource:\n",
+            "    mov rcx, rdx\n",
             "    mov rax, rdi\n",
             "    call __rt_resource_type_name\n",
             "_gt_done:\n",

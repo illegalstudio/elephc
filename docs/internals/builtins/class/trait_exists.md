@@ -1,16 +1,16 @@
 ---
-title: "trait_exists() — internals"
+title: "trait_exists() - internals"
 description: "Compiler internals for trait_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 97
 ---
 
-## `trait_exists()` — internals
+## `trait_exists()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/trait_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/trait_exists.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

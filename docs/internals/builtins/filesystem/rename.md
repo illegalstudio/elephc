@@ -1,16 +1,16 @@
 ---
-title: "rename() — internals"
+title: "rename() - internals"
 description: "Compiler internals for rename(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 155
 ---
 
-## `rename()` — internals
+## `rename()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/rename.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/rename.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

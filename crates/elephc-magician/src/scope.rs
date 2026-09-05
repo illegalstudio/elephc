@@ -336,6 +336,22 @@ impl ElephcEvalScope {
         self.visible_cell(name).is_some()
     }
 
+    /// Returns visible scope entries in stable variable-name order.
+    pub(crate) fn visible_entries(&self) -> Vec<(String, RuntimeCellHandle)> {
+        let mut entries = self
+            .entries
+            .iter()
+            .filter_map(|(name, entry)| {
+                entry
+                    .flags()
+                    .is_visible()
+                    .then_some((name.clone(), entry.cell()))
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
     /// Marks a variable name as an alias to the eval context's global scope.
     pub fn mark_global_alias(&mut self, name: impl Into<String>) {
         let name = name.into();

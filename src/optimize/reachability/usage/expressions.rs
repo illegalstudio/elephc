@@ -27,11 +27,15 @@ impl Scanner<'_> {
             ExprKind::ExprCall { callee, args } => {
                 self.usage.hazards.dynamic_function = true;
                 self.usage.hazards.dynamic_method = true;
-                self.scan_expr(callee); self.scan_exprs(args);
+                self.scan_class_introspection_callable(callee, args);
+                self.scan_expr(callee);
+                self.scan_exprs(args);
             }
-            ExprKind::ClosureCall { args, .. } => {
+            ExprKind::ClosureCall { var, args } => {
                 self.usage.hazards.dynamic_function = true;
                 self.usage.hazards.dynamic_method = true;
+                let callable = Expr::new(ExprKind::Variable(var.clone()), expr.span);
+                self.scan_class_introspection_callable(&callable, args);
                 self.scan_exprs(args);
             }
             ExprKind::NewObject { class_name, args } => {
@@ -238,8 +242,13 @@ impl Scanner<'_> {
                     .insert((php_symbol_key("jsonSerialize"), false));
             }
             "function_exists" => self.literal_function_or_hazard(first),
-            "is_callable" | "call_user_func" | "call_user_func_array" => self.callable_or_hazard(first),
+            "get_defined_functions" => self.usage.hazards.enumerates_functions = true,
+            "is_callable" | "call_user_func" | "call_user_func_array" => {
+                self.callable_or_hazard(first);
+                self.scan_call_user_func_class_introspection(&key, &normalized);
+            }
             "method_exists" => self.method_exists(args),
+            "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
             "eval" => {
@@ -257,7 +266,8 @@ impl Scanner<'_> {
         match name {
             "class_attribute_args" | "class_attribute_names" | "class_get_attributes"
             | "ptr_sizeof" | "class_implements" | "class_parents" | "class_uses"
-            | "get_parent_class" | "property_exists" | "spl_autoload" | "spl_autoload_call" => {
+            | "get_class_methods" | "get_class_vars" | "get_parent_class" | "property_exists"
+            | "spl_autoload" | "spl_autoload_call" => {
                 self.scan_class_argument(name, args, 0, false);
             }
             "is_a" | "is_subclass_of" => {
@@ -302,6 +312,79 @@ impl Scanner<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Roots class metadata selected through a statically known `call_user_func*()` callback.
+    fn scan_call_user_func_class_introspection(&mut self, function: &str, args: &[Expr]) {
+        let Some((callback, remaining)) = args.split_first() else {
+            return;
+        };
+        match function {
+            "call_user_func" => self.scan_class_introspection_callable(callback, remaining),
+            "call_user_func_array" => {
+                let Some(arg_array) = remaining.first().map(unwrap_named_arg) else {
+                    return;
+                };
+                if let Some(callback_args) = static_call_user_func_array_args(arg_array) {
+                    self.scan_class_introspection_callable(callback, &callback_args);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Roots class metadata selected by a known class-introspection callable invocation.
+    fn scan_class_introspection_callable(&mut self, callable: &Expr, args: &[Expr]) {
+        let names = self.callable_function_names(unwrap_named_arg(callable));
+        for name in names {
+            match name.as_str() {
+                "get_class_vars" => {
+                    self.scan_class_argument(&name, args, 0, false);
+                }
+                "get_class_methods" => {
+                    self.scan_class_argument(&name, args, 0, false);
+                    self.usage.hazards.dynamic_method = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Returns statically tracked free-function names represented by one callable expression.
+    fn callable_function_names(&self, callable: &Expr) -> HashSet<String> {
+        match &callable.kind {
+            ExprKind::StringLiteral(name) if !name.contains("::") => {
+                [php_symbol_key(name.trim_start_matches('\\'))]
+                    .into_iter()
+                    .collect()
+            }
+            ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+                [php_symbol_key(name.as_str().trim_start_matches('\\'))]
+                    .into_iter()
+                    .collect()
+            }
+            ExprKind::Variable(name) => self
+                .variable_callables
+                .get(name)
+                .cloned()
+                .unwrap_or_default(),
+            ExprKind::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let mut names = self.callable_function_names(then_expr);
+                names.extend(self.callable_function_names(else_expr));
+                names
+            }
+            ExprKind::NullCoalesce { value, default }
+            | ExprKind::ShortTernary { value, default } => {
+                let mut names = self.callable_function_names(value);
+                names.extend(self.callable_function_names(default));
+                names
+            }
+            _ => HashSet::new(),
         }
     }
 
@@ -668,6 +751,13 @@ impl Scanner<'_> {
                 .or_default()
                 .extend(classes);
         }
+        let callables = self.callable_function_names(value);
+        if !callables.is_empty() {
+            self.variable_callables
+                .entry(name.to_string())
+                .or_default()
+                .extend(callables);
+        }
     }
 
     /// Records the declared receiver domain of a typed local even when its initializer is null.
@@ -699,6 +789,7 @@ impl Scanner<'_> {
     /// Permanently makes one local receiver opaque for the remainder of this conservative scan.
     pub(super) fn forget_variable(&mut self, name: &str) {
         self.variable_classes.remove(name);
+        self.variable_callables.remove(name);
         self.definitely_non_object_variables.remove(name);
         self.invalidated_variables.insert(name.to_string());
     }
@@ -988,6 +1079,31 @@ fn unwrap_named_arg(expr: &Expr) -> &Expr {
     if let ExprKind::NamedArg { value, .. } = &expr.kind { value } else { expr }
 }
 
+/// Converts a literal `call_user_func_array()` argument array into ordinary call arguments.
+fn static_call_user_func_array_args(arg_array: &Expr) -> Option<Vec<Expr>> {
+    match &arg_array.kind {
+        ExprKind::ArrayLiteral(items) => Some(items.clone()),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            let mut args = Vec::with_capacity(pairs.len());
+            for (key, value) in pairs {
+                match &key.kind {
+                    ExprKind::StringLiteral(name) => args.push(Expr::new(
+                        ExprKind::NamedArg {
+                            name: name.clone(),
+                            value: Box::new(value.clone()),
+                        },
+                        value.span,
+                    )),
+                    ExprKind::IntLiteral(_) => args.push(value.clone()),
+                    _ => return None,
+                }
+            }
+            Some(args)
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     const CALLBACK_BUILTINS: &[&str] = &[
@@ -1006,6 +1122,8 @@ mod tests {
         "iterator_apply",
         "ob_start",
         "preg_replace_callback",
+        "set_error_handler",
+        "set_exception_handler",
         "spl_autoload_register",
         "spl_autoload_unregister",
         "uasort",

@@ -1,16 +1,16 @@
 ---
-title: "array_walk_recursive() — internals"
+title: "array_walk_recursive() - internals"
 description: "Compiler internals for array_walk_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 47
 ---
 
-## `array_walk_recursive()` — internals
+## `array_walk_recursive()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_walk_recursive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_walk_recursive.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

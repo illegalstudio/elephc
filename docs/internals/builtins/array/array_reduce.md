@@ -1,16 +1,16 @@
 ---
-title: "array_reduce() — internals"
+title: "array_reduce() - internals"
 description: "Compiler internals for array_reduce(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 32
 ---
 
-## `array_reduce()` — internals
+## `array_reduce()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_reduce.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_reduce.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

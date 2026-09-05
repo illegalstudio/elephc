@@ -976,6 +976,7 @@ and 0.x validation rather than by speculative pass work.
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions
 - [ ] Switch-aware conditional include function variants — extend include-graph exclusivity beyond `if` / `elseif` / `else` to `switch` cases once fall-through, `break`, and terminating case bodies are modeled precisely; revisit `match` only if include-like statement lowering ever appears inside match arms
 - [x] Runtime routine dead stripping — include or link only runtime helpers reachable from the generated program instead of carrying the whole target runtime slice
+- [x] Core builtin parity closure: shared AOT and eval contracts cover the complete supported Core surface, including profile-aware error handling, dynamic class and function introspection, request-safe resources, and live cycle-collector metrics on every supported target
 - [x] Statically-known catchable `Error` conditions (issue #383) — private/protected method access from an inaccessible scope and readonly property writes outside the declaring constructor raise a catchable `Error` at runtime instead of being rejected at compile time, matching PHP
 - [ ] Tail-call optimization — direct tail self- and mutual-recursion lowering on top of EIR (`Br` to function entry with parameter rebinding)
 - [ ] Performance within 2x of C -O0 on compute benchmarks

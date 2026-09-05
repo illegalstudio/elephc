@@ -1,16 +1,16 @@
 ---
-title: "realpath() — internals"
+title: "realpath() - internals"
 description: "Compiler internals for realpath(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 152
 ---
 
-## `realpath()` — internals
+## `realpath()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/realpath.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/realpath.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

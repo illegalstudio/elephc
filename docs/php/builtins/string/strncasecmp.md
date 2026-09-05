@@ -2,7 +2,7 @@
 title: "strncasecmp()"
 description: "Compares the first n bytes of two strings, ignoring ASCII case."
 sidebar:
-  order: 501
+  order: 528
 ---
 
 ## strncasecmp()
@@ -23,9 +23,9 @@ Compares the first n bytes of two strings, ignoring ASCII case.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/strncasecmp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/strncasecmp.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

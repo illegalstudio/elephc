@@ -65,6 +65,7 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
         DefaultSpec::Float(v) => json!(v),
         DefaultSpec::Str(v) => json!(v),
         DefaultSpec::IntMax => json!("PHP_INT_MAX"),
+        DefaultSpec::ErrorAll => json!("E_ALL"),
         DefaultSpec::EmptyArray => json!([]),
     }
 }
@@ -172,6 +173,9 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     };
     let callable = match semantics.callable {
         BuiltinCallablePolicy::Dynamic(_) => json!({"kind": "dynamic"}),
+        BuiltinCallablePolicy::DirectOnly(reason) => {
+            json!({"kind": "direct_only", "reason": reason})
+        }
         BuiltinCallablePolicy::DynamicRuntime(target) => {
             json!({"kind": "dynamic_target", "target": target.as_eir()})
         }

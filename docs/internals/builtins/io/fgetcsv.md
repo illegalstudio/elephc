@@ -1,16 +1,16 @@
 ---
-title: "fgetcsv() — internals"
+title: "fgetcsv() - internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 172
 ---
 
-## `fgetcsv()` — internals
+## `fgetcsv()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fgetcsv.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

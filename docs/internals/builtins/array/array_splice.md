@@ -1,16 +1,16 @@
 ---
-title: "array_splice() — internals"
+title: "array_splice() - internals"
 description: "Compiler internals for array_splice(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 39
 ---
 
-## `array_splice()` — internals
+## `array_splice()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_splice.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_splice.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

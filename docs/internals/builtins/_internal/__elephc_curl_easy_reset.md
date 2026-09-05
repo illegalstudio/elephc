@@ -1,16 +1,16 @@
 ---
-title: "__elephc_curl_easy_reset() — internals"
+title: "__elephc_curl_easy_reset() - internals"
 description: "Compiler internals for __elephc_curl_easy_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 563
+  order: 590
 ---
 
-## `__elephc_curl_easy_reset()` — internals
+## `__elephc_curl_easy_reset()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_easy_reset.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_easy_reset.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

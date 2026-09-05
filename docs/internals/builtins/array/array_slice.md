@@ -1,16 +1,16 @@
 ---
-title: "array_slice() — internals"
+title: "array_slice() - internals"
 description: "Compiler internals for array_slice(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 38
 ---
 
-## `array_slice()` — internals
+## `array_slice()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_slice.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_slice.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

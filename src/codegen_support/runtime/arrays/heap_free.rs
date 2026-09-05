@@ -161,6 +161,8 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_free_post_validate");                      // finish through the common debug validation and free counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
+    emitter.label_shared("__rt_heap_free_insert_cached");
+    emitter.instruction("b __rt_heap_free_insert");                             // enter coalescing from gc_mem_caches through an unconditional cross-atom target
     emitter.label("__rt_heap_free_insert");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_free_list");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current free block while scanning for insertion point
@@ -445,6 +447,8 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_free_post_validate");                    // finish through the shared post-mutation validation and free-counting path
 
     // -- larger blocks still use the ordered free list for coalescing --
+    emitter.label_shared("__rt_heap_free_insert_cached");
+    emitter.instruction("jmp __rt_heap_free_insert");                           // enter coalescing from gc_mem_caches through a cross-section relocation
     emitter.label("__rt_heap_free_insert");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_free_list");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // load the current free-list head while scanning for the insertion point

@@ -36,6 +36,21 @@ pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     Box::into_raw(Box::new(ElephcEvalContext::new()))
 }
 
+/// Retains one heap eval context for a process-wide callback owner.
+///
+/// # Safety
+/// `ctx` must be a live pointer returned by `__elephc_eval_context_new`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_context_retain(ctx: *mut ElephcEvalContext) -> i32 {
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return EvalStatus::RuntimeFatal.code();
+    };
+    match context.retain_abi_owner() {
+        Ok(()) => EvalStatus::Ok.code(),
+        Err(status) => status.code(),
+    }
+}
+
 /// Marks this program's eval bridge as strict-PHP: extension builtins
 /// (`ptr_*`, `buffer_*`, `class_attribute_*`) disappear from eval dispatch and
 /// introspection, matching the PHP interpreter where those names do not exist.
@@ -89,20 +104,22 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
-    if !ctx.is_null() {
-        #[cfg(all(feature = "curl", not(test)))]
-        if let Some(context) = unsafe { ctx.as_mut() } {
-            let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
-            context
-                .stream_resources_mut()
-                .release_curl_easy_private_values(&mut values);
-        }
-        if let Some(context) = unsafe { ctx.as_ref() } {
-            context.unregister_dynamic_object_context();
-        }
-        crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
-        drop(Box::from_raw(ctx));
+    let Some(context) = (unsafe { ctx.as_mut() }) else {
+        return;
+    };
+    if !context.release_abi_owner() {
+        return;
     }
+    #[cfg(all(feature = "curl", not(test)))]
+    {
+        let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
+        context
+            .stream_resources_mut()
+            .release_curl_easy_private_values(&mut values);
+    }
+    context.unregister_dynamic_object_context();
+    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
+    drop(Box::from_raw(ctx));
 }
 
 /// Records source metadata for the next eval fragment executed in this context.

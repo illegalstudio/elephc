@@ -153,6 +153,10 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.label("__rt_mixed_free_deep_resource_stream");
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the native fd from the low payload word
 
+    emitter.instruction("cmp x0, #2");                                          // standard-stream aliases borrow fd 0, 1, and 2
+
+    emitter.instruction("b.ls __rt_mixed_free_deep_box");                       // release the resource box without closing process stdio
+
     emitter.instruction("mov x9, #0x40000000");                                 // load the synthetic/sentinel handle threshold into a scratch register
 
     emitter.instruction("cmp x0, x9");                                          // skip synthetic handles and the -1 sentinel left by an explicit close
@@ -357,6 +361,10 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.label("__rt_mixed_free_deep_resource_stream");
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // load the native fd from the low payload word into the close argument
+
+    emitter.instruction("cmp rdi, 2");                                          // standard-stream aliases borrow fd 0, 1, and 2
+
+    emitter.instruction("jbe __rt_mixed_free_deep_box");                        // release the resource box without closing process stdio
 
     emitter.instruction("cmp rdi, 0x40000000");                                 // synthetic/sentinel handle threshold (-1 marks an explicit close)
 
@@ -571,6 +579,31 @@ mod tests {
                 narrow.contains("__rt_mixed_free_deep_box:\n"),
                 "{arch:?}: the generic box-free path must survive the gating"
             );
+        }
+    }
+
+    /// Stream cleanup preserves fd 0, 1, and 2 aliases on every supported architecture.
+    #[test]
+    fn stream_cleanup_preserves_standard_stream_aliases() {
+        for shapes in LADDERS {
+            let arch = shapes.arch;
+            let narrow = emit_for(shapes, RuntimeFeatures::none());
+            match arch {
+                Arch::AArch64 => {
+                    assert!(narrow.contains("cmp x0, #2"), "{arch:?}");
+                    assert!(
+                        narrow.contains("b.ls __rt_mixed_free_deep_box"),
+                        "{arch:?}"
+                    );
+                }
+                Arch::X86_64 => {
+                    assert!(narrow.contains("cmp rdi, 2"), "{arch:?}");
+                    assert!(
+                        narrow.contains("jbe __rt_mixed_free_deep_box"),
+                        "{arch:?}"
+                    );
+                }
+            }
         }
     }
 

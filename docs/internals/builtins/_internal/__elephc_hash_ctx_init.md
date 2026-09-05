@@ -1,16 +1,16 @@
 ---
-title: "__elephc_hash_ctx_init() — internals"
+title: "__elephc_hash_ctx_init() - internals"
 description: "Compiler internals for __elephc_hash_ctx_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 598
+  order: 625
 ---
 
-## `__elephc_hash_ctx_init()` — internals
+## `__elephc_hash_ctx_init()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/__elephc_hash_ctx_init.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/__elephc_hash_ctx_init.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

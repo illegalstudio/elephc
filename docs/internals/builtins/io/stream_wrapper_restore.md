@@ -1,16 +1,16 @@
 ---
-title: "stream_wrapper_restore() — internals"
+title: "stream_wrapper_restore() - internals"
 description: "Compiler internals for stream_wrapper_restore(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 253
 ---
 
-## `stream_wrapper_restore()` — internals
+## `stream_wrapper_restore()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_wrapper_restore.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_wrapper_restore.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

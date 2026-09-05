@@ -35,6 +35,7 @@ SUPPORTED_TARGETS = [
 ]
 HOST_ONLY_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
 SOURCE_SUFFIXES = {".php", ".rs", ".snap"}
+COMPILER_TRANSFORM_NAMES = {"func_get_arg", "func_get_args", "func_num_args"}
 
 
 def read(path: Path) -> str:
@@ -312,6 +313,7 @@ def build_inventory() -> dict[str, Any]:
         target_category = {
             "language-construct": 5,
             "dedicated-syntax": 5,
+            "compiler-transform": 5,
             "prelude": 4,
         }.get(route, 0)
         compiler_resident.append(
@@ -344,7 +346,17 @@ def build_inventory() -> dict[str, Any]:
             "invalid_non_registry_routes": sorted(
                 record["name"]
                 for record in compiler_resident
-                if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}
+                if record["kind"]
+                not in {
+                    "language-construct",
+                    "dedicated-syntax",
+                    "compiler-transform",
+                    "prelude",
+                }
+                or (
+                    record["kind"] == "compiler-transform"
+                    and record["name"] not in COMPILER_TRANSFORM_NAMES
+                )
             ),
             "inconsistent_eval_only_flags": sorted(
                 record["name"]
@@ -423,9 +435,24 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
                 f"{record['name']}: {strategy} strategy does not use backend-neutral EIR lowering"
             )
 
+    compiler_transforms = set()
     for record in inventory["compiler_resident"]:
-        if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}:
+        if record["kind"] == "compiler-transform":
+            compiler_transforms.add(record["name"])
+        if record["kind"] not in {
+            "language-construct",
+            "dedicated-syntax",
+            "compiler-transform",
+            "prelude",
+        }:
             errors.append(f"{record['name']}: undeclared non-registry AOT route")
+        elif (
+            record["kind"] == "compiler-transform"
+            and record["name"] not in COMPILER_TRANSFORM_NAMES
+        ):
+            errors.append(f"{record['name']}: undeclared compiler-transform AOT route")
+    for name in sorted(COMPILER_TRANSFORM_NAMES - compiler_transforms):
+        errors.append(f"{name}: missing declared compiler-transform AOT route")
 
     # The optional `{` matches a BLOCK-BODIED match arm. rustfmt wraps an arm whose
     # symbol name does not fit on one line into `Variant => { "name" }`, and without

@@ -7,8 +7,8 @@
 //! - `super::tests` for cache-key and integrity regressions.
 //!
 //! Key details:
-//! - Every runtime-emission feature, relocation mode, and library-boundary mode participates in the
-//!   source-identity hash.
+//! - Every runtime-emission feature, PHP profile, relocation mode, and library-boundary mode
+//!   participates in the source-identity hash.
 //! - Published objects are accepted only when their FNV-1a checksum matches the sidecar.
 
 use std::fs;
@@ -36,6 +36,7 @@ pub(super) fn runtime_cache_file_name(heap_size: usize, target: Target, runtime_
 pub(super) fn runtime_cache_key_with_build_identity(
     heap_size: usize,
     target: Target,
+    php_version_id: u32,
     features: RuntimeFeatures,
     pic: bool,
     build_identity: &[u8],
@@ -43,6 +44,7 @@ pub(super) fn runtime_cache_key_with_build_identity(
     runtime_cache_key_with_build_identity_and_boundary(
         heap_size,
         target,
+        php_version_id,
         features,
         pic,
         pic,
@@ -54,6 +56,7 @@ pub(super) fn runtime_cache_key_with_build_identity(
 pub(super) fn runtime_cache_key_with_build_identity_and_boundary(
     heap_size: usize,
     target: Target,
+    php_version_id: u32,
     features: RuntimeFeatures,
     pic: bool,
     library_boundary: bool,
@@ -66,7 +69,11 @@ pub(super) fn runtime_cache_key_with_build_identity_and_boundary(
     let feature_bits = features.cache_key_bits()
         | ((library_boundary as u64) << 62)
         | ((pic as u64) << 63);
-    let mut identity = format!("{}:{heap_size}:{feature_bits}:", target.as_str()).into_bytes();
+    let mut identity = format!(
+        "{}:{php_version_id}:{heap_size}:{feature_bits}:",
+        target.as_str()
+    )
+    .into_bytes();
     identity.extend_from_slice(build_identity);
     runtime_bytes_hash(&identity)
 }

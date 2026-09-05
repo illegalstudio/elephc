@@ -1,16 +1,16 @@
 ---
-title: "substr_count() — internals"
+title: "substr_count() - internals"
 description: "Compiler internals for substr_count(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 512
+  order: 539
 ---
 
-## `substr_count()` — internals
+## `substr_count()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/substr_count.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/substr_count.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

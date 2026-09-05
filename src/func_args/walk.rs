@@ -10,6 +10,8 @@
 //! - Function scopes nest: a closure declared inside a function has its own argument frame,
 //!   so `Rewriter::scope` is saved and restored around every function-like node instead of
 //!   being inherited.
+//! - A source variadic is copied into an internal positional-only snapshot before user code.
+//!   String-keyed named variadic entries are excluded because PHP omits them from `func_*`.
 //! - Children are rewritten before their parent node, so `func_get_arg(func_num_args() - 1)`
 //!   lowers the inner call first and the outer call sees a plain expression.
 //! - The statement and expression matches are exhaustive (no wildcard arm). A new AST node
@@ -20,42 +22,45 @@
 //!   no introspection call to rewrite and are not walked.
 
 use crate::errors::CompileError;
-use crate::names::Name;
+use crate::names::{Name, NameKind};
 use crate::parser::ast::{
     AttributeGroup, CallableTarget, ClassMethod, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind,
     TypeExpr,
 };
 
-use super::{build, IntrospectionCall, HIDDEN_ARGS_PARAM};
+use super::{build, IntrospectionCall, HIDDEN_ARGC_PARAM, HIDDEN_ARGS_PARAM};
 
 /// The argument frame of the function-like scope currently being walked.
 struct Scope {
     /// Declared regular parameters, in declaration order, without the leading `$`.
     param_names: Vec<String>,
-    /// The first declared parameter that carries a default value, if any. Such a scope
-    /// cannot tell "passed" from "defaulted" through a variadic tail, so it is rejected.
+    /// The first declared parameter that carries a default value, if any.
     optional_param: Option<String>,
     /// The variadic parameter the source function declares itself, if any.
     source_variadic: Option<String>,
     /// Set once an introspection call was rewritten in this scope, which is what makes the
     /// hidden variadic parameter necessary.
     used: bool,
-    /// Diagnostic label for this scope, e.g. `function 'va'`.
-    label: String,
 }
 
 /// In-place AST rewriter for the three argument-introspection constructs.
 pub(super) struct Rewriter {
     scope: Option<Scope>,
     errors: Vec<CompileError>,
+    capture_all_frames: bool,
+    rewrite_introspection: bool,
+    saw_backtrace: bool,
 }
 
 impl Rewriter {
-    /// Creates a rewriter positioned at top level, where no argument frame exists.
-    pub(super) fn new() -> Self {
+    /// Creates a rewriter positioned at top level with the requested frame-capture mode.
+    pub(super) fn new(capture_all_frames: bool, rewrite_introspection: bool) -> Self {
         Self {
             scope: None,
             errors: Vec::new(),
+            capture_all_frames,
+            rewrite_introspection,
+            saw_backtrace: false,
         }
     }
 
@@ -286,17 +291,15 @@ impl Rewriter {
         }
     }
 
-    /// Walks a function-like body in its own argument frame and, if the body used one of
-    /// the introspection constructs, appends the hidden `mixed ...$__elephc_func_args`
-    /// parameter that collects the surplus positional arguments.
+    /// Walks a function-like body in its own argument frame and installs its argument snapshot.
     ///
     /// `param_attributes` is `None` for closures, whose AST node carries no per-parameter
     /// attribute list; for every other scope it is kept aligned with `params` plus the one
     /// trailing entry the variadic parameter owns.
     fn walk_function_scope(
         &mut self,
-        label: String,
-        params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+        _label: String,
+        params: &mut Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
         param_attributes: Option<&mut Vec<Vec<AttributeGroup>>>,
         variadic: &mut Option<String>,
         variadic_type: &mut Option<TypeExpr>,
@@ -309,14 +312,35 @@ impl Rewriter {
                 .find(|(_, _, default, _)| default.is_some())
                 .map(|(name, ..)| name.clone()),
             source_variadic: variadic.clone(),
-            used: false,
-            label,
+            used: self.capture_all_frames,
         };
         let outer = self.scope.replace(scope);
         self.walk_stmts(body);
         let scope = std::mem::replace(&mut self.scope, outer)
             .expect("function scope was installed before walking the body");
         if !scope.used {
+            return;
+        }
+        if let Some(source_variadic) = scope.source_variadic {
+            let count_metadata = scope.optional_param.is_some();
+            let span = body
+                .first()
+                .map(|statement| statement.span)
+                .unwrap_or_else(crate::span::Span::dummy);
+            let snapshot = source_variadic_snapshot(&source_variadic, count_metadata, span);
+            body.splice(0..0, snapshot);
+            if count_metadata {
+                let attribute_index = params.len();
+                params.push((
+                    HIDDEN_ARGC_PARAM.to_string(),
+                    Some(TypeExpr::Int),
+                    Some(Expr::new(ExprKind::IntLiteral(0), span)),
+                    false,
+                ));
+                if let Some(param_attributes) = param_attributes {
+                    param_attributes.insert(attribute_index, Vec::new());
+                }
+            }
             return;
         }
         *variadic = Some(HIDDEN_ARGS_PARAM.to_string());
@@ -527,17 +551,27 @@ impl Rewriter {
         self.try_rewrite_call(expr);
     }
 
-    /// Replaces `expr` in place when it is a call to one of the three introspection
-    /// constructs, recording a diagnostic instead when the enclosing scope cannot support
-    /// it. Any other expression is left untouched.
+    /// Replaces direct and literal `call_user_func*` invocations of the three introspection
+    /// constructs, recording a diagnostic when the enclosing scope cannot support them.
     fn try_rewrite_call(&mut self, expr: &mut Expr) {
         let ExprKind::FunctionCall { name, args } = &expr.kind else {
             return;
         };
-        let Some(call) = IntrospectionCall::from_name(name) else {
+        if name.last_segment().is_some_and(|name| {
+            name.eq_ignore_ascii_case("debug_backtrace")
+                || name.eq_ignore_ascii_case("debug_print_backtrace")
+        }) {
+            self.saw_backtrace = true;
+        }
+        if !self.rewrite_introspection {
+            return;
+        }
+        let replacement = IntrospectionCall::from_name(name)
+            .map(|call| (call, args.clone()))
+            .or_else(|| literal_call_user_func_introspection(name, args));
+        let Some((call, args)) = replacement else {
             return;
         };
-        let args = args.clone();
         match self.scope_replacement(call, &args, expr.span) {
             Ok(kind) => expr.kind = kind,
             Err(error) => self.errors.push(error),
@@ -547,11 +581,9 @@ impl Rewriter {
     /// Validates that `call` can be rewritten in the current scope and, if so, marks the
     /// scope as needing the hidden variadic parameter and builds the replacement.
     ///
-    /// Every rejected shape produces a diagnostic instead of a silently different answer:
-    /// PHP's own "must be called from a function context" fatal, and the two argument-frame
-    /// shapes elephc cannot reconstruct from a variadic tail (optional parameters, whose
-    /// "passed" vs "defaulted" status is not recoverable, and a source-declared variadic,
-    /// whose contents the body may have reassigned).
+    /// Every rejected shape produces a diagnostic instead of a silently different answer.
+    /// Optional parameters use the hidden collector's passed-count metadata unless the source
+    /// already owns the variadic slot, a combination which still has no count channel.
     fn scope_replacement(
         &mut self,
         call: IntrospectionCall,
@@ -590,30 +622,110 @@ impl Rewriter {
                 ),
             ));
         };
-        if let Some(variadic) = &scope.source_variadic {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{}() is not supported in {}: it declares the variadic parameter ${} — read that parameter directly",
-                    call.php_name(),
-                    scope.label,
-                    variadic
-                ),
-            ));
-        }
-        if let Some(optional) = &scope.optional_param {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{}() is not supported in {}: parameter ${} has a default value, so elephc cannot tell a passed argument from a defaulted one",
-                    call.php_name(),
-                    scope.label,
-                    optional
-                ),
-            ));
-        }
         scope.used = true;
         let param_names = scope.param_names.clone();
-        Ok(build::replacement(call, &param_names, args, span))
+        Ok(build::replacement(
+            call,
+            &param_names,
+            args,
+            scope.optional_param.is_some(),
+            span,
+        ))
     }
+}
+
+/// Extracts PHP's special literal `call_user_func*('func_*', ...)` call shapes.
+fn literal_call_user_func_introspection(
+    name: &Name,
+    args: &[Expr],
+) -> Option<(IntrospectionCall, Vec<Expr>)> {
+    let function = name.last_segment()?;
+    let ExprKind::StringLiteral(callback) = &args.first()?.kind else {
+        return None;
+    };
+    let call = IntrospectionCall::from_segment(callback)?;
+    if function.eq_ignore_ascii_case("call_user_func") {
+        return Some((call, args[1..].to_vec()));
+    }
+    if !function.eq_ignore_ascii_case("call_user_func_array") || args.len() != 2 {
+        return None;
+    }
+    match &args[1].kind {
+        ExprKind::ArrayLiteral(values) => Some((call, values.clone())),
+        ExprKind::ArrayLiteralAssoc(entries)
+            if entries
+                .iter()
+                .all(|(key, _)| matches!(key.kind, ExprKind::IntLiteral(_))) =>
+        {
+            Some((call, entries.iter().map(|(_, value)| value.clone()).collect()))
+        }
+        _ => None,
+    }
+}
+
+/// Returns whether the resolved program contains a direct Core backtrace call.
+pub(super) fn program_uses_backtrace(program: &[Stmt]) -> bool {
+    let mut scratch = program.to_vec();
+    let mut detector = Rewriter::new(false, false);
+    detector.walk_stmts(&mut scratch);
+    detector.saw_backtrace
+}
+
+/// Builds an entry-time positional snapshot of a source-declared variadic parameter.
+fn source_variadic_snapshot(
+    source_variadic: &str,
+    count_metadata: bool,
+    span: crate::span::Span,
+) -> Vec<Stmt> {
+    let initial = if count_metadata {
+        vec![Expr::new(
+            ExprKind::Variable(HIDDEN_ARGC_PARAM.to_string()),
+            span,
+        )]
+    } else {
+        Vec::new()
+    };
+    let snapshot_init = Stmt::new(
+        StmtKind::Assign {
+            name: HIDDEN_ARGS_PARAM.to_string(),
+            value: Expr::new(ExprKind::ArrayLiteral(initial), span),
+        },
+        span,
+    );
+    let key_name = "__elephc_func_arg_key".to_string();
+    let value_name = "__elephc_func_arg_value".to_string();
+    let key = Expr::new(ExprKind::Variable(key_name.clone()), span);
+    let is_positional = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["is_int".to_string()]),
+            args: vec![key],
+        },
+        span,
+    );
+    let append = Stmt::new(
+        StmtKind::ArrayPush {
+            array: HIDDEN_ARGS_PARAM.to_string(),
+            value: Expr::new(ExprKind::Variable(value_name.clone()), span),
+        },
+        span,
+    );
+    let snapshot_positional = Stmt::new(
+        StmtKind::Foreach {
+            array: Expr::new(ExprKind::Variable(source_variadic.to_string()), span),
+            key_var: Some(key_name),
+            value_var: value_name,
+            value_by_ref: false,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: is_positional,
+                    then_body: vec![append],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                span,
+            )],
+        },
+        span,
+    );
+    vec![snapshot_init, snapshot_positional]
 }

@@ -19,10 +19,10 @@ sidebar:
 | [`class_uses()`](./class/class_uses.md) | `(mixed $object_or_class, bool $autoload = true): mixed` | `mixed` | ✓ | ✓ |
 | [`enum_exists()`](./class/enum_exists.md) | `(string $enum, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`function_exists()`](./class/function_exists.md) | `(string $function): bool` | `bool` | ✓ | ✓ |
-| [`get_called_class()`](./class/get_called_class.md) | `(): mixed` | `mixed` | — | ✓ |
+| [`get_called_class()`](./class/get_called_class.md) | `(): string` | `string` | ✓ | ✓ |
 | [`get_class()`](./class/get_class.md) | `(object $object = null): string` | `string` | ✓ | ✓ |
-| [`get_class_methods()`](./class/get_class_methods.md) | `(mixed $object_or_class): mixed` | `mixed` | — | ✓ |
-| [`get_class_vars()`](./class/get_class_vars.md) | `(mixed $class): mixed` | `mixed` | — | ✓ |
+| [`get_class_methods()`](./class/get_class_methods.md) | `(mixed $object_or_class): array` | `array` | ✓ | ✓ |
+| [`get_class_vars()`](./class/get_class_vars.md) | `(mixed $class): array` | `array` | ✓ | ✓ |
 | [`get_declared_classes()`](./class/get_declared_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_interfaces()`](./class/get_declared_interfaces.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_traits()`](./class/get_declared_traits.md) | `(): array` | `array` | ✓ | ✓ |

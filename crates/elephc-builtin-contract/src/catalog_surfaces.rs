@@ -1,7 +1,7 @@
 //! Purpose:
 //! Canonical contracts for PHP surfaces implemented outside the AOT `builtin!`
 //! registry, including language constructs, dedicated syntax, preludes, and
-//! currently eval-only reflection functions.
+//! compiler transforms, and reflection functions.
 //!
 //! Called from:
 //! - `crate::registry` when assembling the complete shared contract catalog.
@@ -75,6 +75,30 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         extension: true
     ),
     surface!(
+        "debug_backtrace",
+        Callables,
+        Function,
+        [
+            param!("options", Int = DefaultSpec::Int(1)),
+            param!("limit", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Mixed,
+        "Generates a PHP backtrace for the active call stack."
+    ),
+    surface!(
+        "debug_print_backtrace",
+        Callables,
+        Function,
+        [
+            param!("options", Int = DefaultSpec::Int(0)),
+            param!("limit", Int = DefaultSpec::Int(0)),
+        ],
+        None,
+        Void,
+        "Prints a PHP backtrace for the active call stack."
+    ),
+    surface!(
         "die",
         System,
         LanguageConstruct,
@@ -93,6 +117,15 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Determines whether a variable is considered empty."
     ),
     surface!(
+        "error_reporting",
+        System,
+        Function,
+        [param!("error_level", Mixed = DefaultSpec::Null)],
+        None,
+        Int,
+        "Gets or sets the active error reporting mask."
+    ),
+    surface!(
         "exit",
         System,
         LanguageConstruct,
@@ -102,13 +135,112 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Terminates execution with an optional status."
     ),
     surface!(
-        "get_called_class",
+        "func_get_arg",
+        Callables,
+        Function,
+        [param!("position", Int)],
+        None,
+        Mixed,
+        "Returns one argument from the current function call."
+    ),
+    surface!(
+        "func_get_args",
         Callables,
         Function,
         [],
         None,
         Mixed,
-        "Returns the late-static-binding class name in eval context."
+        "Returns the arguments passed to the current function call."
+    ),
+    surface!(
+        "func_num_args",
+        Callables,
+        Function,
+        [],
+        None,
+        Int,
+        "Returns the number of arguments passed to the current function call."
+    ),
+    surface!(
+        "get_called_class",
+        Callables,
+        Function,
+        [],
+        None,
+        Str,
+        "Returns the late-static-binding class name."
+    ),
+    surface!(
+        "get_defined_constants",
+        Callables,
+        Function,
+        [param!("categorize", Bool = DefaultSpec::Bool(false))],
+        None,
+        Mixed,
+        "Returns constants visible to the current program."
+    ),
+    surface!(
+        "get_defined_functions",
+        Callables,
+        Function,
+        [param!("exclude_disabled", Bool = DefaultSpec::Bool(true))],
+        None,
+        Mixed,
+        "Returns internal and user-defined function names. Elephc has no disable_functions configuration, so exclude_disabled is accepted but does not change the result."
+    ),
+    surface!(
+        "get_defined_vars",
+        Callables,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns variables visible in the current scope."
+    ),
+    surface!(
+        "get_extension_funcs",
+        Callables,
+        Function,
+        [param!("extension", Str)],
+        None,
+        Mixed,
+        "Returns functions exported by a loaded extension or false."
+    ),
+    surface!(
+        "get_included_files",
+        Callables,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns the files included by the current program."
+    ),
+    surface!(
+        "get_mangled_object_vars",
+        Callables,
+        Function,
+        [param!("object", Mixed)],
+        None,
+        Mixed,
+        "Returns an object's properties using PHP's visibility-mangled keys."
+    ),
+    surface!(
+        "get_required_files",
+        Callables,
+        Function,
+        [],
+        None,
+        Mixed,
+        "Returns the files included or required by the current program."
+    ),
+    surface!(
+        "get_resources",
+        Callables,
+        Function,
+        [param!("type", Mixed = DefaultSpec::Null)],
+        None,
+        Mixed,
+        "Returns currently active resources, optionally filtered by type."
     ),
     surface!(
         "get_class_methods",
@@ -126,7 +258,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         [param!("class", Mixed)],
         None,
         Mixed,
-        "Returns visible default properties for a class."
+        "Returns visible default properties for a class. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported."
     ),
     surface!(
         "hash_copy",
@@ -181,6 +313,57 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Determines whether variables are set and are not null."
     ),
     surface!(
+        "restore_error_handler",
+        System,
+        Function,
+        [],
+        None,
+        Bool,
+        "Restores the previously active user error handler."
+    ),
+    surface!(
+        "restore_exception_handler",
+        System,
+        Function,
+        [],
+        None,
+        Bool,
+        "Restores the previously active uncaught-exception handler."
+    ),
+    surface!(
+        "set_error_handler",
+        System,
+        Function,
+        [
+            param!("callback", Mixed),
+            param!("error_levels", Int = DefaultSpec::ErrorAll),
+        ],
+        None,
+        Mixed,
+        "Installs a user error handler and returns the previous handler."
+    ),
+    surface!(
+        "set_exception_handler",
+        System,
+        Function,
+        [param!("callback", Mixed)],
+        None,
+        Mixed,
+        "Installs an uncaught-exception handler and returns the previous handler."
+    ),
+    surface!(
+        "trigger_error",
+        System,
+        Function,
+        [
+            param!("message", Str),
+            param!("error_level", Int = DefaultSpec::Int(1_024)),
+        ],
+        None,
+        Bool,
+        "Generates a user-level PHP error."
+    ),
+    surface!(
         "unset",
         Types,
         LanguageConstruct,
@@ -188,5 +371,26 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         Some("vars"),
         Void,
         "Unsets the given variables."
+    ),
+    surface!(
+        "user_error",
+        System,
+        Function,
+        [
+            param!("message", Str),
+            param!("error_level", Int = DefaultSpec::Int(1_024)),
+        ],
+        None,
+        Bool,
+        "Alias of trigger_error."
+    ),
+    surface!(
+        "zend_version",
+        System,
+        PreludeProvided,
+        [],
+        None,
+        Str,
+        "Returns the Zend Engine version for the active PHP profile."
     ),
 ];

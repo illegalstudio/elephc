@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **515 / 2030** (25%).
+Overall builtin coverage: **542 / 2030** (27%).
 
 ## Builtin coverage by PHP module
 
@@ -19,7 +19,7 @@ Overall builtin coverage: **515 / 2030** (25%).
 | `bcmath` | 14 / 14 | 100% | 14 | 14 |
 | `bz2` | 0 / 10 | 0% | 0 | 0 |
 | `calendar`† | 0 / 18 | 0% | 0 | 0 |
-| `core` | 32 / 59 | 54% | 29 | 30 |
+| `core` | 59 / 59 | 100% | 59 | 59 |
 | `ctype` | 4 / 11 | 36% | 4 | 4 |
 | `curl`† | 32 / 33 | 97% | 32 | 32 |
 | `date`† | 11 / 48 | 23% | 11 | 11 |

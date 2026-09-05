@@ -1,16 +1,16 @@
 ---
-title: "array_rand() — internals"
+title: "array_rand() - internals"
 description: "Compiler internals for array_rand(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 31
 ---
 
-## `array_rand()` — internals
+## `array_rand()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_rand.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

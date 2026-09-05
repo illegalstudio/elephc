@@ -1,16 +1,16 @@
 ---
-title: "array_flip() — internals"
+title: "array_flip() - internals"
 description: "Compiler internals for array_flip(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 14
 ---
 
-## `array_flip()` — internals
+## `array_flip()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_flip.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_flip.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

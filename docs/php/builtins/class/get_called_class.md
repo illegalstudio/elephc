@@ -1,6 +1,6 @@
 ---
 title: "get_called_class()"
-description: "Returns the late-static-binding class name in eval context."
+description: "Returns the late-static-binding class name."
 sidebar:
   order: 83
 ---
@@ -8,21 +8,21 @@ sidebar:
 ## get_called_class()
 
 ```php
-function get_called_class(): mixed
+function get_called_class(): string
 ```
 
-Returns the late-static-binding class name in eval context.
+Returns the late-static-binding class name.
 
 **Parameters**: none.
 
-**Returns**: `mixed`
+**Returns**: `string`
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin (`eval-only-reflection`).
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_called_class.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_called_class.rs)).
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_called_class.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_called_class.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

@@ -61,6 +61,7 @@ pub(in crate::interpreter) use function_exists::{
     eval_date_procedural_alias_names, eval_function_probe_exists,
 };
 pub(in crate::interpreter) use get_class::eval_get_class_result;
+pub(in crate::interpreter) use get_object_vars::eval_get_object_vars_result;
 pub(in crate::interpreter) use get_parent_class::eval_get_parent_class_result;
 pub(in crate::interpreter) use is_a::dynamic_object_is_a;
 /// Gated with its only consumer: `curl_setopt()`'s KIND 8 options are the sole caller

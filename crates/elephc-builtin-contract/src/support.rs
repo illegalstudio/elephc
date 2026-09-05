@@ -33,6 +33,8 @@ pub enum BackendImplementation {
     LanguageConstruct,
     /// Dedicated syntax node rather than an ordinary function call.
     DedicatedSyntax,
+    /// Compiler pass that rewrites a call using its enclosing lexical function frame.
+    CompilerTransform,
     /// Injected elephc-PHP prelude backed by internal compiler builtins.
     Prelude,
 }
@@ -44,8 +46,6 @@ pub enum UnsupportedReason {
     InternalCompilerSurface,
     /// PHP-visible AOT implementation whose Magician implementation has not landed.
     EvalImplementationPending,
-    /// Reflection behavior currently exists only for eval-declared/runtime objects.
-    EvalOnlyReflection,
 }
 
 /// Expected support for one contract/backend pair.
@@ -117,8 +117,8 @@ pub fn backend_support(contract: &BuiltinContract, backend: BuiltinBackend) -> B
 
 /// Returns the expected compiler route for one shared contract.
 pub fn aot_support(contract: &BuiltinContract) -> BackendSupport {
-    if is_eval_only_reflection(contract.id) {
-        return BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection);
+    if matches!(contract.name, "func_get_arg" | "func_get_args" | "func_num_args") {
+        return BackendSupport::Implemented(BackendImplementation::CompilerTransform);
     }
     let implementation = match contract.kind {
         BuiltinKind::Function => BackendImplementation::Registry,
@@ -191,17 +191,6 @@ pub fn eval_execution(contract: &BuiltinContract) -> Option<EvalExecution> {
     })
 }
 
-/// Returns whether a function contract is intentionally available only in Magician.
-fn is_eval_only_reflection(id: BuiltinId) -> bool {
-    [
-        "get_called_class",
-        "get_class_methods",
-        "get_class_vars",
-    ]
-    .into_iter()
-    .any(|name| id == BuiltinId::from_canonical_name(name))
-}
-
 /// PHP-visible AOT contracts that do not yet have a Magician implementation binding.
 const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_all",
@@ -227,8 +216,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "join",
     "octdec",
     "serialize",
-    "strncasecmp",
-    "strncmp",
     "substr_count",
     "unserialize",
     "zval_free",
@@ -250,7 +237,6 @@ mod tests {
         let mut eval_pending = 0;
         let mut aot_registry = 0;
         let mut aot_external = 0;
-        let mut aot_unsupported = 0;
 
         for contract in contracts() {
             match eval_support(contract) {
@@ -270,9 +256,6 @@ mod tests {
                     aot_registry += 1;
                 }
                 BackendSupport::Implemented(_) => aot_external += 1,
-                BackendSupport::Unsupported(UnsupportedReason::EvalOnlyReflection) => {
-                    aot_unsupported += 1;
-                }
                 other => panic!("unexpected AOT support for {}: {other:?}", contract.name),
             }
         }
@@ -280,16 +263,15 @@ mod tests {
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(eval_registry, 484 + curl_surface);
+        assert_eq!(eval_registry, 513 + curl_surface);
         assert_eq!(eval_internal, 82);
-        assert_eq!(eval_pending, 31);
+        assert_eq!(eval_pending, 29);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
         // entry points.
-        assert_eq!(aot_registry, 584);
-        assert_eq!(aot_external, 10 + curl_surface);
-        assert_eq!(aot_unsupported, 3);
+        assert_eq!(aot_registry, 610);
+        assert_eq!(aot_external, 14 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -336,8 +318,8 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 463 + curl_surface);
-        assert_eq!(unsupported, 113);
+        assert_eq!(interpreter_adapter, 492 + curl_surface);
+        assert_eq!(unsupported, 111);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

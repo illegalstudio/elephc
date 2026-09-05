@@ -2,7 +2,7 @@
 title: "curl_multi_info_read()"
 description: "Gets information about the current transfers."
 sidebar:
-  order: 348
+  order: 375
 ---
 
 ## curl_multi_info_read()
@@ -22,9 +22,9 @@ Gets information about the current transfers.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_info_read.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_info_read.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_info_read.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_info_read.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

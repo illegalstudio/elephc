@@ -2,7 +2,7 @@
 title: "rawurldecode()"
 description: "Decodes an RFC 3986 percent-encoded string without treating '+' as a space."
 sidebar:
-  order: 481
+  order: 508
 ---
 
 ## rawurldecode()
@@ -21,9 +21,9 @@ Decodes an RFC 3986 percent-encoded string without treating '+' as a space.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/rawurldecode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/rawurldecode.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/rawurldecode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/rawurldecode.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

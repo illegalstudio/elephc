@@ -258,8 +258,10 @@ pub(super) const EVAL_PATHINFO_BASENAME: i64 = 2;
 pub(super) const EVAL_PATHINFO_EXTENSION: i64 = 4;
 pub(super) const EVAL_PATHINFO_FILENAME: i64 = 8;
 pub(super) const EVAL_PATHINFO_ALL: i64 = 15;
-pub(super) const EVAL_FNM_NOESCAPE: i64 = 1;
-pub(super) const EVAL_FNM_PATHNAME: i64 = 2;
+pub(super) const EVAL_FNM_NOESCAPE: i64 =
+    if cfg!(any(target_os = "macos", target_os = "ios")) { 1 } else { 2 };
+pub(super) const EVAL_FNM_PATHNAME: i64 =
+    if cfg!(any(target_os = "macos", target_os = "ios")) { 2 } else { 1 };
 pub(super) const EVAL_FNM_PERIOD: i64 = 4;
 pub(super) const EVAL_FNM_CASEFOLD: i64 = 16;
 pub(super) const EVAL_LOCK_SH: i64 = 1;

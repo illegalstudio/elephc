@@ -99,17 +99,37 @@ impl Checker {
                 ));
             }
         }
-        let regular_param_count = if effective_sig.variadic.is_some() {
-            effective_sig.params.len().saturating_sub(1)
-        } else {
-            effective_sig.params.len()
-        };
-        let variadic_elem_ty = effective_sig.variadic.as_ref().and_then(|_| {
-            effective_sig.params.last().and_then(|(_, ty)| match ty {
-                PhpType::Array(elem) => Some((**elem).clone()),
-                _ => None,
-            })
+        let regular_param_count = crate::types::call_args::regular_param_count(effective_sig);
+        let variadic_index = effective_sig.variadic.as_ref().and_then(|variadic_name| {
+            effective_sig
+                .params
+                .iter()
+                .position(|(param_name, _)| param_name == variadic_name)
         });
+        let variadic_elem_ty = if let Some(variadic_index) = variadic_index {
+            match &effective_sig.params[variadic_index].1 {
+                PhpType::Array(elem) => Some((**elem).clone()),
+                PhpType::Iterable => effective_sig
+                    .param_type_exprs
+                    .get(variadic_index)
+                    .and_then(Option::as_ref)
+                    .map(|type_expr| {
+                        self.resolve_declared_param_type_hint(
+                            type_expr,
+                            span,
+                            &format!(
+                                "Function '{}' variadic parameter ${}",
+                                name,
+                                effective_sig.variadic.as_deref().unwrap_or_default()
+                            ),
+                        )
+                    })
+                    .transpose()?,
+                _ => None,
+            }
+        } else {
+            None
+        };
         let mut param_idx = 0usize;
         for arg in args {
             let actual_ty = self.infer_type(arg, caller_env)?;
@@ -192,9 +212,8 @@ impl Checker {
                 // An argument collected by a by-REFERENCE variadic (`&...$xs`) is bound by
                 // reference exactly like a regular by-ref parameter's. Its flag sits at
                 // `regular_param_count` in `ref_params` (the signature's last slot).
-                if effective_sig
-                    .ref_params
-                    .get(regular_param_count)
+                if variadic_index
+                    .and_then(|index| effective_sig.ref_params.get(index))
                     .copied()
                     .unwrap_or(false)
                 {

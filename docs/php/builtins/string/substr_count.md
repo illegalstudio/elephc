@@ -2,7 +2,7 @@
 title: "substr_count()"
 description: "Counts the number of non-overlapping substring occurrences."
 sidebar:
-  order: 512
+  order: 539
 ---
 
 ## substr_count()
@@ -26,7 +26,7 @@ Counts the number of non-overlapping substring occurrences.
 - **Compiled (AOT)**: supported by the Elephc code generator.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

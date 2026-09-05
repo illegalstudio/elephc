@@ -1,16 +1,16 @@
 ---
-title: "bcceil() — internals"
+title: "bcceil() - internals"
 description: "Compiler internals for bcceil(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 268
 ---
 
-## `bcceil()` — internals
+## `bcceil()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/bcceil.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/bcceil.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

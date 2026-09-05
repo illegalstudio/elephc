@@ -1,16 +1,16 @@
 ---
-title: "strcasecmp() — internals"
+title: "strcasecmp() - internals"
 description: "Compiler internals for strcasecmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 496
+  order: 523
 ---
 
-## `strcasecmp()` — internals
+## `strcasecmp()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strcasecmp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strcasecmp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

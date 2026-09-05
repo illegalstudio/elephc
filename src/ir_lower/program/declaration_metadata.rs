@@ -184,6 +184,7 @@ pub(super) fn collect_declared_trait_methods(
                         .map(|method| {
                             let method_key = php_symbol_key(&method.name);
                             let info = TraitMethodInfo {
+                                name: method.name.clone(),
                                 signature: function::method_signature_from_ast(method),
                                 visibility: method.visibility.clone(),
                                 is_static: method.is_static,
@@ -437,4 +438,3 @@ pub(super) fn value_or_void_ir_type(php_type: &PhpType) -> IrType {
         other => IrType::from_php(other),
     }
 }
-

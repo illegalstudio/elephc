@@ -1,16 +1,16 @@
 ---
-title: "pathinfo() — internals"
+title: "pathinfo() - internals"
 description: "Compiler internals for pathinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 148
 ---
 
-## `pathinfo()` — internals
+## `pathinfo()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/pathinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/pathinfo.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

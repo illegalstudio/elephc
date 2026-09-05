@@ -1,16 +1,16 @@
 ---
-title: "preg_split() — internals"
+title: "preg_split() - internals"
 description: "Compiler internals for preg_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 404
+  order: 431
 ---
 
-## `preg_split()` — internals
+## `preg_split()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_split.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_split.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

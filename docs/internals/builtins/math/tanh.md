@@ -1,16 +1,16 @@
 ---
-title: "tanh() — internals"
+title: "tanh() - internals"
 description: "Compiler internals for tanh(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 317
 ---
 
-## `tanh()` — internals
+## `tanh()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/tanh.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/tanh.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

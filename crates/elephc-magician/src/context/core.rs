@@ -8,6 +8,14 @@
 //! - Generated code only passes this value opaquely; Rust owns every internal collection.
 
 use super::*;
+use crate::errors::EvalStatus;
+
+/// One installed eval user error handler and its accepted level mask.
+#[derive(Clone, Copy)]
+pub(crate) struct EvalErrorHandlerState {
+    pub(crate) callback: RuntimeCellHandle,
+    pub(crate) levels: i64,
+}
 
 /// Process-level eval context passed opaquely across the C ABI.
 ///
@@ -16,6 +24,7 @@ use super::*;
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
     pub(super) abi_version: u32,
+    pub(super) abi_owner_count: usize,
     pub(super) classes: HashMap<String, EvalClass>,
     pub(super) class_aliases: HashMap<String, EvalClassAlias>,
     pub(super) declared_class_names: Vec<String>,
@@ -28,6 +37,7 @@ pub struct ElephcEvalContext {
     pub(super) enum_cases: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) enum_case_values: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) constants: HashMap<String, RuntimeCellHandle>,
+    pub(super) native_global_constants: HashMap<String, EvalNativeGlobalConstant>,
     pub(super) functions: HashMap<String, EvalFunction>,
     pub(super) closures: HashMap<String, EvalClosure>,
     pub(super) closure_objects: HashMap<u64, EvalClosureObjectTarget>,
@@ -50,6 +60,11 @@ pub struct ElephcEvalContext {
     pub(super) static_property_aliases: HashMap<(String, String), EvalReferenceTarget>,
     pub(super) class_constants: HashMap<(String, String), RuntimeCellHandle>,
     pub(super) included_files: HashSet<String>,
+    pub(super) error_reporting: i64,
+    pub(super) error_handler: Option<EvalErrorHandlerState>,
+    pub(super) error_handler_stack: Vec<Option<EvalErrorHandlerState>>,
+    pub(super) exception_handler: Option<RuntimeCellHandle>,
+    pub(super) exception_handler_stack: Vec<Option<RuntimeCellHandle>>,
     pub(super) dynamic_objects: HashMap<u64, String>,
     pub(super) dynamic_destructing_objects: HashSet<u64>,
     pub(super) dynamic_destructed_objects: HashSet<u64>,
@@ -69,6 +84,7 @@ pub struct ElephcEvalContext {
     pub(super) eval_object_callables: HashMap<usize, EvalObjectCallableMetadata>,
     pub(super) global_scope: Option<*mut ElephcEvalScope>,
     pub(super) function_stack: Vec<String>,
+    pub(super) function_args_stack: Vec<EvalBacktraceFrame>,
     pub(super) class_stack: Vec<String>,
     pub(super) called_class_stack: Vec<String>,
     pub(super) magic_stack: Vec<EvalMagicScope>,
@@ -90,6 +106,7 @@ impl ElephcEvalContext {
     pub fn new() -> Self {
         Self {
             abi_version: ABI_VERSION,
+            abi_owner_count: 1,
             classes: HashMap::new(),
             class_aliases: HashMap::new(),
             declared_class_names: Vec::new(),
@@ -102,6 +119,7 @@ impl ElephcEvalContext {
             enum_cases: HashMap::new(),
             enum_case_values: HashMap::new(),
             constants: HashMap::new(),
+            native_global_constants: HashMap::new(),
             functions: HashMap::new(),
             closures: HashMap::new(),
             closure_objects: HashMap::new(),
@@ -124,6 +142,11 @@ impl ElephcEvalContext {
             static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
+            error_reporting: crate::eval_php_profile::eval_all_error_mask(),
+            error_handler: None,
+            error_handler_stack: Vec::new(),
+            exception_handler: None,
+            exception_handler_stack: Vec::new(),
             dynamic_objects: HashMap::new(),
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
@@ -143,6 +166,7 @@ impl ElephcEvalContext {
             eval_object_callables: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
+            function_args_stack: Vec::new(),
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
             magic_stack: Vec::new(),
@@ -165,6 +189,7 @@ impl ElephcEvalContext {
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
             abi_version,
+            abi_owner_count: 1,
             classes: HashMap::new(),
             class_aliases: HashMap::new(),
             declared_class_names: Vec::new(),
@@ -177,6 +202,7 @@ impl ElephcEvalContext {
             enum_cases: HashMap::new(),
             enum_case_values: HashMap::new(),
             constants: HashMap::new(),
+            native_global_constants: HashMap::new(),
             functions: HashMap::new(),
             closures: HashMap::new(),
             closure_objects: HashMap::new(),
@@ -199,6 +225,11 @@ impl ElephcEvalContext {
             static_property_aliases: HashMap::new(),
             class_constants: HashMap::new(),
             included_files: HashSet::new(),
+            error_reporting: crate::eval_php_profile::eval_all_error_mask(),
+            error_handler: None,
+            error_handler_stack: Vec::new(),
+            exception_handler: None,
+            exception_handler_stack: Vec::new(),
             dynamic_objects: HashMap::new(),
             dynamic_destructing_objects: HashSet::new(),
             dynamic_destructed_objects: HashSet::new(),
@@ -218,6 +249,7 @@ impl ElephcEvalContext {
             eval_object_callables: HashMap::new(),
             global_scope: None,
             function_stack: Vec::new(),
+            function_args_stack: Vec::new(),
             class_stack: Vec::new(),
             called_class_stack: Vec::new(),
             magic_stack: Vec::new(),
@@ -238,5 +270,23 @@ impl ElephcEvalContext {
     /// Returns the ABI version this context was created for.
     pub const fn abi_version(&self) -> u32 {
         self.abi_version
+    }
+
+    /// Adds one opaque ABI owner that can keep this heap context alive past its frame.
+    pub(crate) fn retain_abi_owner(&mut self) -> Result<(), EvalStatus> {
+        self.abi_owner_count = self
+            .abi_owner_count
+            .checked_add(1)
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        Ok(())
+    }
+
+    /// Drops one opaque ABI owner and reports whether the heap context can be destroyed.
+    pub(crate) fn release_abi_owner(&mut self) -> bool {
+        if self.abi_owner_count == 0 {
+            return false;
+        }
+        self.abi_owner_count -= 1;
+        self.abi_owner_count == 0
     }
 }

@@ -257,6 +257,7 @@ fn plan_named_call_args(
                     Ok(NamedParamMatch::Variadic) => {
                         let expr = (**value).clone();
                         variadic_args.push(PlannedVariadicArg {
+                            source_index,
                             key: Some(name.clone()),
                             expr: expr.clone(),
                         });
@@ -346,6 +347,7 @@ fn plan_named_call_args(
                     });
                 } else {
                     variadic_args.push(PlannedVariadicArg {
+                        source_index,
                         key: None,
                         expr: expr.clone(),
                     });
@@ -476,6 +478,8 @@ fn plan_named_call_args(
             });
         }
     }
+
+    variadic_args.sort_by_key(|arg| arg.source_index);
 
     Ok(CallArgPlan {
         source_args,

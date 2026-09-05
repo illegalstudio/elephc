@@ -17,6 +17,7 @@ pub enum EvalStatus {
     UncaughtThrowable,
     UnsupportedConstruct,
     AbiMismatch,
+    UserFatal,
 }
 
 impl EvalStatus {
@@ -29,6 +30,7 @@ impl EvalStatus {
             Self::UncaughtThrowable => 3,
             Self::UnsupportedConstruct => 4,
             Self::AbiMismatch => 5,
+            Self::UserFatal => 6,
         }
     }
 }

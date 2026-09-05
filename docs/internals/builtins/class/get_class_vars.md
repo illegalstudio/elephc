@@ -1,31 +1,43 @@
 ---
-title: "get_class_vars() — internals"
+title: "get_class_vars() - internals"
 description: "Compiler internals for get_class_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 86
 ---
 
-## `get_class_vars()` — internals
+## `get_class_vars()` - internals
 
 ## Where it lives
 
-- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`src/builtins/callables/get_class_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_class_vars.rs)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
+
+### Lowering notes
+
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-Shared contract intentionally unsupported by the AOT backend.
+- **Target strategy**: `eir_graph`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `fresh`
+- **Effects**: `static (3 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-_No compiled lowering: this surface is intentionally eval-only._
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 
 ```php
-function get_class_vars(mixed $class): mixed
+function get_class_vars(mixed $class): array
 ```
 
 ## What the type checker enforces

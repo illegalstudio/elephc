@@ -1,11 +1,11 @@
 ---
-title: "curl_strerror() — internals"
+title: "curl_strerror() - internals"
 description: "Compiler internals for curl_strerror(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 364
+  order: 391
 ---
 
-## `curl_strerror()` — internals
+## `curl_strerror()` - internals
 
 ## Where it lives
 

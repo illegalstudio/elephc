@@ -278,6 +278,12 @@ fn php_type_may_be_callable(ty: &PhpType) -> bool {
 /// Returns `None` if the builtin is not registered.
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     let def = lookup(name)?;
+    if matches!(
+        def.spec.semantics.callable,
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(_)
+    ) {
+        return None;
+    }
     let sig = function_sig(def.name)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
     refine_first_class_callable_sig(def, &mut fcc_sig);
@@ -290,6 +296,15 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
         .map(|index| !fcc_sig.ref_params.get(index).copied().unwrap_or(false))
         .collect();
     Some(fcc_sig)
+}
+
+/// Returns PHP's diagnostic for a builtin that forbids first-class invocation.
+pub fn first_class_callable_rejection(name: &str) -> Option<&'static str> {
+    let definition = lookup(name)?;
+    match definition.spec.semantics.callable {
+        crate::builtins::semantics::BuiltinCallablePolicy::DirectOnly(reason) => Some(reason),
+        _ => None,
+    }
 }
 
 /// Applies first-class-callable refinements that are broader in the direct builtin spec.

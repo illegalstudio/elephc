@@ -1,16 +1,16 @@
 ---
-title: "__elephc_ptr_read_string() — internals"
+title: "__elephc_ptr_read_string() - internals"
 description: "Compiler internals for __elephc_ptr_read_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 629
+  order: 656
 ---
 
-## `__elephc_ptr_read_string()` — internals
+## `__elephc_ptr_read_string()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/__elephc_ptr_read_string.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/__elephc_ptr_read_string.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

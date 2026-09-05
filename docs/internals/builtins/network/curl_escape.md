@@ -1,11 +1,11 @@
 ---
-title: "curl_escape() — internals"
+title: "curl_escape() - internals"
 description: "Compiler internals for curl_escape(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 338
+  order: 365
 ---
 
-## `curl_escape()` — internals
+## `curl_escape()` - internals
 
 ## Where it lives
 

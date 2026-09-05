@@ -428,18 +428,29 @@ fn scan_declared_class_queries_are_dynamic_class_hazards() {
     }
 }
 
-/// Verifies eval-only introspection names do not invent hazards in the AOT declaration graph.
+/// Verifies function enumeration keeps declarations without widening dynamic callability.
 #[test]
-fn scan_eval_only_introspection_names_are_not_aot_hazards() {
-    for source in [
-        "<?php get_defined_functions();",
-        "<?php get_class_methods($value);",
-    ] {
-        let hazards = scan_program(&parse(source)).hazards;
-        assert!(!hazards.dynamic_function);
-        assert!(!hazards.dynamic_method);
-        assert!(!hazards.dynamic_class);
-    }
+fn scan_core_introspection_records_only_required_hazards() {
+    let defined = scan_program(&parse("<?php get_defined_functions();")).hazards;
+    assert!(defined.enumerates_functions);
+    assert!(!defined.dynamic_function);
+    assert!(!defined.dynamic_method);
+    assert!(!defined.dynamic_class);
+
+    let methods = scan_program(&parse("<?php get_class_methods($value);")).hazards;
+    assert!(!methods.dynamic_function);
+    assert!(methods.dynamic_method);
+    assert!(methods.dynamic_class);
+}
+
+/// Verifies function enumeration preserves otherwise unused user declarations for the inventory.
+#[test]
+fn prune_get_defined_functions_keeps_user_declarations() {
+    let (program, check) = prune(
+        "<?php function visible_but_unused(): int { return 1; } get_defined_functions();",
+    );
+    assert!(has_function(&program, "visible_but_unused"));
+    assert!(check.functions.contains_key("visible_but_unused"));
 }
 
 /// Verifies an unpacked builtin callback that cannot be identified widens callable reachability.

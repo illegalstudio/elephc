@@ -1,16 +1,16 @@
 ---
-title: "lchown() — internals"
+title: "lchown() - internals"
 description: "Compiler internals for lchown(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 143
 ---
 
-## `lchown()` — internals
+## `lchown()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/lchown.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/lchown.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

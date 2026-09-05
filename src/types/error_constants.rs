@@ -14,8 +14,9 @@
 //!   fold correctly with zero runtime `define()` calls.
 //! - These constants are global (available in CLI and `--web` alike), matching
 //!   PHP where the `E_*` levels are always defined.
-//! - `E_ALL` is `32767` on PHP 8.x (`E_STRICT`, value `2048`, is deprecated but
-//!   its bit remains set in `E_ALL`).
+//! - `E_ALL` is `32767` through PHP 8.4 and `30719` from PHP 8.5, where the
+//!   deprecated `E_STRICT` bit was removed. Prescan replaces the table's legacy
+//!   value with the selected profile's authoritative mask.
 
 /// Tuple of `(name, value)` pairs for every PHP `E_*` error-level constant.
 ///

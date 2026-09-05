@@ -212,7 +212,7 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             PhpType::Float => emit_var_dump_float(ctx),
             PhpType::Str => emit_var_dump_string(ctx),
             PhpType::Bool => emit_var_dump_bool(ctx),
-            PhpType::Resource(_) => emit_var_dump_resource(ctx),
+            PhpType::Resource(_) => emit_var_dump_resource(ctx, false),
             PhpType::Void | PhpType::Never => {
                 emit_var_dump_null(ctx);
                 Ok(())
@@ -440,7 +440,7 @@ fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
     ctx.emitter.label(&resource_case);
     move_mixed_payload_to_int_result(ctx);
-    emit_var_dump_resource(ctx)?;
+    emit_var_dump_resource(ctx, true)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&array_case);
@@ -577,12 +577,11 @@ fn emit_var_dump_bool(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// `resource(5) of type (Unknown)`. Splitting that literal in two is what lets the
 /// runtime-computed name sit between the halves.
 ///
-/// The payload must therefore survive `__rt_resource_id_of`, which consumes it, so it
-/// is pushed a second time. `abi::emit_push_reg` reserves 16 bytes on both targets, so
-/// nesting the two pushes keeps the stack aligned across the intervening calls; the
-/// two pops below balance the two pushes exactly.
-fn emit_var_dump_resource(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    emit_var_dump_resource_asm(ctx.emitter, ctx.data);
+/// The payload and resource subtype survive `__rt_resource_id_of` in one paired,
+/// aligned stack slot. This lets stream-filter resources keep their distinct type
+/// name after the id and surrounding text have been formatted.
+fn emit_var_dump_resource(ctx: &mut FunctionContext<'_>, has_runtime_subtype: bool) -> Result<()> {
+    emit_var_dump_resource_asm(ctx.emitter, ctx.data, has_runtime_subtype);
     Ok(())
 }
 
@@ -598,19 +597,37 @@ fn emit_var_dump_resource(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// when the call site is removed rather than when the callee is broken. `ctx` supplies
 /// nothing else, so this loses no information.
 ///
-/// Entry state: the native resource payload is in the int result register. Exit state:
-/// the line has been written and the stack is balanced — two pushes, two pops.
-fn emit_var_dump_resource_asm(emitter: &mut Emitter, data: &mut DataSection) {
+/// Entry state: the native resource payload is in the int result register. For a
+/// boxed resource, the unboxed high payload word also carries its subtype. Exit
+/// state: the line has been written and the paired stack slot is balanced.
+fn emit_var_dump_resource_asm(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    has_runtime_subtype: bool,
+) {
     let result_reg = abi::int_result_reg(emitter);
-    abi::emit_push_reg(emitter, result_reg);
+    let subtype_reg = match emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rcx",
+    };
+    if !has_runtime_subtype {
+        abi::emit_load_int_immediate(emitter, subtype_reg, 0);
+    } else if emitter.target.arch == Arch::AArch64 {
+        emitter.instruction("mov x3, x2");                                      // retain the unboxed resource subtype for type-name selection
+    } else {
+        emitter.instruction("mov rcx, rdx");                                    // retain the unboxed resource subtype for type-name selection
+    }
+    abi::emit_push_reg_pair(emitter, result_reg, subtype_reg);
     emit_literal_to_stdout(emitter, data, b"resource(");
-    abi::emit_pop_reg(emitter, result_reg);
-    abi::emit_push_reg(emitter, result_reg);                                    // __rt_resource_id_of consumes the register copy; the name needs it back
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("ldr x0, [sp]"),                   // reload the resource payload while keeping its subtype stashed
+        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rsp]"),        // reload the resource payload while keeping its subtype stashed
+    }
     abi::emit_call_label(emitter, "__rt_resource_id_of");
     abi::emit_call_label(emitter, "__rt_itoa");
     abi::emit_write_stdout(emitter, &PhpType::Str);
     emit_literal_to_stdout(emitter, data, b") of type (");
-    abi::emit_pop_reg(emitter, result_reg);                                     // recover the payload __rt_resource_id_of consumed
+    abi::emit_pop_reg_pair(emitter, result_reg, subtype_reg);                   // recover the payload and subtype consumed by nested formatting calls
     abi::emit_call_label(emitter, "__rt_resource_type_name");                   // stream while the handle is open, Unknown once it is closed
     abi::emit_write_stdout(emitter, &PhpType::Str);
     emit_literal_to_stdout(emitter, data, b")\n");
@@ -885,7 +902,7 @@ mod var_dump_resource_line_tests {
     fn emit_for(target: Target) -> String {
         let mut emitter = Emitter::new(target);
         let mut data = DataSection::new();
-        emit_var_dump_resource_asm(&mut emitter, &mut data);
+        emit_var_dump_resource_asm(&mut emitter, &mut data, false);
         emitter.output()
     }
 
@@ -901,15 +918,15 @@ mod var_dump_resource_line_tests {
     fn aarch64_writes_the_type_name_between_the_two_closing_literals() {
         let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
         let expected = concat!(
-            "    str x0, [sp, #-16]!\n",
+            "    mov x3, #0\n",
+            "    stp x0, x3, [sp, #-16]!\n",
             "    adrp x1, _str_0@PAGE\n",
             "    add x1, x1, _str_0@PAGEOFF\n",
             "    mov x2, #9\n",
             "    mov x0, x1\n",
             "    mov x1, x2\n",
             "    bl __rt_stdout_write\n",
-            "    ldr x0, [sp], #16\n",
-            "    str x0, [sp, #-16]!\n",
+            "    ldr x0, [sp]\n",
             "    bl __rt_resource_id_of\n",
             "    bl __rt_itoa\n",
             "    mov x0, x1\n",
@@ -921,7 +938,7 @@ mod var_dump_resource_line_tests {
             "    mov x0, x1\n",
             "    mov x1, x2\n",
             "    bl __rt_stdout_write\n",
-            "    ldr x0, [sp], #16\n",
+            "    ldp x0, x3, [sp], #16\n",
             "    bl __rt_resource_type_name\n",
             "    mov x0, x1\n",
             "    mov x1, x2\n",
@@ -940,17 +957,16 @@ mod var_dump_resource_line_tests {
     fn x86_64_writes_the_type_name_between_the_two_closing_literals() {
         let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
         let expected = concat!(
+            "    mov rcx, 0\n",
             "    sub rsp, 16\n",
             "    mov QWORD PTR [rsp], rax\n",
+            "    mov QWORD PTR [rsp + 8], rcx\n",
             "    lea rax, [rip + _str_0]\n",
             "    mov rdx, 9\n",
             "    mov rsi, rdx\n",
             "    mov rdi, rax\n",
             "    call __rt_stdout_write\n",
             "    mov rax, QWORD PTR [rsp]\n",
-            "    add rsp, 16\n",
-            "    sub rsp, 16\n",
-            "    mov QWORD PTR [rsp], rax\n",
             "    call __rt_resource_id_of\n",
             "    call __rt_itoa\n",
             "    mov rsi, rdx\n",
@@ -962,6 +978,7 @@ mod var_dump_resource_line_tests {
             "    mov rdi, rax\n",
             "    call __rt_stdout_write\n",
             "    mov rax, QWORD PTR [rsp]\n",
+            "    mov rcx, QWORD PTR [rsp + 8]\n",
             "    add rsp, 16\n",
             "    call __rt_resource_type_name\n",
             "    mov rsi, rdx\n",
@@ -987,7 +1004,7 @@ mod var_dump_resource_line_tests {
         ] {
             let mut emitter = Emitter::new(target);
             let mut data = DataSection::new();
-            emit_var_dump_resource_asm(&mut emitter, &mut data);
+            emit_var_dump_resource_asm(&mut emitter, &mut data, false);
             assert_eq!(
                 data.add_string(b"resource(").0,
                 "_str_0",
@@ -1014,35 +1031,34 @@ mod var_dump_resource_line_tests {
         }
     }
 
-    /// The line must push and pop exactly twice on both targets.
+    /// The line must reserve and release exactly one paired slot on both targets.
     ///
-    /// The payload is stashed once around the `resource(` write and once around
-    /// `__rt_resource_id_of`, which consumes the register copy. An unbalanced pop here
-    /// corrupts the caller frame silently on macOS.
+    /// The payload and subtype remain stashed together until both the resource id
+    /// and prefix have been rendered. An unbalanced release corrupts the caller frame.
     #[test]
-    fn the_line_balances_two_pushes_with_two_pops_on_both_targets() {
+    fn the_line_balances_one_paired_slot_on_both_targets() {
         for (target, push, pop) in [
             (
                 Target::new(Platform::MacOS, Arch::AArch64),
-                "str x0, [sp, #-16]!",
-                "ldr x0, [sp], #16",
+                "stp x0, x3, [sp, #-16]!",
+                "ldp x0, x3, [sp], #16",
             ),
             (
                 Target::new(Platform::Linux, Arch::X86_64),
-                "mov QWORD PTR [rsp], rax",
-                "mov rax, QWORD PTR [rsp]",
+                "sub rsp, 16",
+                "add rsp, 16",
             ),
         ] {
             let asm = emit_for(target);
             assert_eq!(
                 asm.matches(push).count(),
-                2,
-                "exactly two pushes expected ({target:?}):\n{asm}"
+                1,
+                "exactly one paired slot expected ({target:?}):\n{asm}"
             );
             assert_eq!(
                 asm.matches(pop).count(),
-                2,
-                "exactly two pops expected ({target:?}):\n{asm}"
+                1,
+                "exactly one paired release expected ({target:?}):\n{asm}"
             );
         }
     }

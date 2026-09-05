@@ -301,6 +301,25 @@ impl Checker {
             seen_idx += 1;
         }
 
+        if function_variadic_tail_needs_iterable(
+            args,
+            stored_sig,
+            regular_param_count,
+            caller_env,
+        ) {
+            if let Some(variadic_name) = stored_sig.variadic.as_deref() {
+                if let Some(variadic_index) = param_types
+                    .iter()
+                    .position(|(param_name, _)| param_name == variadic_name)
+                {
+                    if param_types[variadic_index].1 != PhpType::Iterable {
+                        param_types[variadic_index].1 = PhpType::Iterable;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
         Ok(changed.then_some(param_types))
     }
 }
@@ -325,6 +344,52 @@ fn variadic_param_is_by_ref(sig: &FunctionSig) -> bool {
         .and_then(|index| sig.ref_params.get(index))
         .copied()
         .unwrap_or(false)
+}
+
+/// Returns whether a function's variadic container must preserve string keys at runtime.
+fn function_variadic_tail_needs_iterable(
+    args: &[Expr],
+    sig: &FunctionSig,
+    regular_param_count: usize,
+    env: &TypeEnv,
+) -> bool {
+    if sig.variadic.is_none() {
+        return false;
+    }
+    if args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::Spread(inner) if function_spread_source_keeps_runtime_keys(inner, env)
+        )
+    }) {
+        return true;
+    }
+    args.iter().any(|arg| {
+        matches!(
+            &arg.kind,
+            ExprKind::NamedArg { name, .. }
+                if !sig
+                    .params
+                    .iter()
+                    .take(regular_param_count)
+                    .any(|(param_name, _)| param_name == name)
+        )
+    })
+}
+
+/// Returns whether a spread source can carry string keys into a variadic function tail.
+fn function_spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => matches!(
+            env.get(name),
+            Some(PhpType::AssocArray { .. } | PhpType::Iterable)
+        ),
+        ExprKind::ArrayLiteralAssoc(_) => true,
+        _ => matches!(
+            crate::types::checker::infer_expr_type_syntactic(expr),
+            PhpType::AssocArray { .. } | PhpType::Iterable
+        ),
+    }
 }
 
 /// Extracts parameter types from a generic `param_types` list, mapping them to the

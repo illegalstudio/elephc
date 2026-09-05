@@ -39,6 +39,8 @@ const CALLBACK_PARAMETERS: &[CallbackParameters] = &[
     callback_parameters("iterator_apply", CALLBACK),
     callback_parameters("ob_start", CALLBACK),
     callback_parameters("preg_replace_callback", CALLBACK),
+    callback_parameters("set_error_handler", CALLBACK),
+    callback_parameters("set_exception_handler", CALLBACK),
     callback_parameters("spl_autoload_register", CALLBACK),
     callback_parameters("spl_autoload_unregister", CALLBACK),
     callback_parameters("uasort", CALLBACK),

@@ -5,10 +5,11 @@
 //! - `crate::interpreter::eval_expr()` for constant and magic-constant expression nodes.
 //!
 //! Key details:
-//! - Dynamic constants prefer eval context declarations before predefined fallback constants.
+//! - Registered AOT constants override the standalone predefined fallback inventory.
 //! - Magic file and directory values come from the current eval call-site context.
 
 use super::*;
+use crate::context::EvalNativeGlobalConstant;
 
 /// Converts one EvalIR constant into a runtime-cell handle.
 pub(super) fn eval_const(
@@ -30,6 +31,9 @@ pub(super) fn eval_const_fetch(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = context.native_global_constant(name) {
+        return eval_native_global_constant(value, values);
+    }
     if let Some(value) = eval_predefined_constant(name, values)? {
         return Ok(value);
     }
@@ -46,6 +50,9 @@ pub(super) fn eval_namespaced_const_fetch(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = context.native_global_constant(name) {
+        return eval_native_global_constant(value, values);
+    }
     if let Some(value) = eval_predefined_constant(name, values)? {
         return Ok(value);
     }
@@ -53,6 +60,21 @@ pub(super) fn eval_namespaced_const_fetch(
         return values.retain(value);
     }
     eval_const_fetch(fallback_name, context, values)
+}
+
+/// Materializes one registered AOT global constant into a fresh runtime cell.
+pub(in crate::interpreter) fn eval_native_global_constant(
+    value: &EvalNativeGlobalConstant,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match value {
+        EvalNativeGlobalConstant::Null => values.null(),
+        EvalNativeGlobalConstant::Bool(value) => values.bool_value(*value),
+        EvalNativeGlobalConstant::Int(value) => values.int(*value),
+        EvalNativeGlobalConstant::Float(value) => values.float(*value),
+        EvalNativeGlobalConstant::String(value) => values.string(value),
+        EvalNativeGlobalConstant::Resource(value) => values.resource(*value),
+    }
 }
 
 /// Materializes one eval-visible predefined constant into a runtime cell.
@@ -75,6 +97,26 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
     match name.trim_start_matches('\\') {
+        "E_ERROR" => Some(EvalPredefinedConstant::Int(1)),
+        "E_WARNING" => Some(EvalPredefinedConstant::Int(2)),
+        "E_PARSE" => Some(EvalPredefinedConstant::Int(4)),
+        "E_NOTICE" => Some(EvalPredefinedConstant::Int(8)),
+        "E_CORE_ERROR" => Some(EvalPredefinedConstant::Int(16)),
+        "E_CORE_WARNING" => Some(EvalPredefinedConstant::Int(32)),
+        "E_COMPILE_ERROR" => Some(EvalPredefinedConstant::Int(64)),
+        "E_COMPILE_WARNING" => Some(EvalPredefinedConstant::Int(128)),
+        "E_USER_ERROR" => Some(EvalPredefinedConstant::Int(256)),
+        "E_USER_WARNING" => Some(EvalPredefinedConstant::Int(512)),
+        "E_USER_NOTICE" => Some(EvalPredefinedConstant::Int(1_024)),
+        "E_STRICT" => Some(EvalPredefinedConstant::Int(2_048)),
+        "E_RECOVERABLE_ERROR" => Some(EvalPredefinedConstant::Int(4_096)),
+        "E_DEPRECATED" => Some(EvalPredefinedConstant::Int(8_192)),
+        "E_USER_DEPRECATED" => Some(EvalPredefinedConstant::Int(16_384)),
+        "E_ALL" => Some(EvalPredefinedConstant::Int(
+            crate::eval_php_profile::eval_all_error_mask(),
+        )),
+        "DEBUG_BACKTRACE_PROVIDE_OBJECT" => Some(EvalPredefinedConstant::Int(1)),
+        "DEBUG_BACKTRACE_IGNORE_ARGS" => Some(EvalPredefinedConstant::Int(2)),
         "ICONV_MIME_DECODE_STRICT" => {
             Some(EvalPredefinedConstant::Int(EVAL_ICONV_MIME_DECODE_STRICT))
         }

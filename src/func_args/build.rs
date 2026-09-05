@@ -7,10 +7,11 @@
 //! - `crate::func_args::walk::Rewriter`.
 //!
 //! Key details:
-//! - The scopes this pass accepts have only mandatory declared parameters, so every one of
-//!   them was necessarily passed: `func_num_args()` is exactly
-//!   `<declared count> + count($__elephc_func_args)`, and the argument list is exactly
-//!   `[$p0, …, $pN-1, ...$__elephc_func_args]`.
+//! - Mandatory-only scopes derive the count from declared parameters plus the hidden tail.
+//!   Optional scopes store the actual PHP argument count as collector metadata, allowing the
+//!   rebuilt argument list to omit defaults the caller did not supply.
+//! - For a source variadic, `$__elephc_func_args` is an entry snapshot containing only its
+//!   positional values. For a non-variadic source function it remains the hidden ABI collector.
 //! - `func_get_args()` reports the *current* values of the parameter variables, not the
 //!   values originally passed (verified against PHP 8.4: reassigning a parameter, or
 //!   writing through a by-reference parameter, changes what `func_get_args()` returns).
@@ -21,7 +22,7 @@
 //!   messages.
 
 use crate::names::{Name, NameKind};
-use crate::parser::ast::{BinOp, Expr, ExprKind};
+use crate::parser::ast::{BinOp, CastType, Expr, ExprKind};
 use crate::span::Span;
 
 use super::{IntrospectionCall, HIDDEN_ARGS_PARAM, POSITION_TEMP};
@@ -44,18 +45,29 @@ pub(super) fn replacement(
     call: IntrospectionCall,
     param_names: &[String],
     args: &[Expr],
+    count_metadata: bool,
     span: Span,
 ) -> ExprKind {
     match call {
-        IntrospectionCall::NumArgs => argc_expr(param_names, span).kind,
-        IntrospectionCall::GetArgs => args_array_expr(param_names, span).kind,
-        IntrospectionCall::GetArg => get_arg_expr(param_names, &args[0], span),
+        IntrospectionCall::NumArgs => argc_expr(param_names, count_metadata, span).kind,
+        IntrospectionCall::GetArgs => args_array_expr(param_names, count_metadata, span).kind,
+        IntrospectionCall::GetArg => {
+            get_arg_expr(param_names, &args[0], count_metadata, span)
+        }
     }
 }
 
-/// Builds `<declared count> + count($__elephc_func_args)`, or just the `count()` call when
-/// the scope declares no regular parameters.
-fn argc_expr(param_names: &[String], span: Span) -> Expr {
+/// Builds the actual PHP argument count from fixed parameters or hidden count metadata.
+fn argc_expr(param_names: &[String], count_metadata: bool, span: Span) -> Expr {
+    if count_metadata {
+        return Expr::new(
+            ExprKind::Cast {
+                target: CastType::Int,
+                expr: Box::new(hidden_arg_at(0, span)),
+            },
+            span,
+        );
+    }
     let surplus = count_call(hidden_args_var(span), span);
     if param_names.is_empty() {
         return surplus;
@@ -77,16 +89,33 @@ fn argc_expr(param_names: &[String], span: Span) -> Expr {
 ///
 /// The array literal is fresh at every use, matching PHP's copy semantics, and the spread
 /// of the hidden variadic keeps the surplus arguments renumbered from `N`.
-fn args_array_expr(param_names: &[String], span: Span) -> Expr {
+fn args_array_expr(param_names: &[String], count_metadata: bool, span: Span) -> Expr {
     let mut elements: Vec<Expr> = param_names
         .iter()
         .map(|name| Expr::new(ExprKind::Variable(name.clone()), span))
         .collect();
-    elements.push(Expr::new(
-        ExprKind::Spread(Box::new(hidden_args_var(span))),
-        span,
-    ));
-    Expr::new(ExprKind::ArrayLiteral(elements), span)
+    let tail = if count_metadata {
+        array_slice_call(
+            hidden_args_var(span),
+            Expr::new(ExprKind::IntLiteral(1), span),
+            None,
+            span,
+        )
+    } else {
+        hidden_args_var(span)
+    };
+    elements.push(Expr::new(ExprKind::Spread(Box::new(tail)), span));
+    let values = Expr::new(ExprKind::ArrayLiteral(elements), span);
+    if count_metadata {
+        array_slice_call(
+            values,
+            Expr::new(ExprKind::IntLiteral(0), span),
+            Some(argc_expr(param_names, true, span)),
+            span,
+        )
+    } else {
+        values
+    }
 }
 
 /// Builds the range-checked indexed read behind `func_get_arg($position)`:
@@ -99,7 +128,12 @@ fn args_array_expr(param_names: &[String], span: Span) -> Expr {
 ///
 /// The position expression is bound to a hidden local first unless it is already
 /// side-effect free, so a call such as `func_get_arg($i++)` evaluates its operand once.
-fn get_arg_expr(param_names: &[String], position: &Expr, span: Span) -> ExprKind {
+fn get_arg_expr(
+    param_names: &[String],
+    position: &Expr,
+    count_metadata: bool,
+    span: Span,
+) -> ExprKind {
     let (first_read, later_read) = position_reads(position, span);
     ExprKind::Ternary {
         condition: Box::new(less_than(
@@ -112,12 +146,12 @@ fn get_arg_expr(param_names: &[String], position: &Expr, span: Span) -> ExprKind
             ExprKind::Ternary {
                 condition: Box::new(less_than(
                     later_read.clone(),
-                    argc_expr(param_names, span),
+                    argc_expr(param_names, count_metadata, span),
                     span,
                 )),
                 then_expr: Box::new(Expr::new(
                     ExprKind::ArrayAccess {
-                        array: Box::new(args_array_expr(param_names, span)),
+                        array: Box::new(args_array_expr(param_names, count_metadata, span)),
                         index: Box::new(later_read),
                     },
                     span,
@@ -161,6 +195,32 @@ fn position_reads(position: &Expr, span: Span) -> (Expr, Expr) {
 /// positional arguments.
 fn hidden_args_var(span: Span) -> Expr {
     Expr::new(ExprKind::Variable(HIDDEN_ARGS_PARAM.to_string()), span)
+}
+
+/// Builds an indexed read from the hidden argument collector.
+fn hidden_arg_at(index: i64, span: Span) -> Expr {
+    Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(hidden_args_var(span)),
+            index: Box::new(Expr::new(ExprKind::IntLiteral(index), span)),
+        },
+        span,
+    )
+}
+
+/// Builds an internal fully-qualified `array_slice()` call with an optional length.
+fn array_slice_call(value: Expr, offset: Expr, length: Option<Expr>, span: Span) -> Expr {
+    let mut args = vec![value, offset];
+    if let Some(length) = length {
+        args.push(length);
+    }
+    Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from_parts(NameKind::FullyQualified, vec!["array_slice".to_string()]),
+            args,
+        },
+        span,
+    )
 }
 
 /// Builds `count(<value>)`.

@@ -1,16 +1,16 @@
 ---
-title: "strpos() — internals"
+title: "strpos() - internals"
 description: "Compiler internals for strpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 503
+  order: 530
 ---
 
-## `strpos()` — internals
+## `strpos()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strpos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strpos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

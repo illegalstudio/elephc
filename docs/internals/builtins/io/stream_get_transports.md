@@ -1,16 +1,16 @@
 ---
-title: "stream_get_transports() — internals"
+title: "stream_get_transports() - internals"
 description: "Compiler internals for stream_get_transports(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 231
 ---
 
-## `stream_get_transports()` — internals
+## `stream_get_transports()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_transports.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_transports.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

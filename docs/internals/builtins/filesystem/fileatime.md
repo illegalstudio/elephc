@@ -1,16 +1,16 @@
 ---
-title: "fileatime() — internals"
+title: "fileatime() - internals"
 description: "Compiler internals for fileatime(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 122
 ---
 
-## `fileatime()` — internals
+## `fileatime()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fileatime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fileatime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

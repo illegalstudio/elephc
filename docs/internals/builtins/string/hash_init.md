@@ -1,11 +1,11 @@
 ---
-title: "hash_init() — internals"
+title: "hash_init() - internals"
 description: "Compiler internals for hash_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 444
+  order: 471
 ---
 
-## `hash_init()` — internals
+## `hash_init()` - internals
 
 ## Where it lives
 

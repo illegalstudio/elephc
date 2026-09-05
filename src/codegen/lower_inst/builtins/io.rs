@@ -168,7 +168,7 @@ pub(crate) use stat_ops::{
 };
 pub(super) use boxing_helpers::box_owned_string_or_false_result;
 pub(super) use resource_handles::load_stream_fd_to_result;
-pub(super) use string_validation::load_string_to_result;
+pub(in crate::codegen::lower_inst) use string_validation::load_string_to_result;
 
 /// Emits a literal `file_get_contents("phar://...")` payload through compile-time PHAR extraction.
 ///

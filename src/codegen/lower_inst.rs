@@ -63,6 +63,7 @@ mod call_cleanup;
 mod call_operands;
 mod callable_descriptors;
 mod core_closures;
+mod core_builtins;
 mod core_includes;
 mod core_misc;
 mod descriptor_arguments;
@@ -93,6 +94,7 @@ use call_cleanup::*;
 use call_operands::*;
 use callable_descriptors::*;
 use core_closures::*;
+use core_builtins::*;
 use core_includes::*;
 use core_misc::*;
 use descriptor_arguments::*;
@@ -153,6 +155,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         .instruction(inst_id)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst_id.as_raw()))?;
+    core_builtins::prepare_backtrace_call_site(ctx, &inst)?;
     match inst.op {
         Op::ConstI64 => lower_const_i64(ctx, &inst),
         Op::ConstF64 => floats::lower_const_f64(ctx, &inst),
@@ -377,6 +380,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::Release => ownership::lower_release(ctx, &inst),
         Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),
         Op::GcCollect => lower_gc_collect(ctx),
+        Op::GcControl => lower_gc_control(ctx, &inst),
+        Op::CoreBuiltin => lower_core_builtin(ctx, &inst),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),

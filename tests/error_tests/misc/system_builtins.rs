@@ -581,3 +581,122 @@ fn test_error_constant_too_many_args() {
         "constant() takes exactly 1 argument",
     );
 }
+
+/// Verifies Core GC builtins reject arguments through the shared zero-arity contract.
+#[test]
+fn test_error_gc_status_wrong_args() {
+    expect_error(
+        "<?php gc_status(1);",
+        "gc_status() takes no arguments",
+    );
+}
+
+/// Verifies every remaining Core parity builtin rejects excess or missing arguments.
+#[test]
+fn test_error_core_parity_builtin_arity_contracts() {
+    let cases = [
+        (
+            "<?php debug_backtrace(0, 0, 0);",
+            "debug_backtrace() takes at most 2 arguments",
+        ),
+        (
+            "<?php debug_print_backtrace(0, 0, 0);",
+            "debug_print_backtrace() takes at most 2 arguments",
+        ),
+        (
+            "<?php error_reporting(1, 2);",
+            "error_reporting() takes at most 1 argument",
+        ),
+        (
+            "<?php gc_collect_cycles(1);",
+            "gc_collect_cycles() takes no arguments",
+        ),
+        ("<?php gc_disable(1);", "gc_disable() takes no arguments"),
+        ("<?php gc_enable(1);", "gc_enable() takes no arguments"),
+        ("<?php gc_enabled(1);", "gc_enabled() takes no arguments"),
+        (
+            "<?php gc_mem_caches(1);",
+            "gc_mem_caches() takes no arguments",
+        ),
+        (
+            "<?php get_called_class(1);",
+            "get_called_class() takes no arguments",
+        ),
+        (
+            "<?php get_class_methods();",
+            "get_class_methods() takes exactly 1 argument",
+        ),
+        (
+            "<?php get_class_vars();",
+            "get_class_vars() takes exactly 1 argument",
+        ),
+        (
+            "<?php get_defined_constants(false, true);",
+            "get_defined_constants() takes at most 1 argument",
+        ),
+        (
+            "<?php get_defined_functions(false, true);",
+            "get_defined_functions() takes at most 1 argument",
+        ),
+        (
+            "<?php get_defined_vars(1);",
+            "get_defined_vars() takes no arguments",
+        ),
+        (
+            "<?php get_extension_funcs();",
+            "get_extension_funcs() takes exactly 1 argument",
+        ),
+        (
+            "<?php get_included_files(1);",
+            "get_included_files() takes no arguments",
+        ),
+        (
+            "<?php get_mangled_object_vars();",
+            "get_mangled_object_vars() takes exactly 1 argument",
+        ),
+        (
+            "<?php get_required_files(1);",
+            "get_required_files() takes no arguments",
+        ),
+        (
+            "<?php get_resources(null, null);",
+            "get_resources() takes at most 1 argument",
+        ),
+        (
+            "<?php restore_error_handler(1);",
+            "restore_error_handler() takes no arguments",
+        ),
+        (
+            "<?php restore_exception_handler(1);",
+            "restore_exception_handler() takes no arguments",
+        ),
+        (
+            "<?php set_error_handler();",
+            "set_error_handler() takes 1 or 2 arguments",
+        ),
+        (
+            "<?php set_exception_handler();",
+            "set_exception_handler() takes exactly 1 argument",
+        ),
+        (
+            "<?php trigger_error();",
+            "trigger_error() takes 1 or 2 arguments",
+        ),
+        (
+            "<?php user_error();",
+            "user_error() takes 1 or 2 arguments",
+        ),
+    ];
+    for (source, expected) in cases {
+        expect_error(source, expected);
+    }
+}
+
+/// Verifies PHP's scope-introspection builtin cannot be invoked through first-class syntax.
+#[test]
+fn test_error_get_defined_vars_first_class_callable() {
+    expect_error(
+        "<?php function inspect_scope() { $callback = get_defined_vars(...); return $callback(); }",
+        "Cannot call get_defined_vars() dynamically",
+    );
+}

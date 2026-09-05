@@ -1,16 +1,16 @@
 ---
-title: "__elephc_phar_get_file_metadata() — internals"
+title: "__elephc_phar_get_file_metadata() - internals"
 description: "Compiler internals for __elephc_phar_get_file_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 614
+  order: 641
 ---
 
-## `__elephc_phar_get_file_metadata()` — internals
+## `__elephc_phar_get_file_metadata()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_get_file_metadata.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_get_file_metadata.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

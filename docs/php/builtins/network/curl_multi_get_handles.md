@@ -2,7 +2,7 @@
 title: "curl_multi_get_handles()"
 description: "Returns the cURL handles currently attached to a cURL multi handle."
 sidebar:
-  order: 346
+  order: 373
 ---
 
 ## curl_multi_get_handles()
@@ -21,9 +21,9 @@ Returns the cURL handles currently attached to a cURL multi handle.
 ## Availability
 
 - **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_get_handles.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_get_handles.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_get_handles.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_get_handles.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

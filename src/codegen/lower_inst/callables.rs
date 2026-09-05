@@ -407,7 +407,12 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&string_label);
-    emit_runtime_string_descriptor_value_from_unboxed(ctx, op_name)?;
+    let candidate_names = ctx.runtime_callable_candidates(callable);
+    emit_runtime_string_descriptor_value_from_unboxed(
+        ctx,
+        op_name,
+        candidate_names.as_deref(),
+    )?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     if let Some(array_label) = &array_label {
@@ -876,11 +881,12 @@ pub(super) fn emit_runtime_string_descriptor_value(
 fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
     op_name: &str,
+    candidate_names: Option<&[String]>,
 ) -> Result<()> {
     let cases = runtime_string_descriptor_cases(
         ctx,
         None,
-        None,
+        candidate_names,
         crate::strict_php::is_enabled(),
     )?;
     if cases.is_empty() {

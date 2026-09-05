@@ -1,16 +1,16 @@
 ---
-title: "stream_bucket_prepend() — internals"
+title: "stream_bucket_prepend() - internals"
 description: "Compiler internals for stream_bucket_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 420
+  order: 447
 ---
 
-## `stream_bucket_prepend()` — internals
+## `stream_bucket_prepend()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_bucket_prepend.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_bucket_prepend.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

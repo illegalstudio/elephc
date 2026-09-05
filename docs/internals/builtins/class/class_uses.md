@@ -1,16 +1,16 @@
 ---
-title: "class_uses() — internals"
+title: "class_uses() - internals"
 description: "Compiler internals for class_uses(): lowering path, type checks, and runtime helpers."
 sidebar:
   order: 80
 ---
 
-## `class_uses()` — internals
+## `class_uses()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/class_uses.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/class_uses.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

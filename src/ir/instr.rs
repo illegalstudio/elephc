@@ -257,6 +257,208 @@ pub struct BuiltinId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RuntimeId(pub u32);
 
+/// Typed selector for PHP cycle-collector control and status operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i64)]
+pub enum GcControlOp {
+    /// Runs the collector even when automatic collection is disabled.
+    Collect = 0,
+    /// Disables automatic collection safe points.
+    Disable = 1,
+    /// Enables automatic collection safe points.
+    Enable = 2,
+    /// Reads the automatic-collection enabled flag.
+    Enabled = 3,
+    /// Releases allocator caches and reports reclaimed bytes.
+    MemCaches = 4,
+    /// Reads whether the collector is currently running.
+    Running = 5,
+    /// Reads whether collector-triggered releases are protected.
+    Protected = 6,
+    /// Reads the number of productive collector runs.
+    Runs = 7,
+    /// Reads the cumulative number of collected graph nodes.
+    Collected = 8,
+    /// Reads the number of live cycle-collector candidate blocks.
+    Roots = 9,
+    /// Reads elapsed application time in seconds.
+    ApplicationTime = 10,
+    /// Reads cumulative collector time in seconds.
+    CollectorTime = 11,
+    /// Reads cumulative destructor time during collection in seconds.
+    DestructorTime = 12,
+    /// Reads cumulative graph-free time in seconds.
+    FreeTime = 13,
+}
+
+impl GcControlOp {
+    /// Returns the stable integer stored in the EIR immediate.
+    pub const fn as_i64(self) -> i64 {
+        self as i64
+    }
+
+    /// Decodes a validated EIR immediate into its typed GC operation.
+    pub const fn from_i64(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::Collect),
+            1 => Some(Self::Disable),
+            2 => Some(Self::Enable),
+            3 => Some(Self::Enabled),
+            4 => Some(Self::MemCaches),
+            5 => Some(Self::Running),
+            6 => Some(Self::Protected),
+            7 => Some(Self::Runs),
+            8 => Some(Self::Collected),
+            9 => Some(Self::Roots),
+            10 => Some(Self::ApplicationTime),
+            11 => Some(Self::CollectorTime),
+            12 => Some(Self::DestructorTime),
+            13 => Some(Self::FreeTime),
+            _ => None,
+        }
+    }
+
+    /// Returns the precise conservative effects of this collector operation.
+    pub const fn effects(self) -> Effects {
+        use Effects as E;
+        match self {
+            Self::Collect => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits()
+                    | E::WRITES_GLOBAL.bits()
+                    | E::READS_HEAP.bits()
+                    | E::WRITES_HEAP.bits()
+                    | E::REFCOUNT_OP.bits(),
+            ),
+            Self::Disable | Self::Enable => E::WRITES_GLOBAL,
+            Self::Enabled
+            | Self::Running
+            | Self::Protected
+            | Self::Runs
+            | Self::Collected
+            | Self::Roots
+            | Self::CollectorTime
+            | Self::DestructorTime
+            | Self::FreeTime => E::READS_GLOBAL,
+            Self::ApplicationTime => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::READS_PROCESS.bits())
+            }
+            Self::MemCaches => {
+                Effects::from_bits_retain(E::READS_HEAP.bits() | E::WRITES_HEAP.bits())
+            }
+        }
+    }
+}
+
+/// Typed selector for PHP Core runtime and introspection builtins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i64)]
+pub enum CoreBuiltinOp {
+    DebugBacktrace = 0,
+    DebugPrintBacktrace = 1,
+    ErrorReporting = 2,
+    RestoreErrorHandler = 3,
+    RestoreExceptionHandler = 4,
+    SetErrorHandler = 5,
+    SetExceptionHandler = 6,
+    TriggerError = 7,
+    GetDefinedConstants = 8,
+    GetDefinedFunctions = 9,
+    GetDefinedVars = 10,
+    GetExtensionFuncs = 11,
+    GetIncludedFiles = 12,
+    GetMangledObjectVars = 13,
+    GetResources = 14,
+}
+
+impl CoreBuiltinOp {
+    /// Returns the stable integer stored in the EIR immediate.
+    pub const fn as_i64(self) -> i64 {
+        self as i64
+    }
+
+    /// Decodes a validated EIR immediate into its typed Core operation.
+    pub const fn from_i64(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::DebugBacktrace),
+            1 => Some(Self::DebugPrintBacktrace),
+            2 => Some(Self::ErrorReporting),
+            3 => Some(Self::RestoreErrorHandler),
+            4 => Some(Self::RestoreExceptionHandler),
+            5 => Some(Self::SetErrorHandler),
+            6 => Some(Self::SetExceptionHandler),
+            7 => Some(Self::TriggerError),
+            8 => Some(Self::GetDefinedConstants),
+            9 => Some(Self::GetDefinedFunctions),
+            10 => Some(Self::GetDefinedVars),
+            11 => Some(Self::GetExtensionFuncs),
+            12 => Some(Self::GetIncludedFiles),
+            13 => Some(Self::GetMangledObjectVars),
+            14 => Some(Self::GetResources),
+            _ => None,
+        }
+    }
+
+    /// Returns the normalized EIR operand count required by this operation.
+    pub const fn operand_count(self) -> usize {
+        match self {
+            Self::DebugBacktrace | Self::DebugPrintBacktrace => 2,
+            Self::ErrorReporting
+            | Self::GetDefinedConstants
+            | Self::GetExtensionFuncs
+            | Self::GetMangledObjectVars
+            | Self::GetResources => 1,
+            Self::SetErrorHandler => 3,
+            Self::SetExceptionHandler => 2,
+            Self::TriggerError => 4,
+            Self::RestoreErrorHandler
+            | Self::RestoreExceptionHandler
+            | Self::GetDefinedVars
+            | Self::GetIncludedFiles => 0,
+            Self::GetDefinedFunctions => 1,
+        }
+    }
+
+    /// Returns the conservative effects of the selected Core operation.
+    pub const fn effects(self) -> Effects {
+        use Effects as E;
+        match self {
+            Self::GetDefinedConstants
+            | Self::GetDefinedFunctions
+            | Self::GetDefinedVars
+            | Self::GetExtensionFuncs
+            | Self::GetIncludedFiles
+            | Self::GetMangledObjectVars
+            | Self::GetResources
+            | Self::DebugBacktrace => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits()
+                    | E::READS_LOCAL.bits()
+                    | E::READS_HEAP.bits()
+                    | E::WRITES_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::REFCOUNT_OP.bits()
+                    | E::MAY_THROW.bits(),
+            ),
+            Self::DebugPrintBacktrace | Self::TriggerError => E::all(),
+            Self::ErrorReporting => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
+            }
+            Self::RestoreErrorHandler
+            | Self::RestoreExceptionHandler
+            | Self::SetErrorHandler
+            | Self::SetExceptionHandler => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits()
+                    | E::WRITES_GLOBAL.bits()
+                    | E::READS_HEAP.bits()
+                    | E::WRITES_HEAP.bits()
+                    | E::ALLOC_HEAP.bits()
+                    | E::REFCOUNT_OP.bits()
+                    | E::MAY_THROW.bits()
+                    | E::MAY_FATAL.bits(),
+            ),
+        }
+    }
+}
+
 /// EIR opcode family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Op {
@@ -592,6 +794,8 @@ pub enum Op {
     Release,
     ReleaseUnlessAliases,
     GcCollect,
+    GcControl,
+    CoreBuiltin,
     Move,
     Borrow,
     EnsureOwned,
@@ -821,6 +1025,14 @@ impl Op {
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
             ReleaseUnlessAliases => E::REFCOUNT_OP | E::WRITES_HEAP | E::READS_HEAP,
             GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
+            GcControl => Effects::from_bits_retain(
+                E::READS_GLOBAL.bits()
+                    | E::WRITES_GLOBAL.bits()
+                    | E::READS_HEAP.bits()
+                    | E::WRITES_HEAP.bits()
+                    | E::REFCOUNT_OP.bits(),
+            ),
+            CoreBuiltin => E::all(),
             ClassConstant => E::MAY_DEOPT,
         }
     }
@@ -864,6 +1076,8 @@ impl Op {
                 | Op::IteratorMethodCall
                 | Op::SplRuntimeCall
                 | Op::FiberRuntimeCall
+                | Op::GcControl
+                | Op::CoreBuiltin
         )
     }
 
@@ -1132,6 +1346,8 @@ impl Op {
             Release => "release",
             ReleaseUnlessAliases => "release_unless_aliases",
             GcCollect => "gc_collect",
+            GcControl => "gc_control",
+            CoreBuiltin => "core_builtin",
             Move => "move",
             Borrow => "borrow",
             EnsureOwned => "ensure_owned",

@@ -1,17 +1,17 @@
 ---
-title: "buffer_new() — internals"
+title: "buffer_new() - internals"
 description: "Compiler internals for buffer_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 368
+  order: 395
 ---
 
-## `buffer_new()` — internals
+## `buffer_new()` - internals
 
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
 - **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Function symbol**: `(none, type-checker only)()`
 
 
 ### Lowering notes

@@ -59,6 +59,13 @@ pub(crate) fn collect_constants(
             PhpType::Str,
         ),
     );
+    constants.insert(
+        "PHP_OS_FAMILY".to_string(),
+        (
+            ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
+            PhpType::Str,
+        ),
+    );
     let php_version = crate::codegen_support::compile_php_version();
     constants.insert(
         "PHP_VERSION".to_string(),
@@ -115,6 +122,25 @@ pub(crate) fn collect_constants(
     constants.insert(
         "SID".to_string(),
         (ExprKind::StringLiteral(String::new()), PhpType::Str),
+    );
+    constants.insert(
+        "PHP_INT_SIZE".to_string(),
+        (ExprKind::IntLiteral(8), PhpType::Int),
+    );
+    constants.insert(
+        "PHP_MAXPATHLEN".to_string(),
+        (
+            ExprKind::IntLiteral(if target_platform == Platform::MacOS { 1_024 } else { 4_096 }),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "DEBUG_BACKTRACE_PROVIDE_OBJECT".to_string(),
+        (ExprKind::IntLiteral(1), PhpType::Int),
+    );
+    constants.insert(
+        "DEBUG_BACKTRACE_IGNORE_ARGS".to_string(),
+        (ExprKind::IntLiteral(2), PhpType::Int),
     );
     constants.insert(
         "PATHINFO_DIRNAME".to_string(),
@@ -267,9 +293,14 @@ pub(crate) fn collect_constants(
         );
     }
     for (name, value) in ERROR_LEVEL_CONSTANTS {
+        let value = if *name == "E_ALL" {
+            php_version.error_reporting_mask()
+        } else {
+            *value
+        };
         constants.insert(
             (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
+            (ExprKind::IntLiteral(value), PhpType::Int),
         );
     }
     // `ext/curl` constants materialize from the frozen `CURL_INT_CONSTANTS` table

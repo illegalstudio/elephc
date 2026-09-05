@@ -2,7 +2,7 @@
 title: "iconv_mime_decode_headers()"
 description: "Decodes a block of MIME header fields into an associative array."
 sidebar:
-  order: 453
+  order: 480
 ---
 
 ## iconv_mime_decode_headers()
@@ -23,9 +23,9 @@ Decodes a block of MIME header fields into an associative array.
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_decode_headers.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_decode_headers.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_decode_headers.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/iconv_mime_decode_headers.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

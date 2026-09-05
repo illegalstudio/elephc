@@ -91,7 +91,9 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     source_inputs.extend((repo / "crates" / "elephc-builtin-contract").rglob("*.rs"))
     source_inputs.extend((repo / "crates" / "elephc-magician" / "src").rglob("*.rs"))
     newest_source_mtime = max(path.stat().st_mtime for path in source_inputs if path.exists())
-    for profile in ("release", "debug"):
+    # CI builds the debug exporter immediately before this script runs. Prefer it over a
+    # release executable whose timestamp may have been refreshed by cache restoration.
+    for profile in ("debug", "release"):
         exe = repo / "target" / profile / "examples" / "gen_builtins"
         if exe.exists() and exe.stat().st_mtime >= newest_source_mtime:
             cmd = [str(exe), "--include-internal"]
@@ -171,6 +173,7 @@ _NON_HOME_FILES = {
 }
 
 _CONTRACT_RE = re.compile(r'contract:\s*"([^"]+)"')
+_CORE_HOME_RE = re.compile(r'core_builtin_home!\(\s*"([^"]+)"')
 
 
 def build_home_file_map(repo: Path) -> dict[str, str]:
@@ -187,9 +190,9 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         if path.name in _NON_HOME_FILES:
             continue
         text = path.read_text(encoding="utf-8")
-        if "builtin!" not in text:
-            continue
         contract_match = _CONTRACT_RE.search(text)
+        if contract_match is None:
+            contract_match = _CORE_HOME_RE.search(text)
         if not contract_match:
             continue
         canonical = contract_match.group(1).lower()
@@ -429,8 +432,8 @@ def _render_default(value, optional: bool) -> Optional[str]:
 
     Required params (``optional`` false) have no default (``None``). Optional
     params render their default: ``null``, ``true``/``false``, integers/floats
-    verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN`` sentinels
-    as constants, and the empty-array sentinel as ``[]``.
+    verbatim, strings single-quoted, the ``PHP_INT_MAX``/``PHP_INT_MIN`` and
+    ``E_ALL`` sentinels as constants, and the empty-array sentinel as ``[]``.
     """
     if not optional:
         return None
@@ -444,7 +447,7 @@ def _render_default(value, optional: bool) -> Optional[str]:
     if isinstance(value, list):
         return "[]"
     if isinstance(value, str):
-        if value in ("PHP_INT_MAX", "PHP_INT_MIN"):
+        if value in ("PHP_INT_MAX", "PHP_INT_MIN", "E_ALL"):
             return value
         return repr(value)
     return str(value)
@@ -541,6 +544,11 @@ PRELUDE_SOURCES: dict[str, tuple[str, str, str]] = {
     "string": (
         "hash_prelude.rs",
         "hash",
+        "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+    ),
+    "system": (
+        "version_prelude.rs",
+        "version",
         "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
     ),
 }

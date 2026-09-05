@@ -1,16 +1,16 @@
 ---
-title: "zval_type() — internals"
+title: "zval_type() - internals"
 description: "Compiler internals for zval_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 386
+  order: 413
 ---
 
-## `zval_type()` — internals
+## `zval_type()` - internals
 
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_type.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_type.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

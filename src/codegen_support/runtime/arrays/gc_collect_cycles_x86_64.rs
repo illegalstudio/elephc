@@ -23,9 +23,10 @@ use crate::codegen_support::emit::Emitter;
 pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");
-    emitter.label_global("__rt_gc_collect_cycles");
+    emitter.label_global("__rt_gc_collect_cycles_explicit");
 
     // -- avoid recursive re-entry while the collector is already running --
+    emitter.instruction("xor eax, eax");                                        // a nested collection reports zero collected nodes
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current collector-active flag before starting a new x86_64 collection pass
     emitter.instruction("test r9, r9");                                         // is the collector already running?
@@ -40,9 +41,11 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 32] = current target user pointer
     //   [rbp - 40] = scratch / saved next header
     //   [rbp - 48] = incoming heap-edge count for the current target
+    //   [rbp - 56] = collected graph-node count
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving x86_64 collector locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the x86_64 collector locals
-    emitter.instruction("sub rsp, 48");                                         // reserve collector locals for heap bounds, scan pointers, and incoming counts
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned collector locals, including the result counter
+    emitter.instruction("call __rt_gc_collector_begin");                        // start timing this complete collector pass
 
     // -- capture heap bounds once for the current collection pass --
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
@@ -52,6 +55,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r9, [r8 + r9]");                                   // compute the initial heap end from the heap base plus bump offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the initial heap end for all x86_64 metadata, root, and free scans
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // initialize the outer scan pointer to the heap base for the clear pass
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the collected graph-node count
 
     // -- pass 1: clear the x86_64 reachable bit while preserving kind + array value_type + heap marker --
     emitter.label("__rt_gc_collect_cycles_clear_loop");
@@ -265,6 +269,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
 
     // -- pass 3: free every still-unreachable live refcounted node --
     emitter.label("__rt_gc_collect_cycles_free_init");
+    emitter.instruction("call __rt_gc_free_begin");                             // start timing graph reclamation separately
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the heap base before starting the unreachable-node free scan
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // restart the outer scan pointer at the heap base for the free pass
     emitter.label("__rt_gc_collect_cycles_free_loop");
@@ -296,6 +301,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_free_candidate_ready");
     emitter.instruction("test r11, 0x10000");                                   // was this live block marked reachable from an external root during the root pass?
     emitter.instruction("jnz __rt_gc_collect_cycles_free_next");                // yes — reachable graph nodes remain live
+    emitter.instruction("add QWORD PTR [rbp - 56], 1");                         // count this unreachable graph node in the explicit result
     emitter.instruction("mov DWORD PTR [r8 + 4], 0");                           // pre-clear the doomed node refcount so back-edges released during deep-free cannot recursively reclaim it again
     emitter.instruction("lea rax, [r8 + 16]");                                  // compute the current user pointer before dispatching to the deep-free helper
     emitter.instruction("cmp rcx, 2");                                          // is this unreachable node an indexed array?
@@ -321,6 +327,15 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gc_collect_cycles_free_loop");                // continue scanning the initial heap window for unreachable graph nodes
 
     emitter.label("__rt_gc_collect_cycles_finish");
+    emitter.instruction("call __rt_gc_collector_end");                          // accumulate collector and graph-free phase durations
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the number of unreachable graph nodes reclaimed
+    emitter.instruction("test rax, rax");                                       // did this pass reclaim any graph nodes?
+    emitter.instruction("jz __rt_gc_collect_cycles_stats_done");                // empty passes do not count as productive collector runs
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_runs");
+    emitter.instruction("add QWORD PTR [r8], 1");                               // include this productive pass in the run counter
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collected");
+    emitter.instruction("add QWORD PTR [r8], rax");                             // include this pass in the cumulative collected-node count
+    emitter.label("__rt_gc_collect_cycles_stats_done");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");
     emitter.instruction("mov QWORD PTR [r8], 0");                               // clear the collector-active flag now that the x86_64 cycle pass is complete
     emitter.instruction("leave");                                               // tear down the x86_64 collector frame before returning to generated code
