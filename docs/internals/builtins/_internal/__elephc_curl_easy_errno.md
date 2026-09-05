@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_errno() — internals"
 description: "Compiler internals for __elephc_curl_easy_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 555
+  order: 556
 ---
 
 ## `__elephc_curl_easy_errno()` — internals
