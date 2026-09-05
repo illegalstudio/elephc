@@ -26330,6 +26330,18 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
+            ParamSpec {
+                name: "matches",
+                ty: TypeSpec::Mixed,
+                default: Some(DefaultSpec::EmptyArray),
+                by_ref: true,
+            },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(0)),
+                by_ref: false,
+            },
         ],
         variadic: None,
         variadic_by_ref: false,
@@ -26338,7 +26350,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Int,
         by_ref_return: false,
-        summary: "Performs a global regular expression match and returns the number of matches.",
+        summary: "Performs a global regular expression match, optionally filling `$matches`, and returns the number of matches.",
         examples: &[
         ],
         php_manual: None,
