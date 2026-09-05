@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **515 / 2030** (25%).
+Overall builtin coverage: **516 / 2030** (25%).
 
 ## Builtin coverage by PHP module
 
@@ -55,7 +55,7 @@ Overall builtin coverage: **515 / 2030** (25%).
 | `sockets` | 0 / 37 | 0% | 0 | 0 |
 | `sodium` | 0 / 110 | 0% | 0 | 0 |
 | `spl` | 15 / 15 | 100% | 15 | 15 |
-| `standard` | 364 / 542 | 67% | 364 | 339 |
+| `standard` | 365 / 542 | 67% | 365 | 340 |
 | `sysvmsg` | 0 / 7 | 0% | 0 | 0 |
 | `sysvsem` | 0 / 4 | 0% | 0 | 0 |
 | `sysvshm` | 0 / 7 | 0% | 0 | 0 |
