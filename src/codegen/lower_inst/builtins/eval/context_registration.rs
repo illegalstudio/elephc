@@ -25,12 +25,144 @@ pub(super) fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result_reg, offset);
     register_eval_declared_symbols(ctx, offset);
+    register_eval_native_global_constants(ctx, offset)?;
     register_eval_native_functions(ctx, offset)?;
     register_eval_native_method_signatures(ctx, offset);
     ctx.emitter.label(&ready);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
+}
+
+/// Registers the AOT Core constant inventory with a newly allocated eval context.
+pub(super) fn register_eval_native_global_constants(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+) -> Result<()> {
+    let user_names = ctx
+        .module
+        .user_defined_constants
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut entries = ctx
+        .module
+        .global_constants
+        .iter()
+        .filter(|(name, _)| !user_names.contains(*name))
+        .map(|(name, (value, ty))| (name.clone(), value.clone(), ty.clone()))
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (name, value, ty) in entries {
+        register_eval_native_global_constant(ctx, context_offset, &name, &value, &ty)?;
+    }
+    Ok(())
+}
+
+/// Emits one scalar AOT constant registration call with its exact PHP runtime type.
+fn register_eval_native_global_constant(
+    ctx: &mut FunctionContext<'_>,
+    context_offset: usize,
+    name: &str,
+    value: &ExprKind,
+    ty: &PhpType,
+) -> Result<()> {
+    load_eval_context_local_to_arg(ctx, context_offset, 0);
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+
+    let (kind, word, string_value) = eval_native_global_constant_abi_value(value, ty)?;
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        kind,
+    );
+    if let Some(string_value) = string_value {
+        let (value_label, value_len) = ctx.data.add_string(string_value.as_bytes());
+        abi::emit_symbol_address(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 4),
+            &value_label,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 5),
+            value_len as i64,
+        );
+    } else {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 4),
+            word,
+        );
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 5),
+            0,
+        );
+    }
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_native_global_constant");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    Ok(())
+}
+
+/// Encodes one prescanned scalar constant for the eval registration ABI.
+fn eval_native_global_constant_abi_value(
+    value: &ExprKind,
+    ty: &PhpType,
+) -> Result<(i64, i64, Option<String>)> {
+    match value {
+        ExprKind::Null => Ok((NATIVE_GLOBAL_CONSTANT_NULL, 0, None)),
+        ExprKind::BoolLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_BOOL,
+            i64::from(*value),
+            None,
+        )),
+        ExprKind::IntLiteral(value) if matches!(ty, PhpType::Resource(_)) => {
+            Ok((NATIVE_GLOBAL_CONSTANT_RESOURCE, *value, None))
+        }
+        ExprKind::IntLiteral(value) => Ok((NATIVE_GLOBAL_CONSTANT_INT, *value, None)),
+        ExprKind::FloatLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_FLOAT,
+            value.to_bits() as i64,
+            None,
+        )),
+        ExprKind::StringLiteral(value) => Ok((
+            NATIVE_GLOBAL_CONSTANT_STRING,
+            0,
+            Some(value.clone()),
+        )),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => {
+                Ok((NATIVE_GLOBAL_CONSTANT_INT, value.wrapping_neg(), None))
+            }
+            ExprKind::FloatLiteral(value) => Ok((
+                NATIVE_GLOBAL_CONSTANT_FLOAT,
+                (-value).to_bits() as i64,
+                None,
+            )),
+            other => Err(CodegenIrError::unsupported(format!(
+                "eval native global constant expression {:?}",
+                other
+            ))),
+        },
+        other => Err(CodegenIrError::unsupported(format!(
+            "eval native global constant expression {:?}",
+            other
+        ))),
+    }
 }
 
 /// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.

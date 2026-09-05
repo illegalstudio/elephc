@@ -57,7 +57,10 @@ fn eval_define_name(
     if name.is_empty() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if eval_predefined_constant_value(&name).is_some() || context.has_constant(&name) {
+    if context.has_native_global_constant(&name)
+        || eval_predefined_constant_value(&name).is_some()
+        || context.has_constant(&name)
+    {
         values.warning(DEFINE_ALREADY_DEFINED_WARNING)?;
         return Ok(false);
     }

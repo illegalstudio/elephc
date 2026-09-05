@@ -5,11 +5,12 @@
 //! - `crate::interpreter::eval_expr()` for constant and magic-constant expression nodes.
 //!
 //! Key details:
-//! - Dynamic constants prefer eval context declarations before predefined fallback constants.
+//! - Registered AOT constants override the standalone predefined fallback inventory.
 //! - Magic file and directory values come from the current eval call-site context.
 
 use super::*;
 use elephc_builtin_contract::ConstValue;
+use crate::context::EvalNativeGlobalConstant;
 
 /// Converts one EvalIR constant into a runtime-cell handle.
 pub(super) fn eval_const(
@@ -31,6 +32,9 @@ pub(super) fn eval_const_fetch(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = context.native_global_constant(name) {
+        return eval_native_global_constant(value, values);
+    }
     if let Some(value) = eval_predefined_constant(name, values)? {
         return Ok(value);
     }
@@ -47,6 +51,9 @@ pub(super) fn eval_namespaced_const_fetch(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(value) = context.native_global_constant(name) {
+        return eval_native_global_constant(value, values);
+    }
     if let Some(value) = eval_predefined_constant(name, values)? {
         return Ok(value);
     }
@@ -54,6 +61,21 @@ pub(super) fn eval_namespaced_const_fetch(
         return values.retain(value);
     }
     eval_const_fetch(fallback_name, context, values)
+}
+
+/// Materializes one registered AOT global constant into a fresh runtime cell.
+pub(in crate::interpreter) fn eval_native_global_constant(
+    value: &EvalNativeGlobalConstant,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match value {
+        EvalNativeGlobalConstant::Null => values.null(),
+        EvalNativeGlobalConstant::Bool(value) => values.bool_value(*value),
+        EvalNativeGlobalConstant::Int(value) => values.int(*value),
+        EvalNativeGlobalConstant::Float(value) => values.float(*value),
+        EvalNativeGlobalConstant::String(value) => values.string(value),
+        EvalNativeGlobalConstant::Resource(value) => values.resource(*value),
+    }
 }
 
 /// Materializes one eval-visible predefined constant into a runtime cell.

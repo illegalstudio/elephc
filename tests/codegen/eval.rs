@@ -29450,3 +29450,30 @@ return ":" . ($quiet ?? "fallback");');
     );
     assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
 }
+
+/// Verifies eval receives the complete typed AOT Core constant inventory.
+#[test]
+fn test_eval_get_defined_constants_matches_aot_core_inventory() {
+    let out = compile_and_run(
+        r#"<?php
+$native = get_defined_constants(true)["Core"];
+$evaluated = eval('return get_defined_constants(true)["Core"];');
+$missing = 0;
+foreach ($native as $name => $value) {
+    if (!array_key_exists($name, $evaluated)) {
+        $missing++;
+    }
+}
+foreach ($evaluated as $name => $value) {
+    if (!array_key_exists($name, $native)) {
+        $missing++;
+    }
+}
+echo count($native) === count($evaluated) ? "count:" : "bad-count:";
+echo $missing === 0 ? "keys:" : "bad-keys:";
+echo $native["FNM_CASEFOLD"] === $evaluated["FNM_CASEFOLD"] ? "value:" : "bad-value:";
+echo get_resource_type($evaluated["STDOUT"]);
+"#,
+    );
+    assert_eq!(out, "count:keys:value:stream");
+}

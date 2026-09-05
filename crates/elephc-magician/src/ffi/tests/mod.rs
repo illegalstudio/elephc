@@ -14,6 +14,7 @@ use super::context::*;
 use super::declared_symbols::*;
 use super::execute::*;
 use super::native_functions::*;
+use super::native_constants::*;
 use super::native_methods::*;
 use super::scope::*;
 use super::symbols::*;

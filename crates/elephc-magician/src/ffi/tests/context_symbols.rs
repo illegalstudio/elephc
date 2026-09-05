@@ -250,6 +250,65 @@ fn register_declared_symbol_names_records_visible_metadata() {
     assert_eq!(ctx.declared_trait_names(), &["AotDeclaredTrait".to_string()]);
 }
 
+/// Verifies AOT scalar constants cross the registration ABI without losing type or value.
+#[test]
+fn register_native_global_constants_preserves_scalar_metadata() {
+    let mut ctx = ElephcEvalContext::new();
+    let integer_name = b"AOT_INTEGER";
+    let string_name = b"AOT_STRING";
+    let string_value = b"registered";
+    let resource_name = b"STDOUT";
+
+    let integer_registered = unsafe {
+        __elephc_eval_register_native_global_constant(
+            &mut ctx,
+            integer_name.as_ptr(),
+            integer_name.len() as u64,
+            2,
+            (-42_i64) as u64,
+            0,
+        )
+    };
+    let string_registered = unsafe {
+        __elephc_eval_register_native_global_constant(
+            &mut ctx,
+            string_name.as_ptr(),
+            string_name.len() as u64,
+            4,
+            string_value.as_ptr() as u64,
+            string_value.len() as u64,
+        )
+    };
+    let resource_registered = unsafe {
+        __elephc_eval_register_native_global_constant(
+            &mut ctx,
+            resource_name.as_ptr(),
+            resource_name.len() as u64,
+            5,
+            1,
+            0,
+        )
+    };
+
+    assert_eq!(integer_registered, 1);
+    assert_eq!(string_registered, 1);
+    assert_eq!(resource_registered, 1);
+    assert_eq!(
+        ctx.native_global_constant("AOT_INTEGER"),
+        Some(&crate::context::EvalNativeGlobalConstant::Int(-42))
+    );
+    assert_eq!(
+        ctx.native_global_constant("AOT_STRING"),
+        Some(&crate::context::EvalNativeGlobalConstant::String(
+            "registered".to_string()
+        ))
+    );
+    assert_eq!(
+        ctx.native_global_constant("STDOUT"),
+        Some(&crate::context::EvalNativeGlobalConstant::Resource(1))
+    );
+}
+
 /// Verifies the function-exists ABI probes eval-declared functions by folded name.
 #[test]
 fn function_exists_reports_declared_eval_function() {
