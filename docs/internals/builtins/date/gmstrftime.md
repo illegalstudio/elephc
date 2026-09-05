@@ -29,7 +29,7 @@ _No registry-backed typed runtime target applies._
 ## Signature summary
 
 ```php
-function gmstrftime(string $format, int $timestamp = null): mixed
+function gmstrftime(string $format, ?int $timestamp = null): mixed
 ```
 
 ## What the type checker enforces

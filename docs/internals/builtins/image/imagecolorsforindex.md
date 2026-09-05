@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imagecolorsforindex(mixed $image, int $color): mixed
+function imagecolorsforindex(mixed $image, int $color): array
 ```
 
 ## What the type checker enforces

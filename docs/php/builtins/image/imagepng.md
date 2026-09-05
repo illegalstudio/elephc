@@ -8,14 +8,14 @@ sidebar:
 ## imagepng()
 
 ```php
-function imagepng(mixed $image, string $file = null, int $quality = -1, int $filters = -1): bool
+function imagepng(mixed $image, ?string $file = null, int $quality = -1, int $filters = -1): bool
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$file` (`string`), default `null`, optional
+- `$file` (`?string`), default `null`, optional
 - `$quality` (`int`), default `-1`, optional
 - `$filters` (`int`), default `-1`, optional
 

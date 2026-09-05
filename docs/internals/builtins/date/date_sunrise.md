@@ -29,7 +29,7 @@ _No registry-backed typed runtime target applies._
 ## Signature summary
 
 ```php
-function date_sunrise(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, float $latitude = null, float $longitude = null, float $zenith = null, float $utcOffset = null): mixed
+function date_sunrise(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): mixed
 ```
 
 ## What the type checker enforces

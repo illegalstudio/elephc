@@ -839,7 +839,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`opcache_compile_file()`](./builtins/misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | — |
-| [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): array` | `array` | ✓ | — |
 | [`opcache_get_status()`](./builtins/misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | — |
 | [`opcache_invalidate()`](./builtins/misc/opcache_invalidate.md) | `(mixed $filename, mixed $force = false): bool` | `bool` | ✓ | — |
 | [`opcache_is_script_cached()`](./builtins/misc/opcache_is_script_cached.md) | `(mixed $filename): bool` | `bool` | ✓ | — |

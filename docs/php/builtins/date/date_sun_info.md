@@ -8,7 +8,7 @@ sidebar:
 ## date_sun_info()
 
 ```php
-function date_sun_info(int $timestamp, float $latitude, float $longitude): mixed
+function date_sun_info(int $timestamp, float $latitude, float $longitude): array
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
@@ -18,7 +18,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - `$latitude` (`float`)
 - `$longitude` (`float`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

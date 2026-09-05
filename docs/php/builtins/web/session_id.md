@@ -8,13 +8,13 @@ sidebar:
 ## session_id()
 
 ```php
-function session_id(string $id = null): mixed
+function session_id(?string $id = null): mixed
 ```
 
 Implemented by the compiler-injected web prelude.
 
 **Parameters**:
-- `$id` (`string`), default `null`, optional
+- `$id` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

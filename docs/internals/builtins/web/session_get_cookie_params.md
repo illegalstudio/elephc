@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function session_get_cookie_params(): mixed
+function session_get_cookie_params(): array
 ```
 
 ## What the type checker enforces

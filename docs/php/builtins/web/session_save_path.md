@@ -8,13 +8,13 @@ sidebar:
 ## session_save_path()
 
 ```php
-function session_save_path(string $path = null): mixed
+function session_save_path(?string $path = null): mixed
 ```
 
 Implemented by the compiler-injected web prelude.
 
 **Parameters**:
-- `$path` (`string`), default `null`, optional
+- `$path` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

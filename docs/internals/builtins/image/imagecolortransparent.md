@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imagecolortransparent(mixed $image, int $color = null): int
+function imagecolortransparent(mixed $image, ?int $color = null): int
 ```
 
 ## What the type checker enforces

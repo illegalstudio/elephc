@@ -8,13 +8,13 @@ sidebar:
 ## session_cache_expire()
 
 ```php
-function session_cache_expire(int $value = null): mixed
+function session_cache_expire(?int $value = null): mixed
 ```
 
 Implemented by the compiler-injected web prelude.
 
 **Parameters**:
-- `$value` (`int`), default `null`, optional
+- `$value` (`?int`), default `null`, optional
 
 **Returns**: `mixed`
 

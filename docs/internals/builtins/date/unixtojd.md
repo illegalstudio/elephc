@@ -29,7 +29,7 @@ _No registry-backed typed runtime target applies._
 ## Signature summary
 
 ```php
-function unixtojd(int $timestamp = null): mixed
+function unixtojd(?int $timestamp = null): mixed
 ```
 
 ## What the type checker enforces

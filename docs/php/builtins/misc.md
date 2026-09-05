@@ -20,7 +20,7 @@ sidebar:
 | [`ini_restore()`](./misc/ini_restore.md) | `(string $option): void` | `void` | ✓ | — |
 | [`isset()`](./misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
 | [`opcache_compile_file()`](./misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | — |
-| [`opcache_get_configuration()`](./misc/opcache_get_configuration.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`opcache_get_configuration()`](./misc/opcache_get_configuration.md) | `(): array` | `array` | ✓ | — |
 | [`opcache_get_status()`](./misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | — |
 | [`opcache_invalidate()`](./misc/opcache_invalidate.md) | `(mixed $filename, mixed $force = false): bool` | `bool` | ✓ | — |
 | [`opcache_is_script_cached()`](./misc/opcache_is_script_cached.md) | `(mixed $filename): bool` | `bool` | ✓ | — |

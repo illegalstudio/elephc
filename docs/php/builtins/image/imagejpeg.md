@@ -8,14 +8,14 @@ sidebar:
 ## imagejpeg()
 
 ```php
-function imagejpeg(mixed $image, string $file = null, int $quality = -1): bool
+function imagejpeg(mixed $image, ?string $file = null, int $quality = -1): bool
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$file` (`string`), default `null`, optional
+- `$file` (`?string`), default `null`, optional
 - `$quality` (`int`), default `-1`, optional
 
 **Returns**: `bool`

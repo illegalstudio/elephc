@@ -8,14 +8,14 @@ sidebar:
 ## mysqli_connect_error()
 
 ```php
-function mysqli_connect_error(): string
+function mysqli_connect_error(): ?string
 ```
 
 Implemented by the compiler-injected mysqli prelude.
 
 **Parameters**: none.
 
-**Returns**: `string`
+**Returns**: `?string`
 
 ## Availability
 

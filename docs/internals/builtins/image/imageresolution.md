@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imageresolution(mixed $image, int $resolution_x = null, int $resolution_y = null): mixed
+function imageresolution(mixed $image, ?int $resolution_x = null, ?int $resolution_y = null): mixed
 ```
 
 ## What the type checker enforces

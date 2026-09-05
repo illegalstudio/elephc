@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function gd_info(): mixed
+function gd_info(): array
 ```
 
 ## What the type checker enforces

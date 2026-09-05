@@ -415,12 +415,12 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`date_isodate_set()`](./builtins/date/date_isodate_set.md) | `(mixed $object, int $year, int $week, int $dayOfWeek = 1): mixed` | `mixed` | ✓ | ✓ |
 | [`date_modify()`](./builtins/date/date_modify.md) | `(mixed $object, string $modifier): mixed` | `mixed` | ✓ | ✓ |
 | [`date_offset_get()`](./builtins/date/date_offset_get.md) | `(mixed $object): int` | `int` | ✓ | ✓ |
-| [`date_parse()`](./builtins/date/date_parse.md) | `(string $datetime): mixed` | `mixed` | ✓ | ✓ |
-| [`date_parse_from_format()`](./builtins/date/date_parse_from_format.md) | `(string $format, string $datetime): mixed` | `mixed` | ✓ | ✓ |
+| [`date_parse()`](./builtins/date/date_parse.md) | `(string $datetime): array` | `array` | ✓ | ✓ |
+| [`date_parse_from_format()`](./builtins/date/date_parse_from_format.md) | `(string $format, string $datetime): array` | `array` | ✓ | ✓ |
 | [`date_sub()`](./builtins/date/date_sub.md) | `(mixed $object, mixed $interval): mixed` | `mixed` | ✓ | ✓ |
-| [`date_sun_info()`](./builtins/date/date_sun_info.md) | `(int $timestamp, float $latitude, float $longitude): mixed` | `mixed` | ✓ | ✓ |
-| [`date_sunrise()`](./builtins/date/date_sunrise.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, float $latitude = null, float $longitude = null, float $zenith = null, float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
-| [`date_sunset()`](./builtins/date/date_sunset.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, float $latitude = null, float $longitude = null, float $zenith = null, float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_sun_info()`](./builtins/date/date_sun_info.md) | `(int $timestamp, float $latitude, float $longitude): array` | `array` | ✓ | ✓ |
+| [`date_sunrise()`](./builtins/date/date_sunrise.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_sunset()`](./builtins/date/date_sunset.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
 | [`date_time_set()`](./builtins/date/date_time_set.md) | `(mixed $object, int $hour, int $minute, int $second = 0, int $microsecond = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`date_timestamp_get()`](./builtins/date/date_timestamp_get.md) | `(mixed $object): int` | `int` | ✓ | ✓ |
 | [`date_timestamp_set()`](./builtins/date/date_timestamp_set.md) | `(mixed $object, int $timestamp): mixed` | `mixed` | ✓ | ✓ |
@@ -429,15 +429,15 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`getdate()`](./builtins/date/getdate.md) | `(int $timestamp = null): array` | `array` | ✓ | ✓ |
 | [`gmdate()`](./builtins/date/gmdate.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
 | [`gmmktime()`](./builtins/date/gmmktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
-| [`gmstrftime()`](./builtins/date/gmstrftime.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
-| [`idate()`](./builtins/date/idate.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`gmstrftime()`](./builtins/date/gmstrftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`idate()`](./builtins/date/idate.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`localtime()`](./builtins/date/localtime.md) | `(int $timestamp = -1, bool $associative = false): array` | `array` | ✓ | ✓ |
 | [`mktime()`](./builtins/date/mktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
-| [`strftime()`](./builtins/date/strftime.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`strftime()`](./builtins/date/strftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`strtotime()`](./builtins/date/strtotime.md) | `(string $datetime, int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`time()`](./builtins/date/time.md) | `(): int` | `int` | ✓ | ✓ |
 | [`timezone_abbreviations_list()`](./builtins/date/timezone_abbreviations_list.md) | `(): mixed` | `mixed` | ✓ | ✓ |
-| [`timezone_identifiers_list()`](./builtins/date/timezone_identifiers_list.md) | `(int $timezoneGroup = DateTimeZone::ALL, string $countryCode = null): mixed` | `mixed` | ✓ | ✓ |
+| [`timezone_identifiers_list()`](./builtins/date/timezone_identifiers_list.md) | `(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array` | `array` | ✓ | ✓ |
 | [`timezone_location_get()`](./builtins/date/timezone_location_get.md) | `(mixed $object): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_name_from_abbr()`](./builtins/date/timezone_name_from_abbr.md) | `(string $abbr, int $utcOffset = -1, int $isDST = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_name_get()`](./builtins/date/timezone_name_get.md) | `(mixed $object): string` | `string` | ✓ | ✓ |

@@ -29,7 +29,7 @@ _No registry-backed typed runtime target applies._
 ## Signature summary
 
 ```php
-function idate(string $format, int $timestamp = null): mixed
+function idate(string $format, ?int $timestamp = null): mixed
 ```
 
 ## What the type checker enforces

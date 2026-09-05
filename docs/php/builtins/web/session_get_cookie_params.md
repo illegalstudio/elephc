@@ -8,14 +8,14 @@ sidebar:
 ## session_get_cookie_params()
 
 ```php
-function session_get_cookie_params(): mixed
+function session_get_cookie_params(): array
 ```
 
 Implemented by the compiler-injected web prelude.
 
 **Parameters**: none.
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

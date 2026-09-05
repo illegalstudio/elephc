@@ -8,14 +8,14 @@ sidebar:
 ## imagecolortransparent()
 
 ```php
-function imagecolortransparent(mixed $image, int $color = null): int
+function imagecolortransparent(mixed $image, ?int $color = null): int
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$color` (`int`), default `null`, optional
+- `$color` (`?int`), default `null`, optional
 
 **Returns**: `int`
 

@@ -8,7 +8,7 @@ sidebar:
 ## cairo_get_current_point()
 
 ```php
-function cairo_get_current_point(mixed $context): mixed
+function cairo_get_current_point(mixed $context): array
 ```
 
 Implemented by the compiler-injected image prelude.
@@ -16,7 +16,7 @@ Implemented by the compiler-injected image prelude.
 **Parameters**:
 - `$context` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

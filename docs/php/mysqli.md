@@ -360,30 +360,30 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 |---|---|---|:-:|:-:|
 | [`mysqli_affected_rows()`](./builtins/database/mysqli_affected_rows.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_autocommit()`](./builtins/database/mysqli_autocommit.md) | `(mixed $mysql, bool $enable): bool` | `bool` | ✓ | — |
-| [`mysqli_begin_transaction()`](./builtins/database/mysqli_begin_transaction.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_begin_transaction()`](./builtins/database/mysqli_begin_transaction.md) | `(mixed $mysql, int $flags = 0, ?string $name = null): bool` | `bool` | ✓ | — |
 | [`mysqli_character_set_name()`](./builtins/database/mysqli_character_set_name.md) | `(mixed $mysql): string` | `string` | ✓ | — |
 | [`mysqli_close()`](./builtins/database/mysqli_close.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
-| [`mysqli_commit()`](./builtins/database/mysqli_commit.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
-| [`mysqli_connect()`](./builtins/database/mysqli_connect.md) | `(string $hostname = null, string $username = null, string $password = null, string $database = null, int $port = null, string $socket = null): mixed` | `mixed` | ✓ | — |
+| [`mysqli_commit()`](./builtins/database/mysqli_commit.md) | `(mixed $mysql, int $flags = 0, ?string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_connect()`](./builtins/database/mysqli_connect.md) | `(?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null): mixed` | `mixed` | ✓ | — |
 | [`mysqli_connect_errno()`](./builtins/database/mysqli_connect_errno.md) | `(): int` | `int` | ✓ | — |
-| [`mysqli_connect_error()`](./builtins/database/mysqli_connect_error.md) | `(): string` | `string` | ✓ | — |
+| [`mysqli_connect_error()`](./builtins/database/mysqli_connect_error.md) | `(): ?string` | `?string` | ✓ | — |
 | [`mysqli_data_seek()`](./builtins/database/mysqli_data_seek.md) | `(mixed $result, int $offset): bool` | `bool` | ✓ | — |
 | [`mysqli_errno()`](./builtins/database/mysqli_errno.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_error()`](./builtins/database/mysqli_error.md) | `(mixed $mysql): string` | `string` | ✓ | — |
-| [`mysqli_error_list()`](./builtins/database/mysqli_error_list.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | — |
+| [`mysqli_error_list()`](./builtins/database/mysqli_error_list.md) | `(mixed $mysql): array` | `array` | ✓ | — |
 | [`mysqli_escape_string()`](./builtins/database/mysqli_escape_string.md) | `(mixed $mysql, string $string): string` | `string` | ✓ | — |
 | [`mysqli_execute()`](./builtins/database/mysqli_execute.md) | `(mixed $statement): bool` | `bool` | ✓ | — |
-| [`mysqli_execute_query()`](./builtins/database/mysqli_execute_query.md) | `(mixed $mysql, string $query, mixed $params = null): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_all()`](./builtins/database/mysqli_fetch_all.md) | `(mixed $result, int $mode = 2): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_execute_query()`](./builtins/database/mysqli_execute_query.md) | `(mixed $mysql, string $query, ?array $params = null): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_all()`](./builtins/database/mysqli_fetch_all.md) | `(mixed $result, int $mode = 2): array` | `array` | ✓ | — |
+| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): ?array` | `?array` | ✓ | — |
+| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): ?array` | `?array` | ✓ | — |
 | [`mysqli_fetch_column()`](./builtins/database/mysqli_fetch_column.md) | `(mixed $result, int $column = 0): mixed` | `mixed` | ✓ | — |
 | [`mysqli_fetch_field()`](./builtins/database/mysqli_fetch_field.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
 | [`mysqli_fetch_field_direct()`](./builtins/database/mysqli_fetch_field_direct.md) | `(mixed $result, int $index): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_fields()`](./builtins/database/mysqli_fetch_fields.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_lengths()`](./builtins/database/mysqli_fetch_lengths.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_object()`](./builtins/database/mysqli_fetch_object.md) | `(mixed $result, string $class = 'stdClass', mixed $constructor_args = []): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_fields()`](./builtins/database/mysqli_fetch_fields.md) | `(mixed $result): array` | `array` | ✓ | — |
+| [`mysqli_fetch_lengths()`](./builtins/database/mysqli_fetch_lengths.md) | `(mixed $result): ?array` | `?array` | ✓ | — |
+| [`mysqli_fetch_object()`](./builtins/database/mysqli_fetch_object.md) | `(mixed $result, string $class = 'stdClass', array $constructor_args = []): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): ?array` | `?array` | ✓ | — |
 | [`mysqli_field_count()`](./builtins/database/mysqli_field_count.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_field_seek()`](./builtins/database/mysqli_field_seek.md) | `(mixed $result, int $index): bool` | `bool` | ✓ | — |
 | [`mysqli_field_tell()`](./builtins/database/mysqli_field_tell.md) | `(mixed $result): int` | `int` | ✓ | — |
@@ -395,7 +395,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`mysqli_get_proto_info()`](./builtins/database/mysqli_get_proto_info.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_get_server_info()`](./builtins/database/mysqli_get_server_info.md) | `(mixed $mysql): string` | `string` | ✓ | — |
 | [`mysqli_get_server_version()`](./builtins/database/mysqli_get_server_version.md) | `(mixed $mysql): int` | `int` | ✓ | — |
-| [`mysqli_info()`](./builtins/database/mysqli_info.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_info()`](./builtins/database/mysqli_info.md) | `(mixed $mysql): ?string` | `?string` | ✓ | — |
 | [`mysqli_init()`](./builtins/database/mysqli_init.md) | `(): mixed` | `mixed` | ✓ | — |
 | [`mysqli_insert_id()`](./builtins/database/mysqli_insert_id.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_more_results()`](./builtins/database/mysqli_more_results.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
@@ -407,12 +407,12 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`mysqli_ping()`](./builtins/database/mysqli_ping.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
 | [`mysqli_prepare()`](./builtins/database/mysqli_prepare.md) | `(mixed $mysql, string $query): mixed` | `mixed` | ✓ | — |
 | [`mysqli_query()`](./builtins/database/mysqli_query.md) | `(mixed $mysql, string $query, int $result_mode = 0): mixed` | `mixed` | ✓ | — |
-| [`mysqli_real_connect()`](./builtins/database/mysqli_real_connect.md) | `(mixed $mysql, string $hostname = null, string $username = null, string $password = null, string $database = null, int $port = null, string $socket = null, int $flags = 0): bool` | `bool` | ✓ | — |
+| [`mysqli_real_connect()`](./builtins/database/mysqli_real_connect.md) | `(mixed $mysql, ?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null, int $flags = 0): bool` | `bool` | ✓ | — |
 | [`mysqli_real_escape_string()`](./builtins/database/mysqli_real_escape_string.md) | `(mixed $mysql, string $string): string` | `string` | ✓ | — |
 | [`mysqli_real_query()`](./builtins/database/mysqli_real_query.md) | `(mixed $mysql, string $query): bool` | `bool` | ✓ | — |
 | [`mysqli_release_savepoint()`](./builtins/database/mysqli_release_savepoint.md) | `(mixed $mysql, string $name): bool` | `bool` | ✓ | — |
 | [`mysqli_report()`](./builtins/database/mysqli_report.md) | `(int $flags): bool` | `bool` | ✓ | — |
-| [`mysqli_rollback()`](./builtins/database/mysqli_rollback.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_rollback()`](./builtins/database/mysqli_rollback.md) | `(mixed $mysql, int $flags = 0, ?string $name = null): bool` | `bool` | ✓ | — |
 | [`mysqli_savepoint()`](./builtins/database/mysqli_savepoint.md) | `(mixed $mysql, string $name): bool` | `bool` | ✓ | — |
 | [`mysqli_select_db()`](./builtins/database/mysqli_select_db.md) | `(mixed $mysql, string $database): bool` | `bool` | ✓ | — |
 | [`mysqli_set_charset()`](./builtins/database/mysqli_set_charset.md) | `(mixed $mysql, string $charset): bool` | `bool` | ✓ | — |
@@ -424,8 +424,8 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`mysqli_stmt_close()`](./builtins/database/mysqli_stmt_close.md) | `(mixed $statement): bool` | `bool` | ✓ | — |
 | [`mysqli_stmt_errno()`](./builtins/database/mysqli_stmt_errno.md) | `(mixed $statement): int` | `int` | ✓ | — |
 | [`mysqli_stmt_error()`](./builtins/database/mysqli_stmt_error.md) | `(mixed $statement): string` | `string` | ✓ | — |
-| [`mysqli_stmt_error_list()`](./builtins/database/mysqli_stmt_error_list.md) | `(mixed $statement): mixed` | `mixed` | ✓ | — |
-| [`mysqli_stmt_execute()`](./builtins/database/mysqli_stmt_execute.md) | `(mixed $statement, mixed $params = null): bool` | `bool` | ✓ | — |
+| [`mysqli_stmt_error_list()`](./builtins/database/mysqli_stmt_error_list.md) | `(mixed $statement): array` | `array` | ✓ | — |
+| [`mysqli_stmt_execute()`](./builtins/database/mysqli_stmt_execute.md) | `(mixed $statement, ?array $params = null): bool` | `bool` | ✓ | — |
 | [`mysqli_stmt_field_count()`](./builtins/database/mysqli_stmt_field_count.md) | `(mixed $statement): int` | `int` | ✓ | — |
 | [`mysqli_stmt_free_result()`](./builtins/database/mysqli_stmt_free_result.md) | `(mixed $statement): void` | `void` | ✓ | — |
 | [`mysqli_stmt_get_result()`](./builtins/database/mysqli_stmt_get_result.md) | `(mixed $statement): mixed` | `mixed` | ✓ | — |

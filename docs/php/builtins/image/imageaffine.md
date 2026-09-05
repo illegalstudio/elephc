@@ -8,15 +8,15 @@ sidebar:
 ## imageaffine()
 
 ```php
-function imageaffine(mixed $image, mixed $affine, mixed $clip = null): mixed
+function imageaffine(mixed $image, array $affine, ?array $clip = null): mixed
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$affine` (`mixed`)
-- `$clip` (`mixed`), default `null`, optional
+- `$affine` (`array`)
+- `$clip` (`?array`), default `null`, optional
 
 **Returns**: `mixed`
 

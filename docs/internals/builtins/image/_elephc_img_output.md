@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function _elephc_img_output(int $handle, int $fmt, string $file, int $quality): bool
+function _elephc_img_output(int $handle, int $fmt, ?string $file, int $quality): bool
 ```
 
 ## What the type checker enforces

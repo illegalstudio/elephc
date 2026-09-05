@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imageopenpolygon(mixed $image, mixed $points, int $color): bool
+function imageopenpolygon(mixed $image, array $points, int $color): bool
 ```
 
 ## What the type checker enforces

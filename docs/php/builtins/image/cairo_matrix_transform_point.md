@@ -8,7 +8,7 @@ sidebar:
 ## cairo_matrix_transform_point()
 
 ```php
-function cairo_matrix_transform_point(mixed $matrix, float $x, float $y): mixed
+function cairo_matrix_transform_point(mixed $matrix, float $x, float $y): array
 ```
 
 Implemented by the compiler-injected image prelude.
@@ -18,7 +18,7 @@ Implemented by the compiler-injected image prelude.
 - `$x` (`float`)
 - `$y` (`float`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

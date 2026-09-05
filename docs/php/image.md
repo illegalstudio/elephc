@@ -888,7 +888,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`cairo_curve_to()`](./builtins/image/cairo_curve_to.md) | `(mixed $context, float $x1, float $y1, float $x2, float $y2, float $x3, float $y3): void` | `void` | ✓ | — |
 | [`cairo_fill()`](./builtins/image/cairo_fill.md) | `(mixed $context): void` | `void` | ✓ | — |
 | [`cairo_fill_preserve()`](./builtins/image/cairo_fill_preserve.md) | `(mixed $context): void` | `void` | ✓ | — |
-| [`cairo_get_current_point()`](./builtins/image/cairo_get_current_point.md) | `(mixed $context): mixed` | `mixed` | ✓ | — |
+| [`cairo_get_current_point()`](./builtins/image/cairo_get_current_point.md) | `(mixed $context): array` | `array` | ✓ | — |
 | [`cairo_identity_matrix()`](./builtins/image/cairo_identity_matrix.md) | `(mixed $context): void` | `void` | ✓ | — |
 | [`cairo_image_surface_create()`](./builtins/image/cairo_image_surface_create.md) | `(int $format, int $width, int $height): mixed` | `mixed` | ✓ | — |
 | [`cairo_image_surface_create_from_png()`](./builtins/image/cairo_image_surface_create_from_png.md) | `(string $filename): mixed` | `mixed` | ✓ | — |
@@ -900,7 +900,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 | [`cairo_matrix_init_scale()`](./builtins/image/cairo_matrix_init_scale.md) | `(float $sx, float $sy): mixed` | `mixed` | ✓ | — |
 | [`cairo_matrix_init_translate()`](./builtins/image/cairo_matrix_init_translate.md) | `(float $tx, float $ty): mixed` | `mixed` | ✓ | — |
 | [`cairo_matrix_multiply()`](./builtins/image/cairo_matrix_multiply.md) | `(mixed $m1, mixed $m2): mixed` | `mixed` | ✓ | — |
-| [`cairo_matrix_transform_point()`](./builtins/image/cairo_matrix_transform_point.md) | `(mixed $matrix, float $x, float $y): mixed` | `mixed` | ✓ | — |
+| [`cairo_matrix_transform_point()`](./builtins/image/cairo_matrix_transform_point.md) | `(mixed $matrix, float $x, float $y): array` | `array` | ✓ | — |
 | [`cairo_move_to()`](./builtins/image/cairo_move_to.md) | `(mixed $context, float $x, float $y): void` | `void` | ✓ | — |
 | [`cairo_new_path()`](./builtins/image/cairo_new_path.md) | `(mixed $context): void` | `void` | ✓ | — |
 | [`cairo_new_sub_path()`](./builtins/image/cairo_new_sub_path.md) | `(mixed $context): void` | `void` | ✓ | — |
@@ -937,7 +937,7 @@ Classes: `CairoAntialias`, `CairoContext`, `CairoException`, `CairoFillRule`, `C
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`exif_imagetype()`](./builtins/image/exif_imagetype.md) | `(string $filename): mixed` | `mixed` | ✓ | — |
-| [`exif_read_data()`](./builtins/image/exif_read_data.md) | `(string $filename, string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | — |
+| [`exif_read_data()`](./builtins/image/exif_read_data.md) | `(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | — |
 | [`exif_tagname()`](./builtins/image/exif_tagname.md) | `(int $index): mixed` | `mixed` | ✓ | — |
 | [`exif_thumbnail()`](./builtins/image/exif_thumbnail.md) | `(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed` | `mixed` | ✓ | — |
 
@@ -947,13 +947,13 @@ Constants: `EXIF_USE_MBSTRING`.
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`gd_info()`](./builtins/image/gd_info.md) | `(): mixed` | `mixed` | ✓ | — |
-| [`imageaffine()`](./builtins/image/imageaffine.md) | `(mixed $image, mixed $affine, mixed $clip = null): mixed` | `mixed` | ✓ | — |
-| [`imageaffinematrixconcat()`](./builtins/image/imageaffinematrixconcat.md) | `(mixed $matrix1, mixed $matrix2): mixed` | `mixed` | ✓ | — |
+| [`gd_info()`](./builtins/image/gd_info.md) | `(): array` | `array` | ✓ | — |
+| [`imageaffine()`](./builtins/image/imageaffine.md) | `(mixed $image, array $affine, ?array $clip = null): mixed` | `mixed` | ✓ | — |
+| [`imageaffinematrixconcat()`](./builtins/image/imageaffinematrixconcat.md) | `(array $matrix1, array $matrix2): array` | `array` | ✓ | — |
 | [`imagealphablending()`](./builtins/image/imagealphablending.md) | `(mixed $image, bool $enable): bool` | `bool` | ✓ | — |
 | [`imageantialias()`](./builtins/image/imageantialias.md) | `(mixed $image, bool $enable): bool` | `bool` | ✓ | — |
 | [`imagearc()`](./builtins/image/imagearc.md) | `(mixed $image, int $center_x, int $center_y, int $width, int $height, int $start_angle, int $end_angle, int $color): bool` | `bool` | ✓ | — |
-| [`imagebmp()`](./builtins/image/imagebmp.md) | `(mixed $image, string $file = null, bool $compressed = true): bool` | `bool` | ✓ | — |
+| [`imagebmp()`](./builtins/image/imagebmp.md) | `(mixed $image, ?string $file = null, bool $compressed = true): bool` | `bool` | ✓ | — |
 | [`imagechar()`](./builtins/image/imagechar.md) | `(mixed $image, int $font, int $x, int $y, string $char, int $color): bool` | `bool` | ✓ | — |
 | [`imagecharup()`](./builtins/image/imagecharup.md) | `(mixed $image, int $font, int $x, int $y, string $char, int $color): bool` | `bool` | ✓ | — |
 | [`imagecolorallocate()`](./builtins/image/imagecolorallocate.md) | `(mixed $image, int $red, int $green, int $blue): int` | `int` | ✓ | — |
@@ -969,10 +969,10 @@ Constants: `EXIF_USE_MBSTRING`.
 | [`imagecolorresolve()`](./builtins/image/imagecolorresolve.md) | `(mixed $image, int $red, int $green, int $blue): int` | `int` | ✓ | — |
 | [`imagecolorresolvealpha()`](./builtins/image/imagecolorresolvealpha.md) | `(mixed $image, int $red, int $green, int $blue, int $alpha): int` | `int` | ✓ | — |
 | [`imagecolorset()`](./builtins/image/imagecolorset.md) | `(mixed $image, int $color, int $red, int $green, int $blue, int $alpha = 0): bool` | `bool` | ✓ | — |
-| [`imagecolorsforindex()`](./builtins/image/imagecolorsforindex.md) | `(mixed $image, int $color): mixed` | `mixed` | ✓ | — |
+| [`imagecolorsforindex()`](./builtins/image/imagecolorsforindex.md) | `(mixed $image, int $color): array` | `array` | ✓ | — |
 | [`imagecolorstotal()`](./builtins/image/imagecolorstotal.md) | `(mixed $image): int` | `int` | ✓ | — |
-| [`imagecolortransparent()`](./builtins/image/imagecolortransparent.md) | `(mixed $image, int $color = null): int` | `int` | ✓ | — |
-| [`imageconvolution()`](./builtins/image/imageconvolution.md) | `(mixed $image, mixed $matrix, float $divisor, float $offset): bool` | `bool` | ✓ | — |
+| [`imagecolortransparent()`](./builtins/image/imagecolortransparent.md) | `(mixed $image, ?int $color = null): int` | `int` | ✓ | — |
+| [`imageconvolution()`](./builtins/image/imageconvolution.md) | `(mixed $image, array $matrix, float $divisor, float $offset): bool` | `bool` | ✓ | — |
 | [`imagecopy()`](./builtins/image/imagecopy.md) | `(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $src_width, int $src_height): bool` | `bool` | ✓ | — |
 | [`imagecopymerge()`](./builtins/image/imagecopymerge.md) | `(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $src_width, int $src_height, int $pct): bool` | `bool` | ✓ | — |
 | [`imagecopymergegray()`](./builtins/image/imagecopymergegray.md) | `(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $src_width, int $src_height, int $pct): bool` | `bool` | ✓ | — |
@@ -995,7 +995,7 @@ Constants: `EXIF_USE_MBSTRING`.
 | [`imagefill()`](./builtins/image/imagefill.md) | `(mixed $image, int $x, int $y, int $color): bool` | `bool` | ✓ | — |
 | [`imagefilledarc()`](./builtins/image/imagefilledarc.md) | `(mixed $image, int $center_x, int $center_y, int $width, int $height, int $start_angle, int $end_angle, int $color, int $style): bool` | `bool` | ✓ | — |
 | [`imagefilledellipse()`](./builtins/image/imagefilledellipse.md) | `(mixed $image, int $center_x, int $center_y, int $width, int $height, int $color): bool` | `bool` | ✓ | — |
-| [`imagefilledpolygon()`](./builtins/image/imagefilledpolygon.md) | `(mixed $image, mixed $points, int $color): bool` | `bool` | ✓ | — |
+| [`imagefilledpolygon()`](./builtins/image/imagefilledpolygon.md) | `(mixed $image, array $points, int $color): bool` | `bool` | ✓ | — |
 | [`imagefilledrectangle()`](./builtins/image/imagefilledrectangle.md) | `(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool` | `bool` | ✓ | — |
 | [`imagefilltoborder()`](./builtins/image/imagefilltoborder.md) | `(mixed $image, int $x, int $y, int $border_color, int $color): bool` | `bool` | ✓ | — |
 | [`imagefilter()`](./builtins/image/imagefilter.md) | `(mixed $image, int $filter, int $arg1 = 0, int $arg2 = 0, int $arg3 = 0, int $arg4 = 0): bool` | `bool` | ✓ | — |
@@ -1004,19 +1004,19 @@ Constants: `EXIF_USE_MBSTRING`.
 | [`imagefontwidth()`](./builtins/image/imagefontwidth.md) | `(int $font): int` | `int` | ✓ | — |
 | [`imagegammacorrect()`](./builtins/image/imagegammacorrect.md) | `(mixed $image, float $input_gamma, float $output_gamma): bool` | `bool` | ✓ | — |
 | [`imagegetinterpolation()`](./builtins/image/imagegetinterpolation.md) | `(mixed $image): int` | `int` | ✓ | — |
-| [`imagegif()`](./builtins/image/imagegif.md) | `(mixed $image, string $file = null): bool` | `bool` | ✓ | — |
-| [`imageinterlace()`](./builtins/image/imageinterlace.md) | `(mixed $image, bool $enable = null): int` | `int` | ✓ | — |
+| [`imagegif()`](./builtins/image/imagegif.md) | `(mixed $image, ?string $file = null): bool` | `bool` | ✓ | — |
+| [`imageinterlace()`](./builtins/image/imageinterlace.md) | `(mixed $image, ?bool $enable = null): int` | `int` | ✓ | — |
 | [`imageistruecolor()`](./builtins/image/imageistruecolor.md) | `(mixed $image): bool` | `bool` | ✓ | — |
-| [`imagejpeg()`](./builtins/image/imagejpeg.md) | `(mixed $image, string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |
+| [`imagejpeg()`](./builtins/image/imagejpeg.md) | `(mixed $image, ?string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |
 | [`imagelayereffect()`](./builtins/image/imagelayereffect.md) | `(mixed $image, int $effect): bool` | `bool` | ✓ | — |
 | [`imageline()`](./builtins/image/imageline.md) | `(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool` | `bool` | ✓ | — |
-| [`imageopenpolygon()`](./builtins/image/imageopenpolygon.md) | `(mixed $image, mixed $points, int $color): bool` | `bool` | ✓ | — |
+| [`imageopenpolygon()`](./builtins/image/imageopenpolygon.md) | `(mixed $image, array $points, int $color): bool` | `bool` | ✓ | — |
 | [`imagepalettecopy()`](./builtins/image/imagepalettecopy.md) | `(mixed $dst, mixed $src): bool` | `bool` | ✓ | — |
 | [`imagepalettetotruecolor()`](./builtins/image/imagepalettetotruecolor.md) | `(mixed $image): bool` | `bool` | ✓ | — |
-| [`imagepng()`](./builtins/image/imagepng.md) | `(mixed $image, string $file = null, int $quality = -1, int $filters = -1): bool` | `bool` | ✓ | — |
-| [`imagepolygon()`](./builtins/image/imagepolygon.md) | `(mixed $image, mixed $points, int $color): bool` | `bool` | ✓ | — |
+| [`imagepng()`](./builtins/image/imagepng.md) | `(mixed $image, ?string $file = null, int $quality = -1, int $filters = -1): bool` | `bool` | ✓ | — |
+| [`imagepolygon()`](./builtins/image/imagepolygon.md) | `(mixed $image, array $points, int $color): bool` | `bool` | ✓ | — |
 | [`imagerectangle()`](./builtins/image/imagerectangle.md) | `(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool` | `bool` | ✓ | — |
-| [`imageresolution()`](./builtins/image/imageresolution.md) | `(mixed $image, int $resolution_x = null, int $resolution_y = null): mixed` | `mixed` | ✓ | — |
+| [`imageresolution()`](./builtins/image/imageresolution.md) | `(mixed $image, ?int $resolution_x = null, ?int $resolution_y = null): mixed` | `mixed` | ✓ | — |
 | [`imagerotate()`](./builtins/image/imagerotate.md) | `(mixed $image, float $angle, int $background_color, int $ignore_transparent = 0): mixed` | `mixed` | ✓ | — |
 | [`imagesavealpha()`](./builtins/image/imagesavealpha.md) | `(mixed $image, bool $enable): bool` | `bool` | ✓ | — |
 | [`imagescale()`](./builtins/image/imagescale.md) | `(mixed $image, int $width, int $height = -1, int $mode = IMG_BILINEAR_FIXED): mixed` | `mixed` | ✓ | — |
@@ -1029,7 +1029,7 @@ Constants: `EXIF_USE_MBSTRING`.
 | [`imagesy()`](./builtins/image/imagesy.md) | `(mixed $image): int` | `int` | ✓ | — |
 | [`imagetruecolortopalette()`](./builtins/image/imagetruecolortopalette.md) | `(mixed $image, bool $dither, int $num_colors): bool` | `bool` | ✓ | — |
 | [`imagetypes()`](./builtins/image/imagetypes.md) | `(): int` | `int` | ✓ | — |
-| [`imagewebp()`](./builtins/image/imagewebp.md) | `(mixed $image, string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |
+| [`imagewebp()`](./builtins/image/imagewebp.md) | `(mixed $image, ?string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |
 
 Classes: `GdImage`.
 

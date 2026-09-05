@@ -8,7 +8,7 @@ sidebar:
 ## date_parse()
 
 ```php
-function date_parse(string $datetime): mixed
+function date_parse(string $datetime): array
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
@@ -16,7 +16,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 **Parameters**:
 - `$datetime` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

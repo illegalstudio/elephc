@@ -8,7 +8,7 @@ sidebar:
 ## cal_from_jd()
 
 ```php
-function cal_from_jd(int $julian_day, int $calendar): mixed
+function cal_from_jd(int $julian_day, int $calendar): array
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
@@ -17,7 +17,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - `$julian_day` (`int`)
 - `$calendar` (`int`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

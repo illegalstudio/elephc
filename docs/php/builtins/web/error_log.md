@@ -8,7 +8,7 @@ sidebar:
 ## error_log()
 
 ```php
-function error_log(string $message, int $message_type = 0, string $destination = null, string $additional_headers = null): bool
+function error_log(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool
 ```
 
 Implemented by the compiler-injected web prelude.
@@ -16,8 +16,8 @@ Implemented by the compiler-injected web prelude.
 **Parameters**:
 - `$message` (`string`)
 - `$message_type` (`int`), default `0`, optional
-- `$destination` (`string`), default `null`, optional
-- `$additional_headers` (`string`), default `null`, optional
+- `$destination` (`?string`), default `null`, optional
+- `$additional_headers` (`?string`), default `null`, optional
 
 **Returns**: `bool`
 

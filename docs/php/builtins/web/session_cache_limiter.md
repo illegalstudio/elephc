@@ -8,13 +8,13 @@ sidebar:
 ## session_cache_limiter()
 
 ```php
-function session_cache_limiter(string $value = null): mixed
+function session_cache_limiter(?string $value = null): mixed
 ```
 
 Implemented by the compiler-injected web prelude.
 
 **Parameters**:
-- `$value` (`string`), default `null`, optional
+- `$value` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

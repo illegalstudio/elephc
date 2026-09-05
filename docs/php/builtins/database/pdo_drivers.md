@@ -8,14 +8,14 @@ sidebar:
 ## pdo_drivers()
 
 ```php
-function pdo_drivers(): mixed
+function pdo_drivers(): array
 ```
 
 Implemented by the compiler-injected PDO prelude.
 
 **Parameters**: none.
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

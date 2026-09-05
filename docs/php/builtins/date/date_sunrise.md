@@ -8,7 +8,7 @@ sidebar:
 ## date_sunrise()
 
 ```php
-function date_sunrise(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, float $latitude = null, float $longitude = null, float $zenith = null, float $utcOffset = null): mixed
+function date_sunrise(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): mixed
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
@@ -16,10 +16,10 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 **Parameters**:
 - `$timestamp` (`int`)
 - `$returnFormat` (`int`), default `SUNFUNCS_RET_STRING`, optional
-- `$latitude` (`float`), default `null`, optional
-- `$longitude` (`float`), default `null`, optional
-- `$zenith` (`float`), default `null`, optional
-- `$utcOffset` (`float`), default `null`, optional
+- `$latitude` (`?float`), default `null`, optional
+- `$longitude` (`?float`), default `null`, optional
+- `$zenith` (`?float`), default `null`, optional
+- `$utcOffset` (`?float`), default `null`, optional
 
 **Returns**: `mixed`
 

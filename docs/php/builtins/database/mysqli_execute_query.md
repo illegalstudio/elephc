@@ -8,7 +8,7 @@ sidebar:
 ## mysqli_execute_query()
 
 ```php
-function mysqli_execute_query(mixed $mysql, string $query, mixed $params = null): mixed
+function mysqli_execute_query(mixed $mysql, string $query, ?array $params = null): mixed
 ```
 
 Implemented by the compiler-injected mysqli prelude.
@@ -16,7 +16,7 @@ Implemented by the compiler-injected mysqli prelude.
 **Parameters**:
 - `$mysql` (`mixed`)
 - `$query` (`string`)
-- `$params` (`mixed`), default `null`, optional
+- `$params` (`?array`), default `null`, optional
 
 **Returns**: `mixed`
 

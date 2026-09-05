@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function exif_read_data(string $filename, string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed
+function exif_read_data(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed
 ```
 
 ## What the type checker enforces

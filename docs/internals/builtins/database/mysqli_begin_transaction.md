@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_begin_transaction(mixed $mysql, int $flags = 0, string $name = null): bool
+function mysqli_begin_transaction(mixed $mysql, int $flags = 0, ?string $name = null): bool
 ```
 
 ## What the type checker enforces

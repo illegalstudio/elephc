@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imageinterlace(mixed $image, bool $enable = null): int
+function imageinterlace(mixed $image, ?bool $enable = null): int
 ```
 
 ## What the type checker enforces

@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function ini_get_all(string $extension = null, bool $details = true): mixed
+function ini_get_all(?string $extension = null, bool $details = true): mixed
 ```
 
 ## What the type checker enforces

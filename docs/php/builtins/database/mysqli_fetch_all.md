@@ -8,7 +8,7 @@ sidebar:
 ## mysqli_fetch_all()
 
 ```php
-function mysqli_fetch_all(mixed $result, int $mode = 2): mixed
+function mysqli_fetch_all(mixed $result, int $mode = 2): array
 ```
 
 Implemented by the compiler-injected mysqli prelude.
@@ -17,7 +17,7 @@ Implemented by the compiler-injected mysqli prelude.
 - `$result` (`mixed`)
 - `$mode` (`int`), default `2`, optional
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

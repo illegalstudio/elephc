@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function opcache_get_configuration(): mixed
+function opcache_get_configuration(): array
 ```
 
 ## What the type checker enforces

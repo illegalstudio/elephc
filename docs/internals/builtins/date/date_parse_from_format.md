@@ -29,7 +29,7 @@ _No registry-backed typed runtime target applies._
 ## Signature summary
 
 ```php
-function date_parse_from_format(string $format, string $datetime): mixed
+function date_parse_from_format(string $format, string $datetime): array
 ```
 
 ## What the type checker enforces

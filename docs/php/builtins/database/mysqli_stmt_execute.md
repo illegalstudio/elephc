@@ -8,14 +8,14 @@ sidebar:
 ## mysqli_stmt_execute()
 
 ```php
-function mysqli_stmt_execute(mixed $statement, mixed $params = null): bool
+function mysqli_stmt_execute(mixed $statement, ?array $params = null): bool
 ```
 
 Implemented by the compiler-injected mysqli prelude.
 
 **Parameters**:
 - `$statement` (`mixed`)
-- `$params` (`mixed`), default `null`, optional
+- `$params` (`?array`), default `null`, optional
 
 **Returns**: `bool`
 

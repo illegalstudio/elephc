@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_execute_query(mixed $mysql, string $query, mixed $params = null): mixed
+function mysqli_execute_query(mixed $mysql, string $query, ?array $params = null): mixed
 ```
 
 ## What the type checker enforces

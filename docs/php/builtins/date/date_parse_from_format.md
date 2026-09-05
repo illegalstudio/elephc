@@ -8,7 +8,7 @@ sidebar:
 ## date_parse_from_format()
 
 ```php
-function date_parse_from_format(string $format, string $datetime): mixed
+function date_parse_from_format(string $format, string $datetime): array
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
@@ -17,7 +17,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 - `$format` (`string`)
 - `$datetime` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

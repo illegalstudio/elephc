@@ -29,7 +29,7 @@ _No registry-backed typed runtime target applies._
 ## Signature summary
 
 ```php
-function timezone_identifiers_list(int $timezoneGroup = DateTimeZone::ALL, string $countryCode = null): mixed
+function timezone_identifiers_list(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array
 ```
 
 ## What the type checker enforces

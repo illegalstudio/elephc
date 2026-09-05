@@ -11062,7 +11062,7 @@
           "default": null,
           "name": "file",
           "optional": false,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -11128,7 +11128,7 @@
           "default": null,
           "name": "file",
           "optional": false,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -23831,7 +23831,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -24709,7 +24709,7 @@
           "type": "float"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -27343,7 +27343,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -27407,7 +27407,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -37251,7 +37251,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -37329,7 +37329,7 @@
           "type": "string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -37499,7 +37499,7 @@
           "type": "float"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -37531,28 +37531,28 @@
           "default": null,
           "name": "latitude",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "longitude",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "zenith",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "utcOffset",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         }
       ],
       "required_param_count": 1,
@@ -37611,28 +37611,28 @@
           "default": "null",
           "name": "latitude",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "longitude",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "zenith",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "utcOffset",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         }
       ],
       "return_type": "mixed",
@@ -37667,28 +37667,28 @@
           "default": null,
           "name": "latitude",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "longitude",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "zenith",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "utcOffset",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         }
       ],
       "required_param_count": 1,
@@ -37747,28 +37747,28 @@
           "default": "null",
           "name": "latitude",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "longitude",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "zenith",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "utcOffset",
           "optional": true,
-          "type": "float"
+          "type": "?float"
         }
       ],
       "return_type": "mixed",
@@ -39448,7 +39448,7 @@
           "default": null,
           "name": "year",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -39502,7 +39502,7 @@
           "default": "null",
           "name": "year",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -39528,7 +39528,7 @@
           "default": null,
           "name": "year",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -39582,7 +39582,7 @@
           "default": "null",
           "name": "year",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
@@ -40010,14 +40010,14 @@
           "default": null,
           "name": "destination",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "additional_headers",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -40076,14 +40076,14 @@
           "default": "null",
           "name": "destination",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "additional_headers",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "bool",
@@ -40313,7 +40313,7 @@
           "default": null,
           "name": "required_sections",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -40379,7 +40379,7 @@
           "default": "null",
           "name": "required_sections",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -47443,7 +47443,7 @@
     "semantics": null,
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -51067,7 +51067,7 @@
           "default": null,
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -51119,7 +51119,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",
@@ -56331,7 +56331,7 @@
           "default": null,
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -56383,7 +56383,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",
@@ -56551,14 +56551,14 @@
           "default": null,
           "name": "affine",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "clip",
           "optional": true,
-          "type": "mixed"
+          "type": "?array"
         }
       ],
       "required_param_count": 2,
@@ -56610,14 +56610,14 @@
           "default": null,
           "name": "affine",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "clip",
           "optional": true,
-          "type": "mixed"
+          "type": "?array"
         }
       ],
       "return_type": "mixed",
@@ -56636,14 +56636,14 @@
           "default": null,
           "name": "matrix1",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "matrix2",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         }
       ],
       "required_param_count": 2,
@@ -56688,17 +56688,17 @@
           "default": null,
           "name": "matrix1",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "matrix2",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -57039,7 +57039,7 @@
           "default": null,
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -57098,7 +57098,7 @@
           "default": "null",
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -58846,7 +58846,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -58933,7 +58933,7 @@
           "default": null,
           "name": "color",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -58985,7 +58985,7 @@
           "default": "null",
           "name": "color",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "int",
@@ -59011,7 +59011,7 @@
           "default": null,
           "name": "matrix",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -59077,7 +59077,7 @@
           "default": null,
           "name": "matrix",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -61551,7 +61551,7 @@
           "default": null,
           "name": "points",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -61610,7 +61610,7 @@
           "default": null,
           "name": "points",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -62393,7 +62393,7 @@
           "default": null,
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -62445,7 +62445,7 @@
           "default": "null",
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "bool",
@@ -62471,7 +62471,7 @@
           "default": null,
           "name": "enable",
           "optional": true,
-          "type": "bool"
+          "type": "?bool"
         }
       ],
       "required_param_count": 1,
@@ -62523,7 +62523,7 @@
           "default": "null",
           "name": "enable",
           "optional": true,
-          "type": "bool"
+          "type": "?bool"
         }
       ],
       "return_type": "int",
@@ -62613,7 +62613,7 @@
           "default": null,
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -62672,7 +62672,7 @@
           "default": "null",
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -62917,7 +62917,7 @@
           "default": null,
           "name": "points",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -62976,7 +62976,7 @@
           "default": null,
           "name": "points",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -63151,7 +63151,7 @@
           "default": null,
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -63217,7 +63217,7 @@
           "default": "null",
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -63257,7 +63257,7 @@
           "default": null,
           "name": "points",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -63316,7 +63316,7 @@
           "default": null,
           "name": "points",
           "optional": false,
-          "type": "mixed"
+          "type": "array"
         },
         {
           "by_ref": false,
@@ -63483,14 +63483,14 @@
           "default": null,
           "name": "resolution_x",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "resolution_y",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -63542,14 +63542,14 @@
           "default": "null",
           "name": "resolution_x",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "resolution_y",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",
@@ -64667,7 +64667,7 @@
           "default": null,
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -64726,7 +64726,7 @@
           "default": "null",
           "name": "file",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -65395,7 +65395,7 @@
           "default": null,
           "name": "extension",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -65447,7 +65447,7 @@
           "default": "null",
           "name": "extension",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -76053,7 +76053,7 @@
           "default": null,
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -76112,7 +76112,7 @@
           "default": "null",
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "bool",
@@ -76273,7 +76273,7 @@
           "default": null,
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -76332,7 +76332,7 @@
           "default": "null",
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "bool",
@@ -76351,42 +76351,42 @@
           "default": null,
           "name": "hostname",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "username",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "password",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "database",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "port",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "socket",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -76431,42 +76431,42 @@
           "default": "null",
           "name": "hostname",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "username",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "password",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "database",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "port",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "socket",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -76565,7 +76565,7 @@
     "semantics": null,
     "sig": {
       "params": [],
-      "return_type": "string",
+      "return_type": "?string",
       "variadic": null
     },
     "since": null,
@@ -76835,7 +76835,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -77007,7 +77007,7 @@
           "default": null,
           "name": "params",
           "optional": true,
-          "type": "mixed"
+          "type": "?array"
         }
       ],
       "required_param_count": 2,
@@ -77066,7 +77066,7 @@
           "default": "null",
           "name": "params",
           "optional": true,
-          "type": "mixed"
+          "type": "?array"
         }
       ],
       "return_type": "mixed",
@@ -77147,7 +77147,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -77225,7 +77225,7 @@
           "type": "int"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "?array",
       "variadic": null
     },
     "since": null,
@@ -77289,7 +77289,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "?array",
       "variadic": null
     },
     "since": null,
@@ -77573,7 +77573,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -77637,7 +77637,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "?array",
       "variadic": null
     },
     "since": null,
@@ -77667,7 +77667,7 @@
           "default": [],
           "name": "constructor_args",
           "optional": true,
-          "type": "mixed"
+          "type": "array"
         }
       ],
       "required_param_count": 1,
@@ -77726,7 +77726,7 @@
           "default": "[]",
           "name": "constructor_args",
           "optional": true,
-          "type": "mixed"
+          "type": "array"
         }
       ],
       "return_type": "mixed",
@@ -77793,7 +77793,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "?array",
       "variadic": null
     },
     "since": null,
@@ -78575,7 +78575,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "string",
+      "return_type": "?string",
       "variadic": null
     },
     "since": null,
@@ -79370,42 +79370,42 @@
           "default": null,
           "name": "hostname",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "username",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "password",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "database",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "port",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "socket",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -79464,42 +79464,42 @@
           "default": "null",
           "name": "hostname",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "username",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "password",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "database",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "port",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "socket",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -79837,7 +79837,7 @@
           "default": null,
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 1,
@@ -79896,7 +79896,7 @@
           "default": "null",
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "bool",
@@ -80751,7 +80751,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -80774,7 +80774,7 @@
           "default": null,
           "name": "params",
           "optional": true,
-          "type": "mixed"
+          "type": "?array"
         }
       ],
       "required_param_count": 1,
@@ -80826,7 +80826,7 @@
           "default": "null",
           "name": "params",
           "optional": true,
-          "type": "mixed"
+          "type": "?array"
         }
       ],
       "return_type": "bool",
@@ -84427,7 +84427,7 @@
     "semantics": null,
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -86575,7 +86575,7 @@
     "semantics": null,
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -92539,7 +92539,7 @@
           "default": null,
           "name": "required_sections",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -92605,7 +92605,7 @@
           "default": "null",
           "name": "required_sections",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         },
         {
           "by_ref": false,
@@ -95074,7 +95074,7 @@
           "default": null,
           "name": "value",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 0,
@@ -95119,7 +95119,7 @@
           "default": "null",
           "name": "value",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",
@@ -95138,7 +95138,7 @@
           "default": null,
           "name": "value",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -95183,7 +95183,7 @@
           "default": "null",
           "name": "value",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -95554,7 +95554,7 @@
     "semantics": null,
     "sig": {
       "params": [],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -95570,7 +95570,7 @@
           "default": null,
           "name": "id",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -95615,7 +95615,7 @@
           "default": "null",
           "name": "id",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -95634,7 +95634,7 @@
           "default": null,
           "name": "module",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -95679,7 +95679,7 @@
           "default": "null",
           "name": "module",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -95698,7 +95698,7 @@
           "default": null,
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -95743,7 +95743,7 @@
           "default": "null",
           "name": "name",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -95922,7 +95922,7 @@
           "default": null,
           "name": "path",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -95967,7 +95967,7 @@
           "default": "null",
           "name": "path",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "return_type": "mixed",
@@ -108568,7 +108568,7 @@
           "default": null,
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 1,
@@ -108620,7 +108620,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",
@@ -112368,7 +112368,7 @@
           "default": null,
           "name": "countryCode",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
       "required_param_count": 0,
@@ -112420,10 +112420,10 @@
           "default": "null",
           "name": "countryCode",
           "optional": true,
-          "type": "string"
+          "type": "?string"
         }
       ],
-      "return_type": "mixed",
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
@@ -114367,7 +114367,7 @@
           "default": null,
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "required_param_count": 0,
@@ -114412,7 +114412,7 @@
           "default": "null",
           "name": "timestamp",
           "optional": true,
-          "type": "int"
+          "type": "?int"
         }
       ],
       "return_type": "mixed",

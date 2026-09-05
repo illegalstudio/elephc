@@ -8,13 +8,13 @@ sidebar:
 ## unixtojd()
 
 ```php
-function unixtojd(int $timestamp = null): mixed
+function unixtojd(?int $timestamp = null): mixed
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
 
 **Parameters**:
-- `$timestamp` (`int`), default `null`, optional
+- `$timestamp` (`?int`), default `null`, optional
 
 **Returns**: `mixed`
 

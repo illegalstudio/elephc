@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function cairo_get_current_point(mixed $context): mixed
+function cairo_get_current_point(mixed $context): array
 ```
 
 ## What the type checker enforces

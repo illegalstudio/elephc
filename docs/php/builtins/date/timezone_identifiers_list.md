@@ -8,16 +8,16 @@ sidebar:
 ## timezone_identifiers_list()
 
 ```php
-function timezone_identifiers_list(int $timezoneGroup = DateTimeZone::ALL, string $countryCode = null): mixed
+function timezone_identifiers_list(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
 
 **Parameters**:
 - `$timezoneGroup` (`int`), default `DateTimeZone::ALL`, optional
-- `$countryCode` (`string`), default `null`, optional
+- `$countryCode` (`?string`), default `null`, optional
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

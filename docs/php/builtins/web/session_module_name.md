@@ -8,13 +8,13 @@ sidebar:
 ## session_module_name()
 
 ```php
-function session_module_name(string $module = null): mixed
+function session_module_name(?string $module = null): mixed
 ```
 
 Implemented by the compiler-injected web prelude.
 
 **Parameters**:
-- `$module` (`string`), default `null`, optional
+- `$module` (`?string`), default `null`, optional
 
 **Returns**: `mixed`
 

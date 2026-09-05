@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **792 / 2169** (37%), classes **138 / 329** (42%), constants **1065 / 3180** (33%).
+Overall coverage: functions **789 / 2169** (36%), classes **138 / 329** (42%), constants **1065 / 3180** (33%).
 
 ## Coverage by PHP module
 
@@ -21,7 +21,7 @@ Each cell counts the PHP-visible symbols elephc implements against the symbols t
 | [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
 | `bz2` | 0 / 10 · 0% | — | — |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
-| `core` | 32 / 62 · 52% | 20 / 40 · 50% | 33 / 89 · 37% |
+| `core` | 29 / 62 · 47% | 20 / 40 · 50% | 33 / 89 · 37% |
 | `ctype` | 4 / 11 · 36% | — | — |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
@@ -85,7 +85,7 @@ Each cell counts the PHP-visible symbols elephc implements against the symbols t
 | `zip` | 0 / 10 · 0% | 0 / 1 · 0% | — |
 | `zlib` | 4 / 30 · 13% | 0 / 2 · 0% | 0 / 27 · 0% |
 
-Every count above holds for compiled programs. Code run through `eval()` sees fewer symbols in these modules (compiled / eval()):
+The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
 
 - `core` functions: 29 / 28
 - `core` constants: 33 / 30
@@ -100,6 +100,8 @@ Every count above holds for compiled programs. Code run through `eval()` sees fe
 - `standard` functions: 381 / 341
 - `standard` constants: 155 / 134
 - `zend opcache` functions: 8 / 0
+
+3 symbol(s) exist only inside `eval()` and are not counted in the table: `get_called_class()`, `get_class_methods()`, `get_class_vars()`.
 
 The remaining 2 baseline extensions expose no functions, classes, or constants of their own, so they have no row above: `lexbor`, `mysqlnd`.
 
@@ -151,7 +153,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
 | [iconv](./iconv.md) ([PHP](https://www.php.net/manual/en/book.iconv.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
-| [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 32 shared-contract functions this baseline knows; curl_multi_get_handles()/curl_share_init_persistent() are PHP 8.5 additions counted separately above, and curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract. |
+| [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 34 shared-contract functions; curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract and is the one function the row does not count. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
 

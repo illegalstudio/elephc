@@ -8,16 +8,16 @@ sidebar:
 ## imageaffinematrixconcat()
 
 ```php
-function imageaffinematrixconcat(mixed $matrix1, mixed $matrix2): mixed
+function imageaffinematrixconcat(array $matrix1, array $matrix2): array
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
-- `$matrix1` (`mixed`)
-- `$matrix2` (`mixed`)
+- `$matrix1` (`array`)
+- `$matrix2` (`array`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

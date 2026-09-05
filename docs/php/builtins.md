@@ -110,30 +110,30 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`trait_exists()`](./builtins/class/trait_exists.md) | `(string $trait, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`mysqli_affected_rows()`](./builtins/database/mysqli_affected_rows.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_autocommit()`](./builtins/database/mysqli_autocommit.md) | `(mixed $mysql, bool $enable): bool` | `bool` | ✓ | — |
-| [`mysqli_begin_transaction()`](./builtins/database/mysqli_begin_transaction.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_begin_transaction()`](./builtins/database/mysqli_begin_transaction.md) | `(mixed $mysql, int $flags = 0, ?string $name = null): bool` | `bool` | ✓ | — |
 | [`mysqli_character_set_name()`](./builtins/database/mysqli_character_set_name.md) | `(mixed $mysql): string` | `string` | ✓ | — |
 | [`mysqli_close()`](./builtins/database/mysqli_close.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
-| [`mysqli_commit()`](./builtins/database/mysqli_commit.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
-| [`mysqli_connect()`](./builtins/database/mysqli_connect.md) | `(string $hostname = null, string $username = null, string $password = null, string $database = null, int $port = null, string $socket = null): mixed` | `mixed` | ✓ | — |
+| [`mysqli_commit()`](./builtins/database/mysqli_commit.md) | `(mixed $mysql, int $flags = 0, ?string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_connect()`](./builtins/database/mysqli_connect.md) | `(?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null): mixed` | `mixed` | ✓ | — |
 | [`mysqli_connect_errno()`](./builtins/database/mysqli_connect_errno.md) | `(): int` | `int` | ✓ | — |
-| [`mysqli_connect_error()`](./builtins/database/mysqli_connect_error.md) | `(): string` | `string` | ✓ | — |
+| [`mysqli_connect_error()`](./builtins/database/mysqli_connect_error.md) | `(): ?string` | `?string` | ✓ | — |
 | [`mysqli_data_seek()`](./builtins/database/mysqli_data_seek.md) | `(mixed $result, int $offset): bool` | `bool` | ✓ | — |
 | [`mysqli_errno()`](./builtins/database/mysqli_errno.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_error()`](./builtins/database/mysqli_error.md) | `(mixed $mysql): string` | `string` | ✓ | — |
-| [`mysqli_error_list()`](./builtins/database/mysqli_error_list.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | — |
+| [`mysqli_error_list()`](./builtins/database/mysqli_error_list.md) | `(mixed $mysql): array` | `array` | ✓ | — |
 | [`mysqli_escape_string()`](./builtins/database/mysqli_escape_string.md) | `(mixed $mysql, string $string): string` | `string` | ✓ | — |
 | [`mysqli_execute()`](./builtins/database/mysqli_execute.md) | `(mixed $statement): bool` | `bool` | ✓ | — |
-| [`mysqli_execute_query()`](./builtins/database/mysqli_execute_query.md) | `(mixed $mysql, string $query, mixed $params = null): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_all()`](./builtins/database/mysqli_fetch_all.md) | `(mixed $result, int $mode = 2): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_execute_query()`](./builtins/database/mysqli_execute_query.md) | `(mixed $mysql, string $query, ?array $params = null): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_all()`](./builtins/database/mysqli_fetch_all.md) | `(mixed $result, int $mode = 2): array` | `array` | ✓ | — |
+| [`mysqli_fetch_array()`](./builtins/database/mysqli_fetch_array.md) | `(mixed $result, int $mode = 3): ?array` | `?array` | ✓ | — |
+| [`mysqli_fetch_assoc()`](./builtins/database/mysqli_fetch_assoc.md) | `(mixed $result): ?array` | `?array` | ✓ | — |
 | [`mysqli_fetch_column()`](./builtins/database/mysqli_fetch_column.md) | `(mixed $result, int $column = 0): mixed` | `mixed` | ✓ | — |
 | [`mysqli_fetch_field()`](./builtins/database/mysqli_fetch_field.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
 | [`mysqli_fetch_field_direct()`](./builtins/database/mysqli_fetch_field_direct.md) | `(mixed $result, int $index): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_fields()`](./builtins/database/mysqli_fetch_fields.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_lengths()`](./builtins/database/mysqli_fetch_lengths.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_object()`](./builtins/database/mysqli_fetch_object.md) | `(mixed $result, string $class = 'stdClass', mixed $constructor_args = []): mixed` | `mixed` | ✓ | — |
-| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_fields()`](./builtins/database/mysqli_fetch_fields.md) | `(mixed $result): array` | `array` | ✓ | — |
+| [`mysqli_fetch_lengths()`](./builtins/database/mysqli_fetch_lengths.md) | `(mixed $result): ?array` | `?array` | ✓ | — |
+| [`mysqli_fetch_object()`](./builtins/database/mysqli_fetch_object.md) | `(mixed $result, string $class = 'stdClass', array $constructor_args = []): mixed` | `mixed` | ✓ | — |
+| [`mysqli_fetch_row()`](./builtins/database/mysqli_fetch_row.md) | `(mixed $result): ?array` | `?array` | ✓ | — |
 | [`mysqli_field_count()`](./builtins/database/mysqli_field_count.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_field_seek()`](./builtins/database/mysqli_field_seek.md) | `(mixed $result, int $index): bool` | `bool` | ✓ | — |
 | [`mysqli_field_tell()`](./builtins/database/mysqli_field_tell.md) | `(mixed $result): int` | `int` | ✓ | — |
@@ -145,7 +145,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mysqli_get_proto_info()`](./builtins/database/mysqli_get_proto_info.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_get_server_info()`](./builtins/database/mysqli_get_server_info.md) | `(mixed $mysql): string` | `string` | ✓ | — |
 | [`mysqli_get_server_version()`](./builtins/database/mysqli_get_server_version.md) | `(mixed $mysql): int` | `int` | ✓ | — |
-| [`mysqli_info()`](./builtins/database/mysqli_info.md) | `(mixed $mysql): string` | `string` | ✓ | — |
+| [`mysqli_info()`](./builtins/database/mysqli_info.md) | `(mixed $mysql): ?string` | `?string` | ✓ | — |
 | [`mysqli_init()`](./builtins/database/mysqli_init.md) | `(): mixed` | `mixed` | ✓ | — |
 | [`mysqli_insert_id()`](./builtins/database/mysqli_insert_id.md) | `(mixed $mysql): int` | `int` | ✓ | — |
 | [`mysqli_more_results()`](./builtins/database/mysqli_more_results.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
@@ -157,12 +157,12 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mysqli_ping()`](./builtins/database/mysqli_ping.md) | `(mixed $mysql): bool` | `bool` | ✓ | — |
 | [`mysqli_prepare()`](./builtins/database/mysqli_prepare.md) | `(mixed $mysql, string $query): mixed` | `mixed` | ✓ | — |
 | [`mysqli_query()`](./builtins/database/mysqli_query.md) | `(mixed $mysql, string $query, int $result_mode = 0): mixed` | `mixed` | ✓ | — |
-| [`mysqli_real_connect()`](./builtins/database/mysqli_real_connect.md) | `(mixed $mysql, string $hostname = null, string $username = null, string $password = null, string $database = null, int $port = null, string $socket = null, int $flags = 0): bool` | `bool` | ✓ | — |
+| [`mysqli_real_connect()`](./builtins/database/mysqli_real_connect.md) | `(mixed $mysql, ?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null, int $flags = 0): bool` | `bool` | ✓ | — |
 | [`mysqli_real_escape_string()`](./builtins/database/mysqli_real_escape_string.md) | `(mixed $mysql, string $string): string` | `string` | ✓ | — |
 | [`mysqli_real_query()`](./builtins/database/mysqli_real_query.md) | `(mixed $mysql, string $query): bool` | `bool` | ✓ | — |
 | [`mysqli_release_savepoint()`](./builtins/database/mysqli_release_savepoint.md) | `(mixed $mysql, string $name): bool` | `bool` | ✓ | — |
 | [`mysqli_report()`](./builtins/database/mysqli_report.md) | `(int $flags): bool` | `bool` | ✓ | — |
-| [`mysqli_rollback()`](./builtins/database/mysqli_rollback.md) | `(mixed $mysql, int $flags = 0, string $name = null): bool` | `bool` | ✓ | — |
+| [`mysqli_rollback()`](./builtins/database/mysqli_rollback.md) | `(mixed $mysql, int $flags = 0, ?string $name = null): bool` | `bool` | ✓ | — |
 | [`mysqli_savepoint()`](./builtins/database/mysqli_savepoint.md) | `(mixed $mysql, string $name): bool` | `bool` | ✓ | — |
 | [`mysqli_select_db()`](./builtins/database/mysqli_select_db.md) | `(mixed $mysql, string $database): bool` | `bool` | ✓ | — |
 | [`mysqli_set_charset()`](./builtins/database/mysqli_set_charset.md) | `(mixed $mysql, string $charset): bool` | `bool` | ✓ | — |
@@ -174,8 +174,8 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mysqli_stmt_close()`](./builtins/database/mysqli_stmt_close.md) | `(mixed $statement): bool` | `bool` | ✓ | — |
 | [`mysqli_stmt_errno()`](./builtins/database/mysqli_stmt_errno.md) | `(mixed $statement): int` | `int` | ✓ | — |
 | [`mysqli_stmt_error()`](./builtins/database/mysqli_stmt_error.md) | `(mixed $statement): string` | `string` | ✓ | — |
-| [`mysqli_stmt_error_list()`](./builtins/database/mysqli_stmt_error_list.md) | `(mixed $statement): mixed` | `mixed` | ✓ | — |
-| [`mysqli_stmt_execute()`](./builtins/database/mysqli_stmt_execute.md) | `(mixed $statement, mixed $params = null): bool` | `bool` | ✓ | — |
+| [`mysqli_stmt_error_list()`](./builtins/database/mysqli_stmt_error_list.md) | `(mixed $statement): array` | `array` | ✓ | — |
+| [`mysqli_stmt_execute()`](./builtins/database/mysqli_stmt_execute.md) | `(mixed $statement, ?array $params = null): bool` | `bool` | ✓ | — |
 | [`mysqli_stmt_field_count()`](./builtins/database/mysqli_stmt_field_count.md) | `(mixed $statement): int` | `int` | ✓ | — |
 | [`mysqli_stmt_free_result()`](./builtins/database/mysqli_stmt_free_result.md) | `(mixed $statement): void` | `void` | ✓ | — |
 | [`mysqli_stmt_get_result()`](./builtins/database/mysqli_stmt_get_result.md) | `(mixed $statement): mixed` | `mixed` | ✓ | — |
@@ -192,10 +192,10 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`mysqli_thread_safe()`](./builtins/database/mysqli_thread_safe.md) | `(): bool` | `bool` | ✓ | — |
 | [`mysqli_use_result()`](./builtins/database/mysqli_use_result.md) | `(mixed $mysql): mixed` | `mixed` | ✓ | — |
 | [`mysqli_warning_count()`](./builtins/database/mysqli_warning_count.md) | `(mixed $mysql): int` | `int` | ✓ | — |
-| [`pdo_drivers()`](./builtins/database/pdo_drivers.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`pdo_drivers()`](./builtins/database/pdo_drivers.md) | `(): array` | `array` | ✓ | — |
 | [`cal_days_in_month()`](./builtins/date/cal_days_in_month.md) | `(int $calendar, int $month, int $year): int` | `int` | ✓ | ✓ |
-| [`cal_from_jd()`](./builtins/date/cal_from_jd.md) | `(int $julian_day, int $calendar): mixed` | `mixed` | ✓ | ✓ |
-| [`cal_info()`](./builtins/date/cal_info.md) | `(int $calendar = -1): mixed` | `mixed` | ✓ | ✓ |
+| [`cal_from_jd()`](./builtins/date/cal_from_jd.md) | `(int $julian_day, int $calendar): array` | `array` | ✓ | ✓ |
+| [`cal_info()`](./builtins/date/cal_info.md) | `(int $calendar = -1): array` | `array` | ✓ | ✓ |
 | [`cal_to_jd()`](./builtins/date/cal_to_jd.md) | `(int $calendar, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`checkdate()`](./builtins/date/checkdate.md) | `(int $month, int $day, int $year): bool` | `bool` | ✓ | ✓ |
 | [`date()`](./builtins/date/date.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
@@ -215,28 +215,28 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`date_isodate_set()`](./builtins/date/date_isodate_set.md) | `(mixed $object, int $year, int $week, int $dayOfWeek = 1): mixed` | `mixed` | ✓ | ✓ |
 | [`date_modify()`](./builtins/date/date_modify.md) | `(mixed $object, string $modifier): mixed` | `mixed` | ✓ | ✓ |
 | [`date_offset_get()`](./builtins/date/date_offset_get.md) | `(mixed $object): int` | `int` | ✓ | ✓ |
-| [`date_parse()`](./builtins/date/date_parse.md) | `(string $datetime): mixed` | `mixed` | ✓ | ✓ |
-| [`date_parse_from_format()`](./builtins/date/date_parse_from_format.md) | `(string $format, string $datetime): mixed` | `mixed` | ✓ | ✓ |
+| [`date_parse()`](./builtins/date/date_parse.md) | `(string $datetime): array` | `array` | ✓ | ✓ |
+| [`date_parse_from_format()`](./builtins/date/date_parse_from_format.md) | `(string $format, string $datetime): array` | `array` | ✓ | ✓ |
 | [`date_sub()`](./builtins/date/date_sub.md) | `(mixed $object, mixed $interval): mixed` | `mixed` | ✓ | ✓ |
-| [`date_sun_info()`](./builtins/date/date_sun_info.md) | `(int $timestamp, float $latitude, float $longitude): mixed` | `mixed` | ✓ | ✓ |
-| [`date_sunrise()`](./builtins/date/date_sunrise.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, float $latitude = null, float $longitude = null, float $zenith = null, float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
-| [`date_sunset()`](./builtins/date/date_sunset.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, float $latitude = null, float $longitude = null, float $zenith = null, float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_sun_info()`](./builtins/date/date_sun_info.md) | `(int $timestamp, float $latitude, float $longitude): array` | `array` | ✓ | ✓ |
+| [`date_sunrise()`](./builtins/date/date_sunrise.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
+| [`date_sunset()`](./builtins/date/date_sunset.md) | `(int $timestamp, int $returnFormat = SUNFUNCS_RET_STRING, ?float $latitude = null, ?float $longitude = null, ?float $zenith = null, ?float $utcOffset = null): mixed` | `mixed` | ✓ | ✓ |
 | [`date_time_set()`](./builtins/date/date_time_set.md) | `(mixed $object, int $hour, int $minute, int $second = 0, int $microsecond = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`date_timestamp_get()`](./builtins/date/date_timestamp_get.md) | `(mixed $object): int` | `int` | ✓ | ✓ |
 | [`date_timestamp_set()`](./builtins/date/date_timestamp_set.md) | `(mixed $object, int $timestamp): mixed` | `mixed` | ✓ | ✓ |
 | [`date_timezone_get()`](./builtins/date/date_timezone_get.md) | `(mixed $object): mixed` | `mixed` | ✓ | ✓ |
 | [`date_timezone_set()`](./builtins/date/date_timezone_set.md) | `(mixed $object, mixed $timezone): mixed` | `mixed` | ✓ | ✓ |
-| [`easter_date()`](./builtins/date/easter_date.md) | `(int $year = null, int $mode = CAL_EASTER_DEFAULT): int` | `int` | ✓ | ✓ |
-| [`easter_days()`](./builtins/date/easter_days.md) | `(int $year = null, int $mode = CAL_EASTER_DEFAULT): int` | `int` | ✓ | ✓ |
+| [`easter_date()`](./builtins/date/easter_date.md) | `(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int` | `int` | ✓ | ✓ |
+| [`easter_days()`](./builtins/date/easter_days.md) | `(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int` | `int` | ✓ | ✓ |
 | [`frenchtojd()`](./builtins/date/frenchtojd.md) | `(int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`getdate()`](./builtins/date/getdate.md) | `(int $timestamp = null): array` | `array` | ✓ | ✓ |
 | [`gettimeofday()`](./builtins/date/gettimeofday.md) | `(bool $as_float = false): mixed` | `mixed` | ✓ | ✓ |
 | [`gmdate()`](./builtins/date/gmdate.md) | `(string $format, int $timestamp = null): string` | `string` | ✓ | ✓ |
 | [`gmmktime()`](./builtins/date/gmmktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
-| [`gmstrftime()`](./builtins/date/gmstrftime.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`gmstrftime()`](./builtins/date/gmstrftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`gregoriantojd()`](./builtins/date/gregoriantojd.md) | `(int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
 | [`hrtime()`](./builtins/date/hrtime.md) | `(bool $as_number = false): mixed` | `mixed` | ✓ | ✓ |
-| [`idate()`](./builtins/date/idate.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`idate()`](./builtins/date/idate.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`jddayofweek()`](./builtins/date/jddayofweek.md) | `(int $julian_day, int $mode = CAL_DOW_DAYNO): mixed` | `mixed` | ✓ | ✓ |
 | [`jdmonthname()`](./builtins/date/jdmonthname.md) | `(int $julian_day, int $mode): string` | `string` | ✓ | ✓ |
 | [`jdtofrench()`](./builtins/date/jdtofrench.md) | `(int $julian_day): string` | `string` | ✓ | ✓ |
@@ -249,12 +249,12 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`localtime()`](./builtins/date/localtime.md) | `(int $timestamp = -1, bool $associative = false): array` | `array` | ✓ | ✓ |
 | [`microtime()`](./builtins/date/microtime.md) | `(bool $as_float = false): mixed` | `mixed` | ✓ | ✓ |
 | [`mktime()`](./builtins/date/mktime.md) | `(int $hour, int $minute, int $second, int $month, int $day, int $year): int` | `int` | ✓ | ✓ |
-| [`strftime()`](./builtins/date/strftime.md) | `(string $format, int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`strftime()`](./builtins/date/strftime.md) | `(string $format, ?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`strptime()`](./builtins/date/strptime.md) | `(string $timestamp, string $format): mixed` | `mixed` | ✓ | ✓ |
 | [`strtotime()`](./builtins/date/strtotime.md) | `(string $datetime, int $baseTimestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`time()`](./builtins/date/time.md) | `(): int` | `int` | ✓ | ✓ |
 | [`timezone_abbreviations_list()`](./builtins/date/timezone_abbreviations_list.md) | `(): mixed` | `mixed` | ✓ | ✓ |
-| [`timezone_identifiers_list()`](./builtins/date/timezone_identifiers_list.md) | `(int $timezoneGroup = DateTimeZone::ALL, string $countryCode = null): mixed` | `mixed` | ✓ | ✓ |
+| [`timezone_identifiers_list()`](./builtins/date/timezone_identifiers_list.md) | `(int $timezoneGroup = DateTimeZone::ALL, ?string $countryCode = null): array` | `array` | ✓ | ✓ |
 | [`timezone_location_get()`](./builtins/date/timezone_location_get.md) | `(mixed $object): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_name_from_abbr()`](./builtins/date/timezone_name_from_abbr.md) | `(string $abbr, int $utcOffset = -1, int $isDST = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_name_get()`](./builtins/date/timezone_name_get.md) | `(mixed $object): string` | `string` | ✓ | ✓ |
@@ -262,7 +262,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`timezone_open()`](./builtins/date/timezone_open.md) | `(string $timezone): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_transitions_get()`](./builtins/date/timezone_transitions_get.md) | `(mixed $object, int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_version_get()`](./builtins/date/timezone_version_get.md) | `(): string` | `string` | ✓ | ✓ |
-| [`unixtojd()`](./builtins/date/unixtojd.md) | `(int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`unixtojd()`](./builtins/date/unixtojd.md) | `(?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
 | [`basename()`](./builtins/filesystem/basename.md) | `(string $path, string $suffix = ''): string` | `string` | ✓ | ✓ |
 | [`chdir()`](./builtins/filesystem/chdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
 | [`chgrp()`](./builtins/filesystem/chgrp.md) | `(string $filename, string $group): bool` | `bool` | ✓ | ✓ |
@@ -415,7 +415,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`cairo_curve_to()`](./builtins/image/cairo_curve_to.md) | `(mixed $context, float $x1, float $y1, float $x2, float $y2, float $x3, float $y3): void` | `void` | ✓ | — |
 | [`cairo_fill()`](./builtins/image/cairo_fill.md) | `(mixed $context): void` | `void` | ✓ | — |
 | [`cairo_fill_preserve()`](./builtins/image/cairo_fill_preserve.md) | `(mixed $context): void` | `void` | ✓ | — |
-| [`cairo_get_current_point()`](./builtins/image/cairo_get_current_point.md) | `(mixed $context): mixed` | `mixed` | ✓ | — |
+| [`cairo_get_current_point()`](./builtins/image/cairo_get_current_point.md) | `(mixed $context): array` | `array` | ✓ | — |
 | [`cairo_identity_matrix()`](./builtins/image/cairo_identity_matrix.md) | `(mixed $context): void` | `void` | ✓ | — |
 | [`cairo_image_surface_create()`](./builtins/image/cairo_image_surface_create.md) | `(int $format, int $width, int $height): mixed` | `mixed` | ✓ | — |
 | [`cairo_image_surface_create_from_png()`](./builtins/image/cairo_image_surface_create_from_png.md) | `(string $filename): mixed` | `mixed` | ✓ | — |
@@ -427,7 +427,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`cairo_matrix_init_scale()`](./builtins/image/cairo_matrix_init_scale.md) | `(float $sx, float $sy): mixed` | `mixed` | ✓ | — |
 | [`cairo_matrix_init_translate()`](./builtins/image/cairo_matrix_init_translate.md) | `(float $tx, float $ty): mixed` | `mixed` | ✓ | — |
 | [`cairo_matrix_multiply()`](./builtins/image/cairo_matrix_multiply.md) | `(mixed $m1, mixed $m2): mixed` | `mixed` | ✓ | — |
-| [`cairo_matrix_transform_point()`](./builtins/image/cairo_matrix_transform_point.md) | `(mixed $matrix, float $x, float $y): mixed` | `mixed` | ✓ | — |
+| [`cairo_matrix_transform_point()`](./builtins/image/cairo_matrix_transform_point.md) | `(mixed $matrix, float $x, float $y): array` | `array` | ✓ | — |
 | [`cairo_move_to()`](./builtins/image/cairo_move_to.md) | `(mixed $context, float $x, float $y): void` | `void` | ✓ | — |
 | [`cairo_new_path()`](./builtins/image/cairo_new_path.md) | `(mixed $context): void` | `void` | ✓ | — |
 | [`cairo_new_sub_path()`](./builtins/image/cairo_new_sub_path.md) | `(mixed $context): void` | `void` | ✓ | — |
@@ -457,20 +457,20 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`cairo_transform()`](./builtins/image/cairo_transform.md) | `(mixed $context, mixed $matrix): void` | `void` | ✓ | — |
 | [`cairo_translate()`](./builtins/image/cairo_translate.md) | `(mixed $context, float $tx, float $ty): void` | `void` | ✓ | — |
 | [`exif_imagetype()`](./builtins/image/exif_imagetype.md) | `(string $filename): mixed` | `mixed` | ✓ | — |
-| [`exif_read_data()`](./builtins/image/exif_read_data.md) | `(string $filename, string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | — |
+| [`exif_read_data()`](./builtins/image/exif_read_data.md) | `(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | — |
 | [`exif_tagname()`](./builtins/image/exif_tagname.md) | `(int $index): mixed` | `mixed` | ✓ | — |
 | [`exif_thumbnail()`](./builtins/image/exif_thumbnail.md) | `(string $filename, mixed $width = 0, mixed $height = 0, mixed $image_type = 0): mixed` | `mixed` | ✓ | — |
-| [`gd_info()`](./builtins/image/gd_info.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`gd_info()`](./builtins/image/gd_info.md) | `(): array` | `array` | ✓ | — |
 | [`getimagesize()`](./builtins/image/getimagesize.md) | `(string $filename): mixed` | `mixed` | ✓ | — |
 | [`getimagesizefromstring()`](./builtins/image/getimagesizefromstring.md) | `(string $data): mixed` | `mixed` | ✓ | — |
 | [`image_type_to_extension()`](./builtins/image/image_type_to_extension.md) | `(int $image_type, bool $include_dot = true): mixed` | `mixed` | ✓ | — |
 | [`image_type_to_mime_type()`](./builtins/image/image_type_to_mime_type.md) | `(int $image_type): string` | `string` | ✓ | — |
-| [`imageaffine()`](./builtins/image/imageaffine.md) | `(mixed $image, mixed $affine, mixed $clip = null): mixed` | `mixed` | ✓ | — |
-| [`imageaffinematrixconcat()`](./builtins/image/imageaffinematrixconcat.md) | `(mixed $matrix1, mixed $matrix2): mixed` | `mixed` | ✓ | — |
+| [`imageaffine()`](./builtins/image/imageaffine.md) | `(mixed $image, array $affine, ?array $clip = null): mixed` | `mixed` | ✓ | — |
+| [`imageaffinematrixconcat()`](./builtins/image/imageaffinematrixconcat.md) | `(array $matrix1, array $matrix2): array` | `array` | ✓ | — |
 | [`imagealphablending()`](./builtins/image/imagealphablending.md) | `(mixed $image, bool $enable): bool` | `bool` | ✓ | — |
 | [`imageantialias()`](./builtins/image/imageantialias.md) | `(mixed $image, bool $enable): bool` | `bool` | ✓ | — |
 | [`imagearc()`](./builtins/image/imagearc.md) | `(mixed $image, int $center_x, int $center_y, int $width, int $height, int $start_angle, int $end_angle, int $color): bool` | `bool` | ✓ | — |
-| [`imagebmp()`](./builtins/image/imagebmp.md) | `(mixed $image, string $file = null, bool $compressed = true): bool` | `bool` | ✓ | — |
+| [`imagebmp()`](./builtins/image/imagebmp.md) | `(mixed $image, ?string $file = null, bool $compressed = true): bool` | `bool` | ✓ | — |
 | [`imagechar()`](./builtins/image/imagechar.md) | `(mixed $image, int $font, int $x, int $y, string $char, int $color): bool` | `bool` | ✓ | — |
 | [`imagecharup()`](./builtins/image/imagecharup.md) | `(mixed $image, int $font, int $x, int $y, string $char, int $color): bool` | `bool` | ✓ | — |
 | [`imagecolorallocate()`](./builtins/image/imagecolorallocate.md) | `(mixed $image, int $red, int $green, int $blue): int` | `int` | ✓ | — |
@@ -486,10 +486,10 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`imagecolorresolve()`](./builtins/image/imagecolorresolve.md) | `(mixed $image, int $red, int $green, int $blue): int` | `int` | ✓ | — |
 | [`imagecolorresolvealpha()`](./builtins/image/imagecolorresolvealpha.md) | `(mixed $image, int $red, int $green, int $blue, int $alpha): int` | `int` | ✓ | — |
 | [`imagecolorset()`](./builtins/image/imagecolorset.md) | `(mixed $image, int $color, int $red, int $green, int $blue, int $alpha = 0): bool` | `bool` | ✓ | — |
-| [`imagecolorsforindex()`](./builtins/image/imagecolorsforindex.md) | `(mixed $image, int $color): mixed` | `mixed` | ✓ | — |
+| [`imagecolorsforindex()`](./builtins/image/imagecolorsforindex.md) | `(mixed $image, int $color): array` | `array` | ✓ | — |
 | [`imagecolorstotal()`](./builtins/image/imagecolorstotal.md) | `(mixed $image): int` | `int` | ✓ | — |
-| [`imagecolortransparent()`](./builtins/image/imagecolortransparent.md) | `(mixed $image, int $color = null): int` | `int` | ✓ | — |
-| [`imageconvolution()`](./builtins/image/imageconvolution.md) | `(mixed $image, mixed $matrix, float $divisor, float $offset): bool` | `bool` | ✓ | — |
+| [`imagecolortransparent()`](./builtins/image/imagecolortransparent.md) | `(mixed $image, ?int $color = null): int` | `int` | ✓ | — |
+| [`imageconvolution()`](./builtins/image/imageconvolution.md) | `(mixed $image, array $matrix, float $divisor, float $offset): bool` | `bool` | ✓ | — |
 | [`imagecopy()`](./builtins/image/imagecopy.md) | `(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $src_width, int $src_height): bool` | `bool` | ✓ | — |
 | [`imagecopymerge()`](./builtins/image/imagecopymerge.md) | `(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $src_width, int $src_height, int $pct): bool` | `bool` | ✓ | — |
 | [`imagecopymergegray()`](./builtins/image/imagecopymergegray.md) | `(mixed $dst_image, mixed $src_image, int $dst_x, int $dst_y, int $src_x, int $src_y, int $src_width, int $src_height, int $pct): bool` | `bool` | ✓ | — |
@@ -512,7 +512,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`imagefill()`](./builtins/image/imagefill.md) | `(mixed $image, int $x, int $y, int $color): bool` | `bool` | ✓ | — |
 | [`imagefilledarc()`](./builtins/image/imagefilledarc.md) | `(mixed $image, int $center_x, int $center_y, int $width, int $height, int $start_angle, int $end_angle, int $color, int $style): bool` | `bool` | ✓ | — |
 | [`imagefilledellipse()`](./builtins/image/imagefilledellipse.md) | `(mixed $image, int $center_x, int $center_y, int $width, int $height, int $color): bool` | `bool` | ✓ | — |
-| [`imagefilledpolygon()`](./builtins/image/imagefilledpolygon.md) | `(mixed $image, mixed $points, int $color): bool` | `bool` | ✓ | — |
+| [`imagefilledpolygon()`](./builtins/image/imagefilledpolygon.md) | `(mixed $image, array $points, int $color): bool` | `bool` | ✓ | — |
 | [`imagefilledrectangle()`](./builtins/image/imagefilledrectangle.md) | `(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool` | `bool` | ✓ | — |
 | [`imagefilltoborder()`](./builtins/image/imagefilltoborder.md) | `(mixed $image, int $x, int $y, int $border_color, int $color): bool` | `bool` | ✓ | — |
 | [`imagefilter()`](./builtins/image/imagefilter.md) | `(mixed $image, int $filter, int $arg1 = 0, int $arg2 = 0, int $arg3 = 0, int $arg4 = 0): bool` | `bool` | ✓ | — |
@@ -521,19 +521,19 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`imagefontwidth()`](./builtins/image/imagefontwidth.md) | `(int $font): int` | `int` | ✓ | — |
 | [`imagegammacorrect()`](./builtins/image/imagegammacorrect.md) | `(mixed $image, float $input_gamma, float $output_gamma): bool` | `bool` | ✓ | — |
 | [`imagegetinterpolation()`](./builtins/image/imagegetinterpolation.md) | `(mixed $image): int` | `int` | ✓ | — |
-| [`imagegif()`](./builtins/image/imagegif.md) | `(mixed $image, string $file = null): bool` | `bool` | ✓ | — |
-| [`imageinterlace()`](./builtins/image/imageinterlace.md) | `(mixed $image, bool $enable = null): int` | `int` | ✓ | — |
+| [`imagegif()`](./builtins/image/imagegif.md) | `(mixed $image, ?string $file = null): bool` | `bool` | ✓ | — |
+| [`imageinterlace()`](./builtins/image/imageinterlace.md) | `(mixed $image, ?bool $enable = null): int` | `int` | ✓ | — |
 | [`imageistruecolor()`](./builtins/image/imageistruecolor.md) | `(mixed $image): bool` | `bool` | ✓ | — |
-| [`imagejpeg()`](./builtins/image/imagejpeg.md) | `(mixed $image, string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |
+| [`imagejpeg()`](./builtins/image/imagejpeg.md) | `(mixed $image, ?string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |
 | [`imagelayereffect()`](./builtins/image/imagelayereffect.md) | `(mixed $image, int $effect): bool` | `bool` | ✓ | — |
 | [`imageline()`](./builtins/image/imageline.md) | `(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool` | `bool` | ✓ | — |
-| [`imageopenpolygon()`](./builtins/image/imageopenpolygon.md) | `(mixed $image, mixed $points, int $color): bool` | `bool` | ✓ | — |
+| [`imageopenpolygon()`](./builtins/image/imageopenpolygon.md) | `(mixed $image, array $points, int $color): bool` | `bool` | ✓ | — |
 | [`imagepalettecopy()`](./builtins/image/imagepalettecopy.md) | `(mixed $dst, mixed $src): bool` | `bool` | ✓ | — |
 | [`imagepalettetotruecolor()`](./builtins/image/imagepalettetotruecolor.md) | `(mixed $image): bool` | `bool` | ✓ | — |
-| [`imagepng()`](./builtins/image/imagepng.md) | `(mixed $image, string $file = null, int $quality = -1, int $filters = -1): bool` | `bool` | ✓ | — |
-| [`imagepolygon()`](./builtins/image/imagepolygon.md) | `(mixed $image, mixed $points, int $color): bool` | `bool` | ✓ | — |
+| [`imagepng()`](./builtins/image/imagepng.md) | `(mixed $image, ?string $file = null, int $quality = -1, int $filters = -1): bool` | `bool` | ✓ | — |
+| [`imagepolygon()`](./builtins/image/imagepolygon.md) | `(mixed $image, array $points, int $color): bool` | `bool` | ✓ | — |
 | [`imagerectangle()`](./builtins/image/imagerectangle.md) | `(mixed $image, int $x1, int $y1, int $x2, int $y2, int $color): bool` | `bool` | ✓ | — |
-| [`imageresolution()`](./builtins/image/imageresolution.md) | `(mixed $image, int $resolution_x = null, int $resolution_y = null): mixed` | `mixed` | ✓ | — |
+| [`imageresolution()`](./builtins/image/imageresolution.md) | `(mixed $image, ?int $resolution_x = null, ?int $resolution_y = null): mixed` | `mixed` | ✓ | — |
 | [`imagerotate()`](./builtins/image/imagerotate.md) | `(mixed $image, float $angle, int $background_color, int $ignore_transparent = 0): mixed` | `mixed` | ✓ | — |
 | [`imagesavealpha()`](./builtins/image/imagesavealpha.md) | `(mixed $image, bool $enable): bool` | `bool` | ✓ | — |
 | [`imagescale()`](./builtins/image/imagescale.md) | `(mixed $image, int $width, int $height = -1, int $mode = IMG_BILINEAR_FIXED): mixed` | `mixed` | ✓ | — |
@@ -546,10 +546,10 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`imagesy()`](./builtins/image/imagesy.md) | `(mixed $image): int` | `int` | ✓ | — |
 | [`imagetruecolortopalette()`](./builtins/image/imagetruecolortopalette.md) | `(mixed $image, bool $dither, int $num_colors): bool` | `bool` | ✓ | — |
 | [`imagetypes()`](./builtins/image/imagetypes.md) | `(): int` | `int` | ✓ | — |
-| [`imagewebp()`](./builtins/image/imagewebp.md) | `(mixed $image, string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |
+| [`imagewebp()`](./builtins/image/imagewebp.md) | `(mixed $image, ?string $file = null, int $quality = -1): bool` | `bool` | ✓ | — |
 | [`iptcembed()`](./builtins/image/iptcembed.md) | `(string $iptcdata, string $jpeg_file_name, int $spool = 0): mixed` | `mixed` | ✓ | — |
 | [`iptcparse()`](./builtins/image/iptcparse.md) | `(string $iptcblock): mixed` | `mixed` | ✓ | — |
-| [`read_exif_data()`](./builtins/image/read_exif_data.md) | `(string $filename, string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | — |
+| [`read_exif_data()`](./builtins/image/read_exif_data.md) | `(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed` | `mixed` | ✓ | — |
 | [`json_decode()`](./builtins/json/json_decode.md) | `(string $json, bool $associative = null, int $depth = 512, int $flags = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`json_encode()`](./builtins/json/json_encode.md) | `(mixed $value, int $flags = 0, int $depth = 512): string` | `string` | ✓ | ✓ |
 | [`json_last_error()`](./builtins/json/json_last_error.md) | `(): int` | `int` | ✓ | ✓ |
@@ -623,7 +623,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`ini_restore()`](./builtins/misc/ini_restore.md) | `(string $option): void` | `void` | ✓ | — |
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |
 | [`opcache_compile_file()`](./builtins/misc/opcache_compile_file.md) | `(mixed $filename): bool` | `bool` | ✓ | — |
-| [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`opcache_get_configuration()`](./builtins/misc/opcache_get_configuration.md) | `(): array` | `array` | ✓ | — |
 | [`opcache_get_status()`](./builtins/misc/opcache_get_status.md) | `(mixed $include_scripts = true): mixed` | `mixed` | ✓ | — |
 | [`opcache_invalidate()`](./builtins/misc/opcache_invalidate.md) | `(mixed $filename, mixed $force = false): bool` | `bool` | ✓ | — |
 | [`opcache_is_script_cached()`](./builtins/misc/opcache_is_script_cached.md) | `(mixed $filename): bool` | `bool` | ✓ | — |
@@ -856,27 +856,27 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`settype()`](./builtins/type/settype.md) | `(mixed $var, string $type): bool` | `bool` | ✓ | ✓ |
 | [`strval()`](./builtins/type/strval.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
 | [`var_export()`](./builtins/type/var_export.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | — |
-| [`error_log()`](./builtins/web/error_log.md) | `(string $message, int $message_type = 0, string $destination = null, string $additional_headers = null): bool` | `bool` | ✓ | — |
+| [`error_log()`](./builtins/web/error_log.md) | `(string $message, int $message_type = 0, ?string $destination = null, ?string $additional_headers = null): bool` | `bool` | ✓ | — |
 | [`ini_get()`](./builtins/web/ini_get.md) | `(string $option): mixed` | `mixed` | ✓ | — |
-| [`ini_get_all()`](./builtins/web/ini_get_all.md) | `(string $extension = null, bool $details = true): mixed` | `mixed` | ✓ | — |
+| [`ini_get_all()`](./builtins/web/ini_get_all.md) | `(?string $extension = null, bool $details = true): mixed` | `mixed` | ✓ | — |
 | [`ini_set()`](./builtins/web/ini_set.md) | `(string $option, mixed $value): mixed` | `mixed` | ✓ | — |
 | [`session_abort()`](./builtins/web/session_abort.md) | `(): bool` | `bool` | ✓ | — |
-| [`session_cache_expire()`](./builtins/web/session_cache_expire.md) | `(int $value = null): mixed` | `mixed` | ✓ | — |
-| [`session_cache_limiter()`](./builtins/web/session_cache_limiter.md) | `(string $value = null): mixed` | `mixed` | ✓ | — |
+| [`session_cache_expire()`](./builtins/web/session_cache_expire.md) | `(?int $value = null): mixed` | `mixed` | ✓ | — |
+| [`session_cache_limiter()`](./builtins/web/session_cache_limiter.md) | `(?string $value = null): mixed` | `mixed` | ✓ | — |
 | [`session_commit()`](./builtins/web/session_commit.md) | `(): bool` | `bool` | ✓ | — |
 | [`session_create_id()`](./builtins/web/session_create_id.md) | `(string $prefix = ''): mixed` | `mixed` | ✓ | — |
 | [`session_decode()`](./builtins/web/session_decode.md) | `(string $data): bool` | `bool` | ✓ | — |
 | [`session_destroy()`](./builtins/web/session_destroy.md) | `(): bool` | `bool` | ✓ | — |
 | [`session_encode()`](./builtins/web/session_encode.md) | `(): mixed` | `mixed` | ✓ | — |
 | [`session_gc()`](./builtins/web/session_gc.md) | `(): mixed` | `mixed` | ✓ | — |
-| [`session_get_cookie_params()`](./builtins/web/session_get_cookie_params.md) | `(): mixed` | `mixed` | ✓ | — |
-| [`session_id()`](./builtins/web/session_id.md) | `(string $id = null): mixed` | `mixed` | ✓ | — |
-| [`session_module_name()`](./builtins/web/session_module_name.md) | `(string $module = null): mixed` | `mixed` | ✓ | — |
-| [`session_name()`](./builtins/web/session_name.md) | `(string $name = null): mixed` | `mixed` | ✓ | — |
+| [`session_get_cookie_params()`](./builtins/web/session_get_cookie_params.md) | `(): array` | `array` | ✓ | — |
+| [`session_id()`](./builtins/web/session_id.md) | `(?string $id = null): mixed` | `mixed` | ✓ | — |
+| [`session_module_name()`](./builtins/web/session_module_name.md) | `(?string $module = null): mixed` | `mixed` | ✓ | — |
+| [`session_name()`](./builtins/web/session_name.md) | `(?string $name = null): mixed` | `mixed` | ✓ | — |
 | [`session_regenerate_id()`](./builtins/web/session_regenerate_id.md) | `(bool $delete_old = false): bool` | `bool` | ✓ | — |
 | [`session_register_shutdown()`](./builtins/web/session_register_shutdown.md) | `(): void` | `void` | ✓ | — |
 | [`session_reset()`](./builtins/web/session_reset.md) | `(): bool` | `bool` | ✓ | — |
-| [`session_save_path()`](./builtins/web/session_save_path.md) | `(string $path = null): mixed` | `mixed` | ✓ | — |
+| [`session_save_path()`](./builtins/web/session_save_path.md) | `(?string $path = null): mixed` | `mixed` | ✓ | — |
 | [`session_set_cookie_params()`](./builtins/web/session_set_cookie_params.md) | `(...$args): bool` | `bool` | ✓ | — |
 | [`session_set_save_handler()`](./builtins/web/session_set_save_handler.md) | `(mixed $handler_or_open = null, mixed $register_or_close = true, mixed $read = null, mixed $write = null, mixed $destroy = null, mixed $gc = null, mixed $create_sid = null, mixed $validate_id = null, mixed $update_timestamp = null): bool` | `bool` | ✓ | — |
 | [`session_start()`](./builtins/web/session_start.md) | `(mixed $options = []): bool` | `bool` | ✓ | — |

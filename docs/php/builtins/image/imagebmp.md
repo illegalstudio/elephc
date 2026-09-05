@@ -8,14 +8,14 @@ sidebar:
 ## imagebmp()
 
 ```php
-function imagebmp(mixed $image, string $file = null, bool $compressed = true): bool
+function imagebmp(mixed $image, ?string $file = null, bool $compressed = true): bool
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$file` (`string`), default `null`, optional
+- `$file` (`?string`), default `null`, optional
 - `$compressed` (`bool`), default `true`, optional
 
 **Returns**: `bool`

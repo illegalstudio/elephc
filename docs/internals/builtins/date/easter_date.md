@@ -29,7 +29,7 @@ _No registry-backed typed runtime target applies._
 ## Signature summary
 
 ```php
-function easter_date(int $year = null, int $mode = CAL_EASTER_DEFAULT): int
+function easter_date(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int
 ```
 
 ## What the type checker enforces

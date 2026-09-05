@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_fetch_object(mixed $result, string $class = 'stdClass', mixed $constructor_args = []): mixed
+function mysqli_fetch_object(mixed $result, string $class = 'stdClass', array $constructor_args = []): mixed
 ```
 
 ## What the type checker enforces

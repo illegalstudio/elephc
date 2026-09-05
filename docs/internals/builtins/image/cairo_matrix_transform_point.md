@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function cairo_matrix_transform_point(mixed $matrix, float $x, float $y): mixed
+function cairo_matrix_transform_point(mixed $matrix, float $x, float $y): array
 ```
 
 ## What the type checker enforces

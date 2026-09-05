@@ -8,7 +8,7 @@ sidebar:
 ## cal_info()
 
 ```php
-function cal_info(int $calendar = -1): mixed
+function cal_info(int $calendar = -1): array
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
@@ -16,7 +16,7 @@ Rewritten by the name resolver into a constructor or method call on the correspo
 **Parameters**:
 - `$calendar` (`int`), default `-1`, optional
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

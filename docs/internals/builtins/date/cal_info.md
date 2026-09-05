@@ -29,7 +29,7 @@ _No registry-backed typed runtime target applies._
 ## Signature summary
 
 ```php
-function cal_info(int $calendar = -1): mixed
+function cal_info(int $calendar = -1): array
 ```
 
 ## What the type checker enforces

@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function session_save_path(string $path = null): mixed
+function session_save_path(?string $path = null): mixed
 ```
 
 ## What the type checker enforces

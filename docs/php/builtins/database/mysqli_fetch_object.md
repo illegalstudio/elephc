@@ -8,7 +8,7 @@ sidebar:
 ## mysqli_fetch_object()
 
 ```php
-function mysqli_fetch_object(mixed $result, string $class = 'stdClass', mixed $constructor_args = []): mixed
+function mysqli_fetch_object(mixed $result, string $class = 'stdClass', array $constructor_args = []): mixed
 ```
 
 Implemented by the compiler-injected mysqli prelude.
@@ -16,7 +16,7 @@ Implemented by the compiler-injected mysqli prelude.
 **Parameters**:
 - `$result` (`mixed`)
 - `$class` (`string`), default `'stdClass'`, optional
-- `$constructor_args` (`mixed`), default `[]`, optional
+- `$constructor_args` (`array`), default `[]`, optional
 
 **Returns**: `mixed`
 

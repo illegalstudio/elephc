@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_stmt_execute(mixed $statement, mixed $params = null): bool
+function mysqli_stmt_execute(mixed $statement, ?array $params = null): bool
 ```
 
 ## What the type checker enforces

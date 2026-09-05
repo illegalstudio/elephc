@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_connect_error(): string
+function mysqli_connect_error(): ?string
 ```
 
 ## What the type checker enforces

@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_connect(string $hostname = null, string $username = null, string $password = null, string $database = null, int $port = null, string $socket = null): mixed
+function mysqli_connect(?string $hostname = null, ?string $username = null, ?string $password = null, ?string $database = null, ?int $port = null, ?string $socket = null): mixed
 ```
 
 ## What the type checker enforces

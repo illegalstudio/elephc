@@ -8,14 +8,14 @@ sidebar:
 ## read_exif_data()
 
 ```php
-function read_exif_data(string $filename, string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed
+function read_exif_data(string $filename, ?string $required_sections = null, bool $as_arrays = false, bool $read_thumbnail = false): mixed
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$filename` (`string`)
-- `$required_sections` (`string`), default `null`, optional
+- `$required_sections` (`?string`), default `null`, optional
 - `$as_arrays` (`bool`), default `false`, optional
 - `$read_thumbnail` (`bool`), default `false`, optional
 

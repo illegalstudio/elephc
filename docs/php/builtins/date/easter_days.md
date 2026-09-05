@@ -8,13 +8,13 @@ sidebar:
 ## easter_days()
 
 ```php
-function easter_days(int $year = null, int $mode = CAL_EASTER_DEFAULT): int
+function easter_days(?int $year = null, int $mode = CAL_EASTER_DEFAULT): int
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
 
 **Parameters**:
-- `$year` (`int`), default `null`, optional
+- `$year` (`?int`), default `null`, optional
 - `$mode` (`int`), default `CAL_EASTER_DEFAULT`, optional
 
 **Returns**: `int`

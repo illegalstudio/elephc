@@ -8,14 +8,14 @@ sidebar:
 ## imageconvolution()
 
 ```php
-function imageconvolution(mixed $image, mixed $matrix, float $divisor, float $offset): bool
+function imageconvolution(mixed $image, array $matrix, float $divisor, float $offset): bool
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$matrix` (`mixed`)
+- `$matrix` (`array`)
 - `$divisor` (`float`)
 - `$offset` (`float`)
 

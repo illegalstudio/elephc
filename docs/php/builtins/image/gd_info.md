@@ -8,14 +8,14 @@ sidebar:
 ## gd_info()
 
 ```php
-function gd_info(): mixed
+function gd_info(): array
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**: none.
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

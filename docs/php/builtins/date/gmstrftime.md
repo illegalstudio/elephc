@@ -8,14 +8,14 @@ sidebar:
 ## gmstrftime()
 
 ```php
-function gmstrftime(string $format, int $timestamp = null): mixed
+function gmstrftime(string $format, ?int $timestamp = null): mixed
 ```
 
 Rewritten by the name resolver into a constructor or method call on the corresponding builtin class before type checking.
 
 **Parameters**:
 - `$format` (`string`)
-- `$timestamp` (`int`), default `null`, optional
+- `$timestamp` (`?int`), default `null`, optional
 
 **Returns**: `mixed`
 

@@ -8,7 +8,7 @@ sidebar:
 ## mysqli_fetch_lengths()
 
 ```php
-function mysqli_fetch_lengths(mixed $result): mixed
+function mysqli_fetch_lengths(mixed $result): ?array
 ```
 
 Implemented by the compiler-injected mysqli prelude.
@@ -16,7 +16,7 @@ Implemented by the compiler-injected mysqli prelude.
 **Parameters**:
 - `$result` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `?array`
 
 ## Availability
 

@@ -8,14 +8,14 @@ sidebar:
 ## imagepolygon()
 
 ```php
-function imagepolygon(mixed $image, mixed $points, int $color): bool
+function imagepolygon(mixed $image, array $points, int $color): bool
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$points` (`mixed`)
+- `$points` (`array`)
 - `$color` (`int`)
 
 **Returns**: `bool`

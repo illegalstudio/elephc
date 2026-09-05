@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function pdo_drivers(): mixed
+function pdo_drivers(): array
 ```
 
 ## What the type checker enforces

@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_error_list(mixed $mysql): mixed
+function mysqli_error_list(mixed $mysql): array
 ```
 
 ## What the type checker enforces

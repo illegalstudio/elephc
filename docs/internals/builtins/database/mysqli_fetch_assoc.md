@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_fetch_assoc(mixed $result): mixed
+function mysqli_fetch_assoc(mixed $result): ?array
 ```
 
 ## What the type checker enforces

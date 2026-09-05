@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imagepng(mixed $image, string $file = null, int $quality = -1, int $filters = -1): bool
+function imagepng(mixed $image, ?string $file = null, int $quality = -1, int $filters = -1): bool
 ```
 
 ## What the type checker enforces

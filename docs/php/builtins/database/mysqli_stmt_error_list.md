@@ -8,7 +8,7 @@ sidebar:
 ## mysqli_stmt_error_list()
 
 ```php
-function mysqli_stmt_error_list(mixed $statement): mixed
+function mysqli_stmt_error_list(mixed $statement): array
 ```
 
 Implemented by the compiler-injected mysqli prelude.
@@ -16,7 +16,7 @@ Implemented by the compiler-injected mysqli prelude.
 **Parameters**:
 - `$statement` (`mixed`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

@@ -8,14 +8,14 @@ sidebar:
 ## imageinterlace()
 
 ```php
-function imageinterlace(mixed $image, bool $enable = null): int
+function imageinterlace(mixed $image, ?bool $enable = null): int
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$enable` (`bool`), default `null`, optional
+- `$enable` (`?bool`), default `null`, optional
 
 **Returns**: `int`
 

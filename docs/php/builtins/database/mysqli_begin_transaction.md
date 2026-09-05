@@ -8,7 +8,7 @@ sidebar:
 ## mysqli_begin_transaction()
 
 ```php
-function mysqli_begin_transaction(mixed $mysql, int $flags = 0, string $name = null): bool
+function mysqli_begin_transaction(mixed $mysql, int $flags = 0, ?string $name = null): bool
 ```
 
 Implemented by the compiler-injected mysqli prelude.
@@ -16,7 +16,7 @@ Implemented by the compiler-injected mysqli prelude.
 **Parameters**:
 - `$mysql` (`mixed`)
 - `$flags` (`int`), default `0`, optional
-- `$name` (`string`), default `null`, optional
+- `$name` (`?string`), default `null`, optional
 
 **Returns**: `bool`
 

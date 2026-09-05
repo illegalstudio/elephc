@@ -8,7 +8,7 @@ sidebar:
 ## imagecolorsforindex()
 
 ```php
-function imagecolorsforindex(mixed $image, int $color): mixed
+function imagecolorsforindex(mixed $image, int $color): array
 ```
 
 Implemented by the compiler-injected image prelude.
@@ -17,7 +17,7 @@ Implemented by the compiler-injected image prelude.
 - `$image` (`mixed`)
 - `$color` (`int`)
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

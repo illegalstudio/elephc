@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imageaffinematrixconcat(mixed $matrix1, mixed $matrix2): mixed
+function imageaffinematrixconcat(array $matrix1, array $matrix2): array
 ```
 
 ## What the type checker enforces

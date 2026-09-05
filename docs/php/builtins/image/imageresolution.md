@@ -8,15 +8,15 @@ sidebar:
 ## imageresolution()
 
 ```php
-function imageresolution(mixed $image, int $resolution_x = null, int $resolution_y = null): mixed
+function imageresolution(mixed $image, ?int $resolution_x = null, ?int $resolution_y = null): mixed
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$resolution_x` (`int`), default `null`, optional
-- `$resolution_y` (`int`), default `null`, optional
+- `$resolution_x` (`?int`), default `null`, optional
+- `$resolution_y` (`?int`), default `null`, optional
 
 **Returns**: `mixed`
 

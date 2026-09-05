@@ -8,14 +8,14 @@ sidebar:
 ## opcache_get_configuration()
 
 ```php
-function opcache_get_configuration(): mixed
+function opcache_get_configuration(): array
 ```
 
 Implemented by the compiler-injected OPcache prelude.
 
 **Parameters**: none.
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

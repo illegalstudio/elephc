@@ -1424,7 +1424,7 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`pdo_drivers()`](./builtins/database/pdo_drivers.md) | `(): mixed` | `mixed` | ✓ | — |
+| [`pdo_drivers()`](./builtins/database/pdo_drivers.md) | `(): array` | `array` | ✓ | — |
 
 Classes: `PDO`, `PDOException`, `PDORow`, `PDOStatement`.
 

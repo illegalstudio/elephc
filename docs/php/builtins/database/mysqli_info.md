@@ -8,7 +8,7 @@ sidebar:
 ## mysqli_info()
 
 ```php
-function mysqli_info(mixed $mysql): string
+function mysqli_info(mixed $mysql): ?string
 ```
 
 Implemented by the compiler-injected mysqli prelude.
@@ -16,7 +16,7 @@ Implemented by the compiler-injected mysqli prelude.
 **Parameters**:
 - `$mysql` (`mixed`)
 
-**Returns**: `string`
+**Returns**: `?string`
 
 ## Availability
 

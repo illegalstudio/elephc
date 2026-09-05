@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_fetch_all(mixed $result, int $mode = 2): mixed
+function mysqli_fetch_all(mixed $result, int $mode = 2): array
 ```
 
 ## What the type checker enforces

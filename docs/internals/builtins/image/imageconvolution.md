@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imageconvolution(mixed $image, mixed $matrix, float $divisor, float $offset): bool
+function imageconvolution(mixed $image, array $matrix, float $divisor, float $offset): bool
 ```
 
 ## What the type checker enforces

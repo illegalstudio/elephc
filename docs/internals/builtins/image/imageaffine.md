@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function imageaffine(mixed $image, mixed $affine, mixed $clip = null): mixed
+function imageaffine(mixed $image, array $affine, ?array $clip = null): mixed
 ```
 
 ## What the type checker enforces

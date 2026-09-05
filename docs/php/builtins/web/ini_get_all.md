@@ -8,13 +8,13 @@ sidebar:
 ## ini_get_all()
 
 ```php
-function ini_get_all(string $extension = null, bool $details = true): mixed
+function ini_get_all(?string $extension = null, bool $details = true): mixed
 ```
 
 Implemented by the compiler-injected web prelude.
 
 **Parameters**:
-- `$extension` (`string`), default `null`, optional
+- `$extension` (`?string`), default `null`, optional
 - `$details` (`bool`), default `true`, optional
 
 **Returns**: `mixed`

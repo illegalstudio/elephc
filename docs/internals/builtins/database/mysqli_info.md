@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_info(mixed $mysql): string
+function mysqli_info(mixed $mysql): ?string
 ```
 
 ## What the type checker enforces

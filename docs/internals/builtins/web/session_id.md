@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function session_id(string $id = null): mixed
+function session_id(?string $id = null): mixed
 ```
 
 ## What the type checker enforces

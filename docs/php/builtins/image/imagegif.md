@@ -8,14 +8,14 @@ sidebar:
 ## imagegif()
 
 ```php
-function imagegif(mixed $image, string $file = null): bool
+function imagegif(mixed $image, ?string $file = null): bool
 ```
 
 Implemented by the compiler-injected image prelude.
 
 **Parameters**:
 - `$image` (`mixed`)
-- `$file` (`string`), default `null`, optional
+- `$file` (`?string`), default `null`, optional
 
 **Returns**: `bool`
 
