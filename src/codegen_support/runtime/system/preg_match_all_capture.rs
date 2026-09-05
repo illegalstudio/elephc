@@ -303,6 +303,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
     emitter.instruction("b.ge __rt_pma_cap_append_done");                       // PATTERN_ORDER append for this match is complete
     emit_preg_match_all_capture_box_cell_arm64(
         emitter,
+        "po",
         preg_flags_off,
         regmatches_ptr_off,
         group_idx_off,
@@ -344,6 +345,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
     emitter.instruction("b.ge __rt_pma_cap_append_set_row");                    // box the completed SET_ORDER row
     emit_preg_match_all_capture_box_cell_arm64(
         emitter,
+        "set",
         preg_flags_off,
         regmatches_ptr_off,
         group_idx_off,
@@ -386,6 +388,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
 #[allow(clippy::too_many_arguments)]
 fn emit_preg_match_all_capture_box_cell_arm64(
     emitter: &mut Emitter,
+    suffix: &str,
     preg_flags_off: usize,
     regmatches_ptr_off: usize,
     group_idx_off: usize,
@@ -397,6 +400,10 @@ fn emit_preg_match_all_capture_box_cell_arm64(
     pair_ptr_off: usize,
     mixed_ptr_off: usize,
 ) {
+    let unmatched = format!("__rt_pma_cap_box_unmatched_{suffix}");
+    let empty = format!("__rt_pma_cap_box_empty_{suffix}");
+    let maybe_offset = format!("__rt_pma_cap_box_maybe_offset_{suffix}");
+    let done = format!("__rt_pma_cap_box_done_{suffix}");
     emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load the offset-pair buffer
     emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // load the current group index
     emitter.instruction("lsl x15, x12, #4");                                    // scale the group index by the 16-byte pair stride
@@ -404,7 +411,7 @@ fn emit_preg_match_all_capture_box_cell_arm64(
     emitter.instruction("ldr x15, [x14]");                                      // load signed-64-bit capture start
     emitter.instruction("ldr x16, [x14, #8]");                                  // load signed-64-bit capture end
     emitter.instruction("cmp x15, #0");                                         // unmatched captures report a negative start
-    emitter.instruction("b.lt __rt_pma_cap_box_unmatched");                     // emit PHP's unmatched cell
+    emitter.instruction(&format!("b.lt {unmatched}"));                          // emit PHP's unmatched cell
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_cstr_off));       // reload the current C-string cursor
     emitter.instruction("add x1, x1, x15");                                     // capture pointer = cursor + rm_so
     emitter.instruction("sub x2, x16, x15");                                    // capture length = rm_eo - rm_so
@@ -420,29 +427,29 @@ fn emit_preg_match_all_capture_box_cell_arm64(
     emitter.instruction(&format!("ldr x2, [sp, #{}]", piece_len_off));          // load the capture string length
     emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the capture string
     emitter.instruction(&format!("str x0, [sp, #{}]", mixed_ptr_off));          // save the boxed string cell
-    emitter.instruction("b __rt_pma_cap_box_maybe_offset");                     // wrap with an offset row when requested
-    emitter.label("__rt_pma_cap_box_unmatched");
+    emitter.instruction(&format!("b {maybe_offset}"));                          // wrap with an offset row when requested
+    emitter.label(&unmatched);
     emitter.instruction("mov x9, #-1");                                         // unmatched offset-capture uses -1
     emitter.instruction(&format!("str x9, [sp, #{}]", piece_offset_off));       // save the unmatched offset
     emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload PHP flags
     emitter.instruction(&format!("tst x9, #{}", PREG_UNMATCHED_AS_NULL));       // should unmatched cells be Mixed null?
-    emitter.instruction("b.eq __rt_pma_cap_box_empty");                         // default unmatched cell is an empty string
+    emitter.instruction(&format!("b.eq {empty}"));                              // default unmatched cell is an empty string
     emitter.instruction("mov x0, #8");                                          // runtime value tag 8 = null
     emitter.instruction("mov x1, #0");                                          // null payload is zero
     emitter.instruction("mov x2, #0");                                          // null payload has no high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box Mixed null
     emitter.instruction(&format!("str x0, [sp, #{}]", mixed_ptr_off));          // save the boxed null cell
-    emitter.instruction("b __rt_pma_cap_box_maybe_offset");                     // wrap with an offset row when requested
-    emitter.label("__rt_pma_cap_box_empty");
+    emitter.instruction(&format!("b {maybe_offset}"));                          // wrap with an offset row when requested
+    emitter.label(&empty);
     emitter.instruction("mov x0, #1");                                          // runtime value tag 1 = string
     emitter.instruction("mov x1, #0");                                          // empty unmatched capture has a null pointer
     emitter.instruction("mov x2, #0");                                          // empty unmatched capture has zero length
     emitter.instruction("bl __rt_mixed_from_value");                            // box the empty string
     emitter.instruction(&format!("str x0, [sp, #{}]", mixed_ptr_off));          // save the boxed empty-string cell
-    emitter.label("__rt_pma_cap_box_maybe_offset");
+    emitter.label(&maybe_offset);
     emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload PHP flags
     emitter.instruction(&format!("tst x9, #{}", PREG_OFFSET_CAPTURE));          // OFFSET_CAPTURE boxes [value, offset]
-    emitter.instruction("b.eq __rt_pma_cap_box_done");                          // leave a bare value cell when the flag is off
+    emitter.instruction(&format!("b.eq {done}"));                               // leave a bare value cell when the flag is off
     emitter.instruction("mov x0, #2");                                          // capacity for [value, offset]
     emitter.instruction("mov x1, #8");                                          // row stores boxed Mixed pointers
     emitter.instruction("bl __rt_array_new");                                   // allocate the offset-capture row
@@ -468,7 +475,7 @@ fn emit_preg_match_all_capture_box_cell_arm64(
     emitter.instruction(&format!("str x0, [sp, #{}]", mixed_ptr_off));          // save the boxed [value, offset] cell
     emitter.instruction(&format!("ldr x0, [sp, #{}]", pair_ptr_off));           // reload the helper-owned row array
     emitter.instruction("bl __rt_decref_array");                                // drop helper ownership after Mixed retain
-    emitter.label("__rt_pma_cap_box_done");
+    emitter.label(&done);
 }
 
 /// Boxes PATTERN_ORDER group rows into the ARM64 outer array after the search.
@@ -798,6 +805,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction("jge __rt_pma_cap_append_done_linux_x86_64");           // PATTERN_ORDER append for this match is complete
     emit_preg_match_all_capture_box_cell_linux_x86_64(
         emitter,
+        "po",
         preg_flags_off,
         regmatches_ptr_off,
         group_idx_off,
@@ -836,6 +844,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction("jge __rt_pma_cap_append_set_row_linux_x86_64");        // box the completed SET_ORDER row
     emit_preg_match_all_capture_box_cell_linux_x86_64(
         emitter,
+        "set",
         preg_flags_off,
         regmatches_ptr_off,
         group_idx_off,
@@ -878,6 +887,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
 #[allow(clippy::too_many_arguments)]
 fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     emitter: &mut Emitter,
+    suffix: &str,
     preg_flags_off: usize,
     regmatches_ptr_off: usize,
     group_idx_off: usize,
@@ -889,6 +899,10 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     pair_ptr_off: usize,
     mixed_ptr_off: usize,
 ) {
+    let unmatched = format!("__rt_pma_cap_box_unmatched_{suffix}_linux_x86_64");
+    let empty = format!("__rt_pma_cap_box_empty_{suffix}_linux_x86_64");
+    let maybe_offset = format!("__rt_pma_cap_box_maybe_offset_{suffix}_linux_x86_64");
+    let done = format!("__rt_pma_cap_box_done_{suffix}_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load the offset-pair buffer
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", group_idx_off)); // load the current group index
     emitter.instruction("shl r11, 4");                                          // scale the group index by the 16-byte pair stride
@@ -896,7 +910,7 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load signed-64-bit capture start
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // load signed-64-bit capture end
     emitter.instruction("cmp r11, 0");                                          // unmatched captures report a negative start
-    emitter.instruction("jl __rt_pma_cap_box_unmatched_linux_x86_64");          // emit PHP's unmatched cell
+    emitter.instruction(&format!("jl {unmatched}"));                            // emit PHP's unmatched cell
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_cstr_off)); // reload the current C-string cursor
     emitter.instruction("add rsi, r11");                                        // capture pointer = cursor + rm_so
     emitter.instruction("mov rdx, rcx");                                        // copy capture end before subtracting start
@@ -912,29 +926,29 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", piece_len_off)); // load the capture string length
     emitter.instruction("call __rt_mixed_from_value");                          // persist and box the capture string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save the boxed string cell
-    emitter.instruction("jmp __rt_pma_cap_box_maybe_offset_linux_x86_64");      // wrap with an offset row when requested
-    emitter.label("__rt_pma_cap_box_unmatched_linux_x86_64");
+    emitter.instruction(&format!("jmp {maybe_offset}"));                        // wrap with an offset row when requested
+    emitter.label(&unmatched);
     emitter.instruction("mov r9, -1");                                          // unmatched offset-capture uses -1
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", piece_offset_off)); // save the unmatched offset
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP flags
     emitter.instruction(&format!("test r9, {}", PREG_UNMATCHED_AS_NULL));        // should unmatched cells be Mixed null?
-    emitter.instruction("jz __rt_pma_cap_box_empty_linux_x86_64");              // default unmatched cell is an empty string
+    emitter.instruction(&format!("jz {empty}"));                                // default unmatched cell is an empty string
     emitter.instruction("mov rax, 8");                                          // runtime value tag 8 = null
     emitter.instruction("xor edi, edi");                                        // null payload is zero
     emitter.instruction("xor esi, esi");                                        // null payload has no high word
     emitter.instruction("call __rt_mixed_from_value");                          // box Mixed null
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save the boxed null cell
-    emitter.instruction("jmp __rt_pma_cap_box_maybe_offset_linux_x86_64");      // wrap with an offset row when requested
-    emitter.label("__rt_pma_cap_box_empty_linux_x86_64");
+    emitter.instruction(&format!("jmp {maybe_offset}"));                        // wrap with an offset row when requested
+    emitter.label(&empty);
     emitter.instruction("mov rax, 1");                                          // runtime value tag 1 = string
     emitter.instruction("xor edi, edi");                                        // empty unmatched capture has a null pointer
     emitter.instruction("xor esi, esi");                                        // empty unmatched capture has zero length
     emitter.instruction("call __rt_mixed_from_value");                          // box the empty string
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save the boxed empty-string cell
-    emitter.label("__rt_pma_cap_box_maybe_offset_linux_x86_64");
+    emitter.label(&maybe_offset);
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP flags
     emitter.instruction(&format!("test r9, {}", PREG_OFFSET_CAPTURE));          // OFFSET_CAPTURE boxes [value, offset]
-    emitter.instruction("jz __rt_pma_cap_box_done_linux_x86_64");               // leave a bare value cell when the flag is off
+    emitter.instruction(&format!("jz {done}"));                                 // leave a bare value cell when the flag is off
     emitter.instruction("mov edi, 2");                                          // capacity for [value, offset]
     emitter.instruction("mov esi, 8");                                          // row stores boxed Mixed pointers
     emitter.instruction("call __rt_array_new");                                 // allocate the offset-capture row
@@ -958,7 +972,7 @@ fn emit_preg_match_all_capture_box_cell_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", mixed_ptr_off)); // save the boxed [value, offset] cell
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", pair_ptr_off)); // reload the helper-owned row array
     emitter.instruction("call __rt_decref_array");                              // drop helper ownership after Mixed retain
-    emitter.label("__rt_pma_cap_box_done_linux_x86_64");
+    emitter.label(&done);
 }
 
 /// Boxes PATTERN_ORDER group rows into the x86_64 outer array after the search.
