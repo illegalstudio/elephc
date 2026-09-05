@@ -289,6 +289,59 @@ fn backend_public_name_sets_derive_from_shared_support() {
     assert_eq!(actual_eval, expected_eval);
 }
 
+/// Verifies target-filtered metadata follows PCNTL's Linux and macOS availability contracts.
+#[test]
+fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
+    use elephc::codegen_support::platform::{AppleVariant, Arch, Platform, Target};
+
+    let macos = elephc::builtin_metadata::php_visible_builtin_names_for_target(Target::new(
+        Platform::MacOS,
+        Arch::AArch64,
+    ))
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let linux = elephc::builtin_metadata::php_visible_builtin_names_for_target(Target::new(
+        Platform::Linux,
+        Arch::AArch64,
+    ))
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let ios = elephc::builtin_metadata::php_visible_builtin_names_for_target(Target::new_apple(
+        Arch::AArch64,
+        AppleVariant::IOS,
+    ))
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let ios_sim = elephc::builtin_metadata::php_visible_builtin_names_for_target(
+        Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+    )
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+
+    assert!(macos.contains("pcntl_getqos_class"));
+    assert!(macos.contains("pcntl_setqos_class"));
+    assert!(!macos.contains("pcntl_getcpu"));
+    assert!(!macos.contains("pcntl_unshare"));
+
+    assert!(!linux.contains("pcntl_getqos_class"));
+    assert!(!linux.contains("pcntl_setqos_class"));
+    assert!(linux.contains("pcntl_getcpu"));
+    assert!(linux.contains("pcntl_unshare"));
+
+    for ios_names in [&ios, &ios_sim] {
+        assert!(!ios_names.contains("pcntl_fork"));
+        assert!(!ios_names.contains("pcntl_exec"));
+        assert!(!ios_names.contains("pcntl_wait"));
+        assert!(!ios_names.contains("pcntl_alarm"));
+        assert!(!ios_names.contains("pcntl_signal"));
+        assert!(!ios_names.contains("pcntl_daemon"));
+        assert!(!ios_names.contains("posix_setpgid"));
+        assert!(!ios_names.contains("posix_setsid"));
+        assert!(!ios_names.contains("pcntl_getcpu"));
+        assert!(!ios_names.contains("pcntl_getqos_class"));
+    }
+}
+
 /// Verifies each backend exposes exactly the signature profile selected by the contract.
 #[test]
 fn backend_signature_shapes_derive_from_shared_contracts() {

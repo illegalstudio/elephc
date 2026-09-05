@@ -105,8 +105,9 @@ archives) that elephc links into the program: `pdo` (database access), `tls`
 `bcmath` (exact arbitrary-precision decimal arithmetic),
 `iconv` (character-set conversion and the character-oriented `iconv_*` functions),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
-processing), `eval` (the Magician interpreter fallback for dynamic `eval()`),
-`web` (the `--web` server), and `curl` (the libcurl-backed `ext/curl` surface).
+processing), `pcntl` (Unix process control and signals), `eval` (the Magician
+interpreter fallback for dynamic `eval()`), `web` (the `--web` server), and
+`curl` (the libcurl-backed `ext/curl` surface).
 
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
@@ -128,8 +129,14 @@ elephc app.php --with-pdo
 elephc app.php --with-crypto --with-tls
 elephc app.php --with-bcmath
 elephc app.php --with-iconv
+elephc app.php --with-pcntl
 elephc app.php --with-eval
 ```
+
+`--with-pcntl` force-links the process-control bridge for indirect or opaque
+runtime calls. Statically visible `pcntl_*` calls auto-link it. See
+[PCNTL](../php/pcntl.md) for target availability, fork/signal semantics, and
+documented limits.
 
 `--with-eval` force-links `elephc_magician`; it does not enable new syntax or
 change which fragments are eligible for AOT lowering. Normal eval usage is

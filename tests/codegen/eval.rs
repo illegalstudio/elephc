@@ -16995,8 +16995,12 @@ echo $box->value;');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "Ada");
+}
 
-    for source in [
+/// Verifies eval rejects an explicit untyped set-hook parameter.
+#[test]
+fn test_eval_declared_property_set_hook_rejects_untyped_explicit_parameter() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalUntypedExplicitSetHookParam {
     public string $value {
@@ -17004,6 +17008,17 @@ eval('class EvalUntypedExplicitSetHookParam {
     }
 }');
 "#,
+    );
+    assert!(
+        err.contains("Fatal error: eval()"),
+        "stderr did not contain eval fatal diagnostic: {err}"
+    );
+}
+
+/// Verifies eval rejects a set-hook parameter narrower than its property type.
+#[test]
+fn test_eval_declared_property_set_hook_rejects_narrow_parameter() {
+    let err = compile_and_run_expect_failure(
         r#"<?php
 eval('class EvalNarrowSetHookParam {
     public mixed $value {
@@ -17011,13 +17026,11 @@ eval('class EvalNarrowSetHookParam {
     }
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval()"),
-            "stderr did not contain eval fatal diagnostic: {err}"
-        );
-    }
+    );
+    assert!(
+        err.contains("Fatal error: eval()"),
+        "stderr did not contain eval fatal diagnostic: {err}"
+    );
 }
 
 /// Verifies eval-declared nullsafe and mixed-case property hook reads stay routed.
@@ -29355,4 +29368,26 @@ echo ":"; echo intval("42");');
 "#,
     );
     assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
+}
+
+/// Decodes NUL escapes and warns only for observable undefined-variable reads in eval.
+#[test]
+fn test_eval_nul_escapes_and_undefined_variable_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo eval('echo strlen("\0") . ":" . strlen("\x00") . ":";
+echo $missing;
+return ":" . ($quiet ?? "fallback");');
+"#,
+    );
+    assert_eq!(out.stdout, "1:1::fallback");
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Undefined variable $missing")
+            .count(),
+        1,
+        "{}",
+        out.stderr
+    );
+    assert!(!out.stderr.contains("$quiet"), "{}", out.stderr);
 }

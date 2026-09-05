@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **515 / 2030** (25%).
+Overall builtin coverage: **542 / 2030** (27%).
 
 ## Builtin coverage by PHP module
 
@@ -41,11 +41,11 @@ Overall builtin coverage: **515 / 2030** (25%).
 | `mbstring` | 2 / 65 | 3% | 2 | 2 |
 | `mysqli`† | 0 / 106 | 0% | 0 | 0 |
 | `openssl` | 4 / 66 | 6% | 4 | 4 |
-| `pcntl` | 0 / 25 | 0% | 0 | 0 |
+| `pcntl`† | 25 / 25 | 100% | 25 | 25 |
 | `pcre` | 5 / 11 | 45% | 5 | 5 |
 | `pdo`† | 0 / 1 | 0% | 0 | 0 |
 | `pgsql` | 0 / 122 | 0% | 0 | 0 |
-| `posix` | 0 / 40 | 0% | 0 | 0 |
+| `posix` | 2 / 40 | 5% | 2 | 2 |
 | `random` | 3 / 9 | 33% | 3 | 3 |
 | `readline` | 1 / 13 | 8% | 1 | 1 |
 | `session`† | 0 / 23 | 0% | 0 | 0 |
@@ -73,6 +73,8 @@ The remaining 10 baseline extensions expose classes but no procedural functions,
 7 extensions bundled with php-src were not loaded by the PHP build that produced this snapshot and are not counted: `enchant`, `odbc`, `pdo_dblib`, `pdo_firebird`, `pdo_odbc`, `snmp`, `tidy`.
 
 In addition, elephc implements 3 PHP language constructs that PHP does not count as functions: `empty()`, `isset()`, `unset()`.
+
+The pinned `macos-aarch64` PHP baseline does not expose 7 target-specific PHP functions that elephc supports on other targets, so they are excluded from the percentages above: `pcntl_getcpu()`, `pcntl_getcpuaffinity()`, `pcntl_setcpuaffinity()`, `pcntl_setns()`, `pcntl_sigtimedwait()`, `pcntl_sigwaitinfo()`, `pcntl_unshare()`.
 
 elephc also implements 2 function(s) that PHP added AFTER this baseline release, so they cannot be counted against it: `curl_multi_get_handles()` (PHP 8.5), `curl_share_init_persistent()` (PHP 8.5).
 
@@ -116,6 +118,7 @@ elephc also implements 2 function(s) that PHP added AFTER this baseline release,
 | [Calendar](./calendar.md) ([PHP](https://www.php.net/manual/en/book.calendar.php)) | ✅ Supported |  |
 | [iconv](./iconv.md) ([PHP](https://www.php.net/manual/en/book.iconv.php)) | ✅ Supported |  |
 | [GD / image](./image.md) ([PHP](https://www.php.net/manual/en/book.image.php)) | 🟡 Partial | Enabled with --with-image |
+| [PCNTL](./pcntl.md) ([PHP](https://www.php.net/manual/en/book.pcntl.php)) | ✅ Supported | Target-aware Unix process control; auto-linked or forced with --with-pcntl |
 | [cURL](./curl.md) ([PHP](https://www.php.net/manual/en/book.curl.php)) | ✅ Supported | All 35 functions, 6 classes and 689 constants on a pinned static libcurl 8.21.0; declare the managed curl package (elephc native add curl). 260 of 271 CURLOPT_* implemented, the rest rejected with PHP's warning. eval() covers the easy, multi and share interfaces. The coverage row counts the 32 shared-contract functions this baseline knows; curl_multi_get_handles()/curl_share_init_persistent() are PHP 8.5 additions counted separately above, and curl_file_create() is a plain prelude alias of the CURLFile constructor with no registry binding on either backend, so it carries no shared contract. |
 | OpenSSL ([PHP](https://www.php.net/manual/en/book.openssl.php)) | 🟡 Partial | Encrypt/decrypt subset |
 | [OPcache](./opcache.md) ([PHP](https://www.php.net/manual/en/book.opcache.php)) | 🟡 Partial | Compatibility surface; programs are AOT-compiled, there is no opcode cache |
@@ -133,6 +136,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
+| `pcntl_daemon()` | Misc | Detaches the surviving child into a background daemon process. |
 | `buffer_new()` | Pointer | Allocates a raw byte buffer. |
 | `ptr()` | Pointer | Returns a raw pointer to the given variable. |
 | `ptr_get()` | Pointer | Reads one machine word through a raw pointer and returns it as an integer. |

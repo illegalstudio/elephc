@@ -15,6 +15,16 @@ pub(super) fn lower_named_args_with_signature(
     sig: &FunctionSig,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    lower_named_args_with_signature_options(ctx, sig, args, false)
+}
+
+/// Lowers named arguments with caller-selected trailing-default preservation.
+pub(super) fn lower_named_args_with_signature_options(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+    trim_trailing_defaults: bool,
+) -> Vec<crate::ir::ValueId> {
     let call_span = args
         .first()
         .map(|arg| arg.span)
@@ -26,14 +36,19 @@ pub(super) fn lower_named_args_with_signature(
         args,
         call_span,
         regular_param_count,
-        false,
+        trim_trailing_defaults,
         true,
         &assoc_spread_sources,
     ) else {
         return lower_args(ctx, args);
     };
     if plan.has_spread_args() {
-        if let Some(operands) = lower_named_args_with_spread_plan(ctx, sig, &plan, &assoc_spread_sources) {
+        if let Some(operands) = lower_named_args_with_spread_plan(
+            ctx,
+            sig,
+            &plan,
+            &assoc_spread_sources,
+        ) {
             return operands;
         }
         if let Some(operands) = lower_dynamic_named_spread_variadic_args(ctx, sig, &plan) {
@@ -345,4 +360,3 @@ pub(super) fn lower_named_args_with_spread_plan(
     }
     Some(operands)
 }
-

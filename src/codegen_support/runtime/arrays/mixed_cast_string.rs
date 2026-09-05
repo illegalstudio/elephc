@@ -8,13 +8,14 @@
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
 //! - OWNERSHIP OF THE RESULT IS PER-TAG, and every caller already depends on the split:
-//!   tag 1 (string) is the ONLY arm that allocates — `__rt_str_persist` hands back a fresh
+//!   tag 1 (string) is the ONLY arm that allocates: `__rt_str_persist` hands back a fresh
 //!   `__rt_heap_alloc` block the caller owns. Tags 0 (int), 2 (float), 3-true (bool) and 9
 //!   (resource) all format into the SHARED `_concat_buf` scratch and return a BORROWED
-//!   pointer; tag 3-false and every non-scalar tag return a null pointer with length 0.
+//!   pointer; tags 4 and 5 return the borrowed fixed `Array` literal after warning. Tag
+//!   3-false and other unsupported tags return a null pointer with length 0.
 //!   `__rt_implode` is the one caller that releases the result, and it does so through
 //!   `__rt_heap_free`, which by contract ignores anything that is not a live heap block
-//!   (AArch64 range-checks `_heap_buf`, x86_64 checks the heap magic marker) — precisely so
+//!   (AArch64 range-checks `_heap_buf`, x86_64 checks the heap magic marker), precisely so
 //!   concat-buffer scratch can be passed to it. Adding a scratch-returning arm therefore
 //!   cannot leak (nothing was allocated) and cannot wild-free (nothing frees scratch).
 //! - The tag-9 arm reuses `__rt_resource_to_string`, the SAME helper the statically-typed
@@ -28,7 +29,8 @@ use crate::codegen_support::platform::Arch;
 /// Converts a boxed Mixed value to a string by dispatching on the unboxed tag.
 /// Input: x0 = boxed mixed pointer. Output: x1 = string pointer, x2 = string length (ARM64).
 /// Handles int (tag 0 → itoa), string (tag 1 → persisted copy), float (tag 2 → ftoa),
-/// bool (tag 3 → "1" or ""), resource (tag 9 → `Resource id #N`), and null/unsupported
+/// bool (tag 3 → "1" or ""), arrays (tags 4/5 → warning plus `Array`), resource
+/// (tag 9 → `Resource id #N`), and null/unsupported
 /// (→ empty string).
 /// Dispatches to `emit_mixed_cast_string_linux_x86_64` on x86_64; ARM64 emits inline.
 pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
@@ -53,6 +55,10 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_string_from_float");              // floats cast through ftoa
     emitter.instruction("cmp x0, #3");                                          // does the mixed payload hold a bool?
     emitter.instruction("b.eq __rt_mixed_cast_string_from_bool");               // bools cast to "1" or ""
+    emitter.instruction("cmp x0, #4");                                          // does the mixed payload hold an indexed array?
+    emitter.instruction("b.eq __rt_mixed_cast_string_from_array");              // arrays warn and cast to the literal "Array"
+    emitter.instruction("cmp x0, #5");                                          // does the mixed payload hold an associative array?
+    emitter.instruction("b.eq __rt_mixed_cast_string_from_array");              // hashes share PHP's array stringification behavior
     emitter.instruction("cmp x0, #9");                                          // does the mixed payload hold a resource?
     emitter.instruction("b.eq __rt_mixed_cast_string_from_resource");           // resources render as PHP's "Resource id #N"
     emitter.instruction("mov x1, xzr");                                         // unsupported and null payloads produce an empty string pointer
@@ -72,6 +78,12 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // move the native resource payload into the formatter argument register
     emitter.instruction("bl __rt_resource_to_string");                          // format the payload as "Resource id #N" in the shared concat scratch
     emitter.instruction("b __rt_mixed_cast_string_done");                       // return the borrowed resource display string
+
+    emitter.label("__rt_mixed_cast_string_from_array");
+    emitter.instruction("bl __rt_sprintf_warn_array_to_string");                // emit PHP's array-to-string warning for boxed arrays
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_iterable_array_str");
+    emitter.instruction("mov x2, #5");                                          // byte length of the fixed "Array" literal
+    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the borrowed fixed-data string
 
     emitter.label("__rt_mixed_cast_string_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
@@ -97,7 +109,8 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
 /// x86_64 variant of `emit_mixed_cast_string`: converts a boxed Mixed value to a string.
 /// Input: RDI = boxed mixed pointer. Output: RAX = string pointer, RDX = string length (System V ABI).
 /// Handles int (tag 0 → itoa), string (tag 1 → persisted copy), float (tag 2 → ftoa),
-/// bool (tag 3 → "1" or ""), resource (tag 9 → `Resource id #N`), and null/unsupported
+/// bool (tag 3 → "1" or ""), arrays (tags 4/5 → warning plus `Array`), resource
+/// (tag 9 → `Resource id #N`), and null/unsupported
 /// (→ empty string).
 fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -115,6 +128,10 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_string_from_float");                // floats cast through ftoa
     emitter.instruction("cmp rax, 3");                                          // does the mixed payload hold a bool?
     emitter.instruction("je __rt_mixed_cast_string_from_bool");                 // bools cast to \"1\" or \"\"
+    emitter.instruction("cmp rax, 4");                                          // does the mixed payload hold an indexed array?
+    emitter.instruction("je __rt_mixed_cast_string_from_array");                // arrays warn and cast to the literal \"Array\"
+    emitter.instruction("cmp rax, 5");                                          // does the mixed payload hold an associative array?
+    emitter.instruction("je __rt_mixed_cast_string_from_array");                // hashes share PHP's array stringification behavior
     emitter.instruction("cmp rax, 9");                                          // does the mixed payload hold a resource?
     emitter.instruction("je __rt_mixed_cast_string_from_resource");             // resources render as PHP's \"Resource id #N\"
     emitter.instruction("xor rax, rax");                                        // unsupported and null payloads produce an empty string pointer
@@ -135,6 +152,12 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the native resource payload into the formatter input register
     emitter.instruction("call __rt_resource_to_string");                        // format the payload as \"Resource id #N\" in the shared concat scratch
     emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the borrowed resource display string
+
+    emitter.label("__rt_mixed_cast_string_from_array");
+    emitter.instruction("call __rt_sprintf_warn_array_to_string_x64");          // emit PHP's array-to-string warning for boxed arrays
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rax", "_iterable_array_str");
+    emitter.instruction("mov edx, 5");                                          // byte length of the fixed \"Array\" literal
+    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the borrowed fixed-data string
 
     emitter.label("__rt_mixed_cast_string_from_float");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the FP register file
@@ -206,6 +229,22 @@ mod tests {
         assert_eq!(asm.matches("call __rt_resource_to_string").count(), 1, "{asm}");
         assert_eq!(asm.matches("push rbp").count(), 1, "{asm}");
         assert_eq!(asm.matches("pop rbp").count(), 1, "{asm}");
+    }
+
+    /// Verifies boxed indexed and associative arrays share PHP's warning and `Array` result.
+    #[test]
+    fn test_mixed_cast_string_dispatches_array_tags_on_both_targets() {
+        let arm64 = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(arm64.contains("cmp x0, #4\n    b.eq __rt_mixed_cast_string_from_array"));
+        assert!(arm64.contains("cmp x0, #5\n    b.eq __rt_mixed_cast_string_from_array"));
+        assert!(arm64.contains("bl __rt_sprintf_warn_array_to_string"));
+        assert!(arm64.contains("_iterable_array_str"));
+
+        let x64 = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(x64.contains("cmp rax, 4\n    je __rt_mixed_cast_string_from_array"));
+        assert!(x64.contains("cmp rax, 5\n    je __rt_mixed_cast_string_from_array"));
+        assert!(x64.contains("call __rt_sprintf_warn_array_to_string_x64"));
+        assert!(x64.contains("_iterable_array_str"));
     }
 
     /// Pins the OWNERSHIP contract of the resource arm on both targets: it must return

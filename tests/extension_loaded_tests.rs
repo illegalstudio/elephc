@@ -10,7 +10,7 @@
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated
 //!   temp dir, compile a plain executable, run it, and assert stdout — mirroring the
 //!   web_tests / cdylib_tests harness. Host-target only (macOS aarch64 local).
-//! - The forced-bridge path uses `--with-pdo` (PDO); the auto-detected path uses
+//! - The forced-bridge paths use `--with-pdo` (PDO) and `--with-pcntl` (pcntl); the auto-detected path uses
 //!   `hash()` (links elephc_crypto -> the `hash` extension); the negative case links no
 //!   bridge. Core extensions (json) always report loaded; a bridge with no linked
 //!   staticlib (curl) never does.
@@ -273,6 +273,24 @@ fn pdo_and_mysqli_usage_reports_both() {
     );
 }
 
+/// Verifies PCNTL stays absent when its bridge is neither forced nor selected by a builtin.
+#[test]
+fn unused_pcntl_reports_extension_not_loaded() {
+    let dir = make_test_dir("ext_no_pcntl");
+    let src = "<?php echo extension_loaded('pcntl') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "no");
+}
+
+/// Verifies `--with-pcntl` links the bridge and reports the canonical extension name.
+#[test]
+fn with_pcntl_reports_extension_loaded() {
+    let dir = make_test_dir("ext_pcntl_forced");
+    let src = "<?php echo extension_loaded('PCNTL') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &["--with-pcntl"]);
+    assert_eq!(run_binary(&bin), "yes");
+}
+
 /// Verifies extension-name matching is case-insensitive (PHP semantics): `--with-tls`
 /// makes `extension_loaded('openssl')` and `extension_loaded('OpenSSL')` both report true.
 #[test]
@@ -336,25 +354,29 @@ fn dynamic_argument_matches_core_extensions() {
     );
 }
 
-/// Verifies the dynamic path consults the per-compilation linked-bridge set, not just the
-/// core list: the SAME loop over variable names reports PDO only when `--with-pdo` linked it.
-#[test]
-fn dynamic_argument_tracks_linked_bridges() {
-    let src = "<?php \
+/// Shared dynamic extension probe used with and without an explicitly linked bridge.
+const DYNAMIC_BRIDGE_PROBE_SOURCE: &str = "<?php \
         foreach (['json', 'curl', 'PDO', 'pcre'] as $x) { \
             echo $x, '=', extension_loaded($x) ? 'T' : 'F', ' '; \
         }";
 
+/// Verifies dynamic extension lookup keeps an unlinked bridge absent.
+#[test]
+fn dynamic_argument_keeps_unlinked_bridges_absent() {
     let without = make_test_dir("ext_dyn_nopdo");
-    let bin = compile_with_flags(&without, src, "app", &[]);
+    let bin = compile_with_flags(&without, DYNAMIC_BRIDGE_PROBE_SOURCE, "app", &[]);
     assert_eq!(
         run_binary(&bin),
         "json=T curl=F PDO=F pcre=T ",
         "dynamic loop without --with-pdo: PDO not linked"
     );
+}
 
+/// Verifies dynamic extension lookup consults the linked-bridge set.
+#[test]
+fn dynamic_argument_tracks_linked_bridges() {
     let with = make_test_dir("ext_dyn_pdo");
-    let bin = compile_with_flags(&with, src, "app", &["--with-pdo"]);
+    let bin = compile_with_flags(&with, DYNAMIC_BRIDGE_PROBE_SOURCE, "app", &["--with-pdo"]);
     assert_eq!(
         run_binary(&bin),
         "json=T curl=F PDO=T pcre=T ",

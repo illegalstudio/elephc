@@ -344,6 +344,40 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     op_name: &str,
     retain_existing_descriptor: bool,
 ) -> Result<()> {
+    emit_runtime_mixed_callable_descriptor_value_impl(
+        ctx,
+        callable,
+        op_name,
+        retain_existing_descriptor,
+        None,
+    )
+}
+
+/// Materializes a boxed callable descriptor while turning an unknown string name into `TypeError`.
+pub(super) fn emit_runtime_mixed_callable_descriptor_value_with_string_type_error(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+    retain_existing_descriptor: bool,
+    message: &'static str,
+) -> Result<()> {
+    emit_runtime_mixed_callable_descriptor_value_impl(
+        ctx,
+        callable,
+        op_name,
+        retain_existing_descriptor,
+        Some(message),
+    )
+}
+
+/// Implements boxed callable descriptor selection with a configurable string-name miss path.
+fn emit_runtime_mixed_callable_descriptor_value_impl(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    op_name: &str,
+    retain_existing_descriptor: bool,
+    string_type_error: Option<&'static str>,
+) -> Result<()> {
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
     let invokable_targets = instance_targets
         .iter()
@@ -407,7 +441,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&string_label);
-    emit_runtime_string_descriptor_value_from_unboxed(ctx, op_name)?;
+    emit_runtime_string_descriptor_value_from_unboxed(ctx, op_name, string_type_error)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     if let Some(array_label) = &array_label {
@@ -827,6 +861,39 @@ pub(super) fn emit_runtime_string_descriptor_value(
     op_name: &str,
     strict_php: bool,
 ) -> Result<()> {
+    emit_runtime_string_descriptor_value_impl(
+        ctx, callable, dest_reg, op_name, strict_php, None,
+    )
+}
+
+/// Selects a descriptor from a string and throws `TypeError` when the name is not callable.
+pub(super) fn emit_runtime_string_descriptor_value_with_type_error(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    dest_reg: &str,
+    op_name: &str,
+    strict_php: bool,
+    message: &'static str,
+) -> Result<()> {
+    emit_runtime_string_descriptor_value_impl(
+        ctx,
+        callable,
+        dest_reg,
+        op_name,
+        strict_php,
+        Some(message),
+    )
+}
+
+/// Implements runtime string descriptor selection with a configurable miss path.
+fn emit_runtime_string_descriptor_value_impl(
+    ctx: &mut FunctionContext<'_>,
+    callable: ValueId,
+    dest_reg: &str,
+    op_name: &str,
+    strict_php: bool,
+    type_error: Option<&'static str>,
+) -> Result<()> {
     let candidate_names = ctx.runtime_callable_candidates(callable);
     let cases =
         runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
@@ -865,7 +932,12 @@ pub(super) fn emit_runtime_string_descriptor_value(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    emit_undefined_runtime_string_call_fatal(ctx);
+    if let Some(message) = type_error {
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        super::exceptions::emit_type_error(ctx, message);
+    } else {
+        emit_undefined_runtime_string_call_fatal(ctx);
+    }
 
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -876,6 +948,7 @@ pub(super) fn emit_runtime_string_descriptor_value(
 fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
     op_name: &str,
+    type_error: Option<&'static str>,
 ) -> Result<()> {
     let cases = runtime_string_descriptor_cases(
         ctx,
@@ -920,7 +993,12 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    emit_undefined_runtime_string_call_fatal(ctx);
+    if let Some(message) = type_error {
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        super::exceptions::emit_type_error(ctx, message);
+    } else {
+        emit_undefined_runtime_string_call_fatal(ctx);
+    }
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())

@@ -68,7 +68,10 @@ pub(crate) use network::{lower_inet, lower_ip2long, lower_long2ip};
 pub(crate) use parse_url::lower_parse_url;
 pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprintf};
 pub(crate) use replace_wrap::{lower_str_pad, lower_string_replace, lower_wordwrap};
-pub(crate) use scalar::{lower_chr, lower_number_format, lower_ord};
+pub(crate) use scalar::{
+    emit_explicit_float_result_to_int, emit_signal_float_result_to_int, load_as_explicit_int,
+    lower_chr, lower_number_format, lower_ord,
+};
 pub(crate) use search::{
     lower_str_contains, lower_str_repeat, lower_string_position, lower_strstr, lower_substr,
     lower_substr_replace,

@@ -97,12 +97,21 @@ impl Platform {
 
     /// Returns the PHP-compatible OS name string for this platform.
     ///
-    /// macOS reports `"Darinux"` and Linux reports `"Linux"`, matching PHP's `PHP_OS` constant.
+    /// macOS reports `"Darwin"` and Linux reports `"Linux"`, matching PHP's `PHP_OS` constant.
     pub fn php_os_name(&self) -> &'static str {
         match self {
             Platform::MacOS => "Darwin",
             Platform::Linux => "Linux",
             Platform::Windows => "WINNT",
+        }
+    }
+
+    /// Returns the PHP-compatible operating-system family name.
+    pub fn php_os_family_name(&self) -> &'static str {
+        match self {
+            Platform::MacOS => "Darwin",
+            Platform::Linux => "Linux",
+            Platform::Windows => "Windows",
         }
     }
 

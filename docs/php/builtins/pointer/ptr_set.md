@@ -2,7 +2,7 @@
 title: "ptr_set()"
 description: "Writes one machine word through a raw pointer."
 sidebar:
-  order: 378
+  order: 413
 ---
 
 ## ptr_set()

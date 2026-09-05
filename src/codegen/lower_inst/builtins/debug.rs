@@ -221,6 +221,7 @@ pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
                 emit_var_dump_array(ctx, &ty)
             }
             PhpType::Object(_) => emit_var_dump_dynamic_object(ctx),
+            PhpType::Callable => emit_var_dump_callable(ctx),
             PhpType::Mixed | PhpType::Union(_) => emit_var_dump_mixed(ctx),
             other => Err(CodegenIrError::unsupported(format!(
                 "var_dump for PHP type {:?}",
@@ -405,6 +406,7 @@ fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let array_case = ctx.next_label("var_dump_mixed_array");
     let assoc_case = ctx.next_label("var_dump_mixed_assoc");
     let object_case = ctx.next_label("var_dump_mixed_object");
+    let callable_case = ctx.next_label("var_dump_mixed_callable");
     let null_case = ctx.next_label("var_dump_mixed_null");
     let done = ctx.next_label("var_dump_mixed_done");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -416,6 +418,7 @@ fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
     emit_branch_on_mixed_tag(ctx, 4, &array_case);
     emit_branch_on_mixed_tag(ctx, 5, &assoc_case);
     emit_branch_on_mixed_tag(ctx, 6, &object_case);
+    emit_branch_on_mixed_tag(ctx, 10, &callable_case);
     abi::emit_jump(ctx.emitter, &null_case);
 
     ctx.emitter.label(&int_case);
@@ -462,6 +465,11 @@ fn emit_var_dump_mixed(ctx: &mut FunctionContext<'_>) -> Result<()> {
     ctx.emitter.label(&object_case);
     move_mixed_payload_to_int_result(ctx);
     emit_var_dump_dynamic_object(ctx)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&callable_case);
+    move_mixed_payload_to_int_result(ctx);
+    emit_var_dump_callable(ctx)?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&null_case);
@@ -749,6 +757,15 @@ fn emit_var_dump_dynamic_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_var_dump_value");
+    Ok(())
+}
+
+/// Emits a callable descriptor as PHP's object-shaped `Closure` representation.
+fn emit_var_dump_callable(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the callable descriptor to the Closure renderer
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_var_dump_emit_callable");
     Ok(())
 }
 

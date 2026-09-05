@@ -14,6 +14,7 @@ use crate::parser::ast::{
     InstanceOfTarget, Program, Stmt, StmtKind, TypeExpr,
 };
 use crate::span::Span;
+use crate::codegen_support::platform::Target;
 use crate::termination::{block_terminal_effect, stmt_terminal_effect, TerminalEffect};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -50,6 +51,9 @@ thread_local! {
     static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<Rc<InstanceDispatchMetadata>>> = const { RefCell::new(None) };
     static ACTIVE_CLASS_EFFECT_CONTEXT: RefCell<Option<ClassEffectContext>> = const { RefCell::new(None) };
     static ACTIVE_CALLABLE_ALIAS_EFFECTS: RefCell<Option<HashMap<String, Effect>>> = const { RefCell::new(None) };
+    static ACTIVE_FOLD_TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
+    static ACTIVE_FOLD_USER_FUNCTIONS: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
+    static ACTIVE_TARGET_GUARD_CONDITION: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Borrows the active function-effect summary without cloning its whole map.
@@ -90,7 +94,92 @@ pub(in crate::optimize) fn with_active_instance_dispatch_metadata<R>(
 /// prepends folds like any other.
 pub fn fold_constants(program: Program) -> Program {
     let program = crate::superglobals::seed_cli_populated_superglobals(program);
-    program.into_iter().map(fold_stmt).collect()
+    fold_block(program)
+}
+
+/// Folds constants whose values or builtin availability depend on the compile target.
+///
+/// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and
+/// `function_exists()` guards can remove branches containing target-unavailable builtins.
+pub fn fold_constants_for_target(program: Program, target: Target) -> Program {
+    ACTIVE_FOLD_TARGET.with(|slot| {
+        let previous = slot.replace(Some(target));
+        let user_functions = collect_top_level_user_functions(&program);
+        let previous_functions =
+            ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(Some(user_functions)));
+        let folded = fold_constants(program);
+        // A target guard can turn a conditional polyfill declaration into an unconditional
+        // declaration. Rebuild the function inventory and fold once more so later probes in
+        // the same program observe the function that the retained branch just defined. Use
+        // `fold_block` directly here because `fold_constants` would seed CLI superglobals twice.
+        let materialized_functions = collect_top_level_user_functions(&folded);
+        ACTIVE_FOLD_USER_FUNCTIONS
+            .with(|functions| functions.replace(Some(materialized_functions)));
+        let folded = fold_block(folded);
+        ACTIVE_FOLD_USER_FUNCTIONS.with(|functions| functions.replace(previous_functions));
+        slot.replace(previous);
+        folded
+    })
+}
+
+/// Borrows the target selected for the current constant-folding pass.
+pub(in crate::optimize) fn active_fold_target() -> Option<Target> {
+    ACTIVE_FOLD_TARGET.with(|slot| *slot.borrow())
+}
+
+/// Returns whether the target-folding program declares a top-level function with this name.
+pub(in crate::optimize) fn active_fold_user_function_exists(name: &str) -> bool {
+    let key = php_symbol_key(name);
+    ACTIVE_FOLD_USER_FUNCTIONS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|functions| functions.contains(&key))
+    })
+}
+
+/// Returns whether constant folding is currently evaluating a target-dependent guard condition.
+pub(in crate::optimize) fn active_target_guard_condition() -> bool {
+    ACTIVE_TARGET_GUARD_CONDITION.with(|slot| *slot.borrow())
+}
+
+/// Folds an `if` condition while marking literal target guards as safe for eager availability folds.
+pub(in crate::optimize) fn fold_condition_expr(expr: Expr) -> Expr {
+    if active_fold_target().is_none() || !target_dependent_condition(&expr) {
+        return fold_expr(expr);
+    }
+    ACTIVE_TARGET_GUARD_CONDITION.with(|slot| {
+        let previous = slot.replace(true);
+        let folded = fold_expr(expr);
+        slot.replace(previous);
+        folded
+    })
+}
+
+/// Collects unconditional user functions that can shadow a builtin during `function_exists()`.
+fn collect_top_level_user_functions(program: &[Stmt]) -> HashSet<String> {
+    let mut functions = HashSet::new();
+    collect_top_level_user_functions_from_block(program, &mut functions);
+    functions
+}
+
+/// Walks declaration-transparent compiler wrappers without treating conditional PHP blocks as eager.
+fn collect_top_level_user_functions_from_block(
+    program: &[Stmt],
+    functions: &mut HashSet<String>,
+) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } | StmtKind::FunctionVariantGroup { name, .. } => {
+                functions.insert(php_symbol_key(name));
+            }
+            StmtKind::Synthetic(body)
+            | StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                collect_top_level_user_functions_from_block(body, functions);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Propagates scalar constants across statements and control flow.

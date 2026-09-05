@@ -450,6 +450,10 @@ mod tests {
             callback_parameter_indices(lookup("usort").expect("usort builtin")),
             vec![1]
         );
+        assert_eq!(
+            callback_parameter_indices(lookup("pcntl_signal").expect("pcntl_signal builtin")),
+            vec![1]
+        );
         assert!(callback_parameter_indices(lookup("strlen").expect("strlen builtin")).is_empty());
     }
 
@@ -920,6 +924,14 @@ mod tests {
             ("count", BuiltinArgumentLowering::Count),
             ("date", BuiltinArgumentLowering::Date),
             ("json_decode", BuiltinArgumentLowering::JsonDecode),
+            ("pcntl_exec", BuiltinArgumentLowering::PcntlPreserveOmitted),
+            ("pcntl_signal", BuiltinArgumentLowering::PcntlPreserveOmitted),
+            ("pcntl_wait", BuiltinArgumentLowering::PcntlPreserveOmitted),
+            ("pcntl_waitpid", BuiltinArgumentLowering::PcntlPreserveOmitted),
+            ("pcntl_waitid", BuiltinArgumentLowering::PcntlPreserveOmitted),
+            ("pcntl_sigprocmask", BuiltinArgumentLowering::PcntlPreserveOmitted),
+            ("pcntl_sigwaitinfo", BuiltinArgumentLowering::PcntlPreserveOmitted),
+            ("pcntl_sigtimedwait", BuiltinArgumentLowering::PcntlPreserveOmitted),
             (
                 "preg_replace_callback",
                 BuiltinArgumentLowering::PregReplaceCallback,

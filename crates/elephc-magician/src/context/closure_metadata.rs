@@ -6,12 +6,17 @@
 //!
 //! Key details:
 //! - Bound receivers/scopes and by-reference captures remain explicit runtime metadata.
+//! - Foreign PCNTL handler closures retain the eval context that owns their callable metadata.
 
 use super::*;
 
 /// Callable target represented by a PHP-visible eval `Closure` object.
 #[derive(Clone)]
 pub enum EvalClosureObjectTarget {
+    ForeignContext {
+        target: Box<EvalClosureObjectTarget>,
+        owner: pcntl_runtime::EvalPcntlContextLease,
+    },
     Named(String),
     BoundNamed {
         name: String,
@@ -35,6 +40,14 @@ pub enum EvalClosureObjectTarget {
         native_class: Option<String>,
         bridge_scope: Option<String>,
     },
+}
+
+#[cfg(not(test))]
+impl EvalClosureObjectTarget {
+    /// Returns whether this callable depends on metadata retained by another eval context.
+    pub(crate) fn contains_foreign_context(&self) -> bool {
+        matches!(self, Self::ForeignContext { .. })
+    }
 }
 
 /// Runtime value captured by an eval closure literal.

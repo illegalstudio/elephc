@@ -14,6 +14,7 @@ use crate::{BuiltinId, BuiltinRequirement};
 const BCMATH: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_bcmath")];
 const CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_crypto")];
 const PHAR: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_phar")];
+const PCNTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_pcntl")];
 const TLS: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_tls")];
 const ZLIB: &[BuiltinRequirement] = &[BuiltinRequirement::SystemLibrary("z")];
 const ICONV_MACOS: &[BuiltinRequirement] = &[BuiltinRequirement::MacOsLibrary("iconv")];
@@ -25,6 +26,48 @@ const REGEX: &[BuiltinRequirement] = &[BuiltinRequirement::RuntimeCapability("pc
 
 /// Returns fixed neutral requirements for one canonical shared contract ID.
 pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement] {
+    if matches_name(
+        id,
+        &[
+            "pcntl_alarm",
+            "pcntl_async_signals",
+            "pcntl_daemon",
+            "pcntl_exec",
+            "pcntl_errno",
+            "pcntl_fork",
+            "pcntl_get_last_error",
+            "pcntl_getcpu",
+            "pcntl_getcpuaffinity",
+            "pcntl_getpriority",
+            "pcntl_getqos_class",
+            "pcntl_setcpuaffinity",
+            "pcntl_setns",
+            "pcntl_setpriority",
+            "pcntl_setqos_class",
+            "pcntl_signal",
+            "pcntl_signal_dispatch",
+            "pcntl_signal_get_handler",
+            "pcntl_sigprocmask",
+            "pcntl_sigtimedwait",
+            "pcntl_sigwaitinfo",
+            "pcntl_strerror",
+            "pcntl_unshare",
+            "pcntl_wait",
+            "pcntl_waitid",
+            "pcntl_waitpid",
+            "pcntl_wexitstatus",
+            "pcntl_wifcontinued",
+            "pcntl_wifexited",
+            "pcntl_wifsignaled",
+            "pcntl_wifstopped",
+            "pcntl_wstopsig",
+            "pcntl_wtermsig",
+            "posix_setpgid",
+            "posix_setsid",
+        ],
+    ) {
+        return PCNTL;
+    }
     if matches_name(
         id,
         &[

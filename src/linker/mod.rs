@@ -70,9 +70,9 @@ pub(crate) fn bridges_in(
     bridges::bridges_in(link_libraries)
 }
 
-/// Maps one bridge library name to its canonical PHP extension, when distinct.
-pub(crate) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
-    bridges::php_extension_for_lib(lib_name)
+/// Maps one bridge library name to the PHP extensions identified by linking that bridge.
+pub(crate) fn php_extensions_for_lib(lib_name: &str) -> &'static [&'static str] {
+    bridges::php_extensions_for_lib(lib_name)
 }
 
 /// Returns native libraries required by the selected optional PDO bridge profile.

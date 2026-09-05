@@ -218,6 +218,15 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal retain register
     emitter.instruction("jmp __rt_incref");                                     // retain one eval-owned boxed Mixed cell
 
+    label_c_global(emitter, "__elephc_eval_pcntl_aot_signal_handler");
+    abi::emit_symbol_address(emitter, "r10", "__rt_pcntl_handler_value");
+    emitter.instruction("mov rax, QWORD PTR [r10 + rdi*8]");                    // load the AOT table's original boxed PHP handler
+    emitter.instruction("test rax, rax");                                      // untouched entries have no handler owner
+    emitter.instruction("jz __elephc_eval_pcntl_aot_signal_handler_none_x86");  // return null for an empty table entry
+    emitter.instruction("jmp __rt_incref");                                    // give eval an independent owner of the handler value
+    emitter.label("__elephc_eval_pcntl_aot_signal_handler_none_x86");
+    emitter.instruction("ret");                                                // return the null pointer already held in rax
+
     label_c_global(emitter, "__elephc_eval_value_final_object_identity");
     emitter.instruction("mov rax, rdi");                                        // inspect the C boxed Mixed argument without changing refcounts
     emitter.instruction("test rax, rax");                                       // null handles cannot release an object
@@ -254,6 +263,19 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
 
     label_c_global(emitter, "__elephc_eval_warning");
     emitter.instruction("jmp __rt_diag_warning");                               // emit or suppress one eval runtime warning
+
+    label_c_global(emitter, "__elephc_eval_fatal");
+    emitter.instruction("mov rdx, rsi");                                        // move fatal length into the stderr write-length register
+    emitter.instruction("mov rsi, rdi");                                        // move fatal pointer into the stderr write-buffer register
+    emitter.instruction("mov edi, 2");                                          // select stderr for the unsuppressible fatal diagnostic
+    emitter.instruction("mov eax, 1");                                          // select Linux write for the fatal diagnostic
+    emitter.instruction("syscall");                                             // write the unsuppressible fatal diagnostic
+    abi::emit_exit(emitter, UNCAUGHT_EXIT_STATUS);
+
+    label_c_global(emitter, "__elephc_eval_set_pcntl_dispatching");
+    abi::emit_symbol_address(emitter, "r9", "__rt_pcntl_dispatching");
+    emitter.instruction("mov QWORD PTR [r9], rdi");                             // publish Magician handler execution to the Fiber guard
+    emitter.instruction("ret");                                                 // return to the Rust interpreter
 
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal release register

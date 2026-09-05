@@ -70,6 +70,8 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) web: bool,
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
+    pcntl_async_signals: bool,
+    pcntl_signal_handlers: bool,
     pub(super) epilogue_label: Option<String>,
     block_labels: Vec<String>,
 }
@@ -89,6 +91,8 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
+        let pcntl_async_signals = module_uses_pcntl_async_signals(module);
+        let pcntl_signal_handlers = module_uses_pcntl_signal_handlers(module);
         let function_fragment = label_fragment(&function.name);
         // Indexed by raw block id, matching `Function::block()`'s positional lookup.
         // The platform-local prefix keeps every intra-function label out of the object's
@@ -133,6 +137,8 @@ impl<'a> FunctionContext<'a> {
             web: false,
             gc_stats,
             heap_debug,
+            pcntl_async_signals,
+            pcntl_signal_handlers,
             epilogue_label,
             block_labels,
         }
@@ -165,6 +171,16 @@ impl<'a> FunctionContext<'a> {
             label_fragment(prefix),
             self.shared.next_label_id()
         )
+    }
+
+    /// Returns whether this module needs automatic PCNTL dispatch safe points.
+    pub(super) const fn uses_pcntl_async_signals(&self) -> bool {
+        self.pcntl_async_signals
+    }
+
+    /// Returns whether this module owns process-wide PCNTL handler registrations.
+    pub(super) const fn uses_pcntl_signal_handlers(&self) -> bool {
+        self.pcntl_signal_handlers
     }
 
     /// Emits an unconditional target-aware branch to one local assembly label.
@@ -208,14 +224,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select the aliased storage address after runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select the aliased storage address after runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select the aliased storage address after runtime promotion
                     }
@@ -348,7 +364,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns whether this slot receives an EIR store or a typed runtime writeback.
     pub(super) fn local_slot_has_store(&self, slot: LocalSlotId) -> bool {
-        self.local_analysis.has_store(slot) || self.openssl_encrypt_writes_local(slot)
+        self.local_analysis.has_store(slot)
+            || self.openssl_encrypt_writes_local(slot)
+            || self.pcntl_writes_local(slot)
     }
 
     /// Returns whether an `openssl_encrypt()` call writes its GCM tag into this local.
@@ -370,6 +388,37 @@ impl<'a> FunctionContext<'a> {
                     .get(5)
                     .and_then(|value| self.loaded_local_slot(*value))
                     == Some(slot)
+        })
+    }
+
+    /// Returns whether a typed PCNTL wait or signal operation writes an output to `slot`.
+    fn pcntl_writes_local(&self, slot: LocalSlotId) -> bool {
+        self.function.instructions.iter().any(|inst| {
+            let output_indices: &[usize] = match inst.immediate {
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
+                    crate::ir::PcntlRuntime::Wait,
+                ))) => &[0, 2],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
+                    crate::ir::PcntlRuntime::WaitPid,
+                ))) => &[1, 3],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
+                    crate::ir::PcntlRuntime::WaitId,
+                ))) => &[2, 4],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
+                    crate::ir::PcntlRuntime::SignalMask,
+                ))) => &[2],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(
+                    crate::ir::PcntlRuntime::SignalTimedWait
+                    | crate::ir::PcntlRuntime::SignalWaitInfo,
+                ))) => &[1],
+                _ => return false,
+            };
+            output_indices.iter().copied().any(|index| {
+                inst.operands
+                    .get(index)
+                    .and_then(|value| self.loaded_local_slot(*value))
+                    == Some(slot)
+            })
         })
     }
 
@@ -557,14 +606,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell loading after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell loading after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell loading after a runtime promotion
                     }
@@ -670,14 +719,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell storage after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell storage after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
@@ -784,14 +833,14 @@ impl<'a> FunctionContext<'a> {
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
                     Arch::AArch64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // select ref-cell storage after a runtime promotion
                             &format!("cbnz {}, {}", state_reg, ref_cell)
-                        );                                                      // select ref-cell storage after a runtime promotion
+                        );
                     }
                     Arch::X86_64 => {
-                        self.emitter.instruction(
+                        self.emitter.instruction(                               // test the slot's runtime representation flag
                             &format!("test {}, {}", state_reg, state_reg)
-                        );                                                      // test the slot's runtime representation flag
+                        );
                         self.emitter
                             .instruction(&format!("jne {}", ref_cell));           // select ref-cell storage after a runtime promotion
                     }
@@ -819,6 +868,23 @@ impl<'a> FunctionContext<'a> {
                 ty
             )));
         }
+        self.release_local_before_refcounted_writeback(slot)
+    }
+
+    /// Releases a refcounted or boxed local value before a runtime-owned output replaces it.
+    pub(super) fn release_local_before_refcounted_writeback(
+        &mut self,
+        slot: LocalSlotId,
+    ) -> Result<()> {
+        let ty = self.local_php_type(slot)?.codegen_repr();
+        if !(matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_))
+            || ty.is_refcounted())
+        {
+            return Err(CodegenIrError::unsupported(format!(
+                "refcounted writeback into PHP type {:?}",
+                ty
+            )));
+        }
         match self.local_slot_representation(slot) {
             LocalSlotRepresentation::Raw => {
                 let offset = self.local_offset(slot)?;
@@ -827,8 +893,8 @@ impl<'a> FunctionContext<'a> {
             LocalSlotRepresentation::RefCell => self.release_ref_cell_value(slot, &ty)?,
             LocalSlotRepresentation::Dynamic => {
                 let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
-                let ref_cell = self.next_label("string_writeback_release_ref_cell");
-                let done = self.next_label("string_writeback_release_done");
+                let ref_cell = self.next_label("refcounted_writeback_release_ref_cell");
+                let done = self.next_label("refcounted_writeback_release_done");
                 let state_reg = abi::secondary_scratch_reg(self.emitter);
                 abi::load_at_offset(self.emitter, state_reg, state_offset);
                 match self.emitter.target.arch {
@@ -1190,6 +1256,37 @@ impl<'a> FunctionContext<'a> {
             .copied()
             .ok_or_else(|| CodegenIrError::invalid_module(format!("missing try handler token {}", token)))
     }
+}
+
+/// Scans every emitted function-like body for `pcntl_async_signals()` state changes.
+fn module_uses_pcntl_async_signals(module: &Module) -> bool {
+    module_uses_pcntl_operation(module, crate::ir::PcntlRuntime::AsyncSignals)
+}
+
+/// Scans every emitted function-like body for `pcntl_signal()` registrations.
+pub(super) fn module_uses_pcntl_signal_handlers(module: &Module) -> bool {
+    module_uses_pcntl_operation(module, crate::ir::PcntlRuntime::Signal)
+}
+
+/// Scans every emitted function-like body for one typed PCNTL operation.
+fn module_uses_pcntl_operation(module: &Module, target: crate::ir::PcntlRuntime) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .any(|function| {
+            function.instructions.iter().any(|inst| {
+                matches!(
+                    inst.immediate,
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(found))) if found == target
+                )
+            })
+        })
 }
 
 /// Rejects local ref-cell operations whose frame representation spans multiple words.

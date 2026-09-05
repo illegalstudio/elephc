@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::codegen_support::platform::Platform;
+use crate::codegen_support::platform::{Platform, Target};
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
 use crate::types::curl_constants::CURL_INT_CONSTANTS;
@@ -20,6 +20,7 @@ use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
+use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
@@ -49,13 +50,21 @@ use crate::types::PhpType;
 /// for the SAPI mapping.
 pub(crate) fn collect_constants(
     program: &Program,
-    target_platform: Platform,
+    target: Target,
 ) -> HashMap<String, (ExprKind, PhpType)> {
+    let target_platform = target.platform;
     let mut constants = HashMap::new();
     constants.insert(
         "PHP_OS".to_string(),
         (
             ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "PHP_OS_FAMILY".to_string(),
+        (
+            ExprKind::StringLiteral(target_platform.php_os_family_name().to_string()),
             PhpType::Str,
         ),
     );
@@ -273,9 +282,15 @@ pub(crate) fn collect_constants(
         );
     }
     // `ext/curl` constants materialize from the frozen `CURL_INT_CONSTANTS` table
-    // unconditionally — like JSON_*, their value is a compile-time literal that needs no
+    // unconditionally. Like JSON_*, their value is a compile-time literal that needs no
     // libcurl link, even in a program that never mentions curl.
     for (name, value) in CURL_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in pcntl_int_constants(target) {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),
@@ -450,16 +465,43 @@ mod tests {
     /// Verifies fnmatch constants follow target platform.
     #[test]
     fn test_fnmatch_constants_follow_target_platform() {
-        let mac = collect_constants(&vec![], Platform::MacOS);
+        use crate::codegen_support::platform::Arch;
+
+        let mac = collect_constants(&vec![], Target::new(Platform::MacOS, Arch::AArch64));
         assert_eq!(int_constant(&mac, "FNM_NOESCAPE"), 1);
         assert_eq!(int_constant(&mac, "FNM_PATHNAME"), 2);
         assert_eq!(int_constant(&mac, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&mac, "FNM_CASEFOLD"), 16);
 
-        let linux = collect_constants(&vec![], Platform::Linux);
+        let linux = collect_constants(&vec![], Target::new(Platform::Linux, Arch::AArch64));
         assert_eq!(int_constant(&linux, "FNM_NOESCAPE"), 2);
         assert_eq!(int_constant(&linux, "FNM_PATHNAME"), 1);
         assert_eq!(int_constant(&linux, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&linux, "FNM_CASEFOLD"), 16);
+    }
+
+    /// Verifies PCNTL constants are seeded with target-specific values and availability.
+    #[test]
+    fn test_pcntl_constants_follow_target_platform() {
+        use crate::codegen_support::platform::{AppleVariant, Arch};
+
+        let mac = collect_constants(&vec![], Target::new(Platform::MacOS, Arch::AArch64));
+        assert_eq!(int_constant(&mac, "SIGCHLD"), 20);
+        assert_eq!(int_constant(&mac, "PCNTL_EAGAIN"), 35);
+        assert!(mac.contains_key("PRIO_DARWIN_BG"));
+        assert!(!mac.contains_key("CLONE_NEWNS"));
+
+        let linux = collect_constants(&vec![], Target::new(Platform::Linux, Arch::AArch64));
+        assert_eq!(int_constant(&linux, "SIGCHLD"), 17);
+        assert_eq!(int_constant(&linux, "PCNTL_EAGAIN"), 11);
+        assert!(linux.contains_key("CLONE_NEWNS"));
+        assert!(!linux.contains_key("PRIO_DARWIN_BG"));
+
+        let ios = collect_constants(
+            &vec![],
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+        );
+        assert!(!ios.contains_key("SIGCHLD"));
+        assert!(!ios.contains_key("PCNTL_EAGAIN"));
     }
 }

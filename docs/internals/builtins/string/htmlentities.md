@@ -2,7 +2,7 @@
 title: "htmlentities() — internals"
 description: "Compiler internals for htmlentities(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 448
+  order: 483
 ---
 
 ## `htmlentities()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/htmlentities.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/htmlentities.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L553) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:610](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L610) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

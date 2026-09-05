@@ -36,7 +36,7 @@ pub(crate) fn lower_intval_base(ctx: &mut FunctionContext<'_>, inst: &Instructio
     match ctx.value_php_type(value)?.codegen_repr() {
         PhpType::Str => lower_intval_base_from_string(ctx, value, base)?,
         PhpType::Mixed => lower_intval_base_from_mixed(ctx, value, base)?,
-        _ => super::strings::load_as_int(ctx, value, "intval")?,
+        _ => super::strings::load_as_explicit_int(ctx, value, "intval")?,
     }
     store_if_result(ctx, inst)
 }
@@ -197,7 +197,7 @@ fn emit_settype_int_conversion(ctx: &mut FunctionContext<'_>, value: ValueId) ->
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
-            abi::emit_float_result_to_int_result(ctx.emitter);
+            super::strings::emit_explicit_float_result_to_int(ctx);
         }
         PhpType::Str => {
             ctx.load_value_to_result(value)?;
@@ -445,6 +445,9 @@ pub(crate) fn lower_class_name_lookup(
         PhpType::Object(_) => {
             ctx.load_value_to_result(value)?;
             emit_dynamic_object_class_name(ctx, name);
+        }
+        PhpType::Callable if name == "get_class" => {
+            emit_string_result(ctx, b"Closure");
         }
         PhpType::Mixed | PhpType::Union(_) if super::has_eval_context(ctx) => {
             return super::lower_eval_object_class_name(ctx, inst, value, name);
@@ -919,16 +922,25 @@ fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
 /// Emits class-name lookup for a boxed Mixed value that may contain an object.
 fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let empty_label = ctx.next_label("get_class_mixed_empty");
+    let closure_label = ctx.next_label("get_class_mixed_closure");
     let done_label = ctx.next_label("get_class_mixed_done");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            if name == "get_class" {
+                ctx.emitter.instruction("cmp x0, #10");                         // runtime tag 10 identifies boxed Closure values
+                ctx.emitter.instruction(&format!("b.eq {}", closure_label));    // return PHP's builtin Closure class name
+            }
             ctx.emitter.instruction("cmp x0, #6");                              // require a boxed object payload for class-name lookup
             ctx.emitter
                 .instruction(&format!("b.ne {}", empty_label));                 // non-object Mixed payloads produce an empty class name
             ctx.emitter.instruction("mov x0, x1");                              // expose the unboxed object pointer to the object lookup path
         }
         Arch::X86_64 => {
+            if name == "get_class" {
+                ctx.emitter.instruction("cmp rax, 10");                         // runtime tag 10 identifies boxed Closure values
+                ctx.emitter.instruction(&format!("je {}", closure_label));      // return PHP's builtin Closure class name
+            }
             ctx.emitter.instruction("cmp rax, 6");                              // require a boxed object payload for class-name lookup
             ctx.emitter
                 .instruction(&format!("jne {}", empty_label));                  // non-object Mixed payloads produce an empty class name
@@ -937,6 +949,12 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     }
     emit_dynamic_object_class_name(ctx, name);
     abi::emit_jump(ctx.emitter, &done_label);
+
+    if name == "get_class" {
+        ctx.emitter.label(&closure_label);
+        emit_string_result(ctx, b"Closure");
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
 
     ctx.emitter.label(&empty_label);
     emit_string_result(ctx, b"");

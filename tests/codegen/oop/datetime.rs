@@ -1280,6 +1280,23 @@ echo count($z), "|", $z[0], "|", (in_array("Europe/Paris", $z) ? "y" : "n"),
     assert_eq!(out, "419|Africa/Abidjan|y|419");
 }
 
+/// Keeps a pruned conditional class shadow from suppressing builtin DateTimeZone resolution.
+#[test]
+fn test_conditional_datetimezone_shadow_does_not_panic() {
+    let out = compile_and_run(
+        r#"<?php
+$legacy = PHP_VERSION_ID < 80100;
+if ($legacy) {
+    class DateTimeZone {
+        public static function listIdentifiers() { return []; }
+    }
+}
+var_dump(in_array('UTC', DateTimeZone::listIdentifiers()));
+"#,
+    );
+    assert_eq!(out, "bool(true)\n");
+}
+
 /// Verifies `DateTimeZone::listIdentifiers($group)` filters the identifier list by region-group
 /// bitmask (and `ALL_WITH_BC` adds the backward-compat zones, combined masks union the regions),
 /// keeping the result a usable `array<string>` so `count`/indexing/`in_array` work; the

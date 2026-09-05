@@ -66,4 +66,17 @@ impl RuntimeValueOps for ElephcRuntimeOps {
     impl_construction_raw_ops!();
     impl_lifecycle_scalar_ops!();
     impl_numeric_string_ops!();
+
+    /// Retains the original boxed handler stored in the compiled runtime's PCNTL table.
+    fn pcntl_aot_signal_handler(
+        &mut self,
+        signal: i64,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let pointer = unsafe { __elephc_eval_pcntl_aot_signal_handler(signal) };
+        if pointer.is_null() {
+            Ok(None)
+        } else {
+            Self::handle(pointer).map(Some)
+        }
+    }
 }

@@ -171,7 +171,12 @@ pub(in crate::interpreter) fn eval_expr(
             eval_instanceof_expr(value, target, context, scope, values)
         }
         EvalExpr::LoadVar(name) => {
-            visible_scope_cell(context, scope, name).map_or_else(|| values.null(), Ok)
+            if let Some(value) = visible_scope_cell(context, scope, name) {
+                Ok(value)
+            } else {
+                values.warning(&format!("Warning: Undefined variable ${name}\n"))?;
+                values.null()
+            }
         }
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::Match {
@@ -285,7 +290,14 @@ pub(in crate::interpreter) fn eval_expr(
             )
         }
         EvalExpr::NullCoalesce { value, default } => {
-            let value = eval_expr(value, context, scope, values)?;
+            let value = if let EvalExpr::LoadVar(name) = value.as_ref() {
+                match visible_scope_cell(context, scope, name) {
+                    Some(value) => value,
+                    None => values.null()?,
+                }
+            } else {
+                eval_expr(value, context, scope, values)?
+            };
             if values.is_null(value)? {
                 eval_expr(default, context, scope, values)
             } else {

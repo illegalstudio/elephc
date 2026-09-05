@@ -212,17 +212,16 @@ impl Checker {
         )
     }
 
-    /// Normalizes arguments for a builtin or extern function call, rejecting unknown named
-    /// arguments and not allowing unknown named arguments to flow into the variadic parameter.
-    pub(crate) fn normalize_builtin_call_args(
+    /// Plans builtin arguments while retaining which parameter slots came from caller source.
+    pub(crate) fn plan_builtin_call_args(
         &self,
         sig: &FunctionSig,
         args: &[Expr],
         span: crate::span::Span,
         callee_desc: &str,
         env: &TypeEnv,
-    ) -> Result<Vec<Expr>, CompileError> {
-        self.normalize_call_args(sig, args, span, callee_desc, true, false, env)
+    ) -> Result<call_args::CallArgPlan, CompileError> {
+        self.plan_call_args(sig, args, span, callee_desc, true, false, env)
     }
 
     /// Shared argument normalization for both user-defined and builtin calls. Delegates to the
@@ -237,8 +236,32 @@ impl Checker {
         allow_unknown_named_variadic: bool,
         env: &TypeEnv,
     ) -> Result<Vec<Expr>, CompileError> {
+        Ok(self
+            .plan_call_args(
+                sig,
+                args,
+                span,
+                callee_desc,
+                trim_trailing_defaults,
+                allow_unknown_named_variadic,
+                env,
+            )?
+            .normalized_args())
+    }
+
+    /// Produces the shared planner result and maps semantic planning errors to checker diagnostics.
+    fn plan_call_args(
+        &self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        callee_desc: &str,
+        trim_trailing_defaults: bool,
+        allow_unknown_named_variadic: bool,
+        env: &TypeEnv,
+    ) -> Result<call_args::CallArgPlan, CompileError> {
         let assoc_spread_sources = assoc_spread_sources(args, env);
-        let plan = call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
             sig,
             args,
             span,
@@ -247,8 +270,7 @@ impl Checker {
             allow_unknown_named_variadic,
             &assoc_spread_sources,
         )
-        .map_err(|err| call_arg_plan_error(sig, callee_desc, err))?;
-        Ok(plan.normalized_args())
+        .map_err(|err| call_arg_plan_error(sig, callee_desc, err))
     }
 
     /// Returns true if `expected` and `actual` are compatible according to PHP assignment

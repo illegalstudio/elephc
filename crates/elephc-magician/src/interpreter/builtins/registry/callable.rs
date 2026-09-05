@@ -125,6 +125,18 @@ pub(in crate::interpreter) fn eval_callable_with_optional_scope(
     lexical_scope: Option<&ElephcEvalScope>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvaluatedCallable, EvalStatus> {
+    if let Some(owner) =
+        crate::context::pcntl_runtime::begin_callable_use(callback, context)
+    {
+        let Some(owner_context) = (unsafe { owner.context_ptr().as_ref() }) else {
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        let callback = eval_callable_with_optional_scope(callback, owner_context, None, values)?;
+        return Ok(EvaluatedCallable::ForeignContext {
+            callback: Box::new(callback),
+            owner,
+        });
+    }
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
         return eval_object_callable(callback, context, values);
     }
@@ -178,6 +190,12 @@ pub(in crate::interpreter) fn eval_object_callable(
 /// Converts a PHP-visible eval `Closure` object target into the shared callback enum.
 fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> EvaluatedCallable {
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, owner } => {
+            EvaluatedCallable::ForeignContext {
+                callback: Box::new(eval_closure_object_target_callable(target)),
+                owner: owner.clone(),
+            }
+        }
         EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {
             name: name.clone(),
             display_name: name.clone(),

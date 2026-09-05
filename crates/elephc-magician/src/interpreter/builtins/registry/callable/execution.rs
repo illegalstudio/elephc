@@ -17,6 +17,17 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_evaluated_callable_with_values(
+                callback,
+                evaluated_args,
+                owner_context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
                 return eval_closure_with_evaluated_args(
@@ -59,7 +70,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_object_switch_during_pcntl_dispatch(
+                *object,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => eval_native_method_with_evaluated_args_unchecked_bridge_scope(
                 *object,
                 native_class,
@@ -71,14 +89,22 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 values,
             ),
             None => eval_method_call_result(*object, method, evaluated_args, context, values),
-        },
+            }
+        }
         EvaluatedCallable::StaticMethod {
             class_name,
             method,
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_switch_during_pcntl_dispatch(
+                class_name,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => {
                 eval_native_static_method_with_evaluated_args_unchecked_bridge_scope(
                     native_class,
@@ -110,6 +136,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                     values,
                 ),
             },
+            }
         },
     }
 }
@@ -215,6 +242,17 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_evaluated_callable_with_call_user_func_values(
+                callback,
+                evaluated_args,
+                owner_context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
         }
@@ -264,7 +302,14 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_object_switch_during_pcntl_dispatch(
+                *object,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => {
                 eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                     *object,
@@ -285,14 +330,22 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                 context,
                 values,
             ),
-        },
+            }
+        }
         EvaluatedCallable::StaticMethod {
             class_name,
             method,
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_switch_during_pcntl_dispatch(
+                class_name,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => {
                 eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                     native_class,
@@ -312,6 +365,7 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                 context,
                 values,
             ),
+            }
         },
     }
 }
@@ -325,6 +379,17 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = eval_clear_evaluated_arg_ref_targets(evaluated_args);
     match callback {
+        EvaluatedCallable::ForeignContext { callback, owner } => {
+            let Some(owner_context) = (unsafe { owner.context_ptr().as_mut() }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            eval_evaluated_callable_with_by_value_call_args(
+                callback,
+                evaluated_args,
+                owner_context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_args(name, evaluated_args, context, values)
         }
@@ -373,7 +438,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_object_switch_during_pcntl_dispatch(
+                *object,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => {
                 eval_native_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                     *object,
@@ -394,14 +466,22 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                 context,
                 values,
             ),
-        },
+            }
+        }
         EvaluatedCallable::StaticMethod {
             class_name,
             method,
             called_class,
             native_class,
             bridge_scope,
-        } => match native_class {
+        } => {
+            eval_reject_fiber_switch_during_pcntl_dispatch(
+                class_name,
+                method,
+                context,
+                values,
+            )?;
+            match native_class {
             Some(native_class) => {
                 eval_native_static_method_with_evaluated_args_for_call_user_func_unchecked_bridge_scope(
                     native_class,
@@ -421,6 +501,7 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                 context,
                 values,
             ),
+            }
         },
     }
 }

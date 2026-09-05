@@ -18,6 +18,7 @@ pub(super) fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "Error",
         "ArithmeticError",
         "DivisionByZeroError",
+        "FiberError",
         "ValueError",
         "TypeError",
     ]
@@ -69,6 +70,7 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
             "Error",
             "ArithmeticError",
             "DivisionByZeroError",
+            "FiberError",
             "ValueError",
             "TypeError",
         ]

@@ -79,7 +79,7 @@ pub(crate) fn lower(
     let mut module = Module::new(target);
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;
-    let constants = crate::codegen::collect_constants(program, target.platform);
+    let constants = crate::codegen::collect_constants(program, target);
     module.global_constants = constants.clone();
     let fiber_return_sigs = crate::ir_lower::fibers::collect_fiber_return_sigs(program);
     populate_metadata(&mut module, program, check_result);

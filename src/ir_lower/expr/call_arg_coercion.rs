@@ -235,11 +235,29 @@ pub(super) fn by_ref_array_arg_needs_mixed_storage(
 }
 
 /// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
-/// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
 pub(super) fn lower_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_options(ctx, sig, args, false)
+}
+
+/// Lowers arguments while preserving omission of trailing default-only parameter slots.
+pub(super) fn lower_args_with_signature_trimming_trailing_defaults(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_options(ctx, sig, args, true)
+}
+
+/// Applies shared argument planning with optional elision of trailing defaults.
+fn lower_args_with_signature_options(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    trim_trailing_defaults: bool,
 ) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
@@ -247,7 +265,11 @@ pub(super) fn lower_args_with_signature(
     let literal_bound = rewrite_literal_param_bindings(sig, args);
     let args = literal_bound.as_deref().unwrap_or(args);
     if crate::types::call_args::has_named_args(args) {
-        let operands = lower_named_args_with_signature(ctx, sig, args);
+        let operands = if trim_trailing_defaults {
+            lower_named_args_with_signature_options(ctx, sig, args, true)
+        } else {
+            lower_named_args_with_signature(ctx, sig, args)
+        };
         return coerce_operands_to_params(ctx, sig, operands);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
@@ -284,11 +306,13 @@ pub(super) fn lower_args_with_signature(
         .enumerate()
         .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
         .collect();
-    for idx in fixed_arg_count..regular_param_count {
-        let Some(Some(default)) = sig.defaults.get(idx) else {
-            break;
-        };
-        operands.push(lower_expr(ctx, default).value);
+    if !trim_trailing_defaults {
+        for idx in fixed_arg_count..regular_param_count {
+            let Some(Some(default)) = sig.defaults.get(idx) else {
+                break;
+            };
+            operands.push(lower_expr(ctx, default).value);
+        }
     }
     if sig.variadic.is_some() {
         let tail = if args.len() > regular_param_count {

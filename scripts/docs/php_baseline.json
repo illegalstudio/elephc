@@ -1,6 +1,7 @@
 {
  "php_version": "8.4.20",
  "generated_at": "2026-08-11",
+ "target": "macos-aarch64",
  "extensions": [
   "bcmath",
   "bz2",

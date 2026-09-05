@@ -66,10 +66,9 @@ struct TestBridgeStaticlib {
     lib_name: &'static str,
     /// Cargo package that produces `lib<lib_name>.a` for tests.
     package: &'static str,
-    /// PHP extension name this bridge provides, mirroring the `php_extension` field of
-    /// the production bridge table in `src/linker/bridges.rs`. `None` for bridges with no
-    /// distinct PHP extension (the tz bridge folds into `date`; eval is internal).
-    php_extension: Option<&'static str>,
+    /// PHP extension names this bridge identifies, mirroring `php_extensions` in the
+    /// production bridge table. Empty for bridges with no distinct extension surface.
+    php_extensions: &'static [&'static str],
 }
 
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
@@ -77,54 +76,59 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
-        php_extension: Some("openssl"),
+        php_extensions: &["openssl"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_pdo",
         package: "elephc-pdo",
         // This archive backs both PDO and mysqli; the injected surface reports which
         // extension is actually present, matching the production bridge table.
-        php_extension: None,
+        php_extensions: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_crypto",
         package: "elephc-crypto",
-        php_extension: Some("hash"),
+        php_extensions: &["hash"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_bcmath",
         package: "elephc-bcmath",
-        php_extension: Some("bcmath"),
+        php_extensions: &["bcmath"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_iconv",
         package: "elephc-iconv",
-        php_extension: Some("iconv"),
+        php_extensions: &["iconv"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_pcntl",
+        package: "elephc-pcntl",
+        php_extensions: &["pcntl", "posix"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
-        php_extension: Some("Phar"),
+        php_extensions: &["Phar"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_tz",
         package: "elephc-tz",
-        php_extension: None,
+        php_extensions: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_image",
         package: "elephc-image",
-        php_extension: Some("gd"),
+        php_extensions: &["gd"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_magician",
         package: "elephc-magician",
-        php_extension: None,
+        php_extensions: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_curl",
         package: "elephc-curl",
-        php_extension: Some("curl"),
+        php_extensions: &["curl"],
     },
 ];
 
@@ -274,7 +278,7 @@ fn requested_bridge_staticlibs<'a>(actual_link_libs: &[&str]) -> Vec<&'a TestBri
 }
 
 /// Maps the bridges a fixture links to the PHP extension names `extension_loaded()` must
-/// report, mirroring what `pipeline::backend` does with `linker::php_extension_for_lib`.
+/// report, mirroring what `pipeline::backend` does with `linker::php_extensions_for_lib`.
 ///
 /// That table lives in the `elephc` BINARY crate and is unreachable from an integration
 /// test, so the mapping is carried on `TEST_BRIDGE_STATICLIBS` — the list this harness
@@ -282,13 +286,13 @@ fn requested_bridge_staticlibs<'a>(actual_link_libs: &[&str]) -> Vec<&'a TestBri
 pub(crate) fn test_linked_extensions(required_libraries: &[String]) -> Vec<String> {
     let mut extensions: Vec<String> = Vec::new();
     for bridge in TEST_BRIDGE_STATICLIBS {
-        let Some(extension) = bridge.php_extension else {
+        if !required_libraries.iter().any(|lib| lib == bridge.lib_name) {
             continue;
-        };
-        if required_libraries.iter().any(|lib| lib == bridge.lib_name)
-            && !extensions.iter().any(|existing| existing == extension)
-        {
-            extensions.push(extension.to_string());
+        }
+        for extension in bridge.php_extensions {
+            if !extensions.iter().any(|existing| existing == extension) {
+                extensions.push(extension.to_string());
+            }
         }
     }
     extensions
@@ -304,9 +308,13 @@ mod bridge_extension_tests {
         let linked = vec![
             "elephc_pdo".to_string(),
             "elephc_iconv".to_string(),
+            "elephc_pcntl".to_string(),
             "elephc_curl".to_string(),
         ];
-        assert_eq!(test_linked_extensions(&linked), ["iconv", "curl"]);
+        assert_eq!(
+            test_linked_extensions(&linked),
+            ["iconv", "pcntl", "posix", "curl"]
+        );
     }
 }
 

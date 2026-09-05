@@ -14387,15 +14387,18 @@ pub(crate) fn image_declarations() -> Program {
 ///
 /// `force` (set by `--with-image`) bypasses the usage scan so the image surface
 /// is always injected, making it available even when auto-detection would not see
-/// the usage.
+/// the usage. When every image-shaped call is owned by a user declaration or a
+/// canonical guarded polyfill, no bridge surface is injected and the absent-
+/// capability branch is activated before name resolution.
 pub fn inject_if_used(
     program: crate::parser::ast::Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> crate::parser::ast::Program {
     if !force && !detect::program_uses_image(&program) {
-        return program;
+        return detect::activate_guarded_image_polyfills(program);
     }
+    let program = detect::deactivate_guarded_image_polyfills(program);
     // Injecting the surface is pay-for-use; what gets injected was not. A program calling two GD
     // functions was dragging Imagick, Gmagick and Cairo through codegen, the assembler and the
     // linker — measured at 162,630 lines of assembly against 9,501.

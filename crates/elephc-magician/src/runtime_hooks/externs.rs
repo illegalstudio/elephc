@@ -309,6 +309,9 @@ unsafe extern "C" {
     /// Returns the PHP object handle (`spl_object_id`) for object-tagged eval values.
     pub(super) fn __elephc_eval_value_object_handle(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
+    pub(super) fn __elephc_eval_fatal(message_ptr: *const u8, message_len: u64);
+    /// Mirrors Magician's signal-dispatch region into the generated runtime Fiber guard.
+    pub(super) fn __elephc_eval_set_pcntl_dispatching(active: u64);
     pub(super) fn __elephc_eval_value_null() -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
@@ -432,6 +435,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_final_object_identity(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_release(value: *mut RuntimeCell);
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Retains the original boxed handler value installed by compiled AOT code.
+    pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;
     /// Installs the optional eval dynamic object destructor callback.
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
 }

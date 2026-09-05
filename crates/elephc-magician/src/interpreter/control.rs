@@ -6,9 +6,10 @@
 //! - `crate::interpreter` execution, builtin, and call-dispatch helpers.
 //!
 //! Key details:
-//! - Runtime cells are opaque handles; these types do not own or release values by themselves.
+//! - Runtime cells are opaque handles; only foreign PCNTL callables own a
+//!   temporary lease that keeps their eval context alive through dispatch.
 
-use crate::context::EvalReferenceTarget;
+use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
 
 /// Internal statement-control result used to propagate eval returns and loops.
@@ -85,6 +86,10 @@ pub(super) enum EvalByRefBindingMode<'a> {
 
 /// One already evaluated PHP callback supported by the eval dispatcher.
 pub(super) enum EvaluatedCallable {
+    ForeignContext {
+        callback: Box<EvaluatedCallable>,
+        owner: EvalPcntlContextLease,
+    },
     Named {
         name: String,
         display_name: String,

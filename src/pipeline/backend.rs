@@ -177,7 +177,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     // during instruction lowering.
     let mut linked_extensions: Vec<String> = Vec::new();
     for lib in &planned_link_libraries {
-        if let Some(ext) = linker::php_extension_for_lib(lib) {
+        for ext in linker::php_extensions_for_lib(lib) {
             if !linked_extensions.iter().any(|existing| existing == ext) {
                 linked_extensions.push(ext.to_string());
             }

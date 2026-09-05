@@ -89,20 +89,33 @@ pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
 /// that has not already been freed.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext) {
-    if !ctx.is_null() {
-        #[cfg(all(feature = "curl", not(test)))]
-        if let Some(context) = unsafe { ctx.as_mut() } {
-            let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
-            context
-                .stream_resources_mut()
-                .release_curl_easy_private_values(&mut values);
-        }
-        if let Some(context) = unsafe { ctx.as_ref() } {
-            context.unregister_dynamic_object_context();
-        }
-        crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
-        drop(Box::from_raw(ctx));
+    if ctx.is_null() || crate::context::pcntl_runtime::defer_context_free(ctx) {
+        return;
     }
+    unsafe { drop_eval_context_now(ctx) };
+}
+
+/// Unregisters every process-global callback into one context, then drops it immediately.
+///
+/// PCNTL calls this only after the last retained signal handler stops referencing
+/// a context whose normal ABI teardown was deferred.
+///
+/// # Safety
+/// `ctx` must point to a live context allocated by `__elephc_eval_context_new`
+/// and no process-global PCNTL handler may still reference it.
+pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
+    #[cfg(all(feature = "curl", not(test)))]
+    if let Some(context) = unsafe { ctx.as_mut() } {
+        let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
+        context
+            .stream_resources_mut()
+            .release_curl_easy_private_values(&mut values);
+    }
+    if let Some(context) = unsafe { ctx.as_ref() } {
+        context.unregister_dynamic_object_context();
+    }
+    crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
+    unsafe { drop(Box::from_raw(ctx)) };
 }
 
 /// Records source metadata for the next eval fragment executed in this context.

@@ -10,6 +10,8 @@
 //!   and closures are traversed across every user-authored EIR body collection.
 //! - Fatal terminators, fatal runtime subsets, `exit`/`die`, `eval`, and opaque
 //!   invocation surfaces are rejected with a complete static call path.
+//! - PCNTL operations are refused because a hosted library must not mutate or
+//!   replace the embedding process or its signal dispositions.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -256,6 +258,19 @@ fn validate_runtime_call<'a>(
     queue: &mut VecDeque<(String, Vec<String>)>,
     path: &[String],
 ) -> Result<(), CompileError> {
+    if let Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) =
+        instruction.immediate.as_ref()
+    {
+        return Err(CompileError::new(
+            instruction.span.unwrap_or(export.span),
+            &format!(
+                "export '{}' reaches PCNTL operation '{}' through {}; PCNTL process and signal operations cannot be used with --emit cdylib/staticlib because they can mutate or replace the embedding host process",
+                export.name,
+                target.as_eir(),
+                path.join(" -> "),
+            ),
+        ));
+    }
     let Some(target) = runtime_function_id(instruction.immediate.as_ref()) else {
         return Ok(());
     };

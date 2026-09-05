@@ -27,6 +27,7 @@ env:
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
+    -p elephc-pcntl
     -p elephc-magician
     -p elephc-web
     -p elephc-instr
@@ -83,8 +84,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
         # managed-native-smoke). Build
@@ -178,8 +180,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
         # managed-native-smoke). Build
@@ -268,8 +271,9 @@ jobs:
         # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
         # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
-        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
-        # libelephc_web.a, and libelephc_curl.a (curl; its symbols stay
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a, and
+        # libelephc_curl.a (curl; its symbols stay
         # unresolved until a PHP-program link pulls in a real managed
         # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
         # managed-native-smoke). Build

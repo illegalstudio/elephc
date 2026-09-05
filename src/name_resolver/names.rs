@@ -306,7 +306,7 @@ pub(super) fn resolve_constant_name(
         return name.as_canonical();
     }
     if name.is_unqualified() {
-        if matches!(name.as_str(), "PHP_OS" | "SID") {
+        if matches!(name.as_str(), "PHP_OS" | "PHP_OS_FAMILY" | "SID") {
             return name.as_canonical();
         }
         if let Some(alias) = name
@@ -349,9 +349,10 @@ pub(super) fn resolve_constant_name(
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
 /// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
-        if matches!(
+    if matches!(
             name,
             "PHP_OS"
+                | "PHP_OS_FAMILY"
                 // The PHP version surface, baked per compilation from `--php-version` / `--web`
                 // by `codegen::prescan::collect_constants` — same mechanism as `PHP_OS`.
                 | "PHP_VERSION"
@@ -407,8 +408,11 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "ICONV_IMPL"
                 | "ICONV_VERSION"
         ) {
-            return true;
-        }
+        return true;
+    }
+    if crate::types::pcntl_constants::is_pcntl_int_constant(name) {
+        return true;
+    }
     // Shared source-of-truth slices for JSON, stream/socket, session, array, math, iconv,
     // and curl
     // constants. CURL_INT_CONSTANTS is always in this chain (like JSON_INT_CONSTANTS) so a

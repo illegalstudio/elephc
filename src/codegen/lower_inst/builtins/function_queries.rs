@@ -68,7 +68,11 @@ pub(in crate::codegen::lower_inst) fn literal_function_exists(
 ) -> bool {
     ctx.function_by_name(bare_name).is_some()
         || ctx.has_extern_function(bare_name)
-        || is_php_visible_builtin_function_for_profile(bare_name, strict_php)
+        || is_php_visible_builtin_function_for_target(
+            bare_name,
+            strict_php,
+            ctx.emitter.target,
+        )
         || (!bare_name.contains('\\')
             && crate::name_resolver::is_date_procedural_alias(bare_name))
 }
@@ -212,7 +216,10 @@ fn dynamic_function_exists_candidates(
     for extern_decl in &ctx.module.extern_decls {
         push(&extern_decl.name, None);
     }
-    for name in supported_builtin_function_names_for_profile(strict_php) {
+    for name in supported_builtin_function_names_for_target(
+        strict_php,
+        ctx.emitter.target,
+    ) {
         push(name, None);
     }
     for name in crate::name_resolver::date_procedural_alias_names() {
@@ -233,9 +240,9 @@ pub(in crate::codegen::lower_inst) fn emit_variant_function_exists(ctx: &mut Fun
             ctx.emitter.instruction(&format!("cset {}, ne", result_reg));       // return true only when a function variant is active
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // test whether an include activated this function variant
                 &format!("test {}, {}", result_reg, result_reg)
-            );                                                                  // test whether an include has activated this function variant
+            );
             ctx.emitter.instruction("setne al");                                // return true only when a function variant is active
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }

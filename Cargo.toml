@@ -19,8 +19,9 @@ categories = ["compilers", "command-line-utilities"]
 # libelephc_phar.a (runtime phar:// archive reads),
 # libelephc_tz.a (DateTimeZone introspection: getLocation/getTransitions/
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
-# libelephc_web.a (--web prefork HTTP server), libelephc_magician.a
-# (optional eval runtime), and libelephc_curl.a (ext/curl bridge)
+# libelephc_web.a (--web prefork HTTP server), libelephc_pcntl.a (process
+# control), libelephc_magician.a (optional eval runtime), and libelephc_curl.a
+# (ext/curl bridge)
 # into target/<profile>/, where linker.rs locates
 # them for programs that use those features. elephc-curl declares libcurl's
 # `extern "C"` symbols without linking them, so being a default member never
@@ -28,8 +29,8 @@ categories = ["compilers", "command-line-utilities"]
 # see crates/elephc-curl/build.rs for how its own gated tests opt into a real
 # link.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician", "crates/elephc-curl"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician", "crates/elephc-curl"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl"]
 resolver = "2"
 
 [[bin]]
@@ -73,6 +74,9 @@ flate2 = "1"
 bzip2-rs = "0.1"
 elephc-phar = { path = "crates/elephc-phar" }
 elephc-probe = { path = "crates/elephc-probe" }
+# PCNTL's small rlib surface owns the target constant catalog shared by AOT and runtime eval;
+# emitted programs still link its staticlib only when PCNTL usage is detected.
+elephc-pcntl = { path = "crates/elephc-pcntl" }
 # indicatif drives the live per-phase spinner and cargo-style "Linking" event
 # lines shown while compiling; console (indicatif's own transitive color/TTY
 # crate) is added directly too since errors/report.rs and timings.rs style text

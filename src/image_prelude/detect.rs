@@ -18,6 +18,9 @@
 //!   class (new, type hints, `instanceof`, `catch`, `extends`/`implements`, trait
 //!   uses, `use` imports). This mirrors `pdo_prelude::detect` but adds the
 //!   procedural-call check, since image use is dominated by free functions.
+//! - A user declaration or canonical `if (!function_exists(...))` polyfill owns
+//!   its image-shaped function name. Such calls do not enable the image bridge;
+//!   unrelated image calls and image-class references in the same program still do.
 //! - Soundness over precision: a missed reference would drop the prelude and turn
 //!   a valid program into an "undefined function/class" error, so the `match`es
 //!   are exhaustive (no wildcard arm). Adding an AST node forces this file to be
@@ -82,7 +85,203 @@ fn starts_with_ci(s: &str, prefix: &str) -> bool {
 /// Returns whether any top-level statement references an image symbol, so the
 /// prelude must be injected ahead of user code.
 pub(super) fn program_uses_image(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    let image_function_references = usage
+        .functions
+        .iter()
+        .filter(|name| string_is_image_function(name))
+        .collect::<Vec<_>>();
+    let all_image_functions_are_user_owned = !image_function_references.is_empty()
+        && image_function_references.iter().all(|name| {
+            crate::opcache_prelude::detect::program_declares(program, name)
+                || program_has_guarded_polyfill(program, name)
+        });
+    let references_image_class = usage.classes.iter().any(|name| string_is_image_class(name));
+    if all_image_functions_are_user_owned && !references_image_class {
+        return false;
+    }
     program.iter().any(stmt_refs_image)
+}
+
+/// Returns whether a normalized or source-spelled function name belongs to the image surface.
+fn string_is_image_function(name: &str) -> bool {
+    let name = name.rsplit('\\').next().unwrap_or(name);
+    starts_with_ci(name, "image")
+        || starts_with_ci(name, "exif_")
+        || starts_with_ci(name, "iptc")
+        || starts_with_ci(name, "cairo_")
+        || name.eq_ignore_ascii_case("getimagesize")
+        || name.eq_ignore_ascii_case("getimagesizefromstring")
+        || name.eq_ignore_ascii_case("read_exif_data")
+        || name.eq_ignore_ascii_case("gd_info")
+}
+
+/// Returns whether a normalized or source-spelled class name belongs to the image surface.
+fn string_is_image_class(name: &str) -> bool {
+    let name = name.rsplit('\\').next().unwrap_or(name);
+    IMAGE_CLASSES
+        .iter()
+        .any(|class| name.eq_ignore_ascii_case(class))
+}
+
+/// Returns the literal function name tested by a canonical `!function_exists(...)` guard.
+fn missing_function_guard_target(condition: &Expr) -> Option<&str> {
+    let ExprKind::Not(inner) = &condition.kind else {
+        return None;
+    };
+    let ExprKind::FunctionCall { name, args } = &inner.kind else {
+        return None;
+    };
+    if !name
+        .as_canonical()
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("function_exists")
+    {
+        return None;
+    }
+    match args.as_slice() {
+        [Expr {
+            kind: ExprKind::StringLiteral(target),
+            ..
+        }] => Some(target.trim_start_matches('\\')),
+        _ => None,
+    }
+}
+
+/// Finds a canonical guarded user polyfill for `target` through declaration-transparent blocks.
+fn program_has_guarded_polyfill(program: &[Stmt], target: &str) -> bool {
+    program.iter().any(|stmt| match &stmt.kind {
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            missing_function_guard_target(condition).is_some_and(|guarded| {
+                guarded.eq_ignore_ascii_case(target)
+                    && crate::opcache_prelude::detect::program_declares(then_body, target)
+            }) || program_has_guarded_polyfill(then_body, target)
+                || elseif_clauses
+                    .iter()
+                    .any(|(_, body)| program_has_guarded_polyfill(body, target))
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| program_has_guarded_polyfill(body, target))
+        }
+        StmtKind::NamespaceBlock { body, .. }
+        | StmtKind::IncludeOnceGuard { body, .. }
+        | StmtKind::Synthetic(body) => program_has_guarded_polyfill(body, target),
+        _ => false,
+    })
+}
+
+/// Activates guarded image polyfills after the detector decides the image capability is absent.
+pub(super) fn activate_guarded_image_polyfills(program: Vec<Stmt>) -> Vec<Stmt> {
+    program
+        .into_iter()
+        .flat_map(|mut stmt| {
+            let guarded_target = match &stmt.kind {
+                StmtKind::If {
+                    condition,
+                    then_body,
+                    ..
+                } => missing_function_guard_target(condition).filter(|target| {
+                    string_is_image_function(target)
+                        && crate::opcache_prelude::detect::program_declares(then_body, target)
+                }),
+                _ => None,
+            };
+            if guarded_target.is_some() {
+                let StmtKind::If { then_body, .. } = &mut stmt.kind else {
+                    unreachable!("guarded target only comes from an if statement");
+                };
+                return activate_guarded_image_polyfills(std::mem::take(then_body));
+            }
+            match &mut stmt.kind {
+                StmtKind::NamespaceBlock { body, .. }
+                | StmtKind::IncludeOnceGuard { body, .. }
+                | StmtKind::Synthetic(body) => {
+                    *body = activate_guarded_image_polyfills(std::mem::take(body));
+                }
+                _ => {}
+            }
+            vec![stmt]
+        })
+        .collect()
+}
+
+/// Removes guarded image polyfill declarations when the image capability is present.
+pub(super) fn deactivate_guarded_image_polyfills(program: Vec<Stmt>) -> Vec<Stmt> {
+    program
+        .into_iter()
+        .flat_map(|mut stmt| {
+            let guarded_polyfill = match &stmt.kind {
+                StmtKind::If {
+                    condition,
+                    then_body,
+                    ..
+                } => missing_function_guard_target(condition).is_some_and(|target| {
+                    string_is_image_function(target)
+                        && crate::opcache_prelude::detect::program_declares(then_body, target)
+                }),
+                _ => false,
+            };
+            if guarded_polyfill {
+                let StmtKind::If {
+                    elseif_clauses,
+                    else_body,
+                    ..
+                } = &mut stmt.kind
+                else {
+                    unreachable!("guarded polyfill only comes from an if statement");
+                };
+                if elseif_clauses.is_empty() {
+                    return deactivate_guarded_image_polyfills(
+                        std::mem::take(else_body).unwrap_or_default(),
+                    );
+                }
+                let (condition, then_body) = elseif_clauses.remove(0);
+                let remaining_elseifs = std::mem::take(elseif_clauses)
+                    .into_iter()
+                    .map(|(condition, body)| {
+                        (condition, deactivate_guarded_image_polyfills(body))
+                    })
+                    .collect();
+                let replacement_else = std::mem::take(else_body)
+                    .map(deactivate_guarded_image_polyfills);
+                stmt.kind = StmtKind::If {
+                    condition,
+                    then_body: deactivate_guarded_image_polyfills(then_body),
+                    elseif_clauses: remaining_elseifs,
+                    else_body: replacement_else,
+                };
+                return vec![stmt];
+            }
+            match &mut stmt.kind {
+                StmtKind::If {
+                    then_body,
+                    elseif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    *then_body = deactivate_guarded_image_polyfills(std::mem::take(then_body));
+                    for (_, body) in elseif_clauses {
+                        *body = deactivate_guarded_image_polyfills(std::mem::take(body));
+                    }
+                    if let Some(body) = else_body {
+                        *body = deactivate_guarded_image_polyfills(std::mem::take(body));
+                    }
+                }
+                StmtKind::NamespaceBlock { body, .. }
+                | StmtKind::IncludeOnceGuard { body, .. }
+                | StmtKind::Synthetic(body) => {
+                    *body = deactivate_guarded_image_polyfills(std::mem::take(body));
+                }
+                _ => {}
+            }
+            vec![stmt]
+        })
+        .collect()
 }
 
 /// Returns whether `name`'s last segment is an image *function*: any GD function
@@ -90,24 +289,14 @@ pub(super) fn program_uses_image(program: &[Stmt]) -> bool {
 /// their prefixes, the procedural `cairo_*` family via the `cairo_` prefix,
 /// plus the non-prefixed core/alias names.
 fn name_is_image_function(name: &Name) -> bool {
-    name.last_segment().is_some_and(|s| {
-        starts_with_ci(s, "image")
-            || starts_with_ci(s, "exif_")
-            || starts_with_ci(s, "iptc")
-            || starts_with_ci(s, "cairo_")
-            || s.eq_ignore_ascii_case("getimagesize")
-            || s.eq_ignore_ascii_case("getimagesizefromstring")
-            || s.eq_ignore_ascii_case("read_exif_data")
-            || s.eq_ignore_ascii_case("gd_info")
-    })
+    name.last_segment().is_some_and(string_is_image_function)
 }
 
 /// Returns whether `name`'s last segment is one of the image OOP classes,
 /// compared case-insensitively and tolerant of any namespace/leading-backslash
 /// form (`Imagick`, `\Imagick`, `\Foo\Imagick`).
 fn name_is_image_class(name: &Name) -> bool {
-    name.last_segment()
-        .is_some_and(|s| IMAGE_CLASSES.iter().any(|class| s.eq_ignore_ascii_case(class)))
+    name.last_segment().is_some_and(string_is_image_class)
 }
 
 /// Returns whether a static receiver names an image class (`Imagick::...`).
@@ -598,6 +787,46 @@ mod tests {
         assert!(program_uses_image(&parse(
             "<?php $im = imagecreatetruecolor(8, 8);"
         )));
+    }
+
+    /// A canonical guarded user polyfill does not opt the program into the image bridge.
+    #[test]
+    fn ignores_guarded_image_function_polyfill() {
+        assert!(!program_uses_image(&parse(
+            "<?php if (!function_exists('imagecreatetruecolor')) { function imagecreatetruecolor(int $w, int $h): string { return 'polyfill'; } } echo imagecreatetruecolor(8, 8);"
+        )));
+    }
+
+    /// Another unshadowed image function still enables the bridge beside a guarded polyfill.
+    #[test]
+    fn detects_unshadowed_image_call_beside_polyfill() {
+        assert!(program_uses_image(&parse(
+            "<?php if (!function_exists('imagecreatetruecolor')) { function imagecreatetruecolor(int $w, int $h): string { return 'polyfill'; } } echo imagecreatetruecolor(8, 8); imagepng($im);"
+        )));
+    }
+
+    /// Activating the absent-capability branch exposes its function declaration to later passes.
+    #[test]
+    fn activates_guarded_image_function_polyfill() {
+        let program = activate_guarded_image_polyfills(parse(
+            "<?php if (!function_exists('imagecreatetruecolor')) { function imagecreatetruecolor(int $w, int $h): string { return 'polyfill'; } } echo imagecreatetruecolor(8, 8);"
+        ));
+        assert!(crate::opcache_prelude::detect::program_declares(
+            &program,
+            "imagecreatetruecolor"
+        ));
+    }
+
+    /// Removes a guarded polyfill when another image reference enables the bridge.
+    #[test]
+    fn deactivates_guarded_image_function_polyfill() {
+        let program = deactivate_guarded_image_polyfills(parse(
+            "<?php if (!function_exists('imagecreatetruecolor')) { function imagecreatetruecolor(int $w, int $h): string { return 'polyfill'; } } imagepng($im);"
+        ));
+        assert!(!crate::opcache_prelude::detect::program_declares(
+            &program,
+            "imagecreatetruecolor"
+        ));
     }
 
     /// The non-prefixed core function `getimagesize` is detected.

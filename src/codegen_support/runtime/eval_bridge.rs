@@ -13,6 +13,7 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::UNCAUGHT_EXIT_STATUS;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 const EVAL_RUNTIME_TAG_MIXED: i64 = 7;
@@ -348,6 +349,36 @@ mod tests {
             !compare_prefix.contains("mov r10, QWORD PTR [rbp - 24]"),
             "the x86_64 opcode dispatch must preserve the ordering result:\n{compare}"
         );
+    }
+
+    /// Ensures eval fatals bypass warning suppression, write stderr, and exit 255 on each ABI.
+    #[test]
+    fn eval_fatal_wrapper_terminates_on_both_targets() {
+        for (target, stderr_fd, exit_status) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "mov x0, #2",
+                "mov x0, #255",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::AArch64),
+                "mov x0, #2",
+                "mov x0, #255",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "mov edi, 2",
+                "mov edi, 255",
+            ),
+        ] {
+            let asm = emit_for(target);
+            let body = body_of(&asm, "__elephc_eval_fatal");
+            assert!(body.contains(stderr_fd), "fatal must select stderr on {target:?}:\n{body}");
+            assert!(
+                body.contains(exit_status),
+                "fatal must exit with status 255 on {target:?}:\n{body}"
+            );
+        }
     }
 
     /// Returns the instruction lines following `label` up to the next exported helper.

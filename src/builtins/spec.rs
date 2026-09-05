@@ -33,10 +33,23 @@ pub struct BuiltinCheckCtx<'a> {
     pub name: &'a str,
     /// The unevaluated argument expressions passed to the builtin.
     pub args: &'a [crate::parser::ast::Expr],
+    /// Shared source-to-parameter plan retained across named/default normalization.
+    pub(crate) argument_plan: Option<&'a crate::types::call_args::CallArgPlan>,
     /// Source span of the call expression, for diagnostic messages.
     pub span: crate::span::Span,
     /// The type environment active at the call site.
     pub env: &'a crate::types::TypeEnv,
+}
+
+impl BuiltinCheckCtx<'_> {
+    /// Returns whether argument normalization synthesized this optional parameter's default.
+    pub fn argument_was_omitted(&self, parameter_index: usize) -> bool {
+        matches!(
+            self.argument_plan
+                .and_then(|plan| plan.regular_args.get(parameter_index)),
+            Some(crate::types::call_args::PlannedRegularArg::Default(_))
+        )
+    }
 }
 
 /// Rejects a process-spawning builtin on a target whose sandbox forbids `fork`.

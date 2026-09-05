@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Builtin enum names share PHP's class-like namespace and reject userland redeclarations.
+//! - `Pcntl\QosClass` is injected only for macOS targets, matching php-src's platform guard.
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -18,6 +19,7 @@ use super::Checker;
 
 const SORT_DIRECTION: &str = "SortDirection";
 const PROPERTY_HOOK_TYPE: &str = "PropertyHookType";
+const PCNTL_QOS_CLASS: &str = "Pcntl\\QosClass";
 
 /// Injects all builtin enum declarations into the checker.
 ///
@@ -82,7 +84,42 @@ pub(crate) fn inject_builtin_enums(
         crate::span::Span::dummy(),
         checker,
         next_class_id,
-    )
+    )?;
+
+    if checker.target.platform == crate::codegen::platform::Platform::MacOS
+        && !checker.target.is_ios()
+    {
+        ensure_builtin_enum_name_available(program, checker, PCNTL_QOS_CLASS)?;
+        insert_enum_metadata(
+            PCNTL_QOS_CLASS,
+            None,
+            [
+                "UserInteractive",
+                "UserInitiated",
+                "Default",
+                "Utility",
+                "Background",
+            ]
+            .into_iter()
+            .map(|name| EnumCaseInfo {
+                name: name.to_string(),
+                value: None,
+                attribute_names: Vec::new(),
+                attribute_args: Vec::new(),
+            })
+            .collect(),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            crate::span::Span::dummy(),
+            checker,
+            next_class_id,
+        )?;
+    }
+
+    Ok(())
 }
 
 /// Ensures a builtin enum name does not collide with any user-visible class-like symbol.

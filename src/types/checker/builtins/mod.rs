@@ -23,8 +23,9 @@ use super::Checker;
 
 pub(crate) use catalog::{
     all_supported_builtin_function_names, canonical_builtin_function_name,
-    is_php_visible_builtin_function_for_profile, is_supported_builtin_function,
-    strict_php_hidden_builtin, supported_builtin_function_names_for_profile,
+    is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
+    is_supported_builtin_function, strict_php_hidden_builtin,
+    supported_builtin_function_names_for_profile, supported_builtin_function_names_for_target,
 };
 #[cfg(test)]
 pub(crate) use catalog::is_php_visible_builtin_function;
@@ -104,6 +105,12 @@ impl Checker {
         // eagerly inferred by argument normalization. Their handlers inspect the
         // raw operands directly.
         let builtin_key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        if self.has_function_decl_folded(name)
+            && crate::builtins::registry::lookup(name).is_some()
+            && !catalog::builtin_is_available_for_target(name, self.target)
+        {
+            return Ok(None);
+        }
         // `--strict-php` hides extension builtins entirely: the call must fall
         // through to user-function resolution and the standard undefined-function
         // diagnostics, mirroring PHP where these names do not exist. This must
@@ -114,16 +121,19 @@ impl Checker {
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
         let normalized_args;
+        let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
             (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
-            normalized_args = self.normalize_builtin_call_args(
+            let plan = self.plan_builtin_call_args(
                 &sig,
                 args,
                 span,
                 &format!("Builtin '{}'", name),
                 env,
             )?;
+            normalized_args = plan.normalized_args();
+            builtin_arg_plan = Some(plan);
             normalized_args.as_slice()
         } else {
             args
@@ -148,11 +158,28 @@ impl Checker {
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
             crate::builtins::registry::check_arity(name, args.len(), span)?;
+            if !catalog::builtin_is_available_for_target(name, self.target) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "{}() is not available for the {} target",
+                        def.name, self.target
+                    ),
+                ));
+            }
             // One authority for every builtin that declares a by-reference parameter. Several
             // builtins used to hand-roll this check, which is a catalogue: the ones nobody
             // wrote it for silently accepted a literal and ran, where PHP raises an Error.
             for (index, arg) in args.iter().enumerate() {
                 if !def.ref_params.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                if matches!(
+                    builtin_arg_plan
+                        .as_ref()
+                        .and_then(|plan| plan.regular_args.get(index)),
+                    Some(crate::types::call_args::PlannedRegularArg::Default(_))
+                ) {
                     continue;
                 }
                 // `sort($a)`, `preg_match(..., $m)` and friends reach this local through its
@@ -276,6 +303,7 @@ impl Checker {
                 checker: self,
                 name,
                 args,
+                argument_plan: builtin_arg_plan.as_ref(),
                 span,
                 env,
             };

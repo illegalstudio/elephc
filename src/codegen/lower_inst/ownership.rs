@@ -185,6 +185,12 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_),
             )) => true,
+            Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::Pcntl(target),
+            )) => matches!(
+                target.result_ownership(),
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            ),
             _ => false,
         };
         return Ok(!result_is_fresh);
@@ -220,16 +226,16 @@ fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(
+            ctx.emitter.instruction(                                            // pass the loaded string pointer to validated heap release
                 &format!("mov {}, {}", result_reg, ptr_reg)
-            );                                                                  // pass the loaded string pointer to the validating heap-free helper
+            );
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
             if ptr_reg != result_reg {
-                ctx.emitter.instruction(
+                ctx.emitter.instruction(                                        // pass the loaded string pointer to validated heap release
                     &format!("mov {}, {}", result_reg, ptr_reg)
-                );                                                              // pass the loaded string pointer to the validating heap-free helper
+                );
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }

@@ -27,6 +27,202 @@ expect_builtin_arity_error!(
     "eval() takes exactly 1 argument"
 );
 
+expect_builtin_arity_error!(
+    test_error_pcntl_alarm_wrong_args,
+    "<?php pcntl_alarm();",
+    "pcntl_alarm() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_pcntl_fork_wrong_args,
+    "<?php pcntl_fork(1);",
+    "pcntl_fork() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_pcntl_daemon_wrong_args,
+    "<?php pcntl_daemon(false, false, false);",
+    "pcntl_daemon() takes at most 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_setpgid_wrong_args,
+    "<?php posix_setpgid(1);",
+    "posix_setpgid() takes exactly 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_posix_setsid_wrong_args,
+    "<?php posix_setsid(1);",
+    "posix_setsid() takes no arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_pcntl_getpriority_wrong_args,
+    "<?php pcntl_getpriority(1, 2, 3);",
+    "pcntl_getpriority() takes at most 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_pcntl_setpriority_wrong_args,
+    "<?php pcntl_setpriority();",
+    "pcntl_setpriority() takes 1 to 3 arguments"
+);
+
+#[cfg(target_os = "macos")]
+expect_builtin_arity_error!(
+    test_error_pcntl_setqos_class_wrong_args,
+    "<?php pcntl_setqos_class(Pcntl\\QosClass::Default, Pcntl\\QosClass::Utility);",
+    "pcntl_setqos_class() takes exactly 1 argument"
+);
+
+#[cfg(target_os = "macos")]
+expect_builtin_arity_error!(
+    test_error_pcntl_setqos_class_requires_argument,
+    "<?php pcntl_setqos_class();",
+    "pcntl_setqos_class() takes exactly 1 argument"
+);
+
+/// Verifies Darwin QoS selection accepts only the platform-injected enum type.
+#[cfg(target_os = "macos")]
+#[test]
+fn test_error_pcntl_setqos_class_requires_enum() {
+    expect_error(
+        "<?php pcntl_setqos_class(1);",
+        "pcntl_setqos_class() parameter $qos_class must be of type Pcntl\\QosClass",
+    );
+}
+
+/// Verifies PCNTL signatures reject non-integer operands before EIR lowering.
+#[test]
+fn test_error_pcntl_status_requires_int() {
+    expect_error(
+        "<?php pcntl_wifexited([]);",
+        "pcntl_wifexited() argument 1 must be int-compatible",
+    );
+}
+
+/// Verifies `pcntl_wait()` rejects a non-variable status output.
+#[test]
+fn test_error_pcntl_wait_status_must_be_variable() {
+    expect_error(
+        "<?php pcntl_wait(0);",
+        "pcntl_wait(): Argument #1 ($status) could not be passed by reference",
+    );
+}
+
+/// Verifies `pcntl_waitpid()` rejects a non-variable resource-usage output.
+#[test]
+fn test_error_pcntl_waitpid_resource_usage_must_be_variable() {
+    expect_error(
+        "<?php $status = 0; pcntl_waitpid(1, $status, 0, []);",
+        "pcntl_waitpid(): Argument #4 ($resource_usage) could not be passed by reference",
+    );
+}
+
+/// Verifies `pcntl_waitid()` rejects a non-variable signal-information output.
+#[test]
+fn test_error_pcntl_waitid_info_must_be_variable() {
+    expect_error(
+        "<?php pcntl_waitid(P_ALL, null, []);",
+        "pcntl_waitid(): Argument #3 ($info) could not be passed by reference",
+    );
+}
+
+/// Verifies PHP 8.5 `pcntl_waitid()` rejects a non-variable resource-usage output.
+#[test]
+fn test_error_pcntl_waitid_resource_usage_must_be_variable() {
+    expect_error(
+        "<?php pcntl_waitid(P_ALL, null, $info, WEXITED, []);",
+        "pcntl_waitid(): Argument #5 ($resource_usage) could not be passed by reference",
+    );
+}
+
+/// Verifies PCNTL signal sets reject values outside PHP's integer-coercible scalar set.
+#[test]
+fn test_error_pcntl_signal_mask_rejects_non_scalar_values() {
+    expect_error(
+        "<?php pcntl_sigprocmask(SIG_BLOCK, [[SIGUSR1]]);",
+        "pcntl_sigprocmask() parameter $signals must be an array of integer-coercible scalar values",
+    );
+}
+
+/// Rejects integer signal handlers other than PHP's two disposition constants.
+#[test]
+fn test_error_pcntl_signal_rejects_invalid_integer_handler() {
+    expect_error(
+        "<?php pcntl_signal(SIGUSR1, 2);",
+        "pcntl_signal() integer handler must be SIG_DFL (0) or SIG_IGN (1)",
+    );
+}
+
+/// Verifies `pcntl_exec()` rejects a non-array argv operand.
+#[test]
+fn test_error_pcntl_exec_requires_argument_array() {
+    expect_error(
+        "<?php pcntl_exec('/bin/echo', 'value');",
+        "pcntl_exec() parameter $args must be an array",
+    );
+}
+
+/// Verifies `pcntl_exec()` rejects array values that PHP cannot coerce to strings.
+#[test]
+fn test_error_pcntl_exec_requires_string_array_values() {
+    expect_error(
+        "<?php pcntl_exec('/bin/echo', [fn() => 1]);",
+        "pcntl_exec() array values must be coercible to string",
+    );
+}
+
+/// Verifies the prior-mask output is a writable variable.
+#[test]
+fn test_error_pcntl_signal_mask_output_must_be_variable() {
+    expect_error(
+        "<?php pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1], []);",
+        "pcntl_sigprocmask(): Argument #3 ($old_signals) could not be passed by reference",
+    );
+}
+
+/// Verifies Linux synchronous signal info is written only through a variable.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_error_pcntl_signal_wait_info_must_be_variable() {
+    expect_error(
+        "<?php pcntl_sigwaitinfo([SIGUSR1], []);",
+        "pcntl_sigwaitinfo(): Argument #2 ($info) could not be passed by reference",
+    );
+}
+
+/// Verifies Linux timed waits reject the default zero-duration timeout.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_error_pcntl_timed_signal_wait_requires_positive_timeout() {
+    expect_error(
+        "<?php pcntl_sigtimedwait([SIGUSR1]);",
+        "pcntl_sigtimedwait() requires a positive seconds or nanoseconds timeout",
+    );
+}
+
+/// Verifies Linux CPU affinity requires the optional-looking mask parameter.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_error_pcntl_setcpuaffinity_requires_cpu_ids() {
+    expect_error(
+        "<?php pcntl_setcpuaffinity();",
+        "pcntl_setcpuaffinity() parameter $cpu_ids must not be empty",
+    );
+}
+
+/// Verifies Linux CPU affinity rejects non-integer indexed-array storage.
+#[cfg(target_os = "linux")]
+#[test]
+fn test_error_pcntl_setcpuaffinity_requires_integer_array() {
+    expect_error(
+        "<?php pcntl_setcpuaffinity(cpu_ids: ['zero']);",
+        "pcntl_setcpuaffinity() parameter $cpu_ids must be an indexed integer array",
+    );
+}
+
 /// Verifies an eval barrier allows later reads of variables that eval may create dynamically.
 #[test]
 fn test_eval_barrier_allows_dynamic_variable_read() {

@@ -232,16 +232,23 @@ pub(super) fn eval_instanceof_expr(
     let value = eval_expr(value, context, scope, values)?;
     let result = match target {
         EvalInstanceOfTarget::ClassName(class_name) => {
-            if values.type_tag(value)? != EVAL_TAG_OBJECT {
-                return values.bool_value(false);
-            }
             let target_class = eval_instanceof_static_target_name(class_name, context)?;
-            eval_instanceof_object_result(value, &target_class, context, values)?
+            let tag = values.type_tag(value)?;
+            if tag == EVAL_TAG_CALLABLE && target_class.eq_ignore_ascii_case("Closure") {
+                true
+            } else if tag == EVAL_TAG_OBJECT {
+                eval_instanceof_object_result(value, &target_class, context, values)?
+            } else {
+                false
+            }
         }
         EvalInstanceOfTarget::Expr(target) => {
             let target = eval_expr(target, context, scope, values)?;
             let target_class = eval_instanceof_dynamic_target_name(target, context, values)?;
-            if values.type_tag(value)? == EVAL_TAG_OBJECT {
+            let tag = values.type_tag(value)?;
+            if tag == EVAL_TAG_CALLABLE && target_class.eq_ignore_ascii_case("Closure") {
+                true
+            } else if tag == EVAL_TAG_OBJECT {
                 eval_instanceof_object_result(value, &target_class, context, values)?
             } else {
                 false

@@ -39,8 +39,8 @@ pub(super) struct BridgeStaticlib {
     pub(super) apple_frameworks: &'static [&'static str],
     /// Whether the Linux link needs the dynamic loader library.
     pub(super) needs_libdl: bool,
-    /// Canonical PHP extension reported when this bridge is linked, if distinct.
-    pub(super) php_extension: Option<&'static str>,
+    /// Canonical PHP extensions reported when this bridge alone identifies their surfaces.
+    pub(super) php_extensions: &'static [&'static str],
     /// Required monitoring decision for work crossing this bridge boundary.
     pub(super) monitoring: MonitoringPolicy,
 }
@@ -56,7 +56,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
-        php_extension: Some("openssl"),
+        php_extensions: &["openssl"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -71,7 +71,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         // linked staticlib alone cannot identify a PHP extension. Reporting comes
         // from the injected PHP surface(s) instead: `pipeline::compile` passes
         // `linked_php_surfaces` ("PDO" / "mysqli") to the backend seeding.
-        php_extension: None,
+        php_extensions: &[],
         monitoring: MonitoringPolicy::Io {
             kind: IoKind::Database,
             wait: WaitPolicy::Measured,
@@ -87,7 +87,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The crypto bridge implements PHP's digest/HMAC `hash` extension.
-        php_extension: Some("hash"),
+        php_extensions: &["hash"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -99,7 +99,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The decimal bridge implements PHP's procedural `bcmath` extension.
-        php_extension: Some("bcmath"),
+        php_extensions: &["bcmath"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -111,7 +111,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The charset bridge implements PHP's procedural `iconv` extension.
-        php_extension: Some("iconv"),
+        php_extensions: &["iconv"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -123,7 +123,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The archive reader/writer is exposed by PHP as `Phar`.
-        php_extension: Some("Phar"),
+        php_extensions: &["Phar"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -135,7 +135,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // Timezone support folds into the always-present `date` extension.
-        php_extension: None,
+        php_extensions: &[],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -147,7 +147,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The image codec/drawing surface maps to PHP's `gd` extension.
-        php_extension: Some("gd"),
+        php_extensions: &["gd"],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -159,7 +159,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The sampling probe is an elephc-native diagnostic, not a PHP extension.
-        php_extension: None,
+        php_extensions: &[],
         monitoring: MonitoringPolicy::Infrastructure {
             reason: "sampling monitor implementation",
         },
@@ -173,7 +173,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // Exact per-function instrumentation is an elephc-native diagnostic.
-        php_extension: None,
+        php_extensions: &[],
         monitoring: MonitoringPolicy::Infrastructure {
             reason: "exact monitor implementation",
         },
@@ -187,10 +187,22 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The web bridge owns the PHP `session` extension surface.
-        php_extension: Some("session"),
+        php_extensions: &["session"],
         monitoring: MonitoringPolicy::Infrastructure {
             reason: "request boundary already opens monitoring slices and trace context",
         },
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_pcntl",
+        env_var: "ELEPHC_PCNTL_LIB_DIR",
+        crate_name: "elephc-pcntl",
+        flag_name: "pcntl",
+        whole_archive: false,
+        apple_frameworks: &[],
+        needs_libdl: true,
+        // The process-control bridge implements PHP's `pcntl` and `posix` extensions.
+        php_extensions: &["pcntl", "posix"],
+        monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
         lib_name: "elephc_magician",
@@ -201,7 +213,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
-        php_extension: None,
+        php_extensions: &[],
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
@@ -218,7 +230,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         ],
         needs_libdl: true,
         // The curl bridge implements PHP's libcurl-backed `curl` extension surface.
-        php_extension: Some("curl"),
+        php_extensions: &["curl"],
         monitoring: MonitoringPolicy::Io {
             kind: IoKind::Network,
             wait: WaitPolicy::Measured,
@@ -278,9 +290,9 @@ pub(super) fn bridges_in(
         .collect()
 }
 
-/// Maps one bridge library name to its canonical PHP extension, when distinct.
-pub(super) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
-    bridge_for_library(lib_name).and_then(|bridge| bridge.php_extension)
+/// Maps one bridge library name to the PHP extensions identified by linking that bridge.
+pub(super) fn php_extensions_for_lib(lib_name: &str) -> &'static [&'static str] {
+    bridge_for_library(lib_name).map_or(&[], |bridge| bridge.php_extensions)
 }
 
 /// Replaces located named bridge libraries with exact archive items and adds metadata.
@@ -1342,19 +1354,23 @@ mod tests {
             bridges_in(&libraries),
             vec![("elephc_tls", "tls"), ("elephc_magician", "eval")]
         );
-        assert_eq!(php_extension_for_lib("elephc_tls"), Some("openssl"));
+        assert_eq!(php_extensions_for_lib("elephc_tls"), ["openssl"]);
         // elephc_pdo backs two PHP surfaces (PDO, mysqli); reporting is
         // surface-based via `linked_php_surfaces`, never archive-based.
-        assert_eq!(php_extension_for_lib("elephc_pdo"), None);
-        assert_eq!(php_extension_for_lib("elephc_crypto"), Some("hash"));
-        assert_eq!(php_extension_for_lib("elephc_bcmath"), Some("bcmath"));
-        assert_eq!(php_extension_for_lib("elephc_phar"), Some("Phar"));
-        assert_eq!(php_extension_for_lib("elephc_image"), Some("gd"));
-        assert_eq!(php_extension_for_lib("elephc_web"), Some("session"));
-        assert_eq!(php_extension_for_lib("elephc_tz"), None);
-        assert_eq!(php_extension_for_lib("elephc_magician"), None);
-        assert_eq!(php_extension_for_lib("elephc_curl"), Some("curl"));
-        assert_eq!(php_extension_for_lib("elephc_bogus"), None);
+        assert!(php_extensions_for_lib("elephc_pdo").is_empty());
+        assert_eq!(php_extensions_for_lib("elephc_crypto"), ["hash"]);
+        assert_eq!(php_extensions_for_lib("elephc_bcmath"), ["bcmath"]);
+        assert_eq!(php_extensions_for_lib("elephc_phar"), ["Phar"]);
+        assert_eq!(php_extensions_for_lib("elephc_image"), ["gd"]);
+        assert_eq!(php_extensions_for_lib("elephc_web"), ["session"]);
+        assert_eq!(
+            php_extensions_for_lib("elephc_pcntl"),
+            ["pcntl", "posix"]
+        );
+        assert!(php_extensions_for_lib("elephc_tz").is_empty());
+        assert!(php_extensions_for_lib("elephc_magician").is_empty());
+        assert_eq!(php_extensions_for_lib("elephc_curl"), ["curl"]);
+        assert!(php_extensions_for_lib("elephc_bogus").is_empty());
     }
 
     /// Verifies an already-resolved bridge archive still receives libdl and framework metadata.

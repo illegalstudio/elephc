@@ -121,6 +121,49 @@ echo substr("/hello?name=elephc", get_index("/hello?name=elephc") + 1), "\n";
     assert_eq!(out, "name=elephc\nname=elephc\n");
 }
 
+/// Uses shortest-round-trip formatting for a lossy weak float-to-int deprecation.
+#[test]
+fn test_substr_float_offset_deprecation_preserves_exact_value() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$offset = (0.1 + 0.2) * $argc;
+echo substr("abc", $offset);
+"#,
+    );
+    assert_eq!(out.stdout, "abc");
+    assert!(
+        out.stderr.contains(
+            "Deprecated: Implicit conversion from float 0.30000000000000004 to int loses precision"
+        ),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Rejects NaN, infinity, and out-of-range floats at a weak int argument boundary.
+#[test]
+fn test_substr_nonrepresentable_float_offset_throws_type_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$n = $argc;
+foreach ([INF * $n, NAN * $n, 1e20 * $n] as $offset) {
+    try { echo substr("abc", $offset); }
+    catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out.stdout,
+        "substr(): Argument #2 ($offset) must be of type int, float given\n\
+substr(): Argument #2 ($offset) must be of type int, float given\n\
+substr(): Argument #2 ($offset) must be of type int, float given\n",
+        "success={} stderr={}",
+        out.success,
+        out.stderr
+    );
+    assert_eq!(out.stderr, "");
+}
+
 /// Verifies strpos returns the integer byte offset when the needle is found.
 /// Fixture: "Hello World" contains "World" starting at offset 6.
 #[test]

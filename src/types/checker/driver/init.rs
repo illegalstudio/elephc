@@ -20,8 +20,9 @@ use crate::types::iconv_constants::ICONV_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
-use crate::types::session_constants::SESSION_INT_CONSTANTS;
+use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::PhpType;
@@ -39,7 +40,7 @@ impl Checker {
     /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
-    /// * `target_platform` - The compilation target platform, stored for use in platform-specific
+    /// * `target` - The full compilation target, stored for platform- and Apple-variant-specific
     ///   type checks and library requirements.
     ///
     /// # Returns
@@ -47,6 +48,7 @@ impl Checker {
     pub(super) fn new(target: Target) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
         // The PHP version surface. Only the TYPES are declared here — the values are baked per
         // compilation from `--php-version` / `--web` by `codegen::prescan::collect_constants`,
         // exactly as `PHP_OS`'s value is baked from the target platform.
@@ -131,6 +133,9 @@ impl Checker {
         // curl and therefore never link the `elephc_curl` bridge. See
         // `crate::types::curl_constants` for why.
         for (name, _value) in CURL_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in pcntl_int_constants(target) {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`

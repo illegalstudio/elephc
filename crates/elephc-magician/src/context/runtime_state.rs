@@ -12,6 +12,25 @@
 use super::*;
 
 impl ElephcEvalContext {
+    /// Retains the foreign owner metadata needed to invoke one exported PCNTL handler callable.
+    pub(crate) fn retain_pcntl_foreign_callable(
+        &mut self,
+        callback: RuntimeCellHandle,
+        owner: pcntl_runtime::EvalPcntlContextLease,
+    ) {
+        self.pcntl_foreign_callables
+            .insert(callback.as_ptr() as usize, owner);
+    }
+
+    /// Returns the retained owner lease for a PCNTL callable exported into this context.
+    pub(crate) fn pcntl_foreign_callable_owner(
+        &self,
+        callback: RuntimeCellHandle,
+    ) -> Option<&pcntl_runtime::EvalPcntlContextLease> {
+        self.pcntl_foreign_callables
+            .get(&(callback.as_ptr() as usize))
+    }
+
     /// Returns true when the context has a dynamic or native function with this lowercase PHP name.
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name) || self.native_functions.contains_key(name)

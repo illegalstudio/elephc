@@ -149,6 +149,9 @@ pub(super) fn eval_reflection_function_closure_target_arg(
 /// Returns the function-like name exposed for a Closure-backed ReflectionFunction.
 pub(super) fn eval_reflection_function_closure_target_name(target: &EvalClosureObjectTarget) -> String {
     match target {
+        EvalClosureObjectTarget::ForeignContext { target, .. } => {
+            eval_reflection_function_closure_target_name(target)
+        }
         EvalClosureObjectTarget::Named(name)
         | EvalClosureObjectTarget::BoundNamed { name, .. } => name.clone(),
         EvalClosureObjectTarget::InvokableObject { .. } => String::from("__invoke"),

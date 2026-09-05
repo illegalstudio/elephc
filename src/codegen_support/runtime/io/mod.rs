@@ -293,8 +293,9 @@ pub(crate) use var_dump_object::{
 pub(crate) use var_dump_walk::{
     emit_var_dump_array_bool, emit_var_dump_array_float, emit_var_dump_array_int,
     emit_var_dump_array_str, emit_var_dump_close_container, emit_var_dump_emit_bool_line,
-    emit_var_dump_emit_float_line, emit_var_dump_emit_indexed_key, emit_var_dump_emit_int_line,
-    emit_var_dump_emit_null_line, emit_var_dump_emit_string_key, emit_var_dump_emit_string_line,
-    emit_var_dump_hash, emit_var_dump_indent_step, emit_var_dump_indexed,
-    emit_var_dump_open_container, emit_var_dump_pad, emit_var_dump_value, emit_var_dump_write,
+    emit_var_dump_emit_callable, emit_var_dump_emit_float_line, emit_var_dump_emit_indexed_key,
+    emit_var_dump_emit_int_line, emit_var_dump_emit_null_line, emit_var_dump_emit_string_key,
+    emit_var_dump_emit_string_line, emit_var_dump_hash, emit_var_dump_indent_step,
+    emit_var_dump_indexed, emit_var_dump_open_container, emit_var_dump_pad, emit_var_dump_value,
+    emit_var_dump_write,
 };

@@ -313,9 +313,11 @@ fn execute_program_reads_predefined_runtime_constants() {
     let program = parse_fragment(
         br#"echo PHP_EOL === "\n" ? "eol" : "bad"; echo ":";
 echo (PHP_OS === "Darwin" || PHP_OS === "Linux") ? "os" : "bad"; echo ":";
+echo (PHP_OS_FAMILY === "Darwin" || PHP_OS_FAMILY === "Linux") ? "family" : "bad"; echo ":";
 echo DIRECTORY_SEPARATOR; echo ":";
 echo PHP_INT_MAX > 9000000000000000000 ? "int" : "bad"; echo ":";
 echo defined("PHP_OS") ? "defined" : "bad"; echo ":";
+echo defined("PHP_OS_FAMILY") ? "family-defined" : "bad"; echo ":";
 echo defined("\\PHP_OS") ? "root" : "bad"; echo ":";
 echo defined("php_os") ? "bad" : "case"; echo ":";
 echo define("PHP_OS", "x") ? "bad" : "locked"; echo ":";
@@ -327,12 +329,36 @@ return PHP_INT_MAX;"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "eol:os:/:int:defined:root:case:locked:");
+    assert_eq!(
+        values.output,
+        "eol:os:family:/:int:defined:family-defined:root:case:locked:"
+    );
     assert_eq!(values.get(result), FakeValue::Int(i64::MAX));
     assert_eq!(
         values.warnings,
         vec![DEFINE_ALREADY_DEFINED_WARNING.to_string()]
     );
+}
+
+/// Verifies eval reads target-aware PCNTL constants from the shared bridge catalog.
+#[test]
+fn execute_program_reads_target_aware_pcntl_constants() {
+    let program = parse_fragment(
+        br#"echo SIGALRM; echo ":";
+echo defined("PCNTL_EAGAIN") ? "defined" : "missing"; echo ":";
+return PCNTL_EAGAIN;"#,
+    )
+    .expect("parse PCNTL constant fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "14:defined:");
+    #[cfg(target_os = "macos")]
+    assert_eq!(values.get(result), FakeValue::Int(35));
+    #[cfg(target_os = "linux")]
+    assert_eq!(values.get(result), FakeValue::Int(11));
 }
 /// Verifies missing eval dynamic constants fail through runtime status.
 #[test]

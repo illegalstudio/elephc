@@ -8,8 +8,8 @@
 //! - `super::scan::Lexer::next_tokens()` for every `"` encountered in a fragment.
 //!
 //! Key details:
-//! - Escape handling is byte-identical to the pre-interpolation double-quote table, so
-//!   `\$` still yields a literal `$` and never interpolates.
+//! - Escape handling covers PHP's simple, hexadecimal, and octal forms; `\$` still
+//!   yields a literal `$` and never interpolates.
 //! - Every synthetic token carries the line of the opening quote, keeping `__LINE__`
 //!   stable across multi-line literals.
 //! - PHP simple syntax allows exactly one `[offset]` or `->prop` after `$name`; anything
@@ -46,7 +46,7 @@ impl Lexer<'_> {
                         return Err(EvalParseError::UnterminatedString);
                     };
                     self.bump_char();
-                    push_double_quoted_escape(escaped, &mut current);
+                    self.push_double_quoted_escape(escaped, &mut current);
                 }
                 // Complex interpolation: `{` is only special when a `$` follows it.
                 '{' if self.peek_next_char() == Some('$') => {
@@ -256,6 +256,54 @@ impl Lexer<'_> {
             }
         }
     }
+
+    /// Appends one PHP double-quoted escape, consuming any hexadecimal or octal tail.
+    fn push_double_quoted_escape(&mut self, escaped: char, out: &mut String) {
+        match escaped {
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'v' => out.push('\x0b'),
+            'e' => out.push('\x1b'),
+            'f' => out.push('\x0c'),
+            '\\' => out.push('\\'),
+            '"' => out.push('"'),
+            '$' => out.push('$'),
+            'x' | 'X' => {
+                let mut digits = String::new();
+                while digits.len() < 2
+                    && self.peek_char().is_some_and(|ch| ch.is_ascii_hexdigit())
+                {
+                    digits.push(self.peek_char().expect("hex digit was checked"));
+                    self.bump_char();
+                }
+                if digits.is_empty() {
+                    out.push('\\');
+                    out.push(escaped);
+                } else {
+                    let byte = u8::from_str_radix(&digits, 16)
+                        .expect("one or two checked hexadecimal digits must parse");
+                    out.push(char::from(byte));
+                }
+            }
+            first @ '0'..='7' => {
+                let mut digits = String::from(first);
+                while digits.len() < 3
+                    && self.peek_char().is_some_and(|ch| matches!(ch, '0'..='7'))
+                {
+                    digits.push(self.peek_char().expect("octal digit was checked"));
+                    self.bump_char();
+                }
+                let byte = u16::from_str_radix(&digits, 8)
+                    .expect("checked octal digits must parse") as u8;
+                out.push(char::from(byte));
+            }
+            other => {
+                out.push('\\');
+                out.push(other);
+            }
+        }
+    }
 }
 
 /// Appends one already-tokenized interpolation part to the running stream, flushing the
@@ -304,27 +352,4 @@ fn tokenize_interpolated_fragment(
     );
     part.push(Token::new(TokenKind::RParen, line));
     Ok(part)
-}
-
-/// Appends the expansion of a double-quoted escape sequence to the pending literal text.
-///
-/// The table is intentionally identical to the pre-interpolation lexer: `\x`, octal and
-/// `\u{}` escapes remain unsupported here and keep their backslash, so this change alters
-/// no literal that lacks interpolation.
-fn push_double_quoted_escape(escaped: char, out: &mut String) {
-    match escaped {
-        'n' => out.push('\n'),
-        'r' => out.push('\r'),
-        't' => out.push('\t'),
-        'v' => out.push('\x0b'),
-        'e' => out.push('\x1b'),
-        'f' => out.push('\x0c'),
-        '\\' => out.push('\\'),
-        '"' => out.push('"'),
-        '$' => out.push('$'),
-        other => {
-            out.push('\\');
-            out.push(other);
-        }
-    }
 }

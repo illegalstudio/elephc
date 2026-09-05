@@ -84,6 +84,9 @@ pub(in crate::interpreter) fn eval_call(
     if name == "curl_multi_info_read" {
         return eval_builtin_curl_multi_info_read_call(args, context, scope, values);
     }
+    if name.starts_with("pcntl_") && eval_php_visible_builtin_exists(name) {
+        return eval_builtin_pcntl_call(name, args, context, scope, values);
+    }
     // `opcache_get_configuration` is prelude-provided on the native side (not a
     // catalog builtin), so eval dispatches it as a plain runtime handler rather than
     // through the PHP-visible builtin registry, keeping the two builtin sets in sync.
@@ -209,7 +212,11 @@ pub(in crate::interpreter) fn eval_dynamic_call(
             .ok()
             .and_then(|identity| context.closure_object_target(identity))
             .is_some();
-        if !is_closure_object {
+        let is_detached_pcntl_handler = context
+            .pcntl_foreign_callable_owner(callback)
+            .is_some()
+            || crate::context::pcntl_runtime::is_handler_callable(callback);
+        if !is_closure_object && !is_detached_pcntl_handler {
             eval_invokable_object_precheck(callback, context, values)?;
             let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
             return eval_invokable_object_call_result(callback, evaluated_args, context, values);

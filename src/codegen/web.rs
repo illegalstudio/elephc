@@ -74,6 +74,9 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     abi::emit_frame_prologue(emitter, RESET_FRAME_SIZE);
 
     let mut labels = LabelGen::new();
+    if super::context::module_uses_pcntl_signal_handlers(module) {
+        abi::emit_call_label(emitter, "__rt_pcntl_release_handlers");
+    }
     for record in data.static_locals() {
         emit_static_local_reset(emitter, record, &mut labels);
     }
@@ -238,15 +241,15 @@ fn emit_branch_if_equals_sentinel(emitter: &mut Emitter, label: &str) {
     abi::emit_load_int_immediate(emitter, scratch, UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // compare the property marker with the uninitialized sentinel
                 &format!("cmp {}, {}", abi::int_result_reg(emitter), scratch)
-            );                                                                  // compare the property marker against the uninitialized sentinel
+            );
             emitter.instruction(&format!("b.eq {}", label));                    // skip the release when the property was never written
         }
         Arch::X86_64 => {
-            emitter.instruction(
+            emitter.instruction(                                                // compare the property marker with the uninitialized sentinel
                 &format!("cmp {}, {}", abi::int_result_reg(emitter), scratch)
-            );                                                                  // compare the property marker against the uninitialized sentinel
+            );
             emitter.instruction(&format!("je {}", label));                      // skip the release when the property was never written
         }
     }

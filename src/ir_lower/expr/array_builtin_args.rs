@@ -74,10 +74,11 @@ pub(super) fn lower_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
+    let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
-    match argument_lowering {
+    let lowered = match argument_lowering {
         crate::builtins::semantics::BuiltinArgumentLowering::Count => {
             lower_count_args(ctx, sig, args)
         }
@@ -86,6 +87,9 @@ pub(super) fn lower_builtin_call_args(
         }
         crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
             lower_json_decode_args(ctx, sig, args)
+        }
+        crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted => {
+            lower_args_with_signature_trimming_trailing_defaults(ctx, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback
             if !crate::types::call_args::has_named_args(args)
@@ -129,7 +133,94 @@ pub(super) fn lower_builtin_call_args(
             lower_positional_builtin_args_with_signature(ctx, sig, args)
         }
         _ => lower_args_with_signature(ctx, sig, args),
+    };
+    for (name, ty) in pcntl_outputs {
+        ctx.set_local_logical_type(&name, ty);
     }
+    lowered
+}
+
+/// Widens PCNTL output storage before its write-only by-reference loads are lowered.
+fn prepare_pcntl_output_locals(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<(String, PhpType)> {
+    let mut outputs = Vec::new();
+    if !crate::types::call_args::has_named_args(args) && !args.iter().any(is_spread_arg) {
+        for (index, arg) in args.iter().enumerate() {
+            if let Some(output) = prepare_pcntl_output_local(ctx, canonical, index, arg) {
+                outputs.push(output);
+            }
+        }
+        return outputs;
+    }
+    let Some(sig) = sig else {
+        return outputs;
+    };
+    let call_span = args
+        .first()
+        .map(|arg| arg.span)
+        .unwrap_or_else(crate::span::Span::dummy);
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let Ok(plan) = crate::types::call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
+        sig,
+        args,
+        call_span,
+        regular_param_count,
+        false,
+        true,
+        &assoc_spread_sources(ctx, args),
+    ) else {
+        return outputs;
+    };
+    for (index, arg) in plan.regular_args.iter().enumerate() {
+        let crate::types::call_args::PlannedRegularArg::Source { expr, .. } = arg else {
+            continue;
+        };
+        if let Some(output) = prepare_pcntl_output_local(ctx, canonical, index, expr) {
+            outputs.push(output);
+        }
+    }
+    outputs
+}
+
+/// Widens one direct PCNTL output slot without reinterpreting its pre-call value.
+fn prepare_pcntl_output_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    parameter_index: usize,
+    value: &Expr,
+) -> Option<(String, PhpType)> {
+    let ty = match (canonical, parameter_index) {
+        ("pcntl_wait", 0) | ("pcntl_waitpid", 1) => PhpType::Int,
+        ("pcntl_wait", 2) | ("pcntl_waitpid", 3) => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Int),
+        },
+        ("pcntl_waitid", 2) => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        },
+        ("pcntl_waitid", 4) => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Int),
+        },
+        ("pcntl_sigprocmask", 2) => PhpType::Array(Box::new(PhpType::Int)),
+        ("pcntl_sigwaitinfo", 1) | ("pcntl_sigtimedwait", 1) => PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        },
+        _ => return None,
+    };
+    let ExprKind::Variable(name) = &value.kind else {
+        return None;
+    };
+    if ctx.local_type(name).codegen_repr() != ty.codegen_repr() {
+        ctx.set_local_type(name, PhpType::Mixed);
+    }
+    Some((name.clone(), ty))
 }
 
 /// Promotes the OpenSSL encrypt tag target to string-capable storage before lowering its load.

@@ -1203,11 +1203,13 @@ mod tests {
             "elephc".into(),
             "--with-pdo".into(),
             "--with-tls".into(),
+            "--with-pcntl".into(),
             "app.php".into(),
         ];
         let config = compile_config(&args);
         assert!(config.with_crates.contains("pdo"));
         assert!(config.with_crates.contains("tls"));
+        assert!(config.with_crates.contains("pcntl"));
     }
 
     /// Verifies `--with-web` aliases `--web` (full web mode) instead of being

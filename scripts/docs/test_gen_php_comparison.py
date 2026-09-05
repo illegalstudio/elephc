@@ -13,17 +13,22 @@ import gen_php_comparison as gen
 
 
 def public(name, area="String", eval_supported=True, eval_only=False,
-           is_internal=False, is_extension=False, description="Does a thing."):
-    return {
+           is_internal=False, is_extension=False, description="Does a thing.",
+           target_support=None):
+    entry = {
         "name": name, "area": area, "description": description,
         "is_internal": is_internal, "is_extension": is_extension,
         "eval_only": eval_only, "eval": {"supported": eval_supported},
     }
+    if target_support is not None:
+        entry["semantics"] = {"target_support": target_support}
+    return entry
 
 
 BASELINE = {
     "php_version": "8.4.20",
     "generated_at": "2026-08-11",
+    "target": "macos-aarch64",
     "extensions": ["pcre", "standard"],
     "functions": {
         "preg_match": "pcre", "sprintf": "standard",
@@ -100,6 +105,14 @@ class ValidationTests(unittest.TestCase):
     def test_public_builtin_missing_from_baseline_fails(self):
         code, _ = self.run_gen(registry=[public("frobnicate")])
         self.assertEqual(code, 1)
+
+    def test_php_builtin_for_another_target_is_disclosed_but_not_counted(self):
+        linux_only = public("pcntl_getcpu", target_support=["linux-aarch64", "linux-x86_64"])
+        code, out = self.run_gen(registry=[public("strlen"), linux_only])
+        self.assertEqual(code, 0)
+        self.assertIn("target-specific PHP functions", out)
+        self.assertIn("`pcntl_getcpu()`", out)
+        self.assertNotIn("pcntl_getcpu() |", out)
 
     def test_language_construct_names_are_tolerated(self):
         self.assertIn("isset", gen.LANGUAGE_CONSTRUCTS)

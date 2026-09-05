@@ -180,6 +180,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Min,
     /// Dispatches network, host, environment, and process builtins.
     NetworkEnv,
+    /// Dispatches PCNTL process-control builtins.
+    Pcntl,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -501,6 +503,7 @@ impl EvalValuesHook {
             Self::Min => eval_min_result(evaluated_args, values),
             Self::MtRand => eval_mt_rand_values_result(evaluated_args, values),
             Self::NetworkEnv => eval_network_env_values_result(name, evaluated_args, values),
+            Self::Pcntl => eval_pcntl_values_result(name, evaluated_args, context, values),
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
             }

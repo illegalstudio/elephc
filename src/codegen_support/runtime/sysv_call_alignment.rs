@@ -152,11 +152,23 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
     ),
     ("__rt_closure_bind", "realigns explicitly with `and rsp, -16`"),
     (
+        "__elephc_eval_fatal",
+        "realigns explicitly with `and rsp, -16` before flushing output and exiting. The \
+         call is aligned by construction, but the walk cannot express an absolute stack \
+         alignment as an offset from the helper entry",
+    ),
+    (
         "__rt_report_uncaught_exception",
         "realigns explicitly with `and rsp, -16` before draining the output buffers. The \
          walk tracks rsp as an exact offset from the entry, and a hard realignment has no \
          such offset — but it is also the one construct that cannot BE misaligned: the \
          following `call` runs on a 16-byte boundary by construction, whatever the path in",
+    ),
+    (
+        "__rt_fiber_switch",
+        "loads `rsp` from the target Fiber or main-thread context before restoring saved \
+         registers. The signal-guard call before the hand-off is covered by \
+         fiber_signal_guard_call_is_sysv_aligned",
     ),
     (
         "__rt_gc_mark_reachable",
@@ -588,6 +600,24 @@ fn the_unanalyzable_allowlist_shrinks_only() {
          every_x86_64_runtime_call_site_is_sysv_aligned silently skipped them:\n  {}",
         unlisted.join("\n  ")
     );
+}
+
+/// Verifies the Fiber signal guard aligns its throwing call before the intentional stack hand-off.
+#[test]
+fn fiber_signal_guard_call_is_sysv_aligned() {
+    let asm = runtime_asm(RuntimeFeatures::all());
+    let function = functions_of(&asm)
+        .into_iter()
+        .find(|function| function.name == "__rt_fiber_switch")
+        .expect("the all-features runtime must emit the Fiber switch helper");
+    let call = function
+        .body
+        .iter()
+        .position(|(_, text)| text == "call __rt_fiber_throw_state_error")
+        .expect("the Fiber switch must guard signal-handler context switches");
+
+    assert_eq!(function.body[call - 1].1, "sub rsp, 8");
+    assert_eq!(function.body[call + 1].1, "add rsp, 8");
 }
 
 /// THE CURL RELEASE CHAIN IS NEVER ALLOWLISTED. Muting one of these is how the original bug

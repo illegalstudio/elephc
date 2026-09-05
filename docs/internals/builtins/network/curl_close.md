@@ -2,7 +2,7 @@
 title: "curl_close() — internals"
 description: "Compiler internals for curl_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 334
+  order: 369
 ---
 
 ## `curl_close()` — internals

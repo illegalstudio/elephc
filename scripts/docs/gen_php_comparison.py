@@ -136,10 +136,10 @@ def validate_catalog(catalog: dict, repo_root: Path, baseline_extensions=()) -> 
     return errors
 
 
-def match_builtins(registry: list, baseline_functions: dict):
+def match_builtins(registry: list, baseline_functions: dict, baseline_target: str | None = None):
     """Split registry entries into per-PHP-extension supported lists,
     elephc-specific extensions ('Beyond PHP'), language constructs, and
-    functions that postdate the baseline snapshot."""
+    real PHP functions unavailable on the baseline target or added after its snapshot."""
     # Staleness guard: NOT_IN_BASELINE is only correct while every name in it
     # is genuinely absent from the baseline. If a baseline refresh adds one
     # back (e.g. a new PHP release ships it), the escape hatch has gone
@@ -155,6 +155,7 @@ def match_builtins(registry: list, baseline_functions: dict):
     per_ext: dict[str, list] = {}
     beyond: list = []
     constructs: list = []
+    other_target: list = []
     newer: list = []
     for entry in registry:
         if entry["is_internal"]:
@@ -163,12 +164,20 @@ def match_builtins(registry: list, baseline_functions: dict):
             beyond.append(entry)
             continue
         name = entry["name"]
+        semantics = entry.get("semantics") or {}
         ext = baseline_functions.get(name)
         if ext is None:
             if name in LANGUAGE_CONSTRUCTS:
                 constructs.append(entry)
             elif name in NOT_IN_BASELINE:
                 beyond.append(entry)
+            elif (
+                baseline_target is not None
+                and semantics.get("target_support")
+                and baseline_target
+                not in semantics.get("target_support", [])
+            ):
+                other_target.append(entry)
             elif name in NEWER_THAN_BASELINE:
                 newer.append(entry)
             else:
@@ -181,7 +190,7 @@ def match_builtins(registry: list, baseline_functions: dict):
                 )
             continue
         per_ext.setdefault(ext, []).append(entry)
-    return per_ext, beyond, constructs, newer, errors
+    return per_ext, beyond, constructs, other_target, newer, errors
 
 
 def _pct(part: int, whole: int) -> str:
@@ -210,7 +219,7 @@ def _catalog_table(entries: list) -> list[str]:
     return lines
 
 
-def render(baseline, per_ext, beyond, constructs, newer, catalog) -> str:
+def render(baseline, per_ext, beyond, constructs, other_target, newer, catalog) -> str:
     functions = baseline["functions"]
     totals: dict[str, int] = {}
     for ext in functions.values():
@@ -295,6 +304,16 @@ def render(baseline, per_ext, beyond, constructs, newer, catalog) -> str:
             f"In addition, elephc implements {len(constructs)} PHP language "
             f"constructs that PHP does not count as functions: {names}.",
         ]
+    if other_target:
+        names = ", ".join(
+            f"`{b['name']}()`" for b in sorted(other_target, key=lambda b: b["name"])
+        )
+        lines += [
+            "",
+            f"The pinned `{baseline['target']}` PHP baseline does not expose "
+            f"{len(other_target)} target-specific PHP functions that elephc supports on other "
+            f"targets, so they are excluded from the percentages above: {names}.",
+        ]
     if newer:
         names = ", ".join(
             f"`{b['name']}()` (PHP {NEWER_THAN_BASELINE[b['name']]})"
@@ -367,14 +386,14 @@ def run(repo_root: Path = REPO_ROOT) -> int:
         return _fail(errors)
 
     errors.extend(validate_catalog(catalog, repo_root, baseline["extensions"]))
-    per_ext, beyond, constructs, newer, match_errors = match_builtins(
-        registry, baseline["functions"]
+    per_ext, beyond, constructs, other_target, newer, match_errors = match_builtins(
+        registry, baseline["functions"], baseline.get("target")
     )
     errors.extend(match_errors)
     if errors:
         return _fail(errors)
 
-    page = render(baseline, per_ext, beyond, constructs, newer, catalog)
+    page = render(baseline, per_ext, beyond, constructs, other_target, newer, catalog)
     output = repo_root / "docs" / "php" / "compatibility.md"
     output.write_text(page, encoding="utf-8")
     print(f"wrote {output.relative_to(repo_root)}")

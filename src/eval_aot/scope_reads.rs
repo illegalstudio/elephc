@@ -12,6 +12,7 @@ use super::*;
 /// Variable read/write metadata collected from a parsed eval fragment.
 pub(super) struct EvalScopeAccess {
     pub(super) reads: BTreeSet<String>,
+    pub(super) warning_reads: BTreeSet<String>,
     pub(super) writes: BTreeSet<String>,
     pub(super) creates_unknown_vars: bool,
 }
@@ -21,6 +22,7 @@ impl EvalScopeAccess {
     pub(super) fn new() -> Self {
         Self {
             reads: BTreeSet::new(),
+            warning_reads: BTreeSet::new(),
             writes: BTreeSet::new(),
             creates_unknown_vars: false,
         }
@@ -33,6 +35,12 @@ impl EvalScopeAccess {
 
     /// Records a variable read.
     pub(super) fn read(&mut self, name: &str) {
+        self.reads.insert(name.to_string());
+        self.warning_reads.insert(name.to_string());
+    }
+
+    /// Records a read whose missing-variable warning PHP suppresses.
+    pub(super) fn quiet_read(&mut self, name: &str) {
         self.reads.insert(name.to_string());
     }
 
