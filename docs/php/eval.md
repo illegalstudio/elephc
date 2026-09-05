@@ -898,6 +898,8 @@ value, return `false`, and emit the same suppressible duplicate-constant warning
 as AOT `define()`.
 
 Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
+the Termwind-facing `LIBXML_NOERROR` / `LIBXML_COMPACT` / `LIBXML_HTML_NODEFDTD` /
+`LIBXML_NOBLANKS` / `LIBXML_NOXMLDECL` flags,
 `PHP_INT_MAX`, `INF`, `NAN`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
 `PATHINFO_*`, `PHP_URL_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
