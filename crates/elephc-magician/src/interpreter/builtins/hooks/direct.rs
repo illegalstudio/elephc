@@ -283,6 +283,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Iconv,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
+    /// Dispatches `mb_strtolower(...)`.
+    MbStrtolower,
     /// Dispatches `str_repeat(...)`.
     StrRepeat,
     /// Dispatches `strval(...)`.
@@ -546,6 +548,7 @@ impl EvalDirectHook {
                 "strlen" => eval_builtin_strlen(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::MbStrtolower => eval_builtin_mb_strtolower(args, context, scope, values),
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
             Self::Strval => eval_builtin_strval(args, context, scope, values),
             Self::Strtr => eval_builtin_strtr(args, context, scope, values),
