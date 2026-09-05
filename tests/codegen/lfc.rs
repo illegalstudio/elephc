@@ -82,6 +82,7 @@ fn compile_lfc_eval_project_and_run(
     let runtime_features = elephc::codegen::RuntimeFeatures {
         regex: true,
         mb_strlen: false,
+        mb_strtoupper: false,
         phar_archive: false,
         descriptor_invoker: true,
         eval_bridge: true,
