@@ -208,6 +208,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Range,
     /// Dispatches `mb_ereg_match(...)`.
     MbEregMatch,
+    /// Dispatches `mb_strimwidth(...)`.
+    MbStrimwidth,
     /// Dispatches `preg_match(...)`.
     PregMatch,
     /// Dispatches `preg_match_all(...)`.
@@ -534,6 +536,30 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::MbEregMatch => eval_mb_ereg_match_values_result(evaluated_args, values),
+            Self::MbStrimwidth => match evaluated_args {
+                [value, start, width] => {
+                    eval_mb_strimwidth_result(*value, *start, *width, None, None, context, values)
+                }
+                [value, start, width, trim_marker] => eval_mb_strimwidth_result(
+                    *value,
+                    *start,
+                    *width,
+                    Some(*trim_marker),
+                    None,
+                    context,
+                    values,
+                ),
+                [value, start, width, trim_marker, encoding] => eval_mb_strimwidth_result(
+                    *value,
+                    *start,
+                    *width,
+                    Some(*trim_marker),
+                    Some(*encoding),
+                    context,
+                    values,
+                ),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::PregMatch => eval_preg_match_values_result(evaluated_args, values),
             Self::PregMatchAll => eval_preg_match_all_values_result(evaluated_args, values),
             Self::PregReplace => eval_preg_replace_values_result(evaluated_args, values),
