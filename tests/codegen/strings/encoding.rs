@@ -1286,6 +1286,6 @@ echo strip_tags("a\0b<c>");
     );
     assert_eq!(
         out,
-        "Hello World|plain|ab|ab|hello|1 < 2|<p>Hello World</p>|<BR/>hi</br>|<p class=\"x\">Hi</p>|<p>Hello World</p>|plain|x|y|z|<p>A</p>|ab"
+        "Hello World|plain|ab|ab|hello|1 < 2|<p>Hello World</p>|<BR/>hi</br>|<p class=\"x\">Hi</p>|<p>Hello World</p>|plain|x|y|z|<p>A</p>B|ab"
     );
 }
