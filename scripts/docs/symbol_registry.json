@@ -16379,6 +16379,42 @@
       },
       "extension": false,
       "internal": false,
+      "module": "core",
+      "name": "DEBUG_BACKTRACE_IGNORE_ARGS",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "core",
+      "name": "DEBUG_BACKTRACE_PROVIDE_OBJECT",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "standard",
       "name": "DIRECTORY_SEPARATOR",
       "route": "predefined",

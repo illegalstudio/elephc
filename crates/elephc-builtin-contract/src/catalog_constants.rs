@@ -67,6 +67,8 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("CAL_NUM_CALS", Calendar, ConstValue::Int(4)),
     constant!("COUNT_NORMAL", Standard, ConstValue::Int(0)),
     constant!("COUNT_RECURSIVE", Standard, ConstValue::Int(1)),
+    constant!("DEBUG_BACKTRACE_IGNORE_ARGS", Core, ConstValue::Int(2)),
+    constant!("DEBUG_BACKTRACE_PROVIDE_OBJECT", Core, ConstValue::Int(1)),
     constant!("DIRECTORY_SEPARATOR", Standard, ConstValue::TargetDependent(ConstType::Str)),
     constant!("ENT_COMPAT", Standard, ConstValue::Int(2)),
     constant!("ENT_HTML401", Standard, ConstValue::Int(0)),
