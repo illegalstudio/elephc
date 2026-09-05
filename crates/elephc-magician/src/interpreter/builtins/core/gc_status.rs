@@ -5,8 +5,8 @@
 //! - `crate::interpreter::builtins::core` direct and by-value dispatch.
 //!
 //! Key details:
-//! - The result exposes the PHP 8 twelve-field status shape with runtime-backed counters.
-//! - Timing values come from the same generated-runtime phase clocks used by AOT calls.
+//! - The result exposes PHP's twelve-field shape with live counters, roots, and phase timings.
+//! - Unsupported collector-buffer fields retain documented literal values.
 
 use super::super::super::*;
 
@@ -49,7 +49,7 @@ pub(in crate::interpreter) fn eval_gc_status_values_result(
     eval_gc_status_result(values)
 }
 
-/// Builds the complete PHP 8 collector status associative array.
+/// Builds the PHP-shaped collector status associative array.
 fn eval_gc_status_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {

@@ -258,7 +258,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         [param!("class", Mixed)],
         None,
         Mixed,
-        "Returns visible default properties for a class."
+        "Returns visible default properties for a class. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported."
     ),
     surface!(
         "hash_copy",

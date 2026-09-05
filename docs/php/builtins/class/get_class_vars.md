@@ -1,6 +1,6 @@
 ---
 title: "get_class_vars()"
-description: "Returns visible default properties for a class."
+description: "Returns visible default properties for a class. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported."
 sidebar:
   order: 86
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_class_vars(mixed $class): array
 ```
 
-Returns visible default properties for a class.
+Returns visible default properties for a class. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported.
 
 **Parameters**:
 - `$class` (`mixed`)

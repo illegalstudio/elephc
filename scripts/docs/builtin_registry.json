@@ -39495,7 +39495,7 @@
     },
     "area": "Misc",
     "canonical_name": "gc_status",
-    "description": "Returns live collector counters, candidate roots, and phase timings. The unbuffered collector reports threshold and buffer_size as 0 and full as false.",
+    "description": "Returns live collector counters, roots, and phase timings in PHP's array shape. Elephc has no collector buffer, so full, threshold, and buffer_size are compatibility fields fixed to false, 0, and 0.",
     "eval": {
       "adapter_reason": "runtime-state-or-resource",
       "area": "core",
@@ -39951,7 +39951,7 @@
     },
     "area": "Class",
     "canonical_name": "get_class_vars",
-    "description": "Returns visible default properties for a class.",
+    "description": "Returns visible default properties for a class. AOT supports direct calls, literal call_user_func calls, and first-class callables; runtime-selected callable targets are unsupported.",
     "eval": {
       "adapter_reason": "callable-or-reflection",
       "area": "symbols",
@@ -40002,7 +40002,7 @@
       "argument_lowering": "standard",
       "callable": {
         "kind": "static_only",
-        "reason": "get_class_vars() requires direct EIR metadata lowering in AOT mode"
+        "reason": "get_class_vars() requires a statically resolved callable target in AOT mode"
       },
       "effects": {
         "kind": "static",
@@ -40548,7 +40548,7 @@
     },
     "area": "Misc",
     "canonical_name": "get_defined_functions",
-    "description": "Returns internal and user-defined function names.",
+    "description": "Returns internal and user-defined function names. Elephc has no disable_functions configuration, so exclude_disabled is accepted but does not change the result.",
     "eval": {
       "adapter_reason": "callable-or-reflection",
       "area": "core",

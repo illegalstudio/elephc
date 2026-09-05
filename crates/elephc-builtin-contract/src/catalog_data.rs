@@ -8195,7 +8195,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Returns live collector counters, candidate roots, and phase timings. The unbuffered collector reports threshold and buffer_size as 0 and full as false.",
+        summary: "Returns live collector counters, roots, and phase timings in PHP's array shape. Elephc has no collector buffer, so full, threshold, and buffer_size are compatibility fields fixed to false, 0, and 0.",
         examples: &[],
         php_manual: Some("function.gc-status"),
         deprecation: None,

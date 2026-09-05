@@ -1,6 +1,6 @@
 ---
 title: "gc_status()"
-description: "Returns live collector counters, candidate roots, and phase timings. The unbuffered collector reports threshold and buffer_size as 0 and full as false."
+description: "Returns live collector counters, roots, and phase timings in PHP's array shape. Elephc has no collector buffer, so full, threshold, and buffer_size are compatibility fields fixed to false, 0, and 0."
 sidebar:
   order: 334
 ---
@@ -11,7 +11,7 @@ sidebar:
 function gc_status(): mixed
 ```
 
-Returns live collector counters, candidate roots, and phase timings. The unbuffered collector reports threshold and buffer_size as 0 and full as false.
+Returns live collector counters, roots, and phase timings in PHP's array shape. Elephc has no collector buffer, so full, threshold, and buffer_size are compatibility fields fixed to false, 0, and 0.
 
 **Parameters**: none.
 
