@@ -531,12 +531,14 @@ fn parse_prelude_param(raw: &str, function: &str) -> PreludeParam {
 
 /// Returns whether a prelude's declared PHP type is the contract's neutral type.
 ///
-/// `TypeSpec` has no object, array or union vocabulary, so every non-scalar surface is
-/// spelled `Mixed` in the catalog and the prelude is free to declare `CurlHandle`,
-/// `array`, `mixed` or a union for it. The check is therefore compatibility, not
-/// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared as a
-/// scalar in the prelude, because a scalar is precisely what the catalog can express and
-/// deliberately did not. A leading `?` is stripped: nullability is carried by the
+/// `TypeSpec` spells the scalars, `array`, `callable`, `ptr` and `?T` exactly, so each of
+/// those must match the declaration; it has no object or union vocabulary, so a class-typed
+/// or union surface is `Mixed` in the catalog and the prelude is free to declare
+/// `CurlHandle`, `mixed` or a union for it. The check is therefore compatibility, not
+/// equality — but it is not vacuous either: a `Mixed` contract must NOT be declared with a
+/// spelling the catalog can express (a scalar or `array`), because that spelling is
+/// precisely what the catalog deliberately did not say. A leading `?` is stripped and a
+/// `Nullable` contract compares its inner type: nullability is also carried by the
 /// parameter's default, which is compared separately.
 fn php_type_matches(expected: TypeSpec, declared: &str) -> bool {
     let declared = declared.trim().trim_start_matches('?').trim();
@@ -662,10 +664,11 @@ fn catalog_hosted_preludes_declare_no_uncontracted_php_function() {
 
 /// Verifies the prelude parameter parser reads every PHP passing form it may meet.
 ///
-/// The catalog has no variadic prelude contract today, so the variadic and by-reference
-/// variadic arms cannot be exercised by real data — and a parser that silently mis-reads
-/// `int &...$rest` as a fixed `$rest` would make the first such contract fail for a
-/// confusing reason instead of a real one. These are the forms PHP can spell.
+/// The catalog has exactly one by-reference variadic prelude contract today
+/// (`mysqli_stmt_bind_param(..., mixed &...$vars)`, `variadic_by_ref: true`), so the
+/// signature audit exercises that arm through real data once; the remaining forms are
+/// pinned here so a parser that silently mis-reads `int &...$rest` as a fixed `$rest`
+/// fails for a real reason instead of a confusing one. These are the forms PHP can spell.
 #[test]
 fn prelude_parameters_parse_every_php_passing_form() {
     let cases: &[(&str, PreludeParam)] = &[
