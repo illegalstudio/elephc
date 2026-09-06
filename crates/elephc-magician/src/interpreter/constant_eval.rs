@@ -79,7 +79,7 @@ pub(in crate::interpreter) fn eval_native_global_constant(
 }
 
 /// Materializes one eval-visible predefined constant into a runtime cell.
-fn eval_predefined_constant(
+pub(in crate::interpreter) fn eval_predefined_constant(
     name: &str,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {

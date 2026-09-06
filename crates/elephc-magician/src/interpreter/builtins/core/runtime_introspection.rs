@@ -19,7 +19,9 @@ const E_USER_NOTICE: i64 = 1_024;
 const E_USER_DEPRECATED: i64 = 16_384;
 const INVALID_RESOURCE_TYPE_MESSAGE: &str =
     "get_resources(): Argument #1 ($type) must be a valid resource type";
-use elephc_builtin_contract::CORE_FUNCTION_NAMES;
+use elephc_builtin_contract::{
+    constants, eval_constant_support, BackendSupport, CORE_FUNCTION_NAMES,
+};
 
 /// Evaluates one direct PHP Core introspection or handler call in source order.
 pub(in crate::interpreter) fn eval_builtin_runtime_introspection_call(
@@ -385,51 +387,23 @@ fn core_constant_array(
         }
         return Ok(result);
     }
-    let integer_constants = [
-        ("E_ERROR", 1),
-        ("E_WARNING", 2),
-        ("E_PARSE", 4),
-        ("E_NOTICE", 8),
-        ("E_CORE_ERROR", 16),
-        ("E_CORE_WARNING", 32),
-        ("E_COMPILE_ERROR", 64),
-        ("E_COMPILE_WARNING", 128),
-        ("E_USER_ERROR", 256),
-        ("E_USER_WARNING", 512),
-        ("E_USER_NOTICE", 1_024),
-        ("E_STRICT", 2_048),
-        ("E_RECOVERABLE_ERROR", 4_096),
-        ("E_DEPRECATED", 8_192),
-        ("E_USER_DEPRECATED", 16_384),
-        ("E_ALL", crate::eval_php_profile::eval_all_error_mask()),
-        ("DEBUG_BACKTRACE_PROVIDE_OBJECT", 1),
-        ("DEBUG_BACKTRACE_IGNORE_ARGS", 2),
-        ("PHP_VERSION_ID", i64::from(crate::eval_php_profile::eval_php_version_id())),
-        ("PHP_MAJOR_VERSION", 8),
-        ("PHP_MINOR_VERSION", i64::from(crate::eval_php_profile::eval_php_minor_version())),
-        ("PHP_RELEASE_VERSION", 0),
-        ("PHP_INT_MAX", i64::MAX),
-        ("PHP_INT_MIN", i64::MIN),
-        ("PHP_INT_SIZE", std::mem::size_of::<i64>() as i64),
-        ("PHP_MAXPATHLEN", 4_096),
-    ];
-    let mut result = values.assoc_new(integer_constants.len() + 7)?;
-    for (name, value) in integer_constants {
-        result = set_assoc_int(result, name, value, values)?;
+    let supported = constants()
+        .iter()
+        .filter(|constant| {
+            matches!(
+                eval_constant_support(constant),
+                BackendSupport::Implemented(_)
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut result = values.assoc_new(supported.len())?;
+    for constant in supported {
+        let key = values.string(constant.name)?;
+        let value = eval_predefined_constant(constant.name, values)?
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        result = values.array_set(result, key, value)?;
     }
-    result = set_assoc_string(
-        result,
-        "PHP_VERSION",
-        crate::eval_php_profile::eval_php_version_string(),
-        values,
-    )?;
-    result = set_assoc_string(result, "PHP_EXTRA_VERSION", "", values)?;
-    result = set_assoc_string(result, "PHP_SAPI", "cli", values)?;
-    result = set_assoc_string(result, "PHP_EOL", "\n", values)?;
-    result = set_assoc_string(result, "DIRECTORY_SEPARATOR", "/", values)?;
-    result = set_assoc_string(result, "PATH_SEPARATOR", ":", values)?;
-    let os = if cfg!(target_os = "macos") { "Darwin" } else { "Linux" };
-    set_assoc_string(result, "PHP_OS", os, values)
+    Ok(result)
 }
 
 /// Returns internal registry names and user-declared eval function names.
@@ -652,28 +626,6 @@ fn string_array_from_iter<'a>(
         result = values.array_set(result, key, value)?;
     }
     Ok(result)
-}
-
-/// Inserts one string value under a string key.
-fn set_assoc_string(
-    result: RuntimeCellHandle,
-    key: &str,
-    value: &str,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = values.string(value)?;
-    set_assoc_cell(result, key, value, values)
-}
-
-/// Inserts one integer value under a string key.
-fn set_assoc_int(
-    result: RuntimeCellHandle,
-    key: &str,
-    value: i64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = values.int(value)?;
-    set_assoc_cell(result, key, value, values)
 }
 
 /// Inserts one materialized value under a string key.

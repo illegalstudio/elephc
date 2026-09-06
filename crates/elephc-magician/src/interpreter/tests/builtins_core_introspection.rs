@@ -270,6 +270,11 @@ $extension = get_extension_funcs("cOrE");
 $mangled = get_mangled_object_vars(new IntrospectionBag());
 echo $vars["local"] . ":" . $callbackVars["local"] . ":";
 echo $arrayCallbackVars["local"] . ":" . $constants["user"]["LOCAL_CONSTANT"] . ":";
+echo $constants["Core"]["PHP_INT_SIZE"] . ":";
+echo $constants["Core"]["PHP_FLOAT_MAX"] > 1.0 ? "float:" : "bad-float:";
+echo isset($constants["Core"]["PHP_MAXPATHLEN"])
+    || isset($constants["Core"]["PATH_SEPARATOR"])
+    ? "extra:" : "catalog:";
 echo in_array("local_function", $functions["user"]) ? "function:" : "bad:";
 echo count($functions["internal"]) === count($includeDisabled["internal"])
     && count($functions["user"]) === count($includeDisabled["user"])
@@ -301,7 +306,10 @@ return get_extension_funcs("missing");"#,
     let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values)
         .expect("execute eval ir");
 
-    assert_eq!(values.output, "7:7:7:9:function:flag:59:1:2:3:files");
+    assert_eq!(
+        values.output,
+        "7:7:7:9:8:float:catalog:function:flag:59:1:2:3:files"
+    );
     assert_eq!(values.get(result), FakeValue::Bool(false));
 }
 
