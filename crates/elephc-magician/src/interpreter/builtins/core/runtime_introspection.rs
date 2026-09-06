@@ -372,7 +372,10 @@ fn eval_get_defined_constants(
     Ok(result)
 }
 
-/// Builds the eval-visible PHP Core predefined constant category.
+/// Builds the eval-visible non-user constant category exposed under PHP's `Core` key.
+///
+/// This intentionally mirrors AOT's coarse `Core` versus `user` split, so the fallback may
+/// contain eval-supported catalog constants whose owning `PhpModule` is not Core.
 fn core_constant_array(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
