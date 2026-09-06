@@ -299,6 +299,10 @@ class RenderTests(unittest.TestCase):
         self.assertIn("functions **2 / 4**", first)
         self.assertIn("classes **1 / 2**", first)
         self.assertIn("constants **2 / 3**", first)
+        self.assertIn(
+            "the inventory omits `clone`, `get_error_handler()`, and `get_exception_handler()`",
+            first,
+        )
         # strrev is compiled-only, so the standard functions row diverges between backends.
         self.assertIn("- `standard` functions: 2 / 1", first)
 
