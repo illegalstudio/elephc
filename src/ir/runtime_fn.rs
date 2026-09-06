@@ -161,7 +161,6 @@ pub enum RuntimeFnId {
     EnumExists,
     FunctionExists,
     GetClass,
-    GetClassMethods,
     GetObjectVars,
     GetDeclaredClasses,
     GetDeclaredInterfaces,
@@ -1155,11 +1154,6 @@ impl RuntimeFnId {
             | RuntimeFnId::ElephcObjectPropCount
             | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
-            RuntimeFnId::GetClassMethods => crate::ir::Effects::from_bits_retain(
-                crate::ir::Effects::READS_HEAP.bits()
-                    | crate::ir::Effects::ALLOC_HEAP.bits()
-                    | crate::ir::Effects::MAY_THROW.bits(),
-            ),
             // Re-boxing a property slot allocates the Mixed cell it hands back.
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
@@ -1924,7 +1918,6 @@ impl RuntimeFnId {
                 // Neither result can alias an argument, so the default `MayAliasArguments`
                 // bucket would keep an owned name temporary — and skip releasing the hash.
                 | RuntimeFnId::Getenv
-                | RuntimeFnId::GetClassMethods
                 | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
@@ -2104,7 +2097,6 @@ impl RuntimeFnId {
             RuntimeFnId::EnumExists => "enum_exists",
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
-            RuntimeFnId::GetClassMethods => "get_class_methods",
             RuntimeFnId::GetObjectVars => "get_object_vars",
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",

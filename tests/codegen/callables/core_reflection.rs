@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Fixtures cover late static binding, object and class-name method lookup, property
-//!   visibility, inherited defaults, named arguments, and case-insensitive function names.
+//!   visibility, inherited defaults, named and spread arguments, and callable forms.
 
 use crate::support::*;
 
@@ -188,6 +188,44 @@ fn test_core_get_class_vars_aot_callable_forms() {
         "#,
     );
     assert_eq!(out, "74:72:72:74:visible");
+}
+
+/// Verifies direct literal spreads specialize class variables and object method inventories.
+#[test]
+fn test_core_class_introspection_aot_direct_literal_spreads() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreDirectSpread {
+            public int $value = 9;
+            public function visible(): void {}
+            private function hidden(): void {}
+        }
+
+        $vars = get_class_vars(...["CoreDirectSpread"]);
+        $methods = get_class_methods(...[new CoreDirectSpread()]);
+        echo $vars["value"], ":", implode(",", $methods);
+        "#,
+    );
+    assert_eq!(out, "9:visible");
+}
+
+/// Verifies non-literal spreads stay on the AOT metadata path without a backend fallback.
+#[test]
+fn test_core_get_class_methods_aot_dynamic_spreads() {
+    let out = compile_and_run(
+        r#"<?php
+        class CoreDynamicSpread {
+            public function visible(): void {}
+        }
+        function core_dynamic_spread_name(): string { return "CoreDynamicSpread"; }
+
+        $objectArgs = [new CoreDynamicSpread()];
+        $nameArgs = [core_dynamic_spread_name()];
+        echo implode(",", get_class_methods(...$objectArgs)), ":",
+             implode(",", get_class_methods(...$nameArgs));
+        "#,
+    );
+    assert_eq!(out, "visible:visible");
 }
 
 /// Verifies direct spread and callable forms accept both class names and live objects.

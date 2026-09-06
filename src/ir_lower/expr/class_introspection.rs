@@ -5,8 +5,8 @@
 //! - `super::function_calls::lower_function_call()` before ordinary registry lowering.
 //!
 //! Key details:
-//! - Direct calls, including literal-array spreads, accept runtime class-name strings;
-//!   `get_class_methods()` also resolves an object's concrete runtime class before dispatch.
+//! - Direct calls, including literal and dynamic array spreads, accept runtime class-name
+//!   strings; `get_class_methods()` also resolves an object's concrete runtime class.
 //! - Property defaults are lowered as ordinary EIR expressions and boxed into fresh Mixed cells.
 
 use super::*;
@@ -25,11 +25,20 @@ pub(super) fn lower_class_introspection(
     };
     let expanded = match args {
         [argument] => match &argument.kind {
-            ExprKind::Spread(array) => Some(static_call_user_func_array_args(array)?),
+            ExprKind::Spread(array) => static_call_user_func_array_args(array),
             _ => None,
         },
         _ => None,
     };
+    if matches!(args, [Expr { kind: ExprKind::Spread(_), .. }]) && expanded.is_none() {
+        let sig = call_signature(ctx, name, false);
+        let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
+        let [argument] = operands.as_slice() else {
+            panic!("checked {name} spread did not lower to exactly one operand");
+        };
+        let argument = lowered_value_from_id(ctx, *argument);
+        return Some(lower_class_introspection_value(ctx, kind, argument, expr));
+    }
     let args = expanded.as_deref().unwrap_or(args);
     let argument = class_introspection_argument(args, kind)?;
     if let Some(class_name) = literal_class_argument(argument)
@@ -39,6 +48,16 @@ pub(super) fn lower_class_introspection(
     }
 
     let argument = lower_expr(ctx, argument);
+    Some(lower_class_introspection_value(ctx, kind, argument, expr))
+}
+
+/// Resolves an already lowered class name or object and dispatches its AOT metadata projection.
+fn lower_class_introspection_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    kind: ClassIntrospectionKind,
+    argument: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
     let argument_type = ctx.builder.value_php_type(argument.value).codegen_repr();
     let name = if kind == ClassIntrospectionKind::Methods
         && matches!(argument_type, PhpType::Object(_))
@@ -73,7 +92,7 @@ pub(super) fn lower_class_introspection(
     } else {
         argument
     };
-    Some(lower_dynamic_class_introspection(ctx, kind, name, expr))
+    lower_dynamic_class_introspection(ctx, kind, name, expr)
 }
 
 /// Identifies the metadata projection produced by one supported introspection builtin.

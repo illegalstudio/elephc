@@ -48954,9 +48954,8 @@
       "codegen_function": "lower_registry_call",
       "codegen_line": 588,
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.get_class_methods` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -48969,7 +48968,7 @@
       "argument_lowering": "standard",
       "callable": {
         "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "reason": "get_class_methods() requires a statically resolved callable target in AOT mode"
       },
       "effects": {
         "kind": "static",
@@ -48980,8 +48979,7 @@
         ]
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "get_class_methods"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
@@ -48992,10 +48990,8 @@
         "values": []
       },
       "result_type": "checked",
-      "runtime_functions": [
-        "get_class_methods"
-      ],
-      "target_strategy": "runtime_call",
+      "runtime_functions": [],
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -122623,7 +122619,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 141,
+      "codegen_line": 140,
       "notes": [
         "Rejects `unset()` calls that were not converted into direct EIR unbind operations.",
         "Reaching this lowering means `crate::ir_lower::expr` could not turn the target",
