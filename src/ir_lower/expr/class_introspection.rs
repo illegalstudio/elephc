@@ -5,8 +5,8 @@
 //! - `super::function_calls::lower_function_call()` before ordinary registry lowering.
 //!
 //! Key details:
-//! - Direct calls accept runtime class-name strings, and `get_class_methods()` also resolves
-//!   an object's concrete runtime class before dispatching through the known metadata inventory.
+//! - Direct calls, including literal-array spreads, accept runtime class-name strings;
+//!   `get_class_methods()` also resolves an object's concrete runtime class before dispatch.
 //! - Property defaults are lowered as ordinary EIR expressions and boxed into fresh Mixed cells.
 
 use super::*;
@@ -23,6 +23,14 @@ pub(super) fn lower_class_introspection(
         "get_class_methods" => ClassIntrospectionKind::Methods,
         _ => return None,
     };
+    let expanded = match args {
+        [argument] => match &argument.kind {
+            ExprKind::Spread(array) => Some(static_call_user_func_array_args(array)?),
+            _ => None,
+        },
+        _ => None,
+    };
+    let args = expanded.as_deref().unwrap_or(args);
     let argument = class_introspection_argument(args, kind)?;
     if let Some(class_name) = literal_class_argument(argument)
         .and_then(|requested| resolved_class_name(ctx, &requested))

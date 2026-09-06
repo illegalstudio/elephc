@@ -190,7 +190,7 @@ fn test_core_get_class_vars_aot_callable_forms() {
     assert_eq!(out, "74:72:72:74:visible");
 }
 
-/// Verifies `get_class_methods()` callable forms preserve dynamic names and live results.
+/// Verifies direct spread and callable forms accept both class names and live objects.
 #[test]
 fn test_core_get_class_methods_aot_callable_forms() {
     let out = compile_and_run_capture(
@@ -207,9 +207,18 @@ fn test_core_get_class_methods_aot_callable_forms() {
         $fromDynamicCuf = call_user_func("get_class_methods", $name);
         $callback = get_class_methods(...);
         $fromFcc = $callback($name);
+        $fromObjectCuf = call_user_func("get_class_methods", new CoreCallableMethods());
+        $fromObjectCufa = call_user_func_array(
+            "get_class_methods",
+            [new CoreCallableMethods()]
+        );
+        $fromObjectFcc = $callback(new CoreCallableMethods());
+        $fromDirectSpread = get_class_methods(...["CoreCallableMethods"]);
         echo implode(",", $direct), ":", implode(",", $fromLiteralCuf), ":",
              implode(",", $fromSpreadCuf), ":", implode(",", $fromDynamicCuf), ":",
-             implode(",", $fromFcc), "\n";
+             implode(",", $fromFcc), ":", implode(",", $fromObjectCuf), ":",
+             implode(",", $fromObjectCufa), ":", implode(",", $fromObjectFcc), ":",
+             implode(",", $fromDirectSpread), "\n";
         var_export([$direct, $fromLiteralCuf]);
         "#,
     );
@@ -220,7 +229,7 @@ fn test_core_get_class_methods_aot_callable_forms() {
     );
     assert_eq!(
         out.stdout,
-        "alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta\narray (\n  0 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n  1 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n)"
+        "alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta:alpha,beta\narray (\n  0 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n  1 => \n  array (\n    0 => 'alpha',\n    1 => 'beta',\n  ),\n)"
     );
     assert_eq!(out.stderr, "");
 }
