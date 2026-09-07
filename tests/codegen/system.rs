@@ -1937,6 +1937,110 @@ fn test_preg_match_all_no_matches() {
     assert_eq!(out, "0");
 }
 
+/// Verifies `preg_match_all` fills `$matches` in default PATTERN_ORDER with numbered groups.
+#[test]
+fn test_preg_match_all_populates_pattern_order_matches() {
+    let out = compile_and_run(
+        r#"<?php
+$count = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $all);
+echo $count . ":" . count($all) . ":" . $all[0][1] . ":" . $all[1][0] . ":" . $all[2][1];
+"#,
+    );
+    assert_eq!(out, "2:3:b22:a:22");
+}
+
+/// Verifies Termwind-style newline counting through `$matches[0]`.
+#[test]
+fn test_preg_match_all_termwind_newline_matches() {
+    let out = compile_and_run(
+        r#"<?php
+$content = "one\n\ntwo\nthree";
+preg_match_all("/\n+/", $content, $matches);
+echo count($matches[0]) . ":" . strlen($matches[0][0]);
+"#,
+    );
+    assert_eq!(out, "2:2");
+}
+
+/// Verifies Termwind-style `PREG_OFFSET_CAPTURE` cells as `[string, offset]`.
+#[test]
+fn test_preg_match_all_offset_capture() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $offsetAll, PREG_OFFSET_CAPTURE);
+echo $offsetAll[0][1][0] . ":" . $offsetAll[0][1][1] . ":" . $offsetAll[1][0][1] . ":" . $offsetAll[2][1][1];
+"#,
+    );
+    assert_eq!(out, "b22:3:0:4");
+}
+
+/// Verifies a Termwind-like styling walk over `$matches[0]` offset-capture rows.
+#[test]
+fn test_preg_match_all_termwind_styling_offset_capture() {
+    let out = compile_and_run(
+        r#"<?php
+$text = "ab<c>de";
+preg_match_all("/<[^>]+>|[^<]+/", $text, $matches, PREG_OFFSET_CAPTURE);
+$i = 0;
+while ($i < count($matches[0])) {
+    echo $matches[0][$i][0] . "@" . $matches[0][$i][1] . "|";
+    $i = $i + 1;
+}
+"#,
+    );
+    assert_eq!(out, "ab@0|<c>@2|de@5|");
+}
+
+/// Verifies `PREG_SET_ORDER` fills `$matches[match][group]`.
+#[test]
+fn test_preg_match_all_set_order() {
+    let out = compile_and_run(
+        r#"<?php
+$count = preg_match_all("/([a-z]+)([0-9]+)/", "a1 b22", $set, PREG_SET_ORDER);
+echo $count . ":" . count($set) . ":" . $set[0][0] . ":" . $set[0][1] . ":" . $set[1][2];
+"#,
+    );
+    assert_eq!(out, "2:2:a1:a:22");
+}
+
+/// Verifies `PREG_UNMATCHED_AS_NULL` and zero-match PATTERN_ORDER row counts.
+#[test]
+fn test_preg_match_all_unmatched_null_and_empty_rows() {
+    let out = compile_and_run(
+        r#"<?php
+preg_match_all("/(a)?(b)(c)?/", "b", $nullAll, PREG_UNMATCHED_AS_NULL);
+echo ($nullAll[1][0] === null ? "n" : "bad") . ":" . $nullAll[2][0] . ":" . ($nullAll[3][0] === null ? "n" : "bad") . ":";
+preg_match_all("/(x)(y)/", "abc", $none);
+echo count($none) . ":" . count($none[0]) . ":" . count($none[1]) . ":" . count($none[2]);
+"#,
+    );
+    assert_eq!(out, "n:b:n:3:0:0:0");
+}
+
+/// Verifies named `matches` / `flags` arguments populate the capture matrix.
+#[test]
+fn test_preg_match_all_named_matches_and_flags() {
+    let out = compile_and_run(
+        r#"<?php
+$count = preg_match_all(pattern: "/([a-z])([0-9])/", subject: "a1 b2", matches: $all, flags: PREG_SET_ORDER);
+echo $count . ":" . $all[1][0] . ":" . $all[1][2];
+"#,
+    );
+    assert_eq!(out, "2:b2:2");
+}
+
+/// Verifies an invalid pattern with `$matches` present returns 0 and an empty array.
+#[test]
+fn test_preg_match_all_invalid_pattern_clears_matches() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["stale"];
+echo preg_match_all("/(/", "subject", $matches) . ":" . count($matches);
+"#,
+    );
+    assert_eq!(out, "0:0");
+}
+
 /// Verifies every shim-backed regex family handles an invalid pattern without exposing a
 /// partial handle, invoking callbacks, or returning partially initialized capture data.
 #[test]

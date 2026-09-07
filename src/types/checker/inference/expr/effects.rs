@@ -265,7 +265,9 @@ impl Checker {
                         if contextual_callbacks.contains(&idx) {
                             continue;
                         }
-                        if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                        if ((builtin_name.eq_ignore_ascii_case("preg_match")
+                            || builtin_name.eq_ignore_ascii_case("preg_match_all"))
+                            && idx == 2)
                             || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
                                 && is_openssl_encrypt_tag_arg(arg, idx))
                         {
@@ -289,6 +291,13 @@ impl Checker {
                     if let Some(arg) = expanded_args.get(2) {
                         if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                        }
+                    }
+                }
+                if builtin_name.eq_ignore_ascii_case("preg_match_all") {
+                    if let Some(arg) = expanded_args.get(2) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Mixed)));
                         }
                     }
                 }

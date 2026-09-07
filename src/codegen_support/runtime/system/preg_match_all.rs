@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_preg_match_all`, `__rt_preg_strip` runtime helper assembly for preg match all.
+//! Emits the `__rt_preg_match_all` count helper and `__rt_preg_match_all_capture`.
 //! Keeps PHP builtin semantics, libc/syscall boundaries, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -16,6 +16,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_match_all_linux_x86_64(emitter);
+        super::preg_match_all_capture::emit_preg_match_all_capture(emitter);
         return;
     }
 
@@ -119,6 +120,8 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", save_off));         // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    super::preg_match_all_capture::emit_preg_match_all_capture(emitter);
 }
 
 /// Target-specific implementation of `__rt_preg_match_all` for Linux x86_64.
