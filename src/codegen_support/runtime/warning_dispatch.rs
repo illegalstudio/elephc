@@ -96,7 +96,10 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     let input_len = if arm { 16 } else { 24 };
     emit_entry(e, false);
     emit_entry(e, true);
-    e.label_global("__rt_warning_append");
+    // Both entries arrive with the same live frame. Keep this continuation in
+    // the full-warning atom so ABI analysis starts at its actual prologue.
+    // The fragment entry crosses atoms through an unconditional jump only.
+    e.label_shared("__rt_warning_append");
     arg(e, 0, input_len);
     abi::emit_reg_move(e, result, a0);
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_done");
@@ -339,6 +342,8 @@ mod tests {
                 assert!(asm.contains(symbol), "{target:?}: {symbol}");
             }
             assert!(asm.contains(&target.extern_symbol("realloc")), "{target:?}");
+            assert!(!asm.contains(".globl __rt_warning_append"), "{target:?}: continuation is not a call entry");
+            assert!(!asm.contains(".text.__rt_warning_append"), "{target:?}: continuation must inherit its frame");
             assert!(asm.contains(if target.arch == Arch::AArch64 { "str q31" } else { "movdqu XMMWORD PTR" }), "{target:?}");
             assert!(asm.contains("__rt_warning_allocation_failed:"), "{target:?}");
             assert!(asm.contains(if target.arch == Arch::AArch64 {
