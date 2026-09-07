@@ -212,6 +212,15 @@ fn test_error_named_arguments_reject_duplicate_assignment() {
     );
 }
 
+/// CUF forwards target names but still rejects assigning its callback parameter twice.
+#[test]
+fn test_error_named_arguments_cuf_rejects_duplicate_callback() {
+    expect_error(
+        "<?php call_user_func('strlen', callback: 'strlen', string: 'value');",
+        "Builtin 'call_user_func' parameter $callback is already assigned",
+    );
+}
+
 /// Verifies that spread arguments from associative arrays are subject to the same
 /// unknown-parameter checks as regular named arguments.
 #[test]

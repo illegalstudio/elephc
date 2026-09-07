@@ -121,24 +121,28 @@ impl Checker {
             return Ok(None);
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
-        // CUF forwards names after a positional callback to that callback's signature.
-        // The callable checker owns normalization of those target arguments.
-        let forwards_callback_names = builtin_key == "call_user_func"
-            && args.first().is_some_and(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)));
+        // CUF accepts named variadic entries, then checks them against the callback.
+        // Its own callback parameter must still obey duplicate and ordering rules.
+        let forwards_callback_names = builtin_key == "call_user_func";
         let normalized_args;
         let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
-            (!is_lazy_construct && !forwards_callback_names).then(|| crate::types::builtin_call_sig(name)).flatten()
+            (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
-            let plan = self.plan_builtin_call_args(
-                &sig,
-                args,
-                span,
-                &format!("Builtin '{}'", name),
-                env,
-            )?;
-            normalized_args = plan.normalized_args();
-            builtin_arg_plan = Some(plan);
+            normalized_args = if forwards_callback_names {
+                self.normalize_named_call_args(&sig, args, span, &format!("Builtin '{}'", name), env)?
+            } else {
+                let plan = self.plan_builtin_call_args(
+                    &sig,
+                    args,
+                    span,
+                    &format!("Builtin '{}'", name),
+                    env,
+                )?;
+                let normalized = plan.normalized_args();
+                builtin_arg_plan = Some(plan);
+                normalized
+            };
             normalized_args.as_slice()
         } else {
             args
