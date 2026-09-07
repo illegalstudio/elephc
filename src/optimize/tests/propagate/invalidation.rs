@@ -67,13 +67,16 @@ fn test_unset_property_invalidates_nothing() {
     assert_eq!(expr_invalidation(&expr), names(&[]));
 }
 
-/// A by-ref builtin (`sort`) invalidates exactly its by-ref argument, without
-/// volatilizing it: builtins never retain references.
+/// Warning-capable by-ref builtins invalidate top-level globals, but keep
+/// function-local invalidation targeted and do not retain argument references.
 #[test]
 fn test_by_ref_builtin_invalidates_argument_without_retention() {
     reset_reference_volatile();
     let expr = call("sort", vec![Expr::var("a")]);
-    assert_eq!(expr_invalidation(&expr), names(&["a"]));
+    assert_eq!(expr_invalidation(&expr), Invalidation::All);
+    with_function_scope(|| {
+        assert_eq!(expr_invalidation(&expr), names(&["a"]));
+    });
     assert!(
         !is_reference_volatile("a"),
         "builtin by-ref arguments are not retained"

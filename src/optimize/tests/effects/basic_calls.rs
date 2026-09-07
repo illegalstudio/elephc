@@ -68,7 +68,7 @@ fn test_effect_analysis_keeps_unknown_property_and_array_reads_observable() {
     assert!(expr_is_observable(&array));
 }
 
-/// Verifies literal array reads distinguish present offsets from warning-only misses.
+/// Verifies present literal offsets stay pure while missing offsets can invoke error handlers.
 #[test]
 fn test_effect_analysis_refines_literal_array_reads() {
     let array = Expr::new(
@@ -92,8 +92,10 @@ fn test_effect_analysis_refines_literal_array_reads() {
 
     assert!(!expr_is_observable(&present));
     assert!(!expr_effect(&present).may_throw);
+    assert!(!expr_effect(&present).writes_globals);
     assert!(expr_is_observable(&missing));
-    assert!(!expr_effect(&missing).may_throw);
+    assert!(expr_effect(&missing).may_throw);
+    assert!(expr_effect(&missing).writes_globals);
 }
 
 /// Verifies a read-only runtime registry probe no longer inherits the all-effects fallback.
