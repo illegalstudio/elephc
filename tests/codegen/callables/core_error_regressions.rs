@@ -9,18 +9,19 @@
 
 use crate::support::*;
 
-/// A native warning can enter an eval-registered handler through the shared dispatcher.
+/// Native and eval warnings enter an eval-registered handler through the shared dispatcher.
 #[test]
 fn test_core_error_regression_ordinary_warning_eval_handler() {
     let out = compile_and_run(r#"<?php
 error_reporting(0);
 $source = 'function evalOrdinaryWarning($level, $message) { echo $level, ":"; return true; }
-set_error_handler("evalOrdinaryWarning");' . ' // ' . $argc;
+set_error_handler("evalOrdinaryWarning");
+fopen("/elephc-missing-directory/eval-file", "r");' . ' // ' . $argc;
 eval($source);
 fopen('/elephc-missing-directory/missing-file', 'r');
 echo 'done';
 "#);
-    assert_eq!(out, "2:done");
+    assert_eq!(out, "2:2:done");
 }
 
 /// A warning handler's writes remain observable after a discarded warning-producing read.

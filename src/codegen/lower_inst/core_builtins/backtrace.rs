@@ -43,11 +43,9 @@ pub(super) fn prepare_call_site(
 ) -> Result<()> {
     if instruction_may_enter_php_frame(inst) || inst.effects.contains(crate::ir::Effects::MAY_WARN) {
         let scratch = abi::int_result_reg(ctx.emitter);
-        let file = ctx.module.source_path.as_deref().unwrap_or("Unknown");
-        let (label, len) = ctx.data.add_string(file.as_bytes());
-        abi::emit_symbol_address(ctx.emitter, scratch, &label);
+        abi::emit_symbol_address(ctx.emitter, scratch, "_script_source_file");
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file", 0);
-        abi::emit_load_int_immediate(ctx.emitter, scratch, len as i64);
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_script_source_file_len", 0);
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_file_len", 0);
         abi::emit_load_int_immediate(ctx.emitter, scratch, i64::from(inst.span.map_or(0, |span| span.line)));
         abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_php_diagnostic_line", 0);

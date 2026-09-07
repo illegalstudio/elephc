@@ -99,6 +99,12 @@ macro_rules! impl_lifecycle_scalar_ops {
 
     /// Emits one PHP warning through the generated runtime diagnostic helper.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        // Magician submits complete diagnostics, unlike native fragment producers.
+        let terminated;
+        let message = if message.ends_with('\n') { message } else {
+            terminated = format!("{message}\n");
+            &terminated
+        };
         unsafe {
             __elephc_eval_warning(message.as_ptr(), message.len() as u64);
         }
