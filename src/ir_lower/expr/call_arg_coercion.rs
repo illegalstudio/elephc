@@ -272,7 +272,7 @@ fn lower_args_with_signature_options(
         };
         return coerce_operands_to_params(ctx, sig, operands);
     }
-    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
+    if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args, None) {
         return coerce_operands_to_params(ctx, sig, operands);
     }
     let static_spread_args = if has_static_call_spread_args(args) {

@@ -23,31 +23,22 @@ pub(super) fn lower_class_introspection(
         "get_class_methods" => ClassIntrospectionKind::Methods,
         _ => return None,
     };
-    let expanded = match args {
-        [argument] => match &argument.kind {
-            ExprKind::Spread(array) => static_call_user_func_array_args(array),
-            _ => None,
-        },
-        _ => None,
-    };
-    if matches!(args, [Expr { kind: ExprKind::Spread(_), .. }]) && expanded.is_none() {
-        let sig = call_signature(ctx, name, false);
-        let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
-        let [argument] = operands.as_slice() else {
-            panic!("checked {name} spread did not lower to exactly one operand");
-        };
-        let argument = lowered_value_from_id(ctx, *argument);
-        return Some(lower_class_introspection_value(ctx, kind, argument, expr));
-    }
-    let args = expanded.as_deref().unwrap_or(args);
-    let argument = class_introspection_argument(args, kind)?;
-    if let Some(class_name) = literal_class_argument(argument)
+    if let Some(class_name) = class_introspection_argument(args, kind)
+        .and_then(literal_class_argument)
         .and_then(|requested| resolved_class_name(ctx, &requested))
     {
         return Some(materialize_class_introspection(ctx, kind, &class_name, expr));
     }
 
-    let argument = lower_expr(ctx, argument);
+    // Consume the shared argument planner for every source form, including an empty
+    // spread followed by a named argument. StaticOnly calls must never fall through
+    // to their intentionally unavailable generic descriptor invoker.
+    let sig = call_signature(ctx, name, false);
+    let operands = lower_builtin_call_args(ctx, name, sig.as_ref(), args);
+    let [argument] = operands.as_slice() else {
+        panic!("checked {name} call did not lower to exactly one operand");
+    };
+    let argument = lowered_value_from_id(ctx, *argument);
     Some(lower_class_introspection_value(ctx, kind, argument, expr))
 }
 

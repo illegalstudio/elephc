@@ -74,10 +74,25 @@ pub(super) fn lower_builtin_call_args(
     if canonical == "eval" {
         return lower_eval_args(ctx, sig, args);
     }
-    let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
         .map(|def| def.spec.semantics.argument_lowering)
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
+    let pcntl_outputs = prepare_pcntl_output_locals(ctx, &canonical, sig, args);
+    if !crate::types::call_args::has_named_args(args)
+        && argument_lowering != crate::builtins::semantics::BuiltinArgumentLowering::PcntlPreserveOmitted
+    {
+        if let Some(sig) = sig {
+            if let Some(operands) = lower_positional_spread_args_with_signature(
+                ctx, sig, args, Some(name),
+            ) {
+                let lowered = coerce_operands_to_params(ctx, sig, operands);
+                for (name, ty) in pcntl_outputs {
+                    ctx.set_local_logical_type(&name, ty);
+                }
+                return lowered;
+            }
+        }
+    }
     let lowered = match argument_lowering {
         crate::builtins::semantics::BuiltinArgumentLowering::Count => {
             lower_count_args(ctx, sig, args)

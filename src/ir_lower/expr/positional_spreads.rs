@@ -15,6 +15,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     args: &[Expr],
+    builtin_name: Option<&str>,
 ) -> Option<Vec<crate::ir::ValueId>> {
     let spread_idx = single_trailing_indexed_spread_arg(ctx, args)?;
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
@@ -41,12 +42,17 @@ pub(super) fn lower_positional_spread_args_with_signature(
     store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
     let spread_value = lower_expr(ctx, &spread_expr);
-    emit_positional_spread_min_len_guard(
-        ctx,
-        spread_value.value,
-        required_len,
-        args[spread_idx].span,
-    );
+    if let Some(name) = builtin_name {
+        emit_builtin_spread_arity_guard(
+            ctx, spread_value.value, required_len,
+            sig.variadic.is_none().then_some(regular_param_count - spread_idx),
+            name, args[spread_idx].span,
+        );
+    } else {
+        emit_positional_spread_min_len_guard(
+            ctx, spread_value.value, required_len, args[spread_idx].span,
+        );
+    }
 
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
@@ -120,6 +126,49 @@ pub(super) fn lower_positional_spread_args_with_signature(
     }
 
     Some(operands)
+}
+
+/// Rejects runtime builtin arity violations without discarding surplus unpacked values.
+fn emit_builtin_spread_arity_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    spread: ValueId,
+    min: usize,
+    max: Option<usize>,
+    name: &str,
+    span: Span,
+) {
+    let len = ctx.emit_value(
+        Op::ArrayLen, vec![spread], None, PhpType::Int,
+        Op::ArrayLen.default_effects(), Some(span),
+    );
+    for (bound, predicate, direction) in [
+        (Some(min), CmpPredicate::Sge, "few"),
+        (max, CmpPredicate::Sle, "many"),
+    ] {
+        let Some(bound) = bound else { continue };
+        let bound = emit_i64_at_span(ctx, bound as i64, span);
+        let valid = ctx.emit_value(
+            Op::ICmp, vec![len.value, bound.value],
+            Some(Immediate::CmpPredicate(predicate)), PhpType::Bool,
+            Op::ICmp.default_effects(), Some(span),
+        );
+        let ok = ctx.builder.create_named_block("builtin.spread.arity.ok", Vec::new());
+        let invalid = ctx.builder.create_named_block("builtin.spread.arity.invalid", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: valid.value, then_target: ok, then_args: Vec::new(),
+            else_target: invalid, else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(invalid);
+        let exception = Expr::new(ExprKind::NewObject {
+            class_name: Name::unqualified("ArgumentCountError"),
+            args: vec![Expr::new(ExprKind::StringLiteral(
+                format!("{name}(): Too {direction} arguments for unpacked call")
+            ), span)],
+        }, span);
+        let exception = lower_expr(ctx, &exception);
+        ctx.builder.terminate(Terminator::Throw { value: exception.value });
+        ctx.builder.position_at_end(ok);
+    }
 }
 
 /// Lowers a compiler-generated spread tail with the variadic slot's concrete element layout.

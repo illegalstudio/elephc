@@ -119,6 +119,12 @@ pub(super) fn lower_static_call_user_func(
             {
                 return Some(lower_visible_defined_vars(ctx, expr));
             }
+            let unpacked = Expr::new(ExprKind::Spread(Box::new(arg_array.clone())), arg_array.span);
+            if let Some(value) = lower_static_class_introspection_spread_call(
+                ctx, callback_arg, &[unpacked], expr,
+            ) {
+                return Some(value);
+            }
             if matches!(arg_array.kind, ExprKind::ArrayLiteralAssoc(_))
                 && static_callable_binding_for_expr(ctx, callback_arg)
                     .is_some_and(|target| matches!(target, StaticCallableBinding::InstanceMethod { .. }))
@@ -153,19 +159,13 @@ fn is_static_get_defined_vars_callback(callback: &Expr) -> bool {
     php_symbol_key(name.trim_start_matches('\\')) == "get_defined_vars"
 }
 
-/// Replays one literal positional spread before class introspection reaches descriptor dispatch.
+/// Specializes statically selected class introspection before generic descriptor dispatch.
 fn lower_static_class_introspection_spread_call(
     ctx: &mut LoweringContext<'_, '_>,
     callback_expr: &Expr,
     callback_args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let [argument] = callback_args else {
-        return None;
-    };
-    let ExprKind::Spread(argument_array) = &argument.kind else {
-        return None;
-    };
     let callback = static_call_user_func_callback(ctx, callback_expr)?;
     let StaticCallableBinding::Builtin(function_name) = &callback else {
         return None;
@@ -176,8 +176,7 @@ fn lower_static_class_introspection_spread_call(
     ) {
         return None;
     }
-    let expanded = static_call_user_func_array_args(argument_array)?;
-    lower_static_callable_call(ctx, callback, &expanded, expr)
+    lower_static_callable_call(ctx, callback, callback_args, expr)
 }
 
 /// Lowers unresolved string callbacks after an eval barrier through the eval function table.
