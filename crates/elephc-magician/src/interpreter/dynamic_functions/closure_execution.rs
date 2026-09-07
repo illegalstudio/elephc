@@ -583,8 +583,9 @@ pub(in crate::interpreter) fn retain_static_local_return(
     {
         values.retain(result)
     } else if scope.visible_entries().iter().any(|(name, cell)| {
-        *cell == result && scope.entry(name)
-            .is_some_and(|entry| entry.flags().ownership == ScopeCellOwnership::Owned)
+        *cell == result && !scope.is_global_alias(name) && scope.entry(name)
+            .is_some_and(|entry| entry.flags().ownership == ScopeCellOwnership::Owned
+                && !entry.flags().by_ref)
     }) {
         Ok(result.owned())
     } else {

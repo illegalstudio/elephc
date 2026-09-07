@@ -137,6 +137,19 @@ fn array_literal_insertion_failure_releases_partial_result() {
     }
 }
 
+/// A returned reference parameter cannot transfer the owner already exposed through writeback.
+#[test]
+fn returned_reference_parameter_retains_an_independent_result_lease() {
+    let mut values = FakeOps::default();
+    let mut scope = ElephcEvalScope::new();
+    let cell = values.int(25).unwrap();
+    scope.set_reference("value", "value", cell, ScopeCellOwnership::Owned);
+    let result = retain_static_local_return(Ok(cell.borrowed()), &[], &scope, &mut values).unwrap();
+    assert_eq!(result, cell);
+    assert!(!result.is_borrowed());
+    assert_eq!(values.retains, vec![cell]);
+}
+
 /// Mixed invoker writeback updates exactly one native pointer and preserves the neighboring slot.
 #[test]
 fn mixed_native_reference_slots_remain_pointer_sized() {
