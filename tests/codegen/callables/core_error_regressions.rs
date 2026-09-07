@@ -9,6 +9,68 @@
 
 use crate::support::*;
 
+/// Restoring with an empty stack clears a handler reinstated after callback suspension.
+#[test]
+fn test_core_error_regression_restore_empty_stack_clears_active() {
+    let out = compile_and_run(r#"<?php
+function popInsideHandler(int $level, string $message): bool {
+    echo 'H';
+    restore_error_handler();
+    return true;
+}
+error_reporting(0);
+set_error_handler('popInsideHandler', E_USER_WARNING);
+trigger_error('first', E_USER_WARNING);
+restore_error_handler();
+trigger_error('second', E_USER_WARNING);
+echo ':done';
+"#);
+    assert_eq!(out, "H:done");
+}
+
+/// Null registration preserves the mask of a temporarily suspended native handler.
+#[test]
+fn test_core_error_regression_null_registration_preserves_mask() {
+    let out = compile_and_run(r#"<?php
+function nullInsideHandler(int $level, string $message): bool {
+    echo 'H';
+    set_error_handler(null, E_NOTICE);
+    return true;
+}
+error_reporting(0);
+set_error_handler('nullInsideHandler', E_USER_WARNING);
+trigger_error('first', E_USER_WARNING);
+trigger_error('second', E_USER_WARNING);
+"#);
+    assert_eq!(out, "HH");
+}
+
+/// Eval wrappers share empty-stack and null-mask semantics with native registration.
+#[test]
+fn test_core_error_regression_eval_restore_empty_and_null_mask() {
+    let out = compile_and_run(r#"<?php
+error_reporting(0);
+$source = 'function evalNullHandler($level, $message) {
+    echo "N"; set_error_handler(null, E_NOTICE); return true;
+}
+set_error_handler("evalNullHandler", E_USER_WARNING);
+trigger_error("first", E_USER_WARNING);
+trigger_error("second", E_USER_WARNING);
+restore_error_handler(); restore_error_handler(); restore_error_handler();
+function evalPopHandler($level, $message) {
+    echo "P"; restore_error_handler(); return true;
+}
+set_error_handler("evalPopHandler", E_USER_WARNING);
+trigger_error("first", E_USER_WARNING);
+restore_error_handler();
+trigger_error("second", E_USER_WARNING);' . ' // ' . $argc;
+eval($source);
+trigger_error('native', E_USER_WARNING);
+echo ':done';
+"#);
+    assert_eq!(out, "NNP:done");
+}
+
 /// Native and eval warnings enter an eval-registered handler through the shared dispatcher.
 #[test]
 fn test_core_error_regression_ordinary_warning_eval_handler() {

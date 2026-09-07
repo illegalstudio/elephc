@@ -10,6 +10,34 @@
 use super::super::*;
 use super::support::*;
 
+/// Thin eval agrees with the native bridge on null masks and restoring an empty stack.
+#[test]
+fn execute_program_preserves_null_handler_mask_and_clears_empty_restore() {
+    let program = parse_fragment(br#"
+function nullHandler($level, $message) {
+    echo "N"; set_error_handler(null, E_NOTICE); return true;
+}
+error_reporting(0);
+set_error_handler("nullHandler", E_USER_WARNING);
+trigger_error("one", E_USER_WARNING);
+trigger_error("two", E_USER_WARNING);
+restore_error_handler(); restore_error_handler(); restore_error_handler();
+function popHandler($level, $message) {
+    echo "P"; restore_error_handler(); return true;
+}
+set_error_handler("popHandler", E_USER_WARNING);
+trigger_error("one", E_USER_WARNING);
+restore_error_handler();
+trigger_error("two", E_USER_WARNING);
+return true;
+"#).expect("parse handler edge cases");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute handler edge cases");
+    assert_eq!(values.output, "NNP");
+    assert!(values.warnings.is_empty());
+}
+
 /// The standalone interpreter restores suspended handlers on normal return and exceptions.
 #[test]
 fn execute_program_suspends_reentrant_error_handlers() {

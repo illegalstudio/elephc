@@ -36,11 +36,11 @@ pub(super) fn emit_eval_exception_handler_helpers(
     match module.target.arch {
         Arch::AArch64 => {
             emit_set_exception_handler_aarch64(module, emitter, descriptor_label);
-            emit_restore_exception_handler_aarch64(module, emitter);
+            emit_restore_exception_handler(module, emitter);
         }
         Arch::X86_64 => {
             emit_set_exception_handler_x86_64(module, emitter, descriptor_label);
-            emit_restore_exception_handler_x86_64(module, emitter);
+            emit_restore_exception_handler(module, emitter);
         }
     }
 }
@@ -258,102 +258,16 @@ fn emit_set_exception_handler_x86_64(
     emitter.instruction("ret");                                                 // return to the Rust runtime adapter
 }
 
-/// Emits the ARM64 C wrapper for restoring the prior native exception handler.
-fn emit_restore_exception_handler_aarch64(module: &Module, emitter: &mut Emitter) {
-    let done = "__elephc_eval_exception_handler_restore_done";
+/// Emits the target-aware C wrapper for restoring the prior native exception handler.
+fn emit_restore_exception_handler(module: &Module, emitter: &mut Emitter) {
     label_c_global(module, emitter, "__elephc_eval_exception_handler_restore");
-    emitter.instruction("sub sp, sp, #32");                                     // reserve the node pointer and a standard frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the C caller frame
-    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_php_exception_handler_stack", 0);
-    emitter.instruction(&format!("cbz x9, {done}"));                            // an empty stack leaves the current state unchanged
-    emitter.instruction("str x9, [sp, #0]");                                    // preserve the node across release calls
-    abi::emit_load_symbol_to_reg(emitter, "x0", "_php_exception_handler_value", 0);
-    emitter.instruction("cbz x0, 1f");                                          // skip release when PHP null is active
-    emitter.instruction("bl __rt_decref_mixed");                                // release the current PHP-visible callback owner
-    emitter.label("1");
-    abi::emit_load_symbol_to_reg(emitter, "x0", "_php_exception_handler_callable", 0);
-    emitter.instruction("bl __rt_callable_descriptor_release");                 // release the current normalized descriptor owner
-    abi::emit_load_symbol_to_reg(
-        emitter,
-        "x10",
-        "_php_exception_handler_context_release",
-        0,
-    );
-    emitter.instruction("cbz x10, 2f");                                         // native handlers carry no eval context owner
-    abi::emit_load_symbol_to_reg(emitter, "x0", "_php_exception_handler_context", 0);
-    emitter.instruction("blr x10");                                             // release the active handler's retained eval context
-    emitter.label("2");
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the previous-state node
-    for (offset, symbol) in [
-        (0, "_php_exception_handler_stack"),
-        (8, "_php_exception_handler_value"),
-        (16, "_php_exception_handler_callable"),
-        (24, "_php_exception_handler_context"),
-        (32, "_php_exception_handler_context_release"),
-    ] {
-        emitter.instruction("ldr x9, [sp, #0]");                                // reload the node because symbol stores borrow x9
-        emitter.instruction(&format!("ldr x10, [x9, #{offset}]"));              // load one prior handler field from the node
-        abi::emit_store_reg_to_symbol(emitter, "x10", symbol, 0);
-    }
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the consumed node for deallocation
-    emitter.instruction("mov x0, x9");                                          // pass the consumed node to the heap allocator
-    emitter.instruction("bl __rt_heap_free");                                   // free the restored stack node
-    emitter.label(done);
-    emitter.instruction("mov w0, #0");                                          // report EvalStatus::Ok to magician
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the C caller frame
-    emitter.instruction("add sp, sp, #32");                                     // release wrapper scratch storage
-    emitter.instruction("ret");                                                 // return to the Rust runtime adapter
+    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_call_label(emitter, "__rt_core_exception_handler_pop");
+    abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 0);
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
 }
 
-/// Emits the x86_64 C wrapper for restoring the prior native exception handler.
-fn emit_restore_exception_handler_x86_64(module: &Module, emitter: &mut Emitter) {
-    let done = "__elephc_eval_exception_handler_restore_done_x";
-    label_c_global(module, emitter, "__elephc_eval_exception_handler_restore");
-    emitter.instruction("push rbp");                                            // preserve the C caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // reserve the previous-state node pointer
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_exception_handler_stack", 0);
-    emitter.instruction("test r10, r10");                                       // check whether a previous registration exists
-    emitter.instruction(&format!("jz {done}"));                                 // an empty stack leaves the current state unchanged
-    emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // preserve the node across release calls
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_php_exception_handler_value", 0);
-    emitter.instruction("test rax, rax");                                       // skip release when PHP null is active
-    emitter.instruction("jz 1f");                                               // branch around the Mixed release
-    emitter.instruction("call __rt_decref_mixed");                              // release the current PHP-visible callback owner
-    emitter.label("1");
-    abi::emit_load_symbol_to_reg(emitter, "rax", "_php_exception_handler_callable", 0);
-    emitter.instruction("call __rt_callable_descriptor_release");               // release the current normalized descriptor owner
-    abi::emit_load_symbol_to_reg(
-        emitter,
-        "r10",
-        "_php_exception_handler_context_release",
-        0,
-    );
-    emitter.instruction("test r10, r10");                                       // native handlers carry no eval context owner
-    emitter.instruction("jz 2f");                                               // skip the absent eval-context release callback
-    abi::emit_load_symbol_to_reg(emitter, "rdi", "_php_exception_handler_context", 0);
-    emitter.instruction("call r10");                                            // release the active handler's retained eval context
-    emitter.label("2");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the previous-state node
-    for (offset, symbol) in [
-        (0, "_php_exception_handler_stack"),
-        (8, "_php_exception_handler_value"),
-        (16, "_php_exception_handler_callable"),
-        (24, "_php_exception_handler_context"),
-        (32, "_php_exception_handler_context_release"),
-    ] {
-        emitter.instruction(&format!("mov r11, QWORD PTR [r10 + {offset}]"));   // load one prior handler field from the node
-        abi::emit_store_reg_to_symbol(emitter, "r11", symbol, 0);
-    }
-    emitter.instruction("mov rax, r10");                                        // pass the consumed node to the heap allocator
-    emitter.instruction("call __rt_heap_free");                                 // free the restored stack node
-    emitter.label(done);
-    emitter.instruction("xor eax, eax");                                        // report EvalStatus::Ok to magician
-    emitter.instruction("mov rsp, rbp");                                        // release wrapper scratch storage
-    emitter.instruction("pop rbp");                                             // restore the C caller frame pointer
-    emitter.instruction("ret");                                                 // return to the Rust runtime adapter
-}
 
 /// Emits a platform-C global label for one generated eval wrapper.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {

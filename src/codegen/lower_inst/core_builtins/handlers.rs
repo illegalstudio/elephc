@@ -88,6 +88,9 @@ pub(super) fn lower_set_error_handler(
     preserve_previous_callback_result(ctx, "_php_error_handler_value");
     retain_and_store_mixed(ctx, callback, "_php_error_handler_value")?;
     retain_and_store_descriptor(ctx, descriptor, "_php_error_handler_callable")?;
+    let mask_done = ctx.next_label("set_error_handler_null_mask");
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), "_php_error_handler_callable", 0);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &mask_done);
     load_integer_operand(ctx, mask)?;
     abi::emit_store_reg_to_symbol(
         ctx.emitter,
@@ -95,6 +98,7 @@ pub(super) fn lower_set_error_handler(
         "_php_error_handler_mask",
         0,
     );
+    ctx.emitter.label(&mask_done);
     abi::emit_store_zero_to_symbol(ctx.emitter, "_php_error_handler_context", 0);
     abi::emit_store_zero_to_symbol(
         ctx.emitter,
@@ -139,34 +143,14 @@ pub(super) fn lower_set_exception_handler(
 
 /// Restores the preceding AOT user error handler, if one was registered.
 pub(super) fn lower_restore_error_handler(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    restore_previous_handler_node(
-        ctx,
-        "_php_error_handler_stack",
-        "_php_error_handler_value",
-        "_php_error_handler_callable",
-        Some("_php_error_handler_mask"),
-        &[
-            "_php_error_handler_context",
-            "_php_error_handler_context_release",
-        ],
-    );
+    abi::emit_call_label(ctx.emitter, "__rt_core_error_handler_pop");
     emit_bool_result(ctx, true);
     Ok(())
 }
 
 /// Restores the preceding AOT uncaught-exception handler, if present.
 pub(super) fn lower_restore_exception_handler(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    restore_previous_handler_node(
-        ctx,
-        "_php_exception_handler_stack",
-        "_php_exception_handler_value",
-        "_php_exception_handler_callable",
-        None,
-        &[
-            "_php_exception_handler_context",
-            "_php_exception_handler_context_release",
-        ],
-    );
+    abi::emit_call_label(ctx.emitter, "__rt_core_exception_handler_pop");
     emit_bool_result(ctx, true);
     Ok(())
 }
@@ -350,110 +334,6 @@ fn retain_and_store_descriptor(
         0,
     );
     Ok(())
-}
-
-/// Releases the current handler and transfers the top linked-node state back to globals.
-fn restore_previous_handler_node(
-    ctx: &mut FunctionContext<'_>,
-    stack_symbol: &str,
-    value_symbol: &str,
-    callable_symbol: &str,
-    mask_symbol: Option<&str>,
-    extra_symbols: &[&str],
-) {
-    let node_reg = abi::nested_call_reg(ctx.emitter);
-    abi::emit_load_symbol_to_reg(ctx.emitter, node_reg, stack_symbol, 0);
-    let done = ctx.next_label("restore_handler_done");
-    emit_branch_if_zero(ctx, node_reg, &done);
-
-    abi::emit_push_reg(ctx.emitter, node_reg);
-    release_global_mixed(ctx, value_symbol);
-    release_global_descriptor(ctx, callable_symbol);
-    if let [context_symbol, release_symbol, ..] = extra_symbols {
-        release_handler_context(ctx, context_symbol, release_symbol);
-    }
-    abi::emit_pop_reg(ctx.emitter, node_reg);
-
-    for (offset, symbol) in [
-        (0, stack_symbol),
-        (8, value_symbol),
-        (16, callable_symbol),
-    ] {
-        let scratch = abi::secondary_scratch_reg(ctx.emitter);
-        abi::emit_load_from_address(ctx.emitter, scratch, node_reg, offset);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, symbol, 0);
-    }
-    if let Some(mask_symbol) = mask_symbol {
-        let scratch = abi::secondary_scratch_reg(ctx.emitter);
-        abi::emit_load_from_address(ctx.emitter, scratch, node_reg, 24);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, mask_symbol, 0);
-    }
-    let extra_base = if mask_symbol.is_some() { 32 } else { 24 };
-    for (index, symbol) in extra_symbols.iter().enumerate() {
-        let scratch = abi::secondary_scratch_reg(ctx.emitter);
-        abi::emit_load_from_address(ctx.emitter, scratch, node_reg, extra_base + index * 8);
-        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, symbol, 0);
-    }
-    abi::emit_reg_move(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        node_reg,
-    );
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
-    ctx.emitter.label(&done);
-}
-
-/// Releases the eval context owner carried by the selected active handler.
-fn release_handler_context(
-    ctx: &mut FunctionContext<'_>,
-    context_symbol: &str,
-    release_symbol: &str,
-) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let release_reg = abi::nested_call_reg(ctx.emitter);
-    let done = ctx.next_label("release_exception_handler_context_done");
-    abi::emit_load_symbol_to_reg(
-        ctx.emitter,
-        result_reg,
-        release_symbol,
-        0,
-    );
-    emit_branch_if_zero(ctx, result_reg, &done);
-    abi::emit_reg_move(ctx.emitter, release_reg, result_reg);
-    abi::emit_load_symbol_to_reg(
-        ctx.emitter,
-        abi::int_arg_reg_name(ctx.emitter.target, 0),
-        context_symbol,
-        0,
-    );
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("blr {release_reg}")), // release the retained magician context owner
-        Arch::X86_64 => ctx.emitter.instruction(&format!("call {release_reg}")), // release the retained magician context owner
-    }
-    ctx.emitter.label(&done);
-    abi::emit_store_zero_to_symbol(ctx.emitter, context_symbol, 0);
-    abi::emit_store_zero_to_symbol(ctx.emitter, release_symbol, 0);
-}
-
-/// Releases the boxed Mixed value owned by one runtime global and clears the slot.
-fn release_global_mixed(ctx: &mut FunctionContext<'_>, symbol: &str) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, symbol, 0);
-    let done = ctx.next_label("release_handler_mixed_done");
-    emit_branch_if_zero(ctx, result_reg, &done);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.label(&done);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, symbol, 0);
-}
-
-/// Releases the callable descriptor owned by one runtime global and clears the slot.
-fn release_global_descriptor(ctx: &mut FunctionContext<'_>, symbol: &str) {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, symbol, 0);
-    callable_descriptor::emit_release_current_descriptor(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, symbol, 0);
 }
 
 /// Loads an integer operand, casting boxed Mixed values with PHP semantics.
