@@ -10,6 +10,34 @@
 
 use crate::support::*;
 
+/// Repeating opaque eval constant inventories leaves no extra live allocations after cleanup.
+#[test]
+fn test_core_eval_flat_constant_inventory_releases_each_result() {
+    let outstanding = |iterations: usize| {
+        let source = format!(r#"<?php
+$source = 'define("INVENTORY_PAYLOAD", [1, 2, 3]);
+for ($iteration = 0; $iteration < {iterations}; $iteration++) {{
+    $flat = get_defined_constants();
+    unset($flat);
+    $flat = get_defined_constants(false);
+    unset($flat);
+}}
+return 42;' . ' // ' . $argc;
+echo eval($source);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "42");
+        let (allocations, frees) = parse_gc_stats(&output.stderr);
+        assert!(allocations > 0, "fixture must exercise the runtime heap");
+        (allocations, allocations as i128 - frees as i128)
+    };
+    let (once_allocated, once_live) = outstanding(1);
+    let (repeated_allocated, repeated_live) = outstanding(5);
+    assert!(repeated_allocated > once_allocated, "repeat must actually materialize more inventories");
+    assert_eq!(repeated_live, once_live, "flat constant inventories leaked per-call storage");
+}
+
 /// Verifies GC controls and the PHP 8 status schema across callable forms.
 #[test]
 fn test_core_gc_controls_and_status_schema() {

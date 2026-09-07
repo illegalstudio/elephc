@@ -360,7 +360,6 @@ fn eval_get_defined_constants(
         None => false,
     };
     let entries = context.defined_constant_entries();
-    let user = assoc_from_entries(&entries, values)?;
     let core = core_constant_array(context, values)?;
     if !categorize {
         let mut result = core;
@@ -371,6 +370,7 @@ fn eval_get_defined_constants(
         }
         return Ok(result);
     }
+    let user = assoc_from_entries(&entries, values)?;
     let mut result = values.assoc_new(2)?;
     result = set_assoc_cell(result, "Core", core, values)?;
     result = set_assoc_cell(result, "user", user, values)?;

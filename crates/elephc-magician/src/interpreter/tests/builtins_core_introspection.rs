@@ -10,6 +10,31 @@
 use super::super::*;
 use super::support::*;
 
+/// Flat inventories allocate only their returned hash, never an abandoned user-category hash.
+#[test]
+fn execute_program_flat_constant_inventory_has_no_unused_category() {
+    for argument in ["", "false"] {
+        let source = format!(
+            "define('INVENTORY_USER', 42); return get_defined_constants({argument});"
+        );
+        let program = parse_fragment(source.as_bytes()).expect("parse flat inventory");
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let result = execute_program(&program, &mut scope, &mut values)
+            .expect("execute flat inventory");
+        let arrays = values.values.values()
+            .filter(|value| matches!(value, FakeValue::Assoc(_)))
+            .count();
+        assert_eq!(arrays, 1, "get_defined_constants({argument}) abandoned a category");
+        let FakeValue::Assoc(entries) = values.get(result) else {
+            panic!("constant inventory must be associative");
+        };
+        let user = entries.iter().find(|(key, _)| key == &FakeKey::String("INVENTORY_USER".into()))
+            .expect("flat inventory includes user constants").1;
+        assert_eq!(values.get(user), FakeValue::Int(42));
+    }
+}
+
 /// Thin eval agrees with the native bridge on null masks and restoring an empty stack.
 #[test]
 fn execute_program_preserves_null_handler_mask_and_clears_empty_restore() {
