@@ -147,6 +147,13 @@ impl Checker {
         } else {
             args
         };
+        // The source planner keeps indexed unpacks visible for runtime checks.
+        // Builtin signatures count literal unpacked values instead of containers,
+        // but only after the planner has validated ordering and named arguments.
+        let static_positional_args = (!is_lazy_construct)
+            .then(|| crate::types::call_args::expand_planned_positional_spreads(args))
+            .flatten();
+        let args = static_positional_args.as_deref().unwrap_or(args);
 
         if name == "eval" {
             // eval is not registry-backed, and argument normalization tolerates

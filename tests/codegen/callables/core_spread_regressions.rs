@@ -15,10 +15,13 @@ fn test_core_introspection_spread_multiple_literals_and_cuf_named() {
     let out = compile_and_run(r#"<?php
 class MultiSpreadVars { public int $value = 7; public function method(): void {} }
 echo get_class_vars(...[], ...[MultiSpreadVars::class])['value'], ':';
+echo call_user_func('get_class_vars', ...[], ...[MultiSpreadVars::class])['value'], ':';
+$vars = get_class_vars(...);
+echo $vars(...[MultiSpreadVars::class], ...[])['value'], ':';
 echo call_user_func('get_class_vars', class: MultiSpreadVars::class)['value'], ':';
 echo implode(',', call_user_func('get_class_methods', object_or_class: new MultiSpreadVars()));
 "#);
-    assert_eq!(out, "7:7:method");
+    assert_eq!(out, "7:7:7:7:method");
 }
 
 /// Empty spreads followed by named arguments must not bypass static specialization.
