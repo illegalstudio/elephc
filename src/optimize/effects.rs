@@ -364,8 +364,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             let evaluated = expr_effect(array).combine(expr_effect(index));
             match statically_known_array_read(array, index) {
                 Some(true) => evaluated,
-                Some(false) => evaluated.with_side_effects(),
-                None => evaluated.with_side_effects().with_may_throw(),
+                Some(false) | None => evaluated.with_side_effects().with_may_throw().with_writes_globals(),
             }
         }
         ExprKind::Ternary {

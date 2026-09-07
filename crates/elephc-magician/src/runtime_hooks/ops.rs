@@ -33,6 +33,12 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Keeps trigger_error's precise level and avoids redispatching default formatted text.
+    fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_warning_raw(message.as_ptr(), message.len() as u64); }
+        Ok(())
+    }
+
     /// Reads suspended AOT frame metadata through the shared activation reader ABI.
     fn runtime_backtrace_entry(&mut self, index: usize, options: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         let cell = unsafe { __elephc_eval_backtrace_entry(index as u64, options) };

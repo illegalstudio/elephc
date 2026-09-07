@@ -535,13 +535,13 @@ fn emit_default_user_error(
         Arch::AArch64 => ctx.load_string_value_to_regs(message, "x1", "x2")?,
         Arch::X86_64 => ctx.load_string_value_to_regs(message, "rdi", "rsi")?,
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
     emit_user_error_fragment(ctx, b" in ");
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.load_string_value_to_regs(file, "x1", "x2")?,
         Arch::X86_64 => ctx.load_string_value_to_regs(file, "rdi", "rsi")?,
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
     emit_user_error_fragment(ctx, b" on line ");
     load_integer_operand(ctx, line)?;
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
@@ -552,7 +552,7 @@ fn emit_default_user_error(
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the formatted line-number length to the diagnostic helper
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
     emit_user_error_fragment(ctx, b"\n");
     ctx.emitter.label(&skip_output);
     load_integer_operand(ctx, level)?;
@@ -630,7 +630,7 @@ fn emit_user_error_fragment(ctx: &mut FunctionContext<'_>, bytes: &[u8]) {
             abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_write");
 }
 
 /// Exits with PHP's fatal status when the unhandled level is E_USER_ERROR.

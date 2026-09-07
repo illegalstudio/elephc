@@ -295,7 +295,7 @@ pub(in crate::optimize) fn instance_property_read_effect(
         effect = effect.combine(instance_method_call_effect(object, "__get"));
     }
     if warns_missing {
-        effect = effect.with_side_effects();
+        effect = effect.with_side_effects().with_may_throw().with_writes_globals();
     }
     effect
 }

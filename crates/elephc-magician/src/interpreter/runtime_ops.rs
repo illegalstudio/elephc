@@ -20,6 +20,11 @@ use crate::value::RuntimeCellHandle;
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Writes a diagnostic already dispatched and filtered by its precise PHP error level.
+    fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
+        self.warning(message)
+    }
+
     /// Materializes one suspended native PHP frame, or returns None at the end of the stack.
     fn runtime_backtrace_entry(&mut self, _index: usize, _options: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Ok(None)

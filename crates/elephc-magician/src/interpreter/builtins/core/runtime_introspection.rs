@@ -266,7 +266,7 @@ fn eval_trigger_error(
     };
     if !handled {
         if reporting_mask & level != 0 {
-            values.warning(&format_user_error(&message, level, context))?;
+            values.warning_unhandled(&format_user_error(&message, level, context))?;
         }
         if level == E_USER_ERROR {
             return Err(EvalStatus::UserFatal);

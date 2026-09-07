@@ -9,6 +9,14 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Warning-capable operations must not be reordered across state accessed by a user handler.
+#[test]
+fn warning_handlers_observe_and_mutate_program_state() {
+    assert!(Effects::MAY_WARN.may_observe());
+    assert!(Effects::MAY_WARN.may_mutate());
+    assert!(Effects::MAY_WARN.is_observable());
+}
+
 /// The pure effect set is empty and reports itself as pure.
 #[test]
 fn pure_has_no_bits() {

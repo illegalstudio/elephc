@@ -250,6 +250,10 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "__rt_pcntl_dispatching");
     emitter.instruction("str x0, [x9]");                                        // publish Magician handler execution to the Fiber guard
     emitter.instruction("ret");                                                 // return to the Rust interpreter
+    label_c_global(emitter, "__elephc_eval_warning_raw");
+    emitter.instruction("mov x2, x1");                                          // adapt the already-filtered warning length to the writer ABI
+    emitter.instruction("mov x1, x0");                                          // adapt the already-filtered warning pointer to the writer ABI
+    emitter.instruction("b __rt_diag_write");                                   // do not redispatch trigger_error default output
 
     label_c_global(emitter, "__elephc_eval_value_release");
     emitter.instruction("b __rt_decref_mixed");                                 // release one eval-owned boxed Mixed cell

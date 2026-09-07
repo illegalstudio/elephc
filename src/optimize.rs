@@ -465,8 +465,8 @@ impl Effect {
                     | crate::ir::Effects::OUTPUT
                     | crate::ir::Effects::REFCOUNT_OP,
             ),
-            may_throw: effects.contains(crate::ir::Effects::MAY_THROW),
-            writes_globals: effects.contains(crate::ir::Effects::WRITES_GLOBAL),
+            may_throw: effects.intersects(crate::ir::Effects::MAY_THROW | crate::ir::Effects::MAY_WARN),
+            writes_globals: effects.intersects(crate::ir::Effects::WRITES_GLOBAL | crate::ir::Effects::MAY_WARN),
         };
         if effects.intersects(
             crate::ir::Effects::READS_FS

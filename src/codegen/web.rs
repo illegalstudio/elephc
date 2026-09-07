@@ -106,6 +106,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 
     emit_concat_offset_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
+    abi::emit_call_label(emitter, "__rt_diag_reset");
     emit_gc_state_reset(emitter);
 
     // The heap arena reset MUST be the final reset step: the static/global releases

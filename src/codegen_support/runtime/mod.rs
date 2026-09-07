@@ -19,6 +19,7 @@ mod curl;
 pub(crate) mod data;
 mod diagnostics;
 mod error_handlers;
+mod warning_dispatch;
 mod emitters;
 mod bcmath;
 mod eval_bridge;

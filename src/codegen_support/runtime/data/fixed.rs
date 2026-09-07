@@ -276,6 +276,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_exc_handler_top", 8, target));
     out.push_str(&comm_directive("_exc_call_frame_top", 8, target));
     out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
+    for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
+        out.push_str(&comm_directive(symbol, 8, target));
+    }
+    for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {
+        out.push_str(&format!(".globl {symbol}\n{symbol}:\n    .ascii \"{value}\"\n"));
+    }
     out.push_str(&comm_directive("_exc_value", 8, target));
     out.push_str(&comm_directive("_fiber_current", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
