@@ -60,8 +60,7 @@ impl LabelGen {
 
 /// Emits the `__rt_web_reset` routine for the module.
 ///
-/// Always emitted in `--web` builds (even with zero statics) so the handler's
-/// `bl/call __rt_web_reset` resolves; in that case it only resets `_concat_off`.
+/// Always emitted in `--web` builds, even without statics, to reset shared request state.
 /// Runs before the handler body's static-property/enum initializers, so it must
 /// only RELEASE the previous refcounted property value, not rewrite it.
 pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &DataSection) {
@@ -105,6 +104,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     super::enum_singletons::emit_enum_slot_resets(emitter, module);
 
     emit_concat_offset_reset(emitter);
+    emit_core_handler_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
     abi::emit_call_label(emitter, "__rt_diag_reset");
     emit_gc_state_reset(emitter);
@@ -120,6 +120,37 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
 
     abi::emit_frame_restore(emitter, RESET_FRAME_SIZE);
     abi::emit_return(emitter);
+}
+
+/// Drains both handler stacks and their eval owners while the request heap is still valid.
+fn emit_core_handler_reset(emitter: &mut Emitter) {
+    let again = "__rt_web_reset_core_handlers";
+    emitter.label(again);
+    for kind in ["error", "exception"] {
+        let next = format!("__rt_web_reset_{kind}_handler");
+        emitter.label(&next);
+        abi::emit_call_label(emitter, &format!("__rt_core_{kind}_handler_pop"));
+        abi::emit_load_symbol_to_reg(
+            emitter, abi::int_result_reg(emitter), &format!("_php_{kind}_handler_stack"), 0,
+        );
+        abi::emit_branch_if_int_result_nonzero(emitter, &next);
+    }
+    // The final pop can restore a bottom registration. Destructors can also
+    // register a handler of either kind, so drain again until all owners are gone.
+    for kind in ["error", "exception"] {
+        for suffix in ["stack", "value", "callable", "context", "context_release"] {
+            abi::emit_load_symbol_to_reg(
+                emitter, abi::int_result_reg(emitter), &format!("_php_{kind}_handler_{suffix}"), 0,
+            );
+            abi::emit_branch_if_int_result_nonzero(emitter, again);
+        }
+    }
+    abi::emit_store_zero_to_symbol(emitter, "_php_error_handler_mask", 0);
+    abi::emit_load_int_immediate(
+        emitter, abi::int_result_reg(emitter),
+        crate::codegen::compile_php_version().error_reporting_mask(),
+    );
+    abi::emit_store_reg_to_symbol(emitter, abi::int_result_reg(emitter), "_php_error_reporting", 0);
 }
 
 /// Restores request-local cycle-collector controls and counters to process-start defaults.
@@ -158,6 +189,34 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 8);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 16);
     abi::emit_store_zero_to_symbol(emitter, "_heap_small_bins", 24);
+}
+
+#[cfg(test)]
+mod handler_reset_tests {
+    use super::*;
+    use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    /// Every target releases handlers before inventory cleanup and before resetting the heap.
+    #[test]
+    fn web_handler_reset_precedes_heap_reset_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &Module::new(target), &DataSection::new());
+            let asm = emitter.output();
+            let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
+            let heap = asm.find("_heap_off").unwrap();
+            for symbol in ["__rt_core_error_handler_pop", "__rt_core_exception_handler_pop", "_php_error_reporting"] {
+                assert!(asm.find(symbol).unwrap() < inventory, "{target:?}: {symbol}");
+            }
+            assert!(inventory < heap, "{target:?}: handlers need the live request heap");
+        }
+    }
 }
 
 /// Resets one function static local: skips uninitialized slots, releases any

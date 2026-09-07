@@ -1289,6 +1289,47 @@ fn web_gc_stats_are_emitted_per_request() {
     }
 }
 
+/// Native and eval handler owners, stacks, and reporting masks do not survive a request.
+#[test]
+fn web_resets_core_handlers_between_requests() {
+    let dir = make_test_dir("web_core_handler_reset");
+    let src = r#"<?php
+if (isset($_GET['first'])) {
+    $capture = 'old';
+    set_error_handler(function($level, $message) use ($capture) { echo $capture; return true; });
+    set_exception_handler(function($e) use ($capture) { echo $capture; });
+    $source = 'function webEvalError($level, $message) { echo "stale"; return true; }
+function webEvalException($e) { echo "stale"; }
+set_error_handler("webEvalError");
+set_exception_handler("webEvalException");' . ' // ' . $_GET['first'];
+    eval($source);
+    error_reporting(0);
+    echo 'registered';
+    return;
+}
+echo error_reporting() === E_ALL ? 'mask:' : 'bad:';
+echo set_error_handler(null) === null ? 'error:' : 'bad:';
+echo set_exception_handler(null) === null ? 'exception:' : 'bad:';
+restore_error_handler(); restore_error_handler(); restore_error_handler();
+restore_exception_handler(); restore_exception_handler(); restore_exception_handler();
+error_reporting(0);
+trigger_error('new request', E_USER_WARNING);
+echo 'clean';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_request(&addr, "GET", "/?first=1", &[], "");
+    let second = http_request(&addr, "GET", "/", &[], "");
+    let third = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("registered"), "first response: {first:?}");
+    for response in [second, third] {
+        assert!(response.ends_with("mask:error:exception:clean"), "response: {response:?}");
+    }
+}
+
 /// Verifies each request starts with default GC controls and no leaked stream lock.
 #[test]
 fn web_resets_gc_state_and_closes_unreachable_resources_between_requests() {
