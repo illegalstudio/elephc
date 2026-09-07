@@ -101,6 +101,45 @@ pub(crate) fn expand_planned_positional_spreads(args: &[Expr]) -> Option<Vec<Exp
     Some(expanded)
 }
 
+/// Combines a planned by-value indexed-unpack tail without changing named-key semantics.
+/// Callers supply storage knowledge and must validate source ordering before projection.
+/// Literal elements are flattened, but dynamic sources remain evaluated exactly once.
+pub(crate) fn coalesce_planned_indexed_spreads(
+    args: &[Expr],
+    mut is_indexed: impl FnMut(&Expr) -> bool,
+) -> Option<Vec<Expr>> {
+    if has_named_args(args) {
+        return None;
+    }
+    let first = args.iter().position(|arg| matches!(arg.kind, ExprKind::Spread(_)))?;
+    if args.len() - first < 2 {
+        return None;
+    }
+    let mut items = Vec::new();
+    for arg in &args[first..] {
+        let ExprKind::Spread(inner) = &arg.kind else { return None };
+        if !is_indexed(inner) {
+            return None;
+        }
+        if let ExprKind::ArrayLiteral(elements) = &inner.kind {
+            items.extend(elements.iter().cloned());
+        } else {
+            items.push(arg.clone());
+        }
+    }
+    let span = args[first].span;
+    let tail = if items.len() == 1 && matches!(items[0].kind, ExprKind::Spread(_)) {
+        items.pop().unwrap()
+    } else {
+        Expr::new(ExprKind::Spread(Box::new(
+            Expr::new(ExprKind::ArrayLiteral(items), span),
+        )), span)
+    };
+    let mut projected = args[..first].to_vec();
+    projected.push(tail);
+    Some(projected)
+}
+
 /// Returns `true` if `expr` is an `ArrayLiteralAssoc` and any of its keys
 /// resolve to a named (string) key in PHP array-unpack semantics.
 fn static_assoc_spread_has_named_args(expr: &Expr) -> bool {
@@ -213,6 +252,25 @@ mod tests {
         let expanded = expand_static_assoc_spread_args_with_origins(&[arg.clone()]);
         assert_eq!(expanded.args, vec![arg]);
         assert!(expanded.origins == vec![ExpandedArgOrigin::Source]);
+    }
+
+    /// Empty static unpacks disappear without evaluating or cloning a dynamic source twice.
+    #[test]
+    fn coalesced_indexed_spreads_preserve_dynamic_source() {
+        let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("names"))), Span::dummy());
+        let args = [indexed_spread(Vec::new()), dynamic.clone(), indexed_spread(Vec::new())];
+        assert_eq!(coalesce_planned_indexed_spreads(&args, |_| true), Some(vec![dynamic]));
+        assert_eq!(args.len(), 3, "the source planner input is unchanged");
+    }
+
+    /// Named-key sources and positional-after-unpack shapes are not merged as indexed arrays.
+    #[test]
+    fn coalesced_indexed_spreads_reject_nonindexed_or_invalid_tails() {
+        let dynamic = Expr::new(ExprKind::Spread(Box::new(Expr::var("names"))), Span::dummy());
+        assert!(coalesce_planned_indexed_spreads(
+            &[indexed_spread(Vec::new()), dynamic.clone()], |_| false,
+        ).is_none());
+        assert!(coalesce_planned_indexed_spreads(&[dynamic, Expr::int_lit(1)], |_| true).is_none());
     }
 
     /// Builtin signature projection counts unpacked values instead of containers.

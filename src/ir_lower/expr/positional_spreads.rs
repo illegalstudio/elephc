@@ -17,6 +17,14 @@ pub(super) fn lower_positional_spread_args_with_signature(
     args: &[Expr],
     builtin_name: Option<&str>,
 ) -> Option<Vec<crate::ir::ValueId>> {
+    // Keep generic source planning intact. Only by-value indexed tails can be
+    // materialized into one array without losing references or named keys.
+    let projected = (!sig.ref_params.iter().any(|by_ref| *by_ref))
+        .then(|| crate::types::call_args::coalesce_planned_indexed_spreads(
+            args, |source| indexed_spread_source_type(ctx, source).is_some(),
+        ))
+        .flatten();
+    let args = projected.as_deref().unwrap_or(args);
     let spread_idx = single_trailing_indexed_spread_arg(ctx, args)?;
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     if spread_idx > regular_param_count {
@@ -259,10 +267,10 @@ fn coerce_spread_variadic_array(
     )
 }
 
-/// Returns the element count for a statically-known indexed spread source.
+/// Returns an indexed spread length only when no nested unpack can change its size.
 pub(super) fn static_indexed_spread_len(expr: &Expr) -> Option<usize> {
     match &expr.kind {
-        ExprKind::ArrayLiteral(items) => Some(items.len()),
+        ExprKind::ArrayLiteral(items) if !items.iter().any(is_spread_arg) => Some(items.len()),
         _ => None,
     }
 }
@@ -298,7 +306,7 @@ pub(super) fn indexed_spread_source_type(
     let ty = match &expr.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, expr),
-        _ => infer_expr_type_syntactic(expr),
+        _ => array_literal_element_type_for_ir(ctx, expr),
     }
     .codegen_repr();
     if matches!(ty, PhpType::Array(_)) {

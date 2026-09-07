@@ -25,5 +25,6 @@ pub(crate) use planner::{
     validate_no_spread_after_named,
 };
 pub(crate) use static_spread::{
+    coalesce_planned_indexed_spreads,
     expand_planned_positional_spreads, expand_static_assoc_spread_args, has_named_args,
 };

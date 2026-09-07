@@ -154,6 +154,21 @@ impl Checker {
             .then(|| crate::types::call_args::expand_planned_positional_spreads(args))
             .flatten();
         let args = static_positional_args.as_deref().unwrap_or(args);
+        let mut spread_type_error = None;
+        let indexed_spread_args = (!is_lazy_construct && !forwards_callback_names
+            && crate::types::builtin_call_sig(name)
+                .is_some_and(|sig| !sig.ref_params.iter().any(|by_ref| *by_ref)))
+            .then(|| crate::types::call_args::coalesce_planned_indexed_spreads(args, |source| {
+                match self.infer_type(source, env) {
+                    Ok(ty) => matches!(ty.codegen_repr(), PhpType::Array(_)),
+                    Err(error) => { spread_type_error = Some(error); false }
+                }
+            }))
+            .flatten();
+        if let Some(error) = spread_type_error {
+            return Err(error);
+        }
+        let args = indexed_spread_args.as_deref().unwrap_or(args);
 
         if name == "eval" {
             // eval is not registry-backed, and argument normalization tolerates
