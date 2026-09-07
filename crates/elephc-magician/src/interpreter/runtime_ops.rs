@@ -240,7 +240,8 @@ pub trait RuntimeValueOps {
         property: &str,
     ) -> Result<bool, EvalStatus>;
 
-    /// Writes a named property on a runtime object held in a boxed Mixed cell.
+    /// Writes a named property while borrowing both boxed operands.
+    /// Stored values acquire an independent reference; callers still own their input leases.
     fn property_set(
         &mut self,
         object: RuntimeCellHandle,

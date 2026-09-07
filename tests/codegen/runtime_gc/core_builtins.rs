@@ -10,6 +10,25 @@
 
 use crate::support::*;
 
+/// Native property storage must retain borrowed variable cells independently of later assignments.
+#[test]
+fn test_core_eval_property_assignments_keep_independent_cell_owners() {
+    let source = r#"<?php
+$source = '$box = new stdClass(); $value = "first";
+$box->value = $value; $value = "second";
+echo $box->value, ":", $value, "|";
+$name = "value"; $box->{$name} = $value; unset($value);
+echo $box->value, "|";
+class PropertyAlias { public $value = "old"; }
+$alias = new PropertyAlias(); $original = "A";
+$alias->value =& $original; $original = "B";
+echo $alias->value, "|"; $alias->value = "C";
+echo $original; return 42;' . ' // ' . $argc;
+echo ":", eval($source);
+"#;
+    assert_eq!(compile_and_run(source), ":first:second|second|B|C42");
+}
+
 /// Compares deep cleanup after repeated eval results, without allocating loop-control temporaries.
 fn assert_core_eval_collection_cleanup(setup: &str, body: &str) {
     let outstanding = |iterations| {

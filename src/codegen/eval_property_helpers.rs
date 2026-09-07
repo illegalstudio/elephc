@@ -10,6 +10,7 @@
 //!   offsets, so these C-ABI symbols are emitted into the user assembly.
 //! - Supported slots include public properties plus protected/private
 //!   properties when the active eval class scope satisfies PHP visibility.
+//! - Setters borrow their boxed input; the stdClass hash acquires its own reference.
 
 use std::collections::BTreeMap;
 
@@ -539,6 +540,8 @@ fn emit_aarch64_stdclass_property_set_fallback(
     abi::emit_load_int_immediate(emitter, "x10", class_id as i64);
     emitter.instruction("cmp x9, x10");                                         // check whether the receiver is stdClass
     emitter.instruction(&format!("b.ne {}", fail_label));                       // non-stdClass misses remain unsupported eval writes
+    emitter.instruction("ldr x0, [sp, #24]");                                   // acquire a property owner for the borrowed boxed value
+    emitter.instruction("bl __rt_incref");                                      // hash insertion consumes this independent cell reference
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed receiver for the Mixed stdClass setter
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload requested property-name pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload requested property-name length
@@ -564,6 +567,8 @@ fn emit_x86_64_stdclass_property_set_fallback(
     abi::emit_load_int_immediate(emitter, "r10", class_id as i64);
     emitter.instruction("cmp r11, r10");                                        // check whether the receiver is stdClass
     emitter.instruction(&format!("jne {}", fail_label));                        // non-stdClass misses remain unsupported eval writes
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // acquire a property owner for the borrowed boxed value
+    emitter.instruction("call __rt_incref");                                    // hash insertion consumes this independent cell reference
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the boxed receiver for the Mixed stdClass setter
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload requested property-name pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload requested property-name length
