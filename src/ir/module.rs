@@ -41,6 +41,8 @@ impl DataId {
 pub struct TraitMethodInfo {
     /// PHP-visible source spelling retained alongside the case-insensitive map key.
     pub name: String,
+    /// Position in the trait's declaration, independent of hash-map iteration order.
+    pub declaration_order: usize,
     pub signature: FunctionSig,
     pub visibility: Visibility,
     pub is_static: bool,
@@ -81,6 +83,7 @@ pub struct Module {
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
     pub declared_trait_property_names: HashMap<String, Vec<String>>,
+    pub declared_trait_properties: HashMap<String, Vec<crate::parser::ast::ClassProperty>>,
     pub declared_trait_constant_names: HashMap<String, Vec<String>>,
     pub declared_trait_constants: HashMap<String, HashMap<String, crate::parser::ast::Expr>>,
     pub declared_trait_constant_types:
@@ -139,6 +142,7 @@ impl Module {
             declared_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_property_names: HashMap::new(),
+            declared_trait_properties: HashMap::new(),
             declared_trait_constant_names: HashMap::new(),
             declared_trait_constants: HashMap::new(),
             declared_trait_constant_types: HashMap::new(),

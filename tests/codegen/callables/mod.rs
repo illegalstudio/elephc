@@ -17,6 +17,7 @@ mod constants_and_system;
 mod core_reflection;
 mod core_spread_regressions;
 mod core_error_regressions;
+mod core_reflection_regressions;
 mod core_runtime_introspection;
 mod state_and_variadics;
 mod pipe;

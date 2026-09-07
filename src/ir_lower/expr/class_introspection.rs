@@ -315,34 +315,49 @@ fn visible_class_method_names(
     class_name: &str,
 ) -> Vec<String> {
     let mut names = if let Some(info) = ctx.classes.get(class_name) {
-        info.methods
-            .keys()
-            .chain(info.static_methods.keys())
+        let mut order = Vec::new();
+        let mut declaration = Some(info);
+        while let Some(declaring) = declaration {
+            order.extend(declaring.method_decls.iter().map(|method| php_symbol_key(&method.name)));
+            declaration = declaring.parent.as_ref().and_then(|parent| ctx.classes.get(parent));
+        }
+        if ctx.enums.contains_key(class_name) {
+            order.extend(["cases", "from", "tryfrom"].map(str::to_string));
+        }
+        // Compiler-injected classes may have signatures without source declarations.
+        // Keep their fallback deterministic without sorting user-declared methods.
+        let mut fallback = info.methods.keys().chain(info.static_methods.keys()).cloned().collect::<Vec<_>>();
+        fallback.sort_unstable();
+        order.extend(fallback);
+        order.iter()
+            .filter(|method| info.methods.contains_key(*method) || info.static_methods.contains_key(*method))
             .filter(|method| class_method_visible(ctx, class_name, info, method))
             .map(|method| class_method_display_name(ctx, class_name, info, method))
             .collect::<Vec<_>>()
     } else if let Some(info) = ctx.interfaces.get(class_name) {
-        info.method_order
-            .iter()
-            .chain(info.static_method_order.iter())
-            .cloned()
-            .collect::<Vec<_>>()
+        let mut methods = info.method_decls.iter().map(|method| method.name.clone()).collect::<Vec<_>>();
+        for parent in &info.parents {
+            methods.extend(visible_class_method_names(ctx, parent));
+        }
+        methods.extend(info.method_order.iter().chain(info.static_method_order.iter()).cloned());
+        methods
     } else if let Some(methods) = ctx
         .declared_trait_methods
         .iter()
         .find(|(candidate, _)| candidate.eq_ignore_ascii_case(class_name))
         .map(|(_, methods)| methods)
     {
-        methods
-            .iter()
-            .filter(|(_, method)| method.visibility == Visibility::Public)
-            .map(|(_, method)| method.name.clone())
+        let mut methods = methods.values().collect::<Vec<_>>();
+        methods.sort_by_key(|method| method.declaration_order);
+        methods.into_iter()
+            .filter(|method| property_visible(ctx, class_name, &method.visibility))
+            .map(|method| method.name.clone())
             .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
-    names.sort_unstable();
-    names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    let mut seen = HashSet::new();
+    names.retain(|name| seen.insert(php_symbol_key(name)));
     names
 }
 
@@ -365,7 +380,13 @@ fn class_method_display_name(
         .flat_map(|declaring| declaring.method_decls.iter())
         .find(|declaration| php_symbol_key(&declaration.name) == php_symbol_key(method))
         .map(|declaration| declaration.name.clone())
-        .unwrap_or_else(|| method.to_string())
+        .unwrap_or_else(|| {
+            if ctx.enums.contains_key(lookup_class) && method == "tryfrom" {
+                "tryFrom".to_string()
+            } else {
+                method.to_string()
+            }
+        })
 }
 
 /// Returns whether one class method is visible from the current lexical class.
@@ -479,7 +500,14 @@ fn visible_class_default_entries(
         return entries;
     }
     let Some(info) = ctx.classes.get(class_name) else {
-        return Vec::new();
+        return ctx.declared_trait_properties.get(class_name).into_iter()
+            .flat_map(|properties| {
+                properties.iter().filter(|property| !property.is_static)
+                    .chain(properties.iter().filter(|property| property.is_static))
+            })
+            .filter(|property| property_visible(ctx, class_name, &property.visibility))
+            .map(|property| (property.name.clone(), property.default.clone()))
+            .collect();
     };
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
@@ -551,7 +579,9 @@ fn property_visible(
         Visibility::Public => true,
         Visibility::Private => ctx.current_class.as_deref() == Some(declaring_class),
         Visibility::Protected => ctx.current_class.as_deref().is_some_and(|current| {
-            current == declaring_class || class_is_descendant(ctx, current, declaring_class)
+            current == declaring_class
+                || class_is_descendant(ctx, current, declaring_class)
+                || class_is_descendant(ctx, declaring_class, current)
         }),
     }
 }

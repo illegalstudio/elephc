@@ -32,7 +32,12 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);
-    module.declared_trait_property_names = collect_declared_trait_property_names(program);
+    module.declared_trait_properties = collect_declared_trait_properties(program);
+    module.declared_trait_property_names = module.declared_trait_properties.iter()
+        .map(|(name, properties)| {
+            (name.clone(), properties.iter().map(|property| property.name.clone()).collect())
+        })
+        .collect();
     module.declared_trait_constant_names = collect_declared_trait_constant_names(program);
     module.declared_trait_constants = collect_declared_trait_constants(program);
     module.declared_trait_constant_types = collect_declared_trait_constant_types(program);
@@ -285,4 +290,3 @@ pub(super) fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<S
         _ => false,
     }
 }
-

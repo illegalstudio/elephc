@@ -181,10 +181,12 @@ pub(super) fn collect_declared_trait_methods(
                     name.clone(),
                     trait_methods
                         .iter()
-                        .map(|method| {
+                        .enumerate()
+                        .map(|(declaration_order, method)| {
                             let method_key = php_symbol_key(&method.name);
                             let info = TraitMethodInfo {
                                 name: method.name.clone(),
+                                declaration_order,
                                 signature: function::method_signature_from_ast(method),
                                 visibility: method.visibility.clone(),
                                 is_static: method.is_static,
@@ -205,8 +207,10 @@ pub(super) fn collect_declared_trait_methods(
     methods
 }
 
-/// Collects direct PHP property names declared by each trait in source order.
-pub(super) fn collect_declared_trait_property_names(program: &Program) -> HashMap<String, Vec<String>> {
+/// Retains property defaults and visibility for standalone trait introspection in source order.
+pub(super) fn collect_declared_trait_properties(
+    program: &Program,
+) -> HashMap<String, Vec<crate::parser::ast::ClassProperty>> {
     let mut properties = HashMap::new();
     for stmt in program {
         match &stmt.kind {
@@ -217,14 +221,11 @@ pub(super) fn collect_declared_trait_property_names(program: &Program) -> HashMa
             } => {
                 properties.insert(
                     name.clone(),
-                    trait_properties
-                        .iter()
-                        .map(|property| property.name.clone())
-                        .collect(),
+                    trait_properties.clone(),
                 );
             }
             StmtKind::NamespaceBlock { body, .. } => {
-                properties.extend(collect_declared_trait_property_names(body));
+                properties.extend(collect_declared_trait_properties(body));
             }
             _ => {}
         }
