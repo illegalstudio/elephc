@@ -53,6 +53,26 @@ fn test_core_eval_metadata_collections_release_each_result() {
     );
 }
 
+/// Repeated string-byte reads preserve their length and release no borrowed input storage.
+#[test]
+fn test_core_eval_extension_name_byte_views_do_not_allocate() {
+    assert_core_eval_collection_cleanup(
+        "$core = \"CoRe\";",
+        "$result = get_extension_funcs($core); unset($result);",
+    );
+}
+
+/// Native byte-view ABI results preserve the string length and leave caller variables readable.
+#[test]
+fn test_core_eval_extension_name_byte_views_preserve_contents() {
+    let source = r#"<?php
+$source = '$core = "CoRe"; $first = get_extension_funcs($core);
+$second = get_extension_funcs($core); return count($first) + count($second);' . ' // ' . $argc;
+echo eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "118");
+}
+
 /// Repeating opaque eval constant inventories leaves no extra live allocations after cleanup.
 #[test]
 fn test_core_eval_flat_constant_inventory_releases_each_result() {

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Output state and final-object ownership remain shared with native code.
+//! - String-byte views borrow string payloads while Rust copies them, avoiding allocating casts.
 
 use super::*;
 
@@ -176,7 +177,13 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // save the caller's out_ptr storage address
     emitter.instruction("str x2, [sp, #8]");                                    // save the caller's out_len storage address
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve the source cell for non-string conversion
+    emitter.instruction("bl __rt_mixed_unbox");                                 // inspect the final tag and borrow any existing string payload
+    emitter.instruction("cmp x0, #1");                                          // string payloads are already stable while Rust copies their bytes
+    emitter.instruction("b.eq __elephc_eval_value_string_bytes_store");         // skip the allocating string cast for existing strings
+    emitter.instruction("ldr x0, [sp, #16]");                                   // restore non-string input for the borrowed scalar formatting path
     emitter.instruction("bl __rt_mixed_cast_string");                           // cast the boxed eval value to a PHP string pair
+    emitter.label("__elephc_eval_value_string_bytes_store");
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the optional out_ptr storage address
     emitter.instruction("cbz x9, __elephc_eval_value_string_bytes_len");        // skip pointer storage when the caller passed null
     emitter.instruction("str x1, [x9]");                                        // store the string pointer for Rust to copy immediately

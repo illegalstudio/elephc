@@ -170,6 +170,38 @@ mod tests {
         emitter.output()
     }
 
+    /// Byte views bypass allocating string casts on both architectures and all Apple variants.
+    #[test]
+    fn string_byte_views_borrow_existing_payloads_on_every_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            let start = format!("{}:\n", target.extern_symbol("__elephc_eval_value_string_bytes"));
+            let end = format!("{}:\n", target.extern_symbol("__elephc_eval_value_truthy"));
+            let wrapper = asm.split_once(&start).unwrap().1.split_once(&end).unwrap().0;
+            let unbox = wrapper.find("__rt_mixed_unbox").unwrap();
+            let cast = wrapper.find("__rt_mixed_cast_string").unwrap();
+            let store = wrapper.find("__elephc_eval_value_string_bytes_store:").unwrap();
+            assert!(unbox < cast && cast < store, "{target:?}: inspect before fallback cast");
+            match target.arch {
+                Arch::AArch64 => assert!(wrapper.contains("b.eq __elephc_eval_value_string_bytes_store")),
+                Arch::X86_64 => {
+                    assert!(wrapper.contains("jmp __elephc_eval_value_string_bytes_store"));
+                    assert!(wrapper.contains("sub rsp, 32") && wrapper.contains("add rsp, 32"));
+                    let borrowed = wrapper.split_once("call __rt_mixed_unbox").unwrap().1
+                        .split_once("jmp __elephc_eval_value_string_bytes_store").unwrap().0;
+                    assert!(borrowed.contains("mov rax, rdi"), "borrow the unboxed pointer");
+                    assert!(!borrowed.contains("mov rdx,"), "preserve the unboxed length in rdx");
+                }
+            }
+        }
+    }
+
     /// Resource and backtrace inventory adapters export their C ABI on every supported target.
     #[test]
     fn core_inventory_wrappers_apply_platform_c_symbol_mangling() {
