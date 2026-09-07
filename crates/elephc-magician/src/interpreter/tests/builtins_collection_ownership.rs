@@ -67,3 +67,22 @@ fn core_collection_builders_release_all_temporary_cells() {
         assert!(!values.releases.contains(&result), "{name} released its returned array");
     }
 }
+
+/// Numeric Core arguments release their cast boxes without consuming the caller's cells.
+#[test]
+fn core_integer_arguments_release_conversion_cells() {
+    for (name, args) in [("error_reporting", vec![0]), ("debug_backtrace", vec![2, 1])] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let args = args.into_iter().map(|arg| values.int(arg).unwrap()).collect::<Vec<_>>();
+        let result = eval_runtime_introspection_values_result(name, &args, &mut context, &mut values).unwrap();
+        for id in values.values.keys() {
+            let cell = RuntimeCellHandle::from_raw(*id as *mut crate::value::RuntimeCell);
+            if cell == result || args.contains(&cell) {
+                assert!(!values.releases.contains(&cell), "{name} consumed a live caller cell");
+            } else {
+                assert!(values.releases.contains(&cell), "{name} leaked its integer conversion");
+            }
+        }
+    }
+}

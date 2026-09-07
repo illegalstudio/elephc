@@ -73,6 +73,16 @@ echo eval($source);
     assert_eq!(compile_and_run(source), "118");
 }
 
+/// Explicit numeric options release conversion cells even when the input variables are borrowed.
+#[test]
+fn test_core_eval_numeric_options_release_conversion_cells() {
+    assert_core_eval_collection_cleanup(
+        "$mask = 0; $options = 2; $limit = 1;",
+        "$result = error_reporting($mask); unset($result);
+         $result = debug_backtrace($options, $limit); unset($result);",
+    );
+}
+
 /// Repeating opaque eval constant inventories leaves no extra live allocations after cleanup.
 #[test]
 fn test_core_eval_flat_constant_inventory_releases_each_result() {
