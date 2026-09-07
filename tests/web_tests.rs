@@ -1293,6 +1293,8 @@ fn web_gc_stats_are_emitted_per_request() {
 #[test]
 fn web_resets_core_handlers_between_requests() {
     let dir = make_test_dir("web_core_handler_reset");
+    let started = Instant::now();
+    eprintln!("web Core handler reset: compiling web and eval fixture");
     let src = r#"<?php
 if (isset($_GET['first'])) {
     $capture = 'old';
@@ -1317,11 +1319,15 @@ trigger_error('new request', E_USER_WARNING);
 echo 'clean';
 "#;
     let bin = compile_web(&dir, src, "app");
+    eprintln!("web Core handler reset: fixture compiled in {:?}", started.elapsed());
     let addr = format!("127.0.0.1:{}", free_port());
     let mut child = spawn_server(&bin, &addr, "1");
-    let first = http_request(&addr, "GET", "/?first=1", &[], "");
-    let second = http_request(&addr, "GET", "/", &[], "");
-    let third = http_request(&addr, "GET", "/", &[], "");
+    let first = http_get_with_timeout(&addr, "/?first=1", Duration::from_secs(10))
+        .expect("handler registration request must complete");
+    let second = http_get_with_timeout(&addr, "/", Duration::from_secs(10))
+        .expect("first handler-reset request must complete");
+    let third = http_get_with_timeout(&addr, "/", Duration::from_secs(10))
+        .expect("second handler-reset request must complete");
     let _ = child.kill();
     let _ = child.wait();
     assert!(first.ends_with("registered"), "first response: {first:?}");

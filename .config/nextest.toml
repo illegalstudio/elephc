@@ -95,6 +95,17 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'test(/codegen::eval::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# This fixture compiles the web prelude together with native closures and opaque
+# eval handlers. Keep HTTP requests bounded in the fixture while allowing a cold
+# compiler/linker run to finish on shared macOS runners.
+[[profile.default.overrides]]
+filter = 'test(web_resets_core_handlers_between_requests)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(web_resets_core_handlers_between_requests)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
 # also rebuild the optional system-client archive on a cold local cache.
 [[profile.default.overrides]]
