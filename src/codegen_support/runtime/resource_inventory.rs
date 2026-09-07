@@ -7,8 +7,8 @@
 //!
 //! Key details:
 //! - Inventory nodes are append-only so descriptor reuse cannot erase closed resources.
-//! - Nodes store PHP id, native payload, subtype, and close state independently.
-//! - Returned hashes use integer PHP resource ids as keys and raw tag-9 values.
+//! - Nodes weakly reference a canonical Mixed cell and record its incarnation state.
+//! - Returned hashes retain that cell, sharing ownership and explicit close state.
 //! - Reset closes still-open owned handles, but preserves fd 0, 1, and 2 aliases.
 
 use crate::codegen_support::abi;
@@ -20,10 +20,50 @@ use crate::codegen_support::RuntimeFeatures;
 pub(super) const DEFAULT_CONTEXT_PAYLOAD: i64 = (1_i64 << 62) - 1;
 
 /// Number of payload bytes in one append-only resource inventory node.
-const RESOURCE_NODE_BYTES: i64 = 40;
+const RESOURCE_NODE_BYTES: i64 = 48;
+
+/// Invalidates the weak inventory entry before the last cell owner runs its destructor.
+fn emit_retire(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.label_global("__rt_resource_inventory_retire");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(emitter, "x9", "_resource_inventory_head");
+            emitter.instruction("ldr x9, [x9]");                                // begin weak-cell lookup without changing the input cell
+            emitter.label("__rt_resource_inventory_retire_loop");
+            emitter.instruction("cbz x9, __rt_resource_inventory_retire_done"); // unregistered resource kinds need no inventory mutation
+            emitter.instruction("ldr x10, [x9, #40]");                          // inspect the weak canonical cell
+            emitter.instruction("cmp x10, x0");                                 // match identity, never a reusable native descriptor
+            emitter.instruction("b.eq __rt_resource_inventory_retire_hit");     // invalidate only this incarnation
+            emitter.instruction("ldr x9, [x9]");                                // continue to the next node
+            emitter.instruction("b __rt_resource_inventory_retire_loop");       // inspect the next weak reference
+            emitter.label("__rt_resource_inventory_retire_hit");
+            emitter.instruction("str xzr, [x9, #40]");                          // clear the weak pointer before storage reclamation
+            emitter.instruction("mov x10, #2");                                 // state 2 means the final owner was destroyed
+            emitter.instruction("str x10, [x9, #32]");                          // enumeration and reset must skip dead resources
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(emitter, "r10", "_resource_inventory_head");
+            emitter.instruction("mov r10, QWORD PTR [r10]");                    // begin weak-cell lookup without changing the input cell
+            emitter.label("__rt_resource_inventory_retire_loop");
+            emitter.instruction("test r10, r10");                               // detect the end of the weak inventory
+            emitter.instruction("jz __rt_resource_inventory_retire_done");      // unregistered resource kinds need no inventory mutation
+            emitter.instruction("cmp QWORD PTR [r10 + 40], rax");               // match cell identity, not a reusable descriptor
+            emitter.instruction("je __rt_resource_inventory_retire_hit");       // invalidate only this incarnation
+            emitter.instruction("mov r10, QWORD PTR [r10]");                    // continue to the next node
+            emitter.instruction("jmp __rt_resource_inventory_retire_loop");     // inspect the next weak reference
+            emitter.label("__rt_resource_inventory_retire_hit");
+            emitter.instruction("mov QWORD PTR [r10 + 40], 0");                 // clear the weak pointer before storage reclamation
+            emitter.instruction("mov QWORD PTR [r10 + 32], 2");                 // enumeration and reset must skip dead resources
+        }
+    }
+    emitter.label("__rt_resource_inventory_retire_done");
+    emitter.instruction("ret");                                                 // return the unchanged resource cell for its destructor
+}
 
 /// Emits inventory registration, close tracking, filtering, and enumeration helpers.
 pub(crate) fn emit_resource_inventory(emitter: &mut Emitter, features: RuntimeFeatures) {
+    emit_retire(emitter);
     match emitter.target.arch {
         Arch::AArch64 => emit_resource_inventory_aarch64(emitter, features),
         Arch::X86_64 => emit_resource_inventory_x86_64(emitter, features),
@@ -56,7 +96,7 @@ fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("str x10, [sp, #0]");                                   // heap free may clobber all scratch registers
     emitter.instruction("str x9, [sp, #8]");                                    // preserve the current node across handle cleanup
     emitter.instruction("ldr x10, [x9, #32]");                                  // inspect whether an ordinary close already consumed it
-    emitter.instruction("cbnz x10, __rt_resource_inventory_reset_free");         // never close one native handle twice
+    emitter.instruction("cbnz x10, __rt_resource_inventory_reset_free");        // never close one native handle twice
     emitter.instruction("ldr x10, [x9, #24]");                                  // load the resource cleanup subtype
     emitter.instruction("cmp x10, #1");                                         // kind 1 owns a native stream descriptor
     emitter.instruction("b.eq __rt_resource_inventory_reset_stream");           // close a leaked stream descriptor directly
@@ -82,17 +122,17 @@ fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
         emitter.label("__rt_resource_inventory_reset_popen");
         emitter.instruction("ldr x0, [x9, #16]");                               // pass the leaked pipe descriptor
         emitter.instruction("mov x10, #0x40000000");                            // reject synthetic or invalid descriptors
-        emitter.instruction("cmp x0, x10");
-        emitter.instruction("b.hs __rt_resource_inventory_reset_free");
+        emitter.instruction("cmp x0, x10");                                     // reject synthetic pipe handles
+        emitter.instruction("b.hs __rt_resource_inventory_reset_free");         // synthetic pipes own no descriptor
         abi::emit_call_label(emitter, "__rt_pclose");
-        emitter.instruction("b __rt_resource_inventory_reset_free");
+        emitter.instruction("b __rt_resource_inventory_reset_free");            // reclaim the node after pipe cleanup
     }
     if features.directory_resource {
         emitter.label("__rt_resource_inventory_reset_directory");
         emitter.instruction("ldr x0, [x9, #16]");                               // pass the leaked directory descriptor
         emitter.instruction("mov x10, #0x40000000");                            // reject synthetic or invalid descriptors
-        emitter.instruction("cmp x0, x10");
-        emitter.instruction("b.hs __rt_resource_inventory_reset_free");
+        emitter.instruction("cmp x0, x10");                                     // reject synthetic directory handles
+        emitter.instruction("b.hs __rt_resource_inventory_reset_free");         // synthetic directories own no descriptor
         abi::emit_call_label(emitter, "__rt_closedir");
     }
     emitter.label("__rt_resource_inventory_reset_free");
@@ -100,7 +140,7 @@ fn emit_reset_aarch64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("mov x0, x9");                                          // free the raw inventory node
     abi::emit_call_label(emitter, "__rt_heap_free");
     emitter.instruction("ldr x9, [sp, #0]");                                    // continue from the saved next pointer
-    emitter.instruction("b __rt_resource_inventory_reset_loop");
+    emitter.instruction("b __rt_resource_inventory_reset_loop");                // process the next incarnation
     emitter.label("__rt_resource_inventory_reset_done");
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
@@ -122,14 +162,14 @@ fn emit_register_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x0, x1, [sp, #0]");                                // save PHP id and native payload
     emitter.instruction("str x2, [sp, #16]");                                   // save the resource subtype
     emitter.instruction("cmp x0, #4");                                          // standard streams and the implicit context are synthesized
-    emitter.instruction("b.le __rt_resource_inventory_register_done");          // do not duplicate ids 1 through 4 in the linked list
+    emitter.instruction("b.le __rt_resource_inventory_register_standard");      // synthesized entries need no canonical inventory cell
     abi::emit_symbol_address(emitter, "x9", "_resource_inventory_head");
     emitter.instruction("ldr x10, [x9]");                                       // load the first recorded incarnation
     emitter.label("__rt_resource_inventory_register_find");
     emitter.instruction("cbz x10, __rt_resource_inventory_register_new");       // a missing id needs a fresh node
     emitter.instruction("ldr x11, [x10, #8]");                                  // load the node's PHP id
     emitter.instruction("cmp x11, x0");                                         // compare with the incoming PHP id
-    emitter.instruction("b.eq __rt_resource_inventory_register_done");          // aliases of an existing resource add no new incarnation
+    emitter.instruction("b.eq __rt_resource_inventory_register_found");         // aliases share the existing incarnation node
     emitter.instruction("ldr x10, [x10, #0]");                                  // follow the creation-order next pointer
     emitter.instruction("b __rt_resource_inventory_register_find");             // continue until the id is found or the list ends
 
@@ -145,6 +185,7 @@ fn emit_register_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload resource subtype
     emitter.instruction("str x10, [x9, #24]");                                  // store resource subtype
     emitter.instruction("str xzr, [x9, #32]");                                  // closed = false
+    emitter.instruction("str xzr, [x9, #40]");                                  // weak canonical cell is bound after boxing
     abi::emit_symbol_address(emitter, "x10", "_resource_inventory_tail");
     emitter.instruction("ldr x11, [x10]");                                      // load the preceding tail
     emitter.instruction("cbz x11, __rt_resource_inventory_register_first");     // an empty list initializes its head
@@ -155,6 +196,12 @@ fn emit_register_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x11]");                                       // publish the first node as list head
     emitter.label("__rt_resource_inventory_register_tail");
     emitter.instruction("str x9, [x10]");                                       // publish the new tail
+    emitter.instruction("mov x10, x9");                                         // return the new node through the common found path
+    emitter.label("__rt_resource_inventory_register_found");
+    emitter.instruction("mov x0, x10");                                         // expose the canonical cell slot to the boxing caller
+    emitter.instruction("b __rt_resource_inventory_register_done");             // preserve the node result
+    emitter.label("__rt_resource_inventory_register_standard");
+    emitter.instruction("mov x0, #0");                                          // synthesized resources have no node
 
     emitter.label("__rt_resource_inventory_register_done");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame state
@@ -289,6 +336,8 @@ fn emit_get_resources_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload current node
     emitter.instruction("cbz x9, __rt_get_resources_done");                     // null ends the inventory walk
     emitter.instruction("ldr x10, [x9, #32]");                                  // load closed flag
+    emitter.instruction("cmp x10, #2");                                         // destroyed resources no longer belong in PHP inventories
+    emitter.instruction("b.eq __rt_get_resources_next");                        // skip dead incarnations even in the Unknown filter
     emitter.instruction("cbnz x10, __rt_get_resources_type_unknown");           // closed resources expose the Unknown type
     emitter.instruction("ldr x10, [x9, #24]");                                  // load open resource subtype
     emitter.instruction("cmp x10, #10");                                        // stream-context subtype?
@@ -312,11 +361,16 @@ fn emit_get_resources_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x11, x10");                                        // otherwise require an exact type match
     emitter.instruction("b.ne __rt_get_resources_next");                        // skip nonmatching resources
     emitter.label("__rt_get_resources_insert_node");
+    emitter.instruction("ldr x0, [x9, #40]");                                   // retain the shared cell for the new hash owner
+    abi::emit_call_label(emitter, "__rt_incref");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // restore current node after retention
     emitter.instruction("ldr x0, [sp, #8]");                                    // destination hash
     emitter.instruction("ldr x1, [x9, #8]");                                    // integer key = PHP resource id
-    emitter.instruction("ldr x2, [x9, #16]");                                   // value payload, already -id after close
-    emitter.instruction("ldr x3, [x9, #24]");                                   // preserve original resource subtype
-    abi::emit_call_label(emitter, "__rt_resource_inventory_insert");
+    emitter.instruction("mov x2, #-1");                                         // integer PHP id key
+    emitter.instruction("ldr x3, [x9, #40]");                                   // share the canonical Mixed resource cell
+    emitter.instruction("mov x4, #0");                                          // boxed cells have no high payload word
+    emitter.instruction("mov x5, #7");                                          // transfer the retained Mixed reference to the hash
+    abi::emit_call_label(emitter, "__rt_hash_set");
     emitter.instruction("str x0, [sp, #8]");                                    // save destination after possible growth
     emitter.label("__rt_get_resources_next");
     emitter.instruction("ldr x9, [sp, #16]");                                   // restore current node after helper calls
@@ -368,7 +422,7 @@ fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     }
     if features.directory_resource {
         emitter.instruction("cmp r11, 4");                                      // kind 4 owns an open directory stream
-        emitter.instruction("je __rt_resource_inventory_reset_directory_x86"); // release the leaked DIR pointer mapping
+        emitter.instruction("je __rt_resource_inventory_reset_directory_x86");  // release the leaked DIR pointer mapping
     }
     emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");          // other resource kinds have no inventory-owned destructor
     emitter.label("__rt_resource_inventory_reset_stream_x86");
@@ -378,20 +432,20 @@ fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("cmp rdi, 0x40000000");                                 // reject synthetic or invalid descriptors
     emitter.instruction("jae __rt_resource_inventory_reset_free_x86");          // no operating-system handle is owned
     abi::emit_call_label(emitter, "close");
-    emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");
+    emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");          // reclaim the node after stream cleanup
     if features.popen_resource {
         emitter.label("__rt_resource_inventory_reset_popen_x86");
         emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");                   // pass the leaked pipe descriptor
         emitter.instruction("cmp rdi, 0x40000000");                             // reject synthetic or invalid descriptors
-        emitter.instruction("jae __rt_resource_inventory_reset_free_x86");
+        emitter.instruction("jae __rt_resource_inventory_reset_free_x86");      // synthetic pipes own no descriptor
         abi::emit_call_label(emitter, "__rt_pclose");
-        emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");
+        emitter.instruction("jmp __rt_resource_inventory_reset_free_x86");      // reclaim the node after pipe cleanup
     }
     if features.directory_resource {
         emitter.label("__rt_resource_inventory_reset_directory_x86");
         emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");                   // pass the leaked directory descriptor
         emitter.instruction("cmp rdi, 0x40000000");                             // reject synthetic or invalid descriptors
-        emitter.instruction("jae __rt_resource_inventory_reset_free_x86");
+        emitter.instruction("jae __rt_resource_inventory_reset_free_x86");      // synthetic directories own no descriptor
         abi::emit_call_label(emitter, "__rt_closedir");
     }
     emitter.label("__rt_resource_inventory_reset_free_x86");
@@ -399,7 +453,7 @@ fn emit_reset_x86_64(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("mov rax, r10");                                        // free the raw inventory node
     abi::emit_call_label(emitter, "__rt_heap_free");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // continue from the saved next pointer
-    emitter.instruction("jmp __rt_resource_inventory_reset_loop_x86");
+    emitter.instruction("jmp __rt_resource_inventory_reset_loop_x86");          // process the next incarnation
     emitter.label("__rt_resource_inventory_reset_done_x86");
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_head", 0);
     abi::emit_store_zero_to_symbol(emitter, "_resource_inventory_tail", 0);
@@ -421,7 +475,7 @@ fn emit_register_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save native payload
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save resource subtype
     emitter.instruction("cmp rdi, 4");                                          // ids 1 through 4 are synthesized
-    emitter.instruction("jle __rt_resource_inventory_register_done_x86");       // do not append standard entries
+    emitter.instruction("jle __rt_resource_inventory_register_standard_x86");   // synthesized entries need no canonical inventory cell
     abi::emit_symbol_address(emitter, "r10", "_resource_inventory_head");
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // load first node
     emitter.label("__rt_resource_inventory_register_find_x86");
@@ -429,7 +483,7 @@ fn emit_register_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_resource_inventory_register_new_x86");         // allocate a node for a new id
     emitter.instruction("mov r11, QWORD PTR [r10 + 8]");                        // load stored PHP id
     emitter.instruction("cmp r11, QWORD PTR [rbp - 8]");                        // compare with incoming id
-    emitter.instruction("je __rt_resource_inventory_register_done_x86");        // aliases do not append
+    emitter.instruction("je __rt_resource_inventory_register_found_x86");       // aliases share the existing incarnation node
     emitter.instruction("mov r10, QWORD PTR [r10]");                            // follow next pointer
     emitter.instruction("jmp __rt_resource_inventory_register_find_x86");       // continue search
 
@@ -445,6 +499,7 @@ fn emit_register_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload resource subtype
     emitter.instruction("mov QWORD PTR [r9 + 24], r10");                        // store resource subtype
     emitter.instruction("mov QWORD PTR [r9 + 32], 0");                          // closed = false
+    emitter.instruction("mov QWORD PTR [r9 + 40], 0");                          // bind the weak cell after boxing
     abi::emit_symbol_address(emitter, "r10", "_resource_inventory_tail");
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load preceding tail
     emitter.instruction("test r11, r11");                                       // is the list empty?
@@ -456,6 +511,12 @@ fn emit_register_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r11], r9");                             // publish first node as head
     emitter.label("__rt_resource_inventory_register_tail_x86");
     emitter.instruction("mov QWORD PTR [r10], r9");                             // publish new tail
+    emitter.instruction("mov r10, r9");                                         // return the new node through the common found path
+    emitter.label("__rt_resource_inventory_register_found_x86");
+    emitter.instruction("mov rax, r10");                                        // expose the canonical cell slot to the boxing caller
+    emitter.instruction("jmp __rt_resource_inventory_register_done_x86");       // preserve the node result
+    emitter.label("__rt_resource_inventory_register_standard_x86");
+    emitter.instruction("xor eax, eax");                                        // synthesized resources have no node
 
     emitter.label("__rt_resource_inventory_register_done_x86");
     emitter.instruction("add rsp, 32");                                         // release tuple spills
@@ -598,6 +659,8 @@ fn emit_get_resources_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload current node
     emitter.instruction("test r10, r10");                                       // did the linked list end?
     emitter.instruction("jz __rt_get_resources_done_x86");                      // return completed hash
+    emitter.instruction("cmp QWORD PTR [r10 + 32], 2");                         // destroyed incarnations are absent from every filter
+    emitter.instruction("je __rt_get_resources_next_x86");                      // skip retired cells
     emitter.instruction("cmp QWORD PTR [r10 + 32], 0");                         // inspect closed marker
     emitter.instruction("jne __rt_get_resources_type_unknown_x86");             // closed resources are Unknown
     emitter.instruction("mov r11, QWORD PTR [r10 + 24]");                       // load open subtype
@@ -623,11 +686,16 @@ fn emit_get_resources_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_get_resources_next_x86");                     // skip nonmatching resource
     emitter.label("__rt_get_resources_insert_node_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore current node
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // destination hash
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // integer key = PHP id
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 16]");                       // native payload or -id
-    emitter.instruction("mov rdx, QWORD PTR [r10 + 24]");                       // preserve original subtype
-    abi::emit_call_label(emitter, "__rt_resource_inventory_insert");
+    emitter.instruction("mov rax, QWORD PTR [r10 + 40]");                       // retain the shared cell for the new hash owner
+    abi::emit_call_label(emitter, "__rt_incref");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore current node after retention
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // destination hash
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // integer key = PHP id
+    emitter.instruction("mov rdx, -1");                                         // integer PHP id key
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 40]");                       // share the canonical Mixed resource cell
+    emitter.instruction("xor r8d, r8d");                                        // boxed cells have no high payload word
+    emitter.instruction("mov r9, 7");                                           // transfer the retained Mixed reference to the hash
+    abi::emit_call_label(emitter, "__rt_hash_set");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save destination after possible growth
     emitter.label("__rt_get_resources_next_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // restore current node
@@ -645,13 +713,16 @@ fn emit_get_resources_x86_64(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Platform, Target};
+    use crate::codegen_support::platform::{AppleVariant, Platform, Target};
 
     /// Verifies both supported architectures expose every inventory entry point.
     #[test]
     fn emits_complete_inventory_helper_family_on_both_architectures() {
         for target in [
             Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
             let mut emitter = Emitter::new(target);
@@ -659,6 +730,7 @@ mod tests {
             let asm = emitter.output();
             for symbol in [
                 "__rt_resource_inventory_register:",
+                "__rt_resource_inventory_retire:",
                 "__rt_resource_inventory_close:",
                 "__rt_resource_inventory_reset:",
                 "__rt_resource_inventory_insert:",

@@ -2839,6 +2839,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         };
         match inst.immediate {
+            Some(Immediate::I64(selector)) if inst.op == Op::CoreBuiltin => {
+                crate::ir::CoreBuiltinOp::from_i64(selector).is_some_and(|operation| {
+                    matches!(
+                        operation.result_ownership(),
+                        crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                    )
+                })
+            }
             Some(Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
             )) => matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)),

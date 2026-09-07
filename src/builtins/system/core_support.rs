@@ -11,7 +11,7 @@
 use crate::builtins::semantics::{
     callable_accepts_any_source, BuiltinArgumentLowering, BuiltinCallablePolicy,
     BuiltinEffects, BuiltinLowerFn, BuiltinLowering, BuiltinLoweringContext,
-    BuiltinLoweringError, BuiltinRequirements, BuiltinResultOwnership, BuiltinResultType,
+    BuiltinLoweringError, BuiltinRequirements, BuiltinResultType,
     BuiltinRuntimeFunctions, BuiltinSemantics, BuiltinTargetStrategy, BuiltinTargetSupport,
     BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
 };
@@ -27,7 +27,7 @@ pub const fn core_builtin_semantics(
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Declared,
         effects: BuiltinEffects::Static(operation.effects()),
-        result_ownership: result_ownership(operation),
+        result_ownership: operation.result_ownership(),
         requirements: BuiltinRequirements::Static(&[]),
         target_strategy: BuiltinTargetStrategy::EirPrimitive,
         target_support: BuiltinTargetSupport::All,
@@ -118,27 +118,6 @@ pub fn check_resource_hash(
         key: Box::new(PhpType::Int),
         value: Box::new(PhpType::Mixed),
     })
-}
-
-/// Returns the ownership contract of a Core builtin result.
-const fn result_ownership(operation: CoreBuiltinOp) -> BuiltinResultOwnership {
-    match operation {
-        CoreBuiltinOp::DebugBacktrace
-        | CoreBuiltinOp::SetErrorHandler
-        | CoreBuiltinOp::SetExceptionHandler
-        | CoreBuiltinOp::GetDefinedConstants
-        | CoreBuiltinOp::GetDefinedFunctions
-        | CoreBuiltinOp::GetDefinedVars
-        | CoreBuiltinOp::GetExtensionFuncs
-        | CoreBuiltinOp::GetIncludedFiles
-        | CoreBuiltinOp::GetMangledObjectVars
-        | CoreBuiltinOp::GetResources => BuiltinResultOwnership::Fresh,
-        CoreBuiltinOp::DebugPrintBacktrace
-        | CoreBuiltinOp::ErrorReporting
-        | CoreBuiltinOp::RestoreErrorHandler
-        | CoreBuiltinOp::RestoreExceptionHandler
-        | CoreBuiltinOp::TriggerError => BuiltinResultOwnership::NonHeap,
-    }
 }
 
 /// Lowers one normalized Core call, adding callback and source metadata where required.

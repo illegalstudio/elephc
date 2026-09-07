@@ -371,6 +371,28 @@ pub enum CoreBuiltinOp {
 }
 
 impl CoreBuiltinOp {
+    /// Returns the shared ownership contract consumed by builtin and temporary lowering.
+    pub const fn result_ownership(self) -> crate::builtins::semantics::BuiltinResultOwnership {
+        use crate::builtins::semantics::BuiltinResultOwnership;
+        match self {
+            Self::DebugBacktrace
+            | Self::SetErrorHandler
+            | Self::SetExceptionHandler
+            | Self::GetDefinedConstants
+            | Self::GetDefinedFunctions
+            | Self::GetDefinedVars
+            | Self::GetExtensionFuncs
+            | Self::GetIncludedFiles
+            | Self::GetMangledObjectVars
+            | Self::GetResources => BuiltinResultOwnership::Fresh,
+            Self::DebugPrintBacktrace
+            | Self::ErrorReporting
+            | Self::RestoreErrorHandler
+            | Self::RestoreExceptionHandler
+            | Self::TriggerError => BuiltinResultOwnership::NonHeap,
+        }
+    }
+
     /// Returns the stable integer stored in the EIR immediate.
     pub const fn as_i64(self) -> i64 {
         self as i64

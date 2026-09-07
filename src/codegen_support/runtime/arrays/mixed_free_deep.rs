@@ -110,6 +110,7 @@ pub fn emit_mixed_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     emitter.label("__rt_mixed_free_deep_resource");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the original Mixed cell pointer from the saved slot
+    emitter.instruction("bl __rt_resource_inventory_retire");                   // retire this cell identity before its native handle can be reused
 
     emitter.instruction("ldr x9, [x0, #16]");                                   // load the resource kind from the high payload word
 
@@ -317,6 +318,7 @@ fn emit_mixed_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFea
 
     emitter.label("__rt_mixed_free_deep_resource");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the original Mixed cell pointer from the saved slot
+    emitter.instruction("call __rt_resource_inventory_retire");                 // retire this cell identity before its native handle can be reused
 
     emitter.instruction("mov r9, QWORD PTR [rax + 16]");                        // load the resource kind from the high payload word
 
