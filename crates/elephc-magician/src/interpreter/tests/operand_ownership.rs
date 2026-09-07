@@ -105,6 +105,38 @@ fn property_hook_case_condition_preserves_cached_owner() {
     assert_eq!(values.releases.iter().filter(|cell| **cell == case).count(), 2);
 }
 
+/// Array literal keys, automatic-key arithmetic, and nested results release construction leases.
+#[test]
+fn array_literal_construction_releases_temporary_leases() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let program = parse_fragment(br#"return [3 => "a", 1 => "b", "5" => [7], 8, "z" => 9];"#).unwrap();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    for (id, value) in &values.values {
+        if *id != result.as_ptr() as usize {
+            assert_eq!(values.releases.iter().filter(|cell| cell.as_ptr() as usize == *id).count(), 1,
+                "literal operand {id} ({value:?}) must release exactly its construction lease");
+        }
+    }
+    assert!(!values.releases.contains(&result));
+}
+
+/// Failed insertion frees its key/value operands and the partially constructed result array.
+#[test]
+fn array_literal_insertion_failure_releases_partial_result() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    values.fail_array_set_call(1);
+    let program = parse_fragment(br#"return ["one" => 1, "two" => 2];"#).unwrap();
+    assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
+    for id in values.values.keys() {
+        assert_eq!(values.releases.iter().filter(|cell| cell.as_ptr() as usize == *id).count(), 1,
+            "abandoned literal cell {id} must be released");
+    }
+}
+
 /// Mixed invoker writeback updates exactly one native pointer and preserves the neighboring slot.
 #[test]
 fn mixed_native_reference_slots_remain_pointer_sized() {

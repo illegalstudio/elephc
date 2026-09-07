@@ -7,6 +7,7 @@
 //! Key details:
 //! - Explicit keys are normalized through runtime string conversion to match PHP array-key rules.
 //! - Unkeyed elements continue from the next PHP integer key after explicit keys.
+//! - Construction owns operand leases until insertion finishes, including failure paths.
 
 use super::*;
 
@@ -18,25 +19,31 @@ pub(super) fn eval_indexed_array(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.array_new(elements.len())?;
-    for (index, element) in elements.iter().enumerate() {
-        let index = values.int(index as i64)?;
-        let (value, target) = match element {
-            EvalArrayElement::Value(element) => (eval_expr(element, context, scope, values)?, None),
-            EvalArrayElement::Reference(element) => {
-                let (value, target) =
-                    eval_reference_array_element_value(element, context, scope, values)?;
-                (value, Some(target))
+    let mut operands = Vec::new();
+    let result = (|| {
+        for (index, element) in elements.iter().enumerate() {
+            let index = values.int(index as i64)?;
+            operands.push(index);
+            let (value, target) = match element {
+                EvalArrayElement::Value(element) => (eval_owned_expr(element, context, scope, values)?, None),
+                EvalArrayElement::Reference(element) => {
+                    let (value, target) =
+                        eval_reference_array_element_value(element, context, scope, values)?;
+                    (value, Some(target))
+                }
+                EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                }
+            };
+            operands.push(value);
+            array = values.array_set(array, index, value)?;
+            if let Some(target) = target {
+                bind_array_element_reference(context, array, index, target, values)?;
             }
-            EvalArrayElement::KeyValue { .. } | EvalArrayElement::KeyReference { .. } => {
-                return Err(EvalStatus::UnsupportedConstruct);
-            }
-        };
-        array = values.array_set(array, index, value)?;
-        if let Some(target) = target {
-            bind_array_element_reference(context, array, index, target, values)?;
         }
-    }
-    Ok(array)
+        Ok(())
+    })();
+    finish_array_literal(array, result, operands, context, values)
 }
 
 /// Evaluates an associative array literal into a boxed runtime Mixed hash.
@@ -48,52 +55,74 @@ pub(super) fn eval_assoc_array(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut array = values.assoc_new(elements.len())?;
     let mut next_key = None;
-    for element in elements {
-        let (key, value, target) = match element {
-            EvalArrayElement::Value(value) => {
+    let mut operands = Vec::new();
+    let result = (|| {
+        for element in elements {
+            let (explicit_key, value, by_ref) = match element {
+                EvalArrayElement::Value(value) => (None, value, false),
+                EvalArrayElement::Reference(value) => (None, value, true),
+                EvalArrayElement::KeyValue { key, value } => (Some(key), value, false),
+                EvalArrayElement::KeyReference { key, value } => (Some(key), value, true),
+            };
+            let key = if let Some(key) = explicit_key {
+                let key = eval_owned_expr(key, context, scope, values)?;
+                operands.push(key);
+                next_key = eval_array_next_key_after_explicit_key(key, next_key, &mut operands, values)?;
+                key
+            } else {
                 let key = match next_key {
-                    Some(next_key) => next_key,
-                    None => values.int(0)?,
+                    Some(key) => key,
+                    None => {
+                        let key = values.int(0)?;
+                        operands.push(key);
+                        key
+                    }
                 };
                 let one = values.int(1)?;
-                next_key = Some(values.add(key, one)?);
-                let value = eval_expr(value, context, scope, values)?;
-                (key, value, None)
+                operands.push(one);
+                let next = values.add(key, one)?;
+                operands.push(next);
+                next_key = Some(next);
+                key
+            };
+            let (value, target) = if by_ref {
+                let (value, target) = eval_reference_array_element_value(value, context, scope, values)?;
+                (value, Some(target))
+            } else {
+                (eval_owned_expr(value, context, scope, values)?, None)
+            };
+            operands.push(value);
+            array = values.array_set(array, key, value)?;
+            if let Some(target) = target {
+                bind_array_element_reference(context, array, key, target, values)?;
             }
-            EvalArrayElement::Reference(value) => {
-                let key = match next_key {
-                    Some(next_key) => next_key,
-                    None => values.int(0)?,
-                };
-                let one = values.int(1)?;
-                next_key = Some(values.add(key, one)?);
-                let (value, target) =
-                    eval_reference_array_element_value(value, context, scope, values)?;
-                (key, value, Some(target))
-            }
-            EvalArrayElement::KeyValue { key, value } => {
-                let key = eval_expr(key, context, scope, values)?;
-                next_key = eval_array_next_key_after_explicit_key(key, next_key, values)?;
-                let value = eval_expr(value, context, scope, values)?;
-                (key, value, None)
-            }
-            EvalArrayElement::KeyReference { key, value } => {
-                let key = eval_expr(key, context, scope, values)?;
-                next_key = eval_array_next_key_after_explicit_key(key, next_key, values)?;
-                let (value, target) =
-                    eval_reference_array_element_value(value, context, scope, values)?;
-                (key, value, Some(target))
-            }
-        };
-        array = values.array_set(array, key, value)?;
-        if let Some(target) = target {
-            bind_array_element_reference(context, array, key, target, values)?;
         }
+        Ok(())
+    })();
+    finish_array_literal(array, result, operands, context, values)
+}
+
+/// Releases construction leases and abandons the partial array on evaluation or insertion failure.
+fn finish_array_literal(
+    array: RuntimeCellHandle,
+    result: Result<(), EvalStatus>,
+    operands: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = result;
+    for operand in operands {
+        let released = eval_release_value(context, values, operand);
+        if result.is_ok() { result = released; }
+    }
+    if let Err(status) = result {
+        let _ = eval_release_value(context, values, array);
+        return Err(status);
     }
     Ok(array)
 }
 
-/// Evaluates a by-reference array literal element and captures its writable source target.
+/// Acquires a by-reference array element lease and captures its writable source target.
 fn eval_reference_array_element_value(
     value: &EvalExpr,
     context: &mut ElephcEvalContext,
@@ -101,9 +130,12 @@ fn eval_reference_array_element_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, EvalReferenceTarget), EvalStatus> {
     let (value, target) = eval_call_arg_value(value, context, scope, values)?;
-    target
-        .map(|target| (value, target))
-        .ok_or(EvalStatus::RuntimeFatal)
+    let Some(target) = target else {
+        release_expr_result(value, context, values)?;
+        return Err(EvalStatus::RuntimeFatal);
+    };
+    let value = if value.is_borrowed() { values.retain(value)? } else { value };
+    Ok((value, target))
 }
 
 /// Records one by-reference array element on the eval context side table.
@@ -144,6 +176,7 @@ pub(in crate::interpreter) fn eval_array_reference_key(
 fn eval_array_next_key_after_explicit_key(
     key: RuntimeCellHandle,
     current_next_key: Option<RuntimeCellHandle>,
+    operands: &mut Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let key = match values.type_tag(key)? {
@@ -153,15 +186,24 @@ fn eval_array_next_key_after_explicit_key(
             let Some(key) = eval_numeric_string_array_key(&bytes) else {
                 return Ok(current_next_key);
             };
-            values.int(key)?
+            let key = values.int(key)?;
+            operands.push(key);
+            key
         }
         EVAL_TAG_NULL => return Ok(current_next_key),
-        _ => values.cast_int(key)?,
+        _ => {
+            let key = values.cast_int(key)?;
+            operands.push(key);
+            key
+        }
     };
     let one = values.int(1)?;
+    operands.push(one);
     let candidate = values.add(key, one)?;
+    operands.push(candidate);
     let replace = if let Some(current_next_key) = current_next_key {
         let is_greater = values.compare(EvalBinOp::Gt, candidate, current_next_key)?;
+        operands.push(is_greater);
         values.truthy(is_greater)?
     } else {
         true

@@ -108,11 +108,15 @@ fn test_core_eval_same_cell_assignments_release_previous_leases() {
     );
 }
 
-/// Repeated class-default inventories release owned copies without consuming persistent constants.
+/// Nested literal defaults release keys and values without consuming persistent constants.
 #[test]
 fn test_core_eval_class_constant_defaults_release_inventory_leases() {
     assert_core_eval_collection_cleanup(
-        "class GcDefaultConstant { const TOKEN = \"keep\"; public string $value = self::TOKEN; }",
+        "class GcDefaultConstant {
+            const TOKEN = \"keep\";
+            public string $value = self::TOKEN;
+            public array $items = [1, \"nested\" => [self::TOKEN]];
+        }",
         "$result = get_class_vars(\"GcDefaultConstant\"); unset($result);",
     );
 }
