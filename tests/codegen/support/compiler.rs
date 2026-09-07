@@ -301,7 +301,7 @@ fn try_compile_source_to_asm_with_defines_repr(
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
     set_fixture_linked_extensions(&check_result.required_libraries);
     let optimized =
-        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names());
+        elephc::optimize::propagate_constants(resolved, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let optimized = elephc::optimize::prune_constant_control_flow(
         optimized,
         check_result.local_binding_decision_spans(),

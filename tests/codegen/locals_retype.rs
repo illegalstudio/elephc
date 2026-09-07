@@ -2454,7 +2454,7 @@ fn test_the_single_case_switch_rewrite_vetoes_itself_on_a_marked_default() {
             std::collections::HashSet::new()
         };
         let ast =
-            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+            elephc::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
         let ast = elephc::optimize::prune_constant_control_flow(ast, spans.clone());
         elephc::optimize::normalize_control_flow(ast, spans)
     }

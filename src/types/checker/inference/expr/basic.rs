@@ -201,6 +201,10 @@ impl Checker {
             ExprKind::ArrayAccess { array, index } => {
                 let arr_ty = self.infer_type(array, env)?;
                 let idx_ty = self.infer_type(index, env)?;
+                let buffer = matches!(arr_ty, PhpType::Buffer(_));
+                self.buffer_read_observations.entry(expr.span)
+                    .and_modify(|previous| *previous &= buffer)
+                    .or_insert(buffer);
                 let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
                 match &arr_ty {
                     PhpType::Str => {

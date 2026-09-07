@@ -357,6 +357,9 @@ pub(crate) struct Checker {
     /// on valid PHP. Same-name collisions are still ambiguous and still rejected; see
     /// `retired_mixed_storage_store_sites`.
     pub mixed_storage_store_sites: HashMap<Span, HashSet<String>>,
+    /// True only when every visit to an indexed-read span used native buffer storage.
+    /// Intersecting observations also fails closed when included files share a span.
+    pub buffer_read_observations: HashMap<Span, bool>,
     /// The warnings that BELONG to a local-binding decision, keyed by that decision's
     /// `(span, local name)` instead of being pushed straight into `warnings`.
     ///
@@ -810,6 +813,8 @@ pub fn check_types_with_options(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        buffer_read_sites: checker.buffer_read_observations.into_iter()
+            .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
         local_bind_kill_sites: checker.local_bind_kill_sites,

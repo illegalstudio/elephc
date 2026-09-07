@@ -563,7 +563,9 @@ pub(crate) fn compile(config: CliConfig) {
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
     // names those are and refuses to record a fact for them.
-    let ast = post_typecheck_optimizer.propagate(ast, check_result.mixed_storage_local_names());
+    let ast = post_typecheck_optimizer.propagate(
+        ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone(),
+    );
     timings.record_since("opt-prop", phase_started);
 
     crate::progress::phase("opt-post");

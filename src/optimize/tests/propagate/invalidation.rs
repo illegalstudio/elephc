@@ -59,6 +59,42 @@ fn test_array_warning_invalidation_respects_scope() {
     with_function_scope(|| assert_eq!(expr_invalidation(&expr), names(&[])));
 }
 
+/// Checker-proven buffer reads preserve globals, but calls inside their indices still invalidate.
+#[test]
+fn test_buffer_read_proof_preserves_only_intrinsic_read_facts() {
+    let expr = array_access(Expr::var("buffer"), Expr::int_lit(0));
+    crate::optimize::binding_decisions::with_buffer_read_sites(
+        HashSet::from([expr.span]),
+        || {
+            assert_eq!(expr_invalidation(&expr), names(&[]));
+            let effect = crate::optimize::effects::expr_effect(&expr);
+            assert!(effect.is_observable(), "buffer bounds checks must not be deleted");
+            let with_call = array_access(Expr::var("buffer"), call("unknown_index", vec![]));
+            assert_eq!(expr_invalidation(&with_call), Invalidation::All);
+        },
+    );
+    assert_eq!(expr_invalidation(&expr), Invalidation::All, "proofs must not leak between runs");
+}
+
+/// Buffer proofs are intersected when source files contribute indexed reads with equal spans.
+#[test]
+fn test_checker_buffer_read_proof_rejects_ambiguous_spans() {
+    let tokens = crate::lexer::tokenize(
+        "<?php buffer<int> $native = buffer_new<int>(4); $php = [1]; echo $native[0]; echo $php[0];"
+    ).expect("tokenize buffer proof fixture");
+    let mut program = crate::parser::parse(&tokens).expect("parse buffer proof fixture");
+    let StmtKind::Echo(native_read) = &program[2].kind else { panic!("expected buffer read") };
+    let span = native_read.span;
+    let checked = crate::types::check(&program).expect("check distinct buffer and PHP array reads");
+    assert!(checked.buffer_read_sites.contains(&span));
+    assert_eq!(checked.buffer_read_sites.len(), 1);
+
+    let StmtKind::Echo(php_read) = &mut program[3].kind else { panic!("expected PHP array read") };
+    php_read.span = span;
+    let checked = crate::types::check(&program).expect("check colliding read spans");
+    assert!(!checked.buffer_read_sites.contains(&span), "an ordinary array read can invoke user handlers");
+}
+
 /// A provably present literal element cannot dispatch a missing-key warning.
 #[test]
 fn test_present_literal_array_read_preserves_facts() {

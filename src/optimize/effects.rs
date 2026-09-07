@@ -362,6 +362,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             ),
         ExprKind::ArrayAccess { array, index } => {
             let evaluated = expr_effect(array).combine(expr_effect(index));
+            if super::binding_decisions::is_buffer_read_site(expr.span) {
+                // Keep bounds failures observable, but only operand evaluation can
+                // invoke user code. Native buffer reads do not emit PHP warnings.
+                return evaluated.with_side_effects().with_may_throw();
+            }
             match statically_known_array_read(array, index) {
                 Some(true) => evaluated,
                 Some(false) | None => evaluated.with_side_effects().with_may_throw().with_writes_globals(),

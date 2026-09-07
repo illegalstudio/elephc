@@ -85,6 +85,9 @@ pub struct CheckResult {
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
     /// Authoritative checker result types for builtin calls, keyed by call span.
     pub builtin_call_types: HashMap<Span, PhpType>,
+    /// Reads proven to use native buffers on every checker visit to the source span.
+    /// Buffer bounds checks cannot invoke PHP warning handlers.
+    pub buffer_read_sites: HashSet<Span>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`

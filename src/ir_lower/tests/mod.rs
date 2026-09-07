@@ -94,7 +94,7 @@ fn lower_source_at_for_target(
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
     let ast = crate::optimize::fold_constants_for_target(ast, target);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
-    let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names());
+    let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let ast = crate::optimize::prune_constant_control_flow(
         ast,
         check_result.local_binding_decision_spans(),

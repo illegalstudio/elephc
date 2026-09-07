@@ -118,6 +118,7 @@ impl Checker {
             body_contains_eval: false,
             mixed_storage_locals: HashSet::new(),
             mixed_storage_store_sites: HashMap::new(),
+            buffer_read_observations: HashMap::new(),
             binding_decision_warnings: HashMap::new(),
             retired_mixed_storage_store_sites: HashSet::new(),
         }

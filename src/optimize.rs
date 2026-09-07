@@ -193,9 +193,15 @@ fn collect_top_level_user_functions_from_block(
 /// an empty set would re-enable substitution on a local the checker boxed, and the divergence
 /// surfaces as a compiler PANIC inside a checked builtin's lowering — nothing a reader would trace
 /// back to this call. The test tree shadows this with a no-set wrapper for hand-built ASTs.
+/// `buffer_read_sites` comes from `CheckResult::buffer_read_sites` and preserves unrelated
+/// global facts across native buffer reads without suppressing operand effects or bounds failures.
 #[allow(dead_code)] // public test/support API; the compiler binary uses PostTypecheckOptimizer directly.
-pub fn propagate_constants(program: Program, mixed_storage_locals: HashSet<String>) -> Program {
-    PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals)
+pub fn propagate_constants(
+    program: Program,
+    mixed_storage_locals: HashSet<String>,
+    buffer_read_sites: HashSet<Span>,
+) -> Program {
+    PostTypecheckOptimizer::new(&program).propagate(program, mixed_storage_locals, buffer_read_sites)
 }
 
 /// Normalizes control flow structures (ifs, switches, try/catch) for easier optimization.
@@ -346,7 +352,13 @@ impl PostTypecheckOptimizer {
     /// empty set would re-enable substitution on a boxed local, and the divergence surfaces as a
     /// compiler PANIC in a checked builtin's fast path rather than as anything a reader would
     /// connect back to this call.
-    pub fn propagate(&self, program: Program, mixed_storage_locals: HashSet<String>) -> Program {
+    /// `buffer_read_sites` carries checker proofs that indexing cannot invoke a warning handler.
+    pub fn propagate(
+        &self,
+        program: Program,
+        mixed_storage_locals: HashSet<String>,
+        buffer_read_sites: HashSet<Span>,
+    ) -> Program {
         reset_reference_volatile();
         // Request superglobals are writable from any scope under `--web`, so they
         // can never carry propagated facts.
@@ -360,7 +372,9 @@ impl PostTypecheckOptimizer {
         with_mixed_storage_locals(mixed_storage_locals, || {
             with_callable_effect_analysis(&self.callable_effects, || {
                 with_by_ref_signatures(self.by_ref_signatures.clone(), || {
-                    propagate_block(program, HashMap::new()).0
+                    binding_decisions::with_buffer_read_sites(buffer_read_sites, || {
+                        propagate_block(program, HashMap::new()).0
+                    })
                 })
             })
         })

@@ -15,7 +15,7 @@ AST layer.
 Today the AST optimizer is split into six passes:
 
 1. `fold_constants_for_target(program, target)` runs before type checking
-2. `propagate_constants(program, mixed_storage_locals)` runs after successful type checking
+2. `propagate_constants(program, mixed_storage_locals, buffer_read_sites)` runs after successful type checking
 3. `prune_constant_control_flow(program, binding_decision_spans)` runs after propagation and warning collection
 4. `normalize_control_flow(program, binding_decision_spans)` runs after pruning and rewrites structurally equivalent control-flow shells into simpler AST shapes
 5. `eliminate_dead_code(program, binding_decision_spans)` runs after normalization and removes leftover unreachable or non-observable statements from the already-normalized AST
@@ -29,6 +29,11 @@ veto themselves — DCE's tail-sinking, and the single-case `switch` rewrite rea
 normalize phases (which otherwise materializes a `switch` default body into both branches of a
 synthesized `if`). `propagate_constants` takes the mixed-storage local NAMES for a related reason:
 it must not substitute a literal for a read of a local the checker boxed as `mixed`.
+It also consumes `CheckResult::buffer_read_sites`: indexed reads proven to use
+native buffer storage at every checker observation of that source span. Those
+reads cannot invoke PHP warning handlers, so propagation preserves unrelated
+global facts across them. Bounds failures remain observable, and evaluating the
+receiver or index can still invalidate facts. Ambiguous spans retain no proof.
 
 That split matters. Some rewrites are always safe on syntax alone, while others should only happen after diagnostics have already seen the checked program.
 
@@ -138,7 +143,7 @@ This pass is still intentionally local and conservative. Today it focuses on:
 - preserving untouched scalar locals across simple loops when a conservative local write analysis can prove the loop only mutates other variables, including simple nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop statements, local array writes like `$items[] = $i` / `$items[0] = $i`, local property writes like `$box->last = $i` / `$box->items[] = $i`, and targeted invalidations like `unset($tmp)`, while also retaining stable scalar values introduced by `for` init clauses
 - local loop path summaries for known `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, and branch-local loop exits that agree on scalar values
 - array-literal facts for heap-backed locals: a local assigned an all-scalar indexed/associative array literal (up to 64 entries) carries the literal as a fact, `$a[<const>]` reads fold through the same helper as inline literal access, `list(...) = $a` unpacks element facts, and `$b = $a` copies the fact because PHP array assignment is a COW value-semantics snapshot
-- targeted invalidation grounded in the memory model: a statement or expression removes only the locals it can actually write. Known local writes and `unset($var)` stay exact; `unset($a[0])` kills only `$a`; array reads kill nothing; a call kills its by-ref argument roots (user function/method signatures come from a program pre-scan, builtin signatures from the registry) plus, at top level only, everything when the callee can write `global` storage (tracked transitively by the callable-effects fixed point). Callback-invoking builtins (`call_user_func`, `usort`, `array_walk`, ...) treat their arguments like an unknown callee's
+- targeted invalidation grounded in the memory model: a statement or expression removes only the locals it can actually write. Known local writes and `unset($var)` stay exact; `unset($a[0])` kills only `$a`; warning-capable array reads invalidate top-level global facts because a handler can modify them, while proven present literal reads and checker-proven buffer reads preserve unrelated facts; a call kills its by-ref argument roots (user function/method signatures come from a program pre-scan, builtin signatures from the registry) plus, at top level only, everything when the callee can write `global` storage (tracked transitively by the callable-effects fixed point). Callback-invoking builtins (`call_user_func`, `usort`, `array_walk`, ...) treat their arguments like an unknown callee's
 - a reference-volatility ledger backing those targeted rules: every reference-exposure point (`$t = &$s` and its lvalue roots, by-ref `foreach` array roots, by-ref closure captures, `global`/`static` declarations, by-ref arguments to user callees, `ptr($x)` address-taking, request superglobals) marks the name so it never carries a fact again
 - never substituting a constant into a by-ref argument position, which must stay an lvalue
 - re-running constant folding on expressions after substitutions are made

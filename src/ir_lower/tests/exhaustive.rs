@@ -139,6 +139,7 @@ fn dummy_check_result() -> CheckResult {
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
+        buffer_read_sites: Default::default(),
         loop_storage_types: HashMap::new(),
         string_incdec_locals: Default::default(),
         local_bind_kill_sites: Default::default(),

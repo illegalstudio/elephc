@@ -63,5 +63,5 @@ fn normalize_control_flow(program: Program) -> Program {
 /// The volatility fixtures that need a non-empty set call `PostTypecheckOptimizer::propagate`
 /// directly instead of going through this.
 fn propagate_constants(program: Program) -> Program {
-    super::propagate_constants(program, HashSet::new())
+    super::propagate_constants(program, HashSet::new(), HashSet::new())
 }
