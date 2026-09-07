@@ -83,11 +83,11 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_store_to_sp(e, scratch, PREFIX);
     arg(e, 1, input_len);
     ins(e, "adds x1, x1, x10", "add rsi, r10");
-    ins(e, "b.hs __rt_heap_exhausted", "jc __rt_heap_exhausted");
+    ins(e, "b.hs __rt_warning_allocation_failed", "jc __rt_warning_allocation_failed");
     abi::emit_store_to_sp(e, a1, LENGTH);
     abi::emit_load_symbol_to_reg(e, a0, "_rt_diag_pending_ptr", 0);
     abi::emit_call_label(e, &e.target.extern_symbol("realloc"));
-    abi::emit_branch_if_int_result_zero(e, "__rt_heap_exhausted");
+    abi::emit_branch_if_int_result_zero(e, "__rt_warning_allocation_failed");
     save(e, BUFFER);
     abi::emit_reg_move(e, a0, result);
     abi::emit_load_temporary_stack_slot(e, scratch, PREFIX);
@@ -180,6 +180,10 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     volatile_registers(e, true);
     abi::emit_frame_restore(e, FRAME);
     e.instruction("ret");                                                       // preserve the legacy warning producer's live registers
+    // Conditional branches stay inside this helper's Mach-O atom. Only the
+    // unconditional jump crosses to the allocator's shared recovery entry.
+    e.label("__rt_warning_allocation_failed");
+    abi::emit_jump(e, "__rt_heap_allocation_failed");
     emit_cleanup(e);
     emit_reset(e);
 }
@@ -302,6 +306,13 @@ mod tests {
             }
             assert!(asm.contains(&target.extern_symbol("realloc")), "{target:?}");
             assert!(asm.contains(if target.arch == Arch::AArch64 { "str q31" } else { "movdqu XMMWORD PTR" }), "{target:?}");
+            assert!(asm.contains("__rt_warning_allocation_failed:"), "{target:?}");
+            assert!(asm.contains(if target.arch == Arch::AArch64 {
+                "b __rt_heap_allocation_failed"
+            } else {
+                "jmp __rt_heap_allocation_failed"
+            }), "{target:?}");
+            assert!(!asm.contains("__rt_heap_exhausted"), "{target:?}: allocator-local label escaped");
         }
     }
 }
