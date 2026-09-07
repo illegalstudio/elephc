@@ -26,7 +26,10 @@ pub(super) fn eval_nested_eval(
     let code = eval_expr(code, context, scope, values)?;
     let code = values.string_bytes(code)?;
     let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
-    execute_program_with_context(context, program.as_ref(), scope, values)
+    context.push_eval_backtrace_boundary();
+    let outcome = execute_program_with_context(context, program.as_ref(), scope, values);
+    context.pop_eval_backtrace_boundary();
+    outcome
 }
 
 /// Evaluates an eval-fragment include or require expression.

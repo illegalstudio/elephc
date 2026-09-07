@@ -109,7 +109,10 @@ unsafe fn execute_parsed_eval(
     };
     context.sync_global_eval_classes();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_program_outcome_with_context(context, program, scope, &mut values) {
+    context.push_eval_backtrace_boundary();
+    let outcome = interpreter::execute_program_outcome_with_context(context, program, scope, &mut values);
+    context.pop_eval_backtrace_boundary();
+    match outcome {
         Ok(outcome) => {
             if let interpreter::EvalOutcome::Value(result) = &outcome {
                 match interpreter::value_contains_foreign_pcntl_callable(

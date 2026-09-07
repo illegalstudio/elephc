@@ -20,6 +20,11 @@ use crate::value::RuntimeCellHandle;
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Materializes one suspended native PHP frame, or returns None at the end of the stack.
+    fn runtime_backtrace_entry(&mut self, _index: usize, _options: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Returns the process resource inventory when a shared native runtime is available.
     fn runtime_resource_inventory(&mut self, _selector: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Ok(None)

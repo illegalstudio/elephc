@@ -33,6 +33,12 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Reads suspended AOT frame metadata through the shared activation reader ABI.
+    fn runtime_backtrace_entry(&mut self, index: usize, options: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let cell = unsafe { __elephc_eval_backtrace_entry(index as u64, options) };
+        Ok((!cell.is_null()).then(|| RuntimeCellHandle::from_raw(cell)))
+    }
+
     /// Uses the same filtered and ownership-safe inventory as native get_resources().
     fn runtime_resource_inventory(&mut self, selector: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_resource_inventory(selector) }).map(Some)

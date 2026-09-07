@@ -158,6 +158,9 @@ pub(super) fn layout_for_function(
 
 /// Returns whether any emitted EIR body can request a PHP Core backtrace.
 pub(super) fn module_uses_backtrace(module: &Module) -> bool {
+    if module.required_runtime_features.eval_bridge {
+        return true;
+    }
     module
         .functions
         .iter()

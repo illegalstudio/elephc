@@ -35,6 +35,14 @@ pub(super) fn eval_debug_backtrace(
         let key = values.int(position)?;
         result = values.array_set(result, key, frame)?;
     }
+    let mut native_index = 0;
+    while limit >= 0 && (limit == 0 || values.array_len(result)? < limit as usize) {
+        let Some(frame) = values.runtime_backtrace_entry(native_index, options)? else { break };
+        let position = values.array_len(result)? as i64;
+        let key = values.int(position)?;
+        result = values.array_set(result, key, frame)?;
+        native_index += 1;
+    }
     Ok(result)
 }
 
@@ -57,7 +65,72 @@ pub(super) fn eval_debug_print_backtrace(
         values.echo(rendered)?;
         values.release(rendered)?;
     }
+    let mut native_index = 0;
+    while limit >= 0 && (limit == 0 || frame_limit + native_index < limit as usize) {
+        let Some(frame) = values.runtime_backtrace_entry(native_index, options)? else { break };
+        let rendered = render_native_frame(frame_limit + native_index, frame, options, context, values)?;
+        values.release(frame)?;
+        let rendered = values.string(&rendered)?;
+        values.echo(rendered)?;
+        values.release(rendered)?;
+        native_index += 1;
+    }
     values.null()
+}
+
+/// Formats one materialized native frame using the same scalar spellings as eval frames.
+fn render_native_frame(
+    index: usize,
+    frame: RuntimeCellHandle,
+    options: i64,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<String, EvalStatus> {
+    let file = native_frame_text(frame, "file", values)?;
+    let line = native_frame_field(frame, "line", values)?;
+    let line_number = eval_int_value(line, values)?;
+    values.release(line)?;
+    let function = native_frame_text(frame, "function", values)?;
+    let class = native_frame_text(frame, "class", values)?;
+    let call_type = native_frame_text(frame, "type", values)?;
+    let mut rendered = format!("#{index} {file}({line_number}): {class}{call_type}{function}(");
+    if options & DEBUG_BACKTRACE_IGNORE_ARGS == 0 {
+        let args = native_frame_field(frame, "args", values)?;
+        if !values.is_null(args)? {
+            for position in 0..values.array_len(args)? {
+                if position > 0 { rendered.push_str(", "); }
+                let key = values.int(position as i64)?;
+                let value = values.array_get(args, key)?;
+                values.release(key)?;
+                rendered.push_str(&render_backtrace_argument(value, context, values)?);
+                values.release(value)?;
+            }
+        }
+        values.release(args)?;
+    }
+    rendered.push_str(")\n");
+    Ok(rendered)
+}
+
+/// Returns an owned optional native frame field without emitting a missing-key warning.
+fn native_frame_field(frame: RuntimeCellHandle, name: &str, values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
+    let key = values.string(name)?;
+    let exists = values.array_key_exists(key, frame)?;
+    let present = values.truthy(exists)?;
+    values.release(exists)?;
+    let value = if present { values.array_get(frame, key)? } else { values.null()? };
+    values.release(key)?;
+    Ok(value)
+}
+
+/// Copies an optional native string field, treating absent class/type markers as empty.
+fn native_frame_text(frame: RuntimeCellHandle, name: &str, values: &mut impl RuntimeValueOps) -> Result<String, EvalStatus> {
+    let value = native_frame_field(frame, name, values)?;
+    let text = if values.is_null(value)? { String::new() } else {
+        String::from_utf8_lossy(&values.string_bytes(value)?).into_owned()
+    };
+    values.release(value)?;
+    Ok(text)
 }
 
 /// Applies PHP's limit convention where zero is unlimited and a negative value selects no frames.
@@ -92,7 +165,7 @@ fn build_backtrace_frame(
             result = set_assoc_cell(result, "object", values.retain(object)?, values)?;
         }
     }
-    if options & DEBUG_BACKTRACE_IGNORE_ARGS == 0 {
+    if options & DEBUG_BACKTRACE_IGNORE_ARGS == 0 && frame.function() != "eval" {
         let arguments = build_backtrace_args(frame.arguments(), values)?;
         result = set_assoc_cell(result, "args", arguments, values)?;
     }

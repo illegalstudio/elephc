@@ -17,6 +17,8 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Returns one owned boxed native backtrace frame or null after the final visible frame.
+    pub(super) fn __elephc_eval_backtrace_entry(index: u64, options: i64) -> *mut RuntimeCell;
     /// Returns an owned boxed snapshot of the shared native resource inventory.
     pub(super) fn __elephc_eval_resource_inventory(selector: i64) -> *mut RuntimeCell;
     /// Gets or replaces the native PHP error-reporting mask.

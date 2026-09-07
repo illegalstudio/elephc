@@ -247,7 +247,31 @@ impl ElephcEvalContext {
 
     /// Returns active eval call frames from the current frame to the outermost frame.
     pub(crate) fn backtrace_frames(&self) -> Vec<EvalBacktraceFrame> {
-        self.function_args_stack.iter().rev().cloned().collect()
+        let mut frames = Vec::new();
+        for depth in 0..=self.function_args_stack.len() {
+            frames.extend(self.eval_backtrace_boundaries.iter()
+                .filter(|(position, _)| *position == depth)
+                .map(|(_, frame)| frame.clone()));
+            if let Some(frame) = self.function_args_stack.get(depth) {
+                frames.push(frame.clone());
+            }
+        }
+        frames.reverse();
+        frames
+    }
+
+    /// Records an eval boundary without changing func_* argument introspection scope.
+    pub(crate) fn push_eval_backtrace_boundary(&mut self) {
+        let (file, _, line, _) = self.call_site();
+        let frame = EvalBacktraceFrame::new("eval".to_string(),
+            EvalFunctionArgsFrame::new(Vec::new(), 0, Vec::new()), file, line,
+            None, None, None);
+        self.eval_backtrace_boundaries.push((self.function_args_stack.len(), frame));
+    }
+
+    /// Removes an eval boundary after successful execution or an interpreted throwable.
+    pub(crate) fn pop_eval_backtrace_boundary(&mut self) {
+        self.eval_backtrace_boundaries.pop();
     }
 
     /// Stores the non-owned global scope handle used by eval `global` aliases.
