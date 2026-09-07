@@ -342,7 +342,7 @@ fn emit_dispatch_error_handler_aarch64(module: &Module, emitter: &mut Emitter) {
     emitter.instruction(&format!("cbz x12, {fatal}"));                          // reject malformed handler descriptors safely
     emitter.instruction("mov x0, x9");                                          // invoker argument 0 is the callable descriptor
     emitter.instruction("ldr x1, [sp, #8]");                                    // invoker argument 1 is the boxed argument array
-    emitter.instruction("blr x12");                                             // execute the selected user error handler once
+    abi::emit_call_label(emitter, "__rt_error_handler_invoke");                  // suspend and restore handler ownership across callback and unwind
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload callback-result output storage
     emitter.instruction("str x0, [x9]");                                        // transfer the owned boxed callback result to magician
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload invocation-state output storage
@@ -388,7 +388,7 @@ fn emit_dispatch_error_handler_x86_64(module: &Module, emitter: &mut Emitter) {
     emitter.instruction(&format!("jz {fatal}"));                                // reject malformed handler descriptors safely
     emitter.instruction("mov rdi, r10");                                        // invoker argument 0 is the callable descriptor
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // invoker argument 1 is the boxed argument array
-    emitter.instruction("call r11");                                            // execute the selected user error handler once
+    abi::emit_call_label(emitter, "__rt_error_handler_invoke");                  // suspend and restore handler ownership across callback and unwind
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload callback-result output storage
     emitter.instruction("mov QWORD PTR [r10], rax");                            // transfer the owned boxed callback result to magician
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload invocation-state output storage

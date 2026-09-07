@@ -2692,7 +2692,7 @@ fn emit_missing_descriptor_invoker_fatal(ctx: &mut FunctionContext<'_>, op_name:
 }
 
 /// Creates an indexed argument array and boxes it as the descriptor-invoker container.
-fn emit_invoker_arg_mixed(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<()> {
+pub(super) fn emit_invoker_arg_mixed(ctx: &mut FunctionContext<'_>, args: &[ValueId]) -> Result<()> {
     emit_invoker_arg_array(ctx, args)?;
     emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
     Ok(())
@@ -2793,7 +2793,7 @@ fn move_reg_to_arg(ctx: &mut FunctionContext<'_>, source_reg: &str, arg_index: u
 }
 
 /// Releases the temporary invoker argument while preserving the Mixed call result.
-fn release_invoker_arg_preserving_result(ctx: &mut FunctionContext<'_>) {
+pub(super) fn release_invoker_arg_preserving_result(ctx: &mut FunctionContext<'_>) {
     abi::emit_push_result_value(ctx.emitter, &PhpType::Mixed);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);

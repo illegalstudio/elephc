@@ -10,6 +10,30 @@
 use super::super::*;
 use super::support::*;
 
+/// The standalone interpreter restores suspended handlers on normal return and exceptions.
+#[test]
+fn execute_program_suspends_reentrant_error_handlers() {
+    let program = parse_fragment(br#"
+function handler($level, $message) {
+    echo $message, ":";
+    if ($message === "outer") { trigger_error("inner", E_USER_WARNING); }
+    if ($message === "throw") { throw new Exception("handler"); }
+    return true;
+}
+error_reporting(0);
+set_error_handler("handler");
+trigger_error("outer", E_USER_WARNING);
+try { trigger_error("throw", E_USER_WARNING); } catch (Exception $e) { echo "caught:"; }
+trigger_error("later", E_USER_WARNING);
+return true;
+"#).expect("parse suspension fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("run suspension fixture");
+    assert_eq!(values.output, "outer:throw:caught:later:");
+    assert!(values.warnings.is_empty());
+}
+
 /// Verifies eval error masks, nested handlers, callback arguments, and restoration.
 #[test]
 fn execute_program_dispatches_error_reporting_and_user_handlers() {

@@ -209,6 +209,24 @@ impl ElephcEvalContext {
         self.error_handler
     }
 
+    /// Temporarily removes the active handler without changing its restoration stack.
+    pub(crate) fn suspend_error_handler(&mut self) -> Option<EvalErrorHandlerState> {
+        self.error_handler.take()
+    }
+
+    /// Restores a suspended handler unless its callback installed a replacement.
+    pub(crate) fn resume_error_handler(
+        &mut self,
+        suspended: EvalErrorHandlerState,
+    ) -> Option<EvalErrorHandlerState> {
+        if self.error_handler.is_none() {
+            self.error_handler = Some(suspended);
+            None
+        } else {
+            Some(suspended)
+        }
+    }
+
     /// Installs an eval uncaught-exception handler and returns the previous handler.
     pub(crate) fn push_exception_handler(
         &mut self,

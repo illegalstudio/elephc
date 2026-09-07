@@ -43,6 +43,15 @@ pub(super) fn lower_error_reporting(
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let source_type = ctx.raw_value_php_type(value)?.codegen_repr();
     if !matches!(source_type, PhpType::Void | PhpType::Never) {
+        let query = ctx.next_label("error_reporting_null_query");
+        super::super::predicates::emit_is_null_result(ctx, value)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz x0, {query}")), // runtime null leaves the reporting mask unchanged
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // inspect the shared nullable/Mixed predicate result
+                ctx.emitter.instruction(&format!("jnz {query}"));               // runtime null is a query, not integer zero or a sentinel mask
+            }
+        }
         load_integer_operand(ctx, value)?;
         abi::emit_store_reg_to_symbol(
             ctx.emitter,
@@ -50,6 +59,7 @@ pub(super) fn lower_error_reporting(
             "_php_error_reporting",
             0,
         );
+        ctx.emitter.label(&query);
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     Ok(())
@@ -190,13 +200,14 @@ pub(super) fn lower_trigger_error(
         abi::int_result_reg(ctx.emitter),
         &default_label,
     );
-    super::super::callables::emit_descriptor_reg_invoker_mixed_result_with_args(
-        ctx,
-        descriptor_reg,
-        &[level, message, file, line],
-        "trigger_error_handler",
-        false,
-    )?;
+    super::super::callables::emit_invoker_arg_mixed(ctx, &[level, message, file, line])?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let arg0 = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_symbol_to_reg(ctx.emitter, arg0, "_php_error_handler_callable", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, arg1, 0);
+    abi::emit_call_label(ctx.emitter, "__rt_error_handler_invoke");
+    super::super::callables::release_invoker_arg_preserving_result(ctx);
     emit_release_handler_result_and_branch_on_false(ctx, &default_label);
     emit_bool_result(ctx, true);
     ctx.emitter.instruction(&branch_instruction(ctx, &done_label));             // skip PHP's default diagnostic after handler suppression
@@ -224,7 +235,7 @@ fn emit_validate_trigger_error_level(
             ] {
                 ctx.emitter
                     .instruction(&format!("cmp {level_reg}, #{accepted}"));     // compare against one PHP user-error category
-                ctx.emitter.instruction(&format!("b.eq {valid}"));             // any recognized user category is valid
+                ctx.emitter.instruction(&format!("b.eq {valid}"));              // any recognized user category is valid
             }
         }
         Arch::X86_64 => {
@@ -236,7 +247,7 @@ fn emit_validate_trigger_error_level(
             ] {
                 ctx.emitter
                     .instruction(&format!("cmp {level_reg}, {accepted}"));      // compare against one PHP user-error category
-                ctx.emitter.instruction(&format!("je {valid}"));               // any recognized user category is valid
+                ctx.emitter.instruction(&format!("je {valid}"));                // any recognized user category is valid
             }
         }
     }
@@ -470,7 +481,7 @@ fn emit_release_handler_result_and_branch_on_false(
             ctx.emitter.instruction("cmp x0, #3");                              // only the bool runtime tag can request default handling
             ctx.emitter.instruction(&format!("b.ne {classified}"));             // every non-bool return suppresses the default handler
             ctx.emitter
-                .instruction(&format!("cbz x1, {exact_false}"));               // boolean false requests the built-in diagnostic path
+                .instruction(&format!("cbz x1, {exact_false}"));                // boolean false requests the built-in diagnostic path
             ctx.emitter.instruction(&format!("b {classified}"));                // boolean true suppresses the built-in diagnostic
             ctx.emitter.label(&exact_false);
             ctx.emitter.instruction("mov x0, #1");                              // stage the exact-false classification
@@ -561,12 +572,12 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {level_reg}, #{E_USER_ERROR}"));     // select Fatal error for E_USER_ERROR
-            ctx.emitter.instruction(&format!("b.ne {warning}"));               // inspect the remaining nonfatal categories
+            ctx.emitter.instruction(&format!("b.ne {warning}"));                // inspect the remaining nonfatal categories
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {level_reg}, {E_USER_ERROR}"));      // select Fatal error for E_USER_ERROR
-            ctx.emitter.instruction(&format!("jne {warning}"));                // inspect the remaining nonfatal categories
+            ctx.emitter.instruction(&format!("jne {warning}"));                 // inspect the remaining nonfatal categories
         }
     }
     emit_user_error_fragment(ctx, b"Fatal error: ");
@@ -576,12 +587,12 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {level_reg}, #{E_USER_WARNING}"));   // select Warning for E_USER_WARNING
-            ctx.emitter.instruction(&format!("b.ne {deprecated}"));            // inspect deprecation and notice categories next
+            ctx.emitter.instruction(&format!("b.ne {deprecated}"));             // inspect deprecation and notice categories next
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {level_reg}, {E_USER_WARNING}"));    // select Warning for E_USER_WARNING
-            ctx.emitter.instruction(&format!("jne {deprecated}"));             // inspect deprecation and notice categories next
+            ctx.emitter.instruction(&format!("jne {deprecated}"));              // inspect deprecation and notice categories next
         }
     }
     emit_user_error_fragment(ctx, b"Warning: ");
@@ -591,12 +602,12 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
         Arch::AArch64 => {
             ctx.emitter
                 .instruction(&format!("cmp {level_reg}, #{E_USER_DEPRECATED}")); // select Deprecated for E_USER_DEPRECATED
-            ctx.emitter.instruction(&format!("b.ne {notice}"));                // the only remaining validated level is E_USER_NOTICE
+            ctx.emitter.instruction(&format!("b.ne {notice}"));                 // the only remaining validated level is E_USER_NOTICE
         }
         Arch::X86_64 => {
             ctx.emitter
                 .instruction(&format!("cmp {level_reg}, {E_USER_DEPRECATED}")); // select Deprecated for E_USER_DEPRECATED
-            ctx.emitter.instruction(&format!("jne {notice}"));                 // the only remaining validated level is E_USER_NOTICE
+            ctx.emitter.instruction(&format!("jne {notice}"));                  // the only remaining validated level is E_USER_NOTICE
         }
     }
     emit_user_error_fragment(ctx, b"Deprecated: ");
@@ -628,12 +639,12 @@ fn emit_exit_if_user_error(ctx: &mut FunctionContext<'_>, level_reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cmp {level_reg}, #{E_USER_ERROR}"));    // distinguish the fatal user-error category
+                .instruction(&format!("cmp {level_reg}, #{E_USER_ERROR}"));     // distinguish the fatal user-error category
             ctx.emitter.instruction(&format!("b.ne {done}"));                   // notices, warnings, and deprecations remain nonfatal
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("cmp {level_reg}, {E_USER_ERROR}"));     // distinguish the fatal user-error category
+                .instruction(&format!("cmp {level_reg}, {E_USER_ERROR}"));      // distinguish the fatal user-error category
             ctx.emitter.instruction(&format!("jne {done}"));                    // notices, warnings, and deprecations remain nonfatal
         }
     }

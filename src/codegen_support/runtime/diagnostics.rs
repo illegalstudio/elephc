@@ -27,6 +27,7 @@ use crate::codegen_support::abi;
 /// - `__rt_diag_pop_suppression`: decrements the counter (guarded against underflow) and returns.
 /// - `__rt_diag_warning`: writes to stderr when suppression depth is zero; silently returns when suppressed.
 pub(crate) fn emit_diagnostics(emitter: &mut Emitter) {
+    super::error_handlers::emit_error_handler_invoke(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_diagnostics_linux_x86_64(emitter);
         return;

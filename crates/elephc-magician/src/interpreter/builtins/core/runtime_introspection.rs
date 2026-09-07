@@ -335,7 +335,12 @@ fn dispatch_user_error_handler(
         return Ok(false);
     }
     let callback = eval_callable(handler.callback, context, values)?;
-    let result = eval_evaluated_callable_with_values(&callback, callback_args, context, values)?;
+    let suspended = context.suspend_error_handler().expect("active handler was just checked");
+    let result = eval_evaluated_callable_with_values(&callback, callback_args, context, values);
+    if let Some(discarded) = context.resume_error_handler(suspended) {
+        values.release(discarded.callback)?;
+    }
+    let result = result?;
     let falls_through = values.type_tag(result)? == EVAL_TAG_BOOL && !values.truthy(result)?;
     values.release(result)?;
     Ok(!falls_through)
