@@ -70,6 +70,29 @@ fn context_retain_defers_heap_context_destruction() {
     }
 }
 
+/// PCNTL detachment cannot destroy a context retained later by a Core callback owner.
+#[test]
+fn context_pcntl_detachment_preserves_new_core_owner() {
+    use crate::context::pcntl_runtime;
+    use crate::context::EvalPcntlSignalHandler;
+    use crate::value::RuntimeCellHandle;
+
+    let ctx = __elephc_eval_context_new();
+    // This test exercises the registry only, so the non-null callback is an inert identity.
+    let callback = RuntimeCellHandle::from_raw(ctx.cast());
+    let signal = i32::MAX;
+    assert!(pcntl_runtime::replace_signal_handler(signal, ctx, EvalPcntlSignalHandler::Callable(callback)).is_none());
+    unsafe { __elephc_eval_context_free(ctx); }
+    assert!(!unsafe { (*ctx).has_abi_owners() });
+    assert_eq!(unsafe { __elephc_eval_context_retain(ctx) }, EvalStatus::Ok.code());
+    pcntl_runtime::replace_signal_handler(signal, std::ptr::null_mut(), EvalPcntlSignalHandler::Disposition(0));
+    assert!(pcntl_runtime::take_collectable_context(ctx));
+    unsafe { crate::ffi::context::drop_eval_context_now(ctx); }
+    assert!(unsafe { (*ctx).has_abi_owners() });
+    assert_eq!(unsafe { (*ctx).abi_version() }, ABI_VERSION);
+    unsafe { __elephc_eval_context_free(ctx); }
+}
+
 /// Verifies call-site metadata can be set through the stable context ABI.
 #[test]
 fn context_set_call_site_records_file_dir_and_line() {

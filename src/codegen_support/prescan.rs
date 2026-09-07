@@ -188,7 +188,10 @@ mod tests {
     /// Verifies the prescanned `E_ALL` literal follows the selected PHP profile.
     #[test]
     fn test_error_all_follows_php_profile() {
-        let default_profile = collect_constants(&vec![], Platform::Linux);
+        let default_profile = collect_constants(
+            &vec![],
+            Target::new(Platform::Linux, crate::codegen_support::platform::Arch::X86_64),
+        );
         assert_eq!(int_constant(&default_profile, "E_ALL"), 30_719);
     }
 
