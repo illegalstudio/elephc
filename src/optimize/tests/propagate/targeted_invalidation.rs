@@ -103,10 +103,9 @@ fn test_by_ref_builtin_invalidates_its_argument() {
     );
 }
 
-/// An unfolded array read (`$a[0]`) may warn at runtime but writes no locals:
-/// scalar facts survive it.
+/// An unfolded array read can invoke a warning handler that writes globals.
 #[test]
-fn test_array_read_keeps_facts() {
+fn test_array_read_invalidates_top_level_facts() {
     let program = vec![
         Stmt::assign("x", Expr::int_lit(5)),
         Stmt::assign(
@@ -126,8 +125,8 @@ fn test_array_read_keeps_facts() {
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::int_lit(6)),
-        "an array read cannot write locals"
+        Stmt::echo(Expr::binop(Expr::var("x"), BinOp::Add, Expr::int_lit(1))),
+        "a warning handler can change top-level locals"
     );
 }
 

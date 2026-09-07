@@ -51,6 +51,21 @@ fn test_unset_array_element_invalidates_root_only() {
     assert_eq!(expr_invalidation(&expr), names(&["a"]));
 }
 
+/// Unknown array reads invalidate globals, but not unrelated function locals.
+#[test]
+fn test_array_warning_invalidation_respects_scope() {
+    let expr = array_access(Expr::var("a"), Expr::int_lit(0));
+    assert_eq!(expr_invalidation(&expr), Invalidation::All);
+    with_function_scope(|| assert_eq!(expr_invalidation(&expr), names(&[])));
+}
+
+/// A provably present literal element cannot dispatch a missing-key warning.
+#[test]
+fn test_present_literal_array_read_preserves_facts() {
+    let array = Expr::new(ExprKind::ArrayLiteral(vec![Expr::int_lit(7)]), Span::dummy());
+    assert_eq!(expr_invalidation(&array_access(array, Expr::int_lit(0))), names(&[]));
+}
+
 /// `unset($o->p)` writes heap state, not a caller local.
 #[test]
 fn test_unset_property_invalidates_nothing() {
