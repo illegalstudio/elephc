@@ -9,29 +9,59 @@
 
 use crate::support::*;
 
-/// Empty literal unpacks do not become arguments beside runtime class-name or object arrays.
-#[test]
-fn test_core_introspection_spread_mixed_static_dynamic_matrix() {
-    let source = r#"<?php
-class MixedSpread { public int $bar = 7; public function m(): void {} }
-function inspectMixedSpread(string $name): void {
+/// Keeps each callable surface small enough for the per-test CI deadline in both representations.
+fn assert_mixed_spread_case(body: &str, expected: &str) {
+    let source = format!(r#"<?php
+class MixedSpread {{ public int $bar = 7; public function m(): void {{}} }}
+function inspectMixedSpread(string $name): void {{
     $names = [$name];
     $objects = [new MixedSpread()];
+    {body}
+}}
+inspectMixedSpread(MixedSpread::class);
+"#);
+    eprintln!("mixed spread fixture: boxed representation");
+    assert_eq!(compile_and_run(&source), expected);
+    eprintln!("mixed spread fixture: tagged representation");
+    assert_eq!(compile_and_run_tagged(&source), expected);
+}
+
+/// Direct class introspection ignores empty literal unpacks beside runtime arrays.
+#[test]
+fn test_core_introspection_spread_mixed_static_dynamic_direct() {
+    assert_mixed_spread_case(r#"
     echo get_class_vars(...[], ...$names)['bar'], ':';
     echo implode(',', get_class_methods(...[], ...$names)), ':';
-    echo implode(',', get_class_methods(...$objects, ...[])), ':';
+    echo implode(',', get_class_methods(...$objects, ...[]));
+"#, "7:m:m");
+}
+
+/// CUF specializes class introspection after removing empty literal unpacks.
+#[test]
+fn test_core_introspection_spread_mixed_static_dynamic_cuf() {
+    assert_mixed_spread_case(r#"
     echo call_user_func('get_class_vars', ...[], ...$names)['bar'], ':';
-    echo implode(',', call_user_func('get_class_methods', ...[], ...$objects)), ':';
+    echo implode(',', call_user_func('get_class_methods', ...[], ...$objects));
+"#, "7:m");
+}
+
+/// First-class class introspection preserves runtime object and class-name element types.
+#[test]
+fn test_core_introspection_spread_mixed_static_dynamic_fcc() {
+    assert_mixed_spread_case(r#"
     $vars = get_class_vars(...);
     $methods = get_class_methods(...);
     echo $vars(...[], ...$names, ...[])['bar'], ':';
-    echo implode(',', $methods(...[], ...$objects, ...[])), ':';
-    echo get_class_vars(...[...$names])['bar'];
+    echo implode(',', $methods(...[], ...$objects, ...[]));
+"#, "7:m");
 }
-inspectMixedSpread(MixedSpread::class);
-"#;
-    assert_eq!(compile_and_run(source), "7:m:m:7:m:7:m:7");
-    assert_eq!(compile_and_run_tagged(source), "7:m:m:7:m:7:m:7");
+
+/// A nested dynamic unpack must retain its runtime length rather than the literal node count.
+#[test]
+fn test_core_introspection_spread_mixed_static_dynamic_nested() {
+    assert_mixed_spread_case(r#"
+    echo get_class_vars(...[...$names])['bar'];
+"#, "7");
 }
 
 /// Multiple runtime unpack sources are evaluated once in source order before arity rejection.
@@ -42,7 +72,8 @@ class OrderedSpread { public int $bar = 7; public function m(): void {} }
 function spreadSource(string $mark, string $name): array { echo $mark; return [$name]; }
 function inspectSpreadBounds(string $name): void {
     $names = [$name];
-    $empty = array_slice($names, 1);
+    $empty = $names;
+    array_pop($empty);
     try { get_class_vars(...[], ...$empty); } catch (ArgumentCountError $e) { echo 'D'; }
     try { call_user_func('get_class_methods', ...[], ...$empty); } catch (ArgumentCountError $e) { echo 'C'; }
     $vars = get_class_vars(...);
