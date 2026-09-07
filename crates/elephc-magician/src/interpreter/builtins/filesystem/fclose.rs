@@ -61,7 +61,10 @@ pub(in crate::interpreter) fn eval_fclose_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
     if let Some(result) = eval_user_wrapper_fclose_result(id, context, values)? {
+        if values.truthy(result)? { values.resource_closed(stream)?; }
         return Ok(result);
     }
-    values.bool_value(context.stream_resources_mut().close(id))
+    let closed = context.stream_resources_mut().close(id);
+    if closed { values.resource_closed(stream)?; }
+    values.bool_value(closed)
 }

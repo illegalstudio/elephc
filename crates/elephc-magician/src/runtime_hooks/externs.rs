@@ -17,6 +17,8 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Updates the canonical resource subtype, or marks it closed when subtype is negative.
+    pub(super) fn __elephc_eval_resource_state(resource: *mut RuntimeCell, subtype: i64);
     /// Writes an already-dispatched diagnostic without invoking the user handler again.
     pub(super) fn __elephc_eval_warning_raw(message: *const u8, length: u64);
     /// Returns one owned boxed native backtrace frame or null after the final visible frame.

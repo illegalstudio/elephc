@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// Eval resource type registration and close events are visible to both inventory consumers.
+#[test]
+fn test_core_inventory_regression_eval_resource_close_and_filter_type() {
+    let out = compile_and_run(r#"<?php
+$source = '$stream = fopen("php://memory", "w+");
+$filter = stream_filter_append($stream, "string.toupper", STREAM_FILTER_WRITE);
+echo count(get_resources("stream filter")), ":";
+stream_filter_remove($filter);
+fclose($stream);
+echo count(get_resources("stream")), ":";' . ' // ' . $argc;
+eval($source);
+echo count(get_resources('stream')), ':', count(get_resources('stream filter'));
+"#);
+    assert_eq!(out, "1:3:3:0");
+}
+
 /// Flat and categorized constant snapshots preserve nested arrays and independent mutation.
 #[test]
 fn test_core_inventory_regression_array_constants() {

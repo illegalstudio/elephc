@@ -170,6 +170,30 @@ mod tests {
         emitter.output()
     }
 
+    /// Resource and backtrace inventory adapters export their C ABI on every supported target.
+    #[test]
+    fn core_inventory_wrappers_apply_platform_c_symbol_mangling() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            for wrapper in [
+                "__elephc_eval_resource_inventory",
+                "__elephc_eval_resource_state",
+                "__elephc_eval_backtrace_entry",
+            ] {
+                let symbol = target.extern_symbol(wrapper);
+                assert!(asm.contains(&format!(".globl {symbol}\n")), "{target:?}: missing export {symbol}");
+                assert!(asm.contains(&format!("{symbol}:\n")), "{target:?}: missing label {symbol}");
+            }
+            assert!(asm.contains("__elephc_eval_resource_state_closed:"), "{target:?}");
+        }
+    }
+
     /// Verifies GC bridge exports use the platform C symbol while targeting internal helpers.
     #[test]
     fn gc_lifecycle_wrappers_apply_platform_c_symbol_mangling() {

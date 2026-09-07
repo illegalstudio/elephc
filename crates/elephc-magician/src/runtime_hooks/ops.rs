@@ -33,6 +33,12 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Marks the canonical cell and native inventory closed after Magician released its handle.
+    fn resource_closed(&mut self, resource: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_resource_state(resource.as_ptr(), -1); }
+        Ok(())
+    }
+
     /// Keeps trigger_error's precise level and avoids redispatching default formatted text.
     fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
         unsafe { __elephc_eval_warning_raw(message.as_ptr(), message.len() as u64); }

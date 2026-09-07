@@ -49,5 +49,7 @@ pub(in crate::interpreter) fn eval_stream_filter_remove_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = super::stream_bucket_new::eval_stream_extension_resource_id(stream_filter, values)?;
-    values.bool_value(context.stream_resources_mut().close_filter_resource(id))
+    let closed = context.stream_resources_mut().close_filter_resource(id);
+    if closed { values.resource_closed(stream_filter)?; }
+    values.bool_value(closed)
 }
