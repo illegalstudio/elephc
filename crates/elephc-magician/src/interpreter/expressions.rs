@@ -299,6 +299,7 @@ pub(in crate::interpreter) fn eval_expr(
                 eval_expr(value, context, scope, values)?
             };
             if values.is_null(value)? {
+                release_expr_result(value, context, values)?;
                 eval_expr(default, context, scope, values)
             } else {
                 Ok(value)
@@ -334,57 +335,23 @@ pub(in crate::interpreter) fn eval_expr(
             then_branch,
             else_branch,
         } => {
-            let condition = eval_expr(condition, context, scope, values)?;
-            if values.truthy(condition)? {
-                if let Some(then_branch) = then_branch {
-                    eval_expr(then_branch, context, scope, values)
+            if let Some(then_branch) = then_branch {
+                let selected = if eval_condition(condition, context, scope, values)? {
+                    then_branch
                 } else {
-                    Ok(condition)
-                }
-            } else {
-                eval_expr(else_branch, context, scope, values)
+                    else_branch
+                };
+                return eval_expr(selected, context, scope, values);
             }
+            let condition = eval_owned_expr(condition, context, scope, values)?;
+            let truthy = values.truthy(condition);
+            if matches!(truthy, Ok(true)) { return Ok(condition); }
+            let released = eval_release_value(context, values, condition);
+            truthy?;
+            released?;
+            eval_expr(else_branch, context, scope, values)
         }
-        EvalExpr::Unary { op, expr } => {
-            let value = eval_expr(expr, context, scope, values)?;
-            match op {
-                EvalUnaryOp::Plus => {
-                    let zero = values.int(0)?;
-                    values.add(zero, value)
-                }
-                EvalUnaryOp::Negate => {
-                    let zero = values.int(0)?;
-                    values.sub(zero, value)
-                }
-                EvalUnaryOp::LogicalNot => {
-                    let truthy = values.truthy(value)?;
-                    values.bool_value(!truthy)
-                }
-                EvalUnaryOp::BitNot => values.bit_not(value),
-            }
-        }
-        EvalExpr::Binary { op, left, right } => {
-            if *op == EvalBinOp::LogicalAnd {
-                let left = eval_expr(left, context, scope, values)?;
-                if !values.truthy(left)? {
-                    return values.bool_value(false);
-                }
-                let right = eval_expr(right, context, scope, values)?;
-                let truthy = values.truthy(right)?;
-                return values.bool_value(truthy);
-            }
-            if *op == EvalBinOp::LogicalOr {
-                let left = eval_expr(left, context, scope, values)?;
-                if values.truthy(left)? {
-                    return values.bool_value(true);
-                }
-                let right = eval_expr(right, context, scope, values)?;
-                let truthy = values.truthy(right)?;
-                return values.bool_value(truthy);
-            }
-            let left = eval_expr(left, context, scope, values)?;
-            let right = eval_expr(right, context, scope, values)?;
-            eval_binary_result(*op, left, right, context, values)
-        }
+        EvalExpr::Unary { op, expr } => eval_unary_expr(*op, expr, context, scope, values),
+        EvalExpr::Binary { op, left, right } => eval_binary_expr(*op, left, right, context, scope, values),
     }
 }

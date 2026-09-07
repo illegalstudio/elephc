@@ -107,7 +107,7 @@ fn cleanup_native_function_ref_args(
                 }
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
-                values.release(**slot)?;
+                values.release(RuntimeCellHandle::from_raw(**slot))?;
             }
             BoundNativeFunctionRefSlot::RawWord { .. } => {}
         }
@@ -128,7 +128,7 @@ fn write_back_native_function_ref_args(
                 slot,
                 target,
             } => {
-                let value = **slot;
+                let value = RuntimeCellHandle::from_raw(**slot);
                 if value == *original {
                     values.release(value)?;
                     continue;

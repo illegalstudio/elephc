@@ -440,7 +440,7 @@ pub(super) fn eval_builtin_property_hook_type_case(
     if let Some(replaced) = context.set_enum_case("PropertyHookType", case_name, object) {
         values.release(replaced)?;
     }
-    Ok(Some(object))
+    Ok(Some(object.borrowed()))
 }
 
 /// Returns the PHP case name and backed value for a builtin property-hook case.

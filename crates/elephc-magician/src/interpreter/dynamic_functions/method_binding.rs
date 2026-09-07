@@ -829,7 +829,7 @@ pub(in crate::interpreter) fn eval_method_parameter_default(
         return Err(EvalStatus::UnsupportedConstruct);
     }
     let mut default_scope = ElephcEvalScope::new();
-    eval_expr(default, context, &mut default_scope, values)
+    eval_owned_expr(default, context, &mut default_scope, values)
 }
 
 /// Returns whether an EvalIR expression can be safely evaluated as a method default.

@@ -507,7 +507,7 @@ pub trait RuntimeValueOps {
     /// Creates an invoker-only by-reference marker for a staged Mixed slot.
     fn invoker_ref_cell(
         &mut self,
-        slot: *mut RuntimeCellHandle,
+        slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Creates an invoker-only by-reference marker for a staged raw one-word slot.

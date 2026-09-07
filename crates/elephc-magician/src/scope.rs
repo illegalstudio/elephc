@@ -230,6 +230,29 @@ impl ElephcEvalScope {
         replaced
     }
 
+    /// Consumes a new owner and returns displaced leases, including same-cell assignments.
+    pub(crate) fn set_owned_respecting_references(
+        &mut self,
+        name: impl Into<String>,
+        cell: RuntimeCellHandle,
+    ) -> Vec<RuntimeCellHandle> {
+        let name = name.into();
+        let same_owner = self.entries.get(&name).is_some_and(|entry| {
+            entry.flags().is_visible() && entry.cell() == cell
+                && (entry.flags().ownership == ScopeCellOwnership::Owned
+                    || (entry.flags().by_ref && self.entries.values().any(|alias| {
+                        alias.flags().is_visible() && alias.flags().by_ref
+                            && alias.flags().ownership == ScopeCellOwnership::Owned
+                            && alias.cell() == cell
+                    })))
+        });
+        let mut replaced = self.set_respecting_references(name, cell, ScopeCellOwnership::Owned);
+        if same_owner {
+            replaced.push(cell);
+        }
+        replaced
+    }
+
     /// Binds a target variable name as a PHP reference to a source variable name.
     pub fn set_reference(
         &mut self,
@@ -343,6 +366,7 @@ impl ElephcEvalScope {
         self.entry(name)
             .filter(|entry| entry.flags().is_visible())
             .map(ScopeEntry::cell)
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Returns visible cells whose names are synchronized back to generated AOT storage.

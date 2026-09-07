@@ -105,16 +105,21 @@ pub(super) fn eval_cast_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = eval_expr(expr, context, scope, values)?;
-    match target {
-        EvalCastType::Int => values.cast_int(value),
-        EvalCastType::Float => values.cast_float(value),
-        EvalCastType::String => {
-            let value = eval_string_context_value(value, context, values)?;
-            values.cast_string(value)
+    with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
+        match target {
+            EvalCastType::Int => values.cast_int(args[0]),
+            EvalCastType::Float => values.cast_float(args[0]),
+            EvalCastType::String => {
+                let value = eval_string_context_value(args[0], context, values)?;
+                let result = values.cast_string(value);
+                let released = if value != args[0] {
+                    release_expr_result(value, context, values)
+                } else { Ok(()) };
+                result.and_then(|result| released.map(|()| result))
+            }
+            EvalCastType::Bool => values.cast_bool(args[0]),
         }
-        EvalCastType::Bool => values.cast_bool(value),
-    }
+    })
 }
 
 /// Constructs an object after the target class name and constructor arguments have been evaluated.
@@ -393,17 +398,23 @@ pub(in crate::interpreter) fn eval_match_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let subject = eval_expr(subject, context, scope, values)?;
-    for arm in arms {
-        for pattern in &arm.patterns {
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let matched = values.compare(EvalBinOp::StrictEq, subject, pattern)?;
-            if values.truthy(matched)? {
-                return eval_expr(&arm.value, context, scope, values);
+    with_eval_operands(&[subject], context, scope, values, |args, context, scope, values| {
+        for arm in arms {
+            for pattern in &arm.patterns {
+                let matched = with_eval_operands(&[pattern], context, scope, values, |patterns, _, _, values| {
+                    values.compare(EvalBinOp::StrictEq, args[0], patterns[0])
+                })?;
+                let truthy = values.truthy(matched);
+                let released = values.release(matched);
+                let truthy = truthy?;
+                released?;
+                if truthy {
+                    return eval_expr(&arm.value, context, scope, values);
+                }
             }
         }
-    }
-    default
-        .map(|expr| eval_expr(expr, context, scope, values))
-        .unwrap_or(Err(EvalStatus::RuntimeFatal))
+        default
+            .map(|expr| eval_expr(expr, context, scope, values))
+            .unwrap_or(Err(EvalStatus::RuntimeFatal))
+    })
 }

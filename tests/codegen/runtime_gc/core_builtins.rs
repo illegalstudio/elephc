@@ -83,6 +83,74 @@ fn test_core_eval_numeric_options_release_conversion_cells() {
     );
 }
 
+/// Literal, cast, comparison, and branch-produced Core arguments release their temporary owners.
+#[test]
+fn test_core_eval_scalar_argument_expressions_release_temporaries() {
+    assert_core_eval_collection_cleanup(
+        "$flag = false; $nothing = null;",
+        "get_defined_constants(false);
+         get_defined_constants((bool) 0);
+         get_defined_constants(1 > 2);
+         get_defined_constants(true ? $flag : true);
+         get_defined_constants(false ?: $flag);
+         get_defined_constants($nothing ?? false);
+         get_defined_constants(match (1) { 1 => $flag, default => true });",
+    );
+}
+
+/// Repeated assignment to the same ordinary and referenced cells leaves exactly one scope owner.
+#[test]
+fn test_core_eval_same_cell_assignments_release_previous_leases() {
+    assert_core_eval_collection_cleanup(
+        "$value = \"keep\"; $alias =& $value; $plain = \"plain\";",
+        "$value = $value; $alias = $alias; $plain = $plain;
+         $result = get_defined_vars(); unset($result);",
+    );
+}
+
+/// Repeated class-default inventories release owned copies without consuming persistent constants.
+#[test]
+fn test_core_eval_class_constant_defaults_release_inventory_leases() {
+    assert_core_eval_collection_cleanup(
+        "class GcDefaultConstant { const TOKEN = \"keep\"; public string $value = self::TOKEN; }",
+        "$result = get_class_vars(\"GcDefaultConstant\"); unset($result);",
+    );
+}
+
+/// Defaults referring to scalar, nested-array, and enum constants survive freeing both inventories.
+#[test]
+fn test_core_eval_class_constant_defaults_remain_readable() {
+    let source = r#"<?php
+$source = 'enum SharedDefaultCase { case Ready; }
+class SharedDefaults {
+    const TOKEN = "keep";
+    const ITEMS = [7, 8];
+    public string $value = self::TOKEN;
+    public array $items = self::ITEMS;
+    public $case = SharedDefaultCase::Ready;
+}
+$first = get_class_vars("SharedDefaults"); unset($first);
+$second = get_class_vars("SharedDefaults"); unset($second);
+echo SharedDefaults::TOKEN, ":", SharedDefaults::ITEMS[0], ":", SharedDefaultCase::Ready->name;
+return 42;' . ' // ' . $argc;
+echo ":", eval($source);
+"#;
+    assert_eq!(compile_and_run(source), ":keep:7:Ready42");
+}
+
+/// First-use and cached builtin enum cases stay alive after boolean conversion and condition cleanup.
+#[test]
+fn test_core_eval_property_hook_case_survives_temporary_conditions() {
+    let source = r#"<?php
+$source = '$first = (bool) PropertyHookType::Get; unset($first);
+if (PropertyHookType::Get) { echo "live:"; }
+echo PropertyHookType::Get->name;
+return 42;' . ' // ' . $argc;
+echo eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "live:Get42");
+}
+
 /// Repeating opaque eval constant inventories leaves no extra live allocations after cleanup.
 #[test]
 fn test_core_eval_flat_constant_inventory_releases_each_result() {

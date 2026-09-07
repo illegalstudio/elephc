@@ -94,6 +94,7 @@ pub(super) struct FakeOps {
     pub(super) object_classes: HashMap<usize, String>,
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
+    pub(super) retains: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,

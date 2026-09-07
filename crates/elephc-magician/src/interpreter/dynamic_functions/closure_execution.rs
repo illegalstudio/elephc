@@ -566,7 +566,7 @@ pub(in crate::interpreter) fn persist_static_locals(
     Ok(())
 }
 
-/// Retains a successful return value when it aliases a persistent static-local owner.
+/// Transfers an owned local return or retains a borrowed result before its activation disappears.
 pub(in crate::interpreter) fn retain_static_local_return(
     result: Result<RuntimeCellHandle, EvalStatus>,
     static_names: &[String],
@@ -574,13 +574,21 @@ pub(in crate::interpreter) fn retain_static_local_return(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let result = result?;
+    if !result.is_borrowed() {
+        return Ok(result);
+    }
     if static_names
         .iter()
         .any(|name| scope.visible_cell(name) == Some(result))
     {
         values.retain(result)
+    } else if scope.visible_entries().iter().any(|(name, cell)| {
+        *cell == result && scope.entry(name)
+            .is_some_and(|entry| entry.flags().ownership == ScopeCellOwnership::Owned)
+    }) {
+        Ok(result.owned())
     } else {
-        Ok(result)
+        values.retain(result)
     }
 }
 

@@ -32,11 +32,10 @@ pub(in crate::interpreter) fn eval_builtin_runtime_introspection_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut evaluated = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated.push(eval_expr(arg, context, scope, values)?);
-    }
-    eval_runtime_introspection_result(name, &evaluated, context, Some(scope), values)
+    let args = args.iter().collect::<Vec<_>>();
+    with_eval_operands(&args, context, scope, values, |args, context, scope, values| {
+        eval_runtime_introspection_result(name, args, context, Some(scope), values)
+    })
 }
 
 /// Evaluates one PHP Core introspection or handler call from materialized arguments.

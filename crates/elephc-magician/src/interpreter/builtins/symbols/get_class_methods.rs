@@ -52,8 +52,9 @@ pub(in crate::interpreter) fn eval_builtin_get_class_methods(
     let [target] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let target = eval_expr(target, context, scope, values)?;
-    eval_get_class_methods_result(&[target], context, values)
+    with_eval_operands(&[target], context, scope, values, |args, context, _, values| {
+        eval_get_class_methods_result(args, context, values)
+    })
 }
 
 /// Evaluates materialized `get_class_methods()` arguments.

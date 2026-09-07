@@ -50,7 +50,7 @@ pub(super) fn eval_static_property_inc_dec_result(
 }
 
 /// Releases one eval-owned value after running an eval-declared dynamic destructor if needed.
-pub(super) fn eval_release_value(
+pub(in crate::interpreter) fn eval_release_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     value: RuntimeCellHandle,

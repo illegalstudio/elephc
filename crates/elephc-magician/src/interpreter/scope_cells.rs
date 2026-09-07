@@ -42,6 +42,7 @@ pub(in crate::interpreter) fn visible_scope_cell(
     scope_entry(context, scope, name)
         .filter(|entry| entry.flags().is_visible())
         .map(ScopeEntry::cell)
+        .map(RuntimeCellHandle::borrowed)
 }
 
 /// Stores a variable cell, redirecting `global` aliases to the global scope.
@@ -52,21 +53,44 @@ pub(in crate::interpreter) fn set_scope_cell(
     cell: RuntimeCellHandle,
     ownership: ScopeCellOwnership,
 ) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    let name = name.into();
+    update_scope_cell(context, scope, name.into(), |scope, name| {
+        scope.set_respecting_references(name, cell, ownership)
+    })
+}
+
+/// Transfers a freshly acquired owner into local or global storage, balancing identical aliases.
+pub(in crate::interpreter) fn set_owned_scope_cell(
+    context: &ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    name: String,
+    cell: RuntimeCellHandle,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
+    update_scope_cell(context, scope, name, |scope, name| {
+        scope.set_owned_respecting_references(name, cell)
+    })
+}
+
+/// Applies a storage mutation to the actual scope behind a local or global alias.
+fn update_scope_cell(
+    context: &ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    name: String,
+    update: impl FnOnce(&mut ElephcEvalScope, String) -> Vec<RuntimeCellHandle>,
+) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
     if let Some(global_name) = scope.global_alias_target(&name).map(str::to_string) {
         let Some(global_scope) = context.global_scope_ptr() else {
             return Err(EvalStatus::RuntimeFatal);
         };
         let current_scope = scope as *mut ElephcEvalScope;
         if global_scope == current_scope {
-            return Ok(scope.set_respecting_references(global_name, cell, ownership));
+            return Ok(update(scope, global_name));
         }
         let Some(global_scope) = (unsafe { global_scope.as_mut() }) else {
             return Err(EvalStatus::RuntimeFatal);
         };
-        return Ok(global_scope.set_respecting_references(global_name, cell, ownership));
+        return Ok(update(global_scope, global_name));
     }
-    Ok(scope.set_respecting_references(name, cell, ownership))
+    Ok(update(scope, name))
 }
 
 /// Creates a PHP reference alias between two eval-visible variable names.

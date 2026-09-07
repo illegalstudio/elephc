@@ -46,6 +46,7 @@ impl ElephcEvalContext {
         self.static_locals
             .get(&(function_name.to_string(), name.to_string()))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one static local cell and returns any replaced distinct cell.
@@ -66,6 +67,7 @@ impl ElephcEvalContext {
         self.static_properties
             .get(&(normalize_class_name(class_name), name.to_string()))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one eval static property cell and returns any replaced distinct cell.
@@ -107,6 +109,7 @@ impl ElephcEvalContext {
         self.class_constants
             .get(&(normalize_class_name(class_name), name.to_string()))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores one eval class constant cell and returns any replaced distinct cell.

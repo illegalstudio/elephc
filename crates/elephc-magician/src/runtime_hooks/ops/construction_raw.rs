@@ -137,7 +137,7 @@ macro_rules! impl_construction_raw_ops {
     /// Creates an invoker-only by-reference marker for a staged Mixed slot.
     fn invoker_ref_cell(
         &mut self,
-        slot: *mut RuntimeCellHandle,
+        slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_invoker_ref_cell(slot) })
     }

@@ -179,6 +179,16 @@ fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
 
+The Rust-only `RuntimeCellHandle` records whether an expression borrows a stored
+cell or transfers an owner. Native C-ABI arguments and by-reference slots remain
+raw cell pointers, never the Rust handle structure. Core adapters and scalar
+expression consumers retain borrowed operands before evaluating later operands,
+then release their leases on success and failure. Conditions consume their
+temporary results; assignments transfer an owner and balance replacements even
+when the old and new cell pointers coincide. Class-default collection builders
+also acquire a lease for defaults borrowed from persistent class constants or
+enum cases before inserting and releasing their temporary operands.
+
 Builtin lookup is also shared at the contract boundary. Magician joins its
 implementation hooks to the same `BuiltinId` used by the compiler. For compatible
 boxed-cell operations it dispatches a typed `RuntimeBuiltinId` through

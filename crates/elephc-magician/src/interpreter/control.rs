@@ -54,7 +54,7 @@ pub(super) struct BoundNativeFunctionArgs {
 pub(super) enum BoundNativeFunctionRefSlot {
     Mixed {
         original: RuntimeCellHandle,
-        slot: Box<RuntimeCellHandle>,
+        slot: Box<*mut crate::value::RuntimeCell>,
         target: Option<EvalReferenceTarget>,
     },
     RawWord {

@@ -15,12 +15,13 @@ impl FakeOps {
         self.releases.push(value);
         Ok(())
     }
-    /// Returns the same fake handle because fake cells do not refcount.
+    /// Records a retained lease while preserving fake cell identity.
     pub(super) fn runtime_retain(
         &mut self,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        Ok(value)
+        self.retains.push(value);
+        Ok(value.owned())
     }
     /// Records fake PHP warnings without writing to stderr.
     pub(super) fn runtime_warning(&mut self, message: &str) -> Result<(), EvalStatus> {

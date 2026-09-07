@@ -184,6 +184,7 @@ impl ElephcEvalContext {
                 normalize_enum_case_name(case_name),
             ))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores a materialized singleton case object and returns any replaced distinct cell.
@@ -214,6 +215,7 @@ impl ElephcEvalContext {
                 normalize_enum_case_name(case_name),
             ))
             .copied()
+            .map(RuntimeCellHandle::borrowed)
     }
 
     /// Stores a materialized backing value and returns any replaced distinct cell.

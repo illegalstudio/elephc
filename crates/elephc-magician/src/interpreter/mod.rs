@@ -21,6 +21,7 @@ mod control;
 mod dynamic_functions;
 mod expressions;
 mod include_exec;
+mod operands;
 mod libc_shims;
 mod reflection;
 mod return_type_compat;
@@ -66,6 +67,7 @@ use control::{
 use dynamic_functions::*;
 use expressions::*;
 use include_exec::*;
+use operands::*;
 use libc_shims::*;
 use reflection::*;
 use return_type_compat::*;

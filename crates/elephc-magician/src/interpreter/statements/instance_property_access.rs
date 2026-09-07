@@ -464,7 +464,7 @@ pub(in crate::interpreter) fn eval_reference_target_value(
             context.replace_execution_scope(previous_scope);
             result
         }
-        EvalReferenceTarget::Cell { cell } => Ok(*cell),
+        EvalReferenceTarget::Cell { cell } => Ok(cell.borrowed()),
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
             eval_invoker_slot_ref_target_value(*slot, *source_tag, values)
         }
