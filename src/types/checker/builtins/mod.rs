@@ -121,10 +121,14 @@ impl Checker {
             return Ok(None);
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");
+        // CUF forwards names after a positional callback to that callback's signature.
+        // The callable checker owns normalization of those target arguments.
+        let forwards_callback_names = builtin_key == "call_user_func"
+            && args.first().is_some_and(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)));
         let normalized_args;
         let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
-            (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
+            (!is_lazy_construct && !forwards_callback_names).then(|| crate::types::builtin_call_sig(name)).flatten()
         {
             let plan = self.plan_builtin_call_args(
                 &sig,

@@ -60,6 +60,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
     allow_unknown_named_variadic: bool,
 ) -> Result<CallArgPlan, CallArgPlanError> {
     validate_no_spread_after_named(args)?;
+    validate_positional_spread_order(args)?;
     let expanded = expand_static_assoc_spread_args_with_origins(args);
     let assoc_spread_sources = vec![false; expanded.args.len()];
     let (source_args, source_origins, assoc_spread_sources) =
@@ -113,6 +114,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     assoc_spread_sources: &[bool],
 ) -> Result<CallArgPlan, CallArgPlanError> {
     validate_no_spread_after_named(args)?;
+    validate_positional_spread_order(args)?;
     let expanded = expand_static_assoc_spread_args_with_origins(args);
     let expanded_assoc_spread_sources = (0..expanded.args.len())
         .map(|idx| assoc_spread_sources.get(idx).copied().unwrap_or(false))
@@ -192,7 +194,7 @@ fn validate_positional_spread_order(args: &[Expr]) -> Result<(), CallArgPlanErro
     for arg in args {
         if matches!(arg.kind, ExprKind::Spread(_)) {
             seen_spread = true;
-        } else if seen_spread {
+        } else if seen_spread && !matches!(arg.kind, ExprKind::NamedArg { .. }) {
             return Err(CallArgPlanError::PositionalAfterSpread { span: arg.span });
         }
     }

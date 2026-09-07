@@ -55,9 +55,21 @@ pub(crate) fn expand_static_assoc_spread_args_with_origins(
 ) -> ExpandedStaticSpreadArgs {
     let mut expanded_args = Vec::with_capacity(args.len());
     let mut origins = Vec::with_capacity(args.len());
+    let all_spreads_static = args.iter().all(|arg| match &arg.kind {
+        ExprKind::Spread(inner) => matches!(&inner.kind, ExprKind::ArrayLiteral(items) if items.iter().all(|item| !matches!(item.kind, ExprKind::Spread(_))))
+            || matches!(inner.kind, ExprKind::ArrayLiteralAssoc(_)),
+        _ => true,
+    });
 
     for arg in args {
         if let ExprKind::Spread(inner) = &arg.kind {
+            if all_spreads_static {
+                if let ExprKind::ArrayLiteral(items) = &inner.kind {
+                    expanded_args.extend(items.iter().cloned());
+                    origins.extend(items.iter().map(|_| ExpandedArgOrigin::StaticAssocPositional));
+                    continue;
+                }
+            }
             if let Some(mut spread_args) = expand_static_spread(inner, arg.span) {
                 for (arg, origin) in spread_args.drain(..) {
                     expanded_args.push(arg);
