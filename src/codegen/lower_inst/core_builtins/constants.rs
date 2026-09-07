@@ -5,7 +5,7 @@
 //! - `super::lower_core_builtin()` for `get_defined_constants()`.
 //!
 //! Key details:
-//! - The flat result and categorized `Core`/`user` result share the same scalar materializer.
+//! - Flat and categorized results share recursive scalar/array constant materialization.
 //! - Hash entries own boxed Mixed cells whose payload types match the constant declarations.
 
 use std::collections::HashSet;
@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::ir::Instruction;
-use crate::parser::ast::ExprKind;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -31,6 +31,7 @@ pub(super) fn lower_get_defined_constants(
     emit_branch_if_nonzero(ctx, &categorized);
     let entries = sorted_constant_entries(ctx);
     emit_constant_hash(ctx, &entries)?;
+    crate::codegen::lower_inst::builtins::append_eval_inventory(ctx, true)?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&categorized);
     emit_categorized_constants(ctx, &entries)?;
@@ -93,6 +94,7 @@ fn emit_categorized_constants(
     insert_boxed_hash_value(ctx, "Core");
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     emit_constant_hash(ctx, &user)?;
+    crate::codegen::lower_inst::builtins::append_eval_inventory(ctx, true)?;
     box_owned_mixed_hash(ctx);
     insert_boxed_hash_value(ctx, "user");
     Ok(())
@@ -138,7 +140,7 @@ fn allocate_mixed_hash(ctx: &mut FunctionContext<'_>, capacity: usize) {
     abi::emit_call_label(ctx.emitter, "__rt_hash_new");
 }
 
-/// Materializes one supported scalar constant as an owned Mixed cell.
+/// Materializes one folded scalar or recursively nested array constant as an owned Mixed cell.
 fn emit_boxed_constant_value(
     ctx: &mut FunctionContext<'_>,
     value: &ExprKind,
@@ -187,7 +189,75 @@ fn emit_boxed_constant_value(
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
         }
         ExprKind::Negate(inner) => emit_boxed_negative_constant(ctx, &inner.kind)?,
+        ExprKind::ArrayLiteral(items) => {
+            emit_boxed_array_constant(ctx, items.iter().enumerate().map(|(index, value)| {
+                (ExprKind::IntLiteral(index as i64), value)
+            }))?;
+        }
+        ExprKind::ArrayLiteralAssoc(items) => {
+            emit_boxed_array_constant(ctx, items.iter().map(|(key, value)| (key.kind.clone(), value)))?;
+        }
         other => return Err(unsupported_constant_value(other)),
+    }
+    Ok(())
+}
+
+/// Builds a PHP array with normalized keys and owned Mixed entries, including nested arrays.
+fn emit_boxed_array_constant<'a>(
+    ctx: &mut FunctionContext<'_>,
+    entries: impl ExactSizeIterator<Item = (ExprKind, &'a Expr)>,
+) -> Result<()> {
+    allocate_mixed_hash(ctx, entries.len().saturating_mul(2).max(16));
+    for (key, value) in entries {
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        // Scalar literals own their PHP tag; nested array children recurse independently.
+        emit_boxed_constant_value(ctx, &value.kind, &PhpType::Int)?;
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        emit_constant_array_key(ctx, &key)?;
+        let value_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+        abi::emit_pop_reg(ctx.emitter, value_reg);
+        let table_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        abi::emit_pop_reg(ctx.emitter, table_reg);
+        for (arg, value) in [(4, 0), (5, 7)] {
+            let reg = abi::int_arg_reg_name(ctx.emitter.target, arg);
+            abi::emit_load_int_immediate(ctx.emitter, reg, value);
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    }
+    box_owned_mixed_hash(ctx);
+    Ok(())
+}
+
+/// Materializes a folded constant array key through the ordinary PHP key normalizer.
+fn emit_constant_array_key(ctx: &mut FunctionContext<'_>, key: &ExprKind) -> Result<()> {
+    let lo = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let hi = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let integer = match key {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
+        ExprKind::Negate(value) => match &value.kind {
+            ExprKind::IntLiteral(value) => Some(value.wrapping_neg()),
+            _ => return Err(unsupported_constant_value(key)),
+        },
+        _ => None,
+    };
+    if let Some(value) = integer {
+        abi::emit_load_int_immediate(ctx.emitter, lo, value);
+        abi::emit_load_int_immediate(ctx.emitter, hi, -1);
+        return Ok(());
+    }
+    let bytes = match key {
+        ExprKind::StringLiteral(value) => value.as_bytes(),
+        ExprKind::Null => b"",
+        _ => return Err(unsupported_constant_value(key)),
+    };
+    let (label, len) = ctx.data.add_string(bytes);
+    let (ptr, length) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr, &label);
+    abi::emit_load_int_immediate(ctx.emitter, length, len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rax");                                // pass the normalized string or integer key to hash_set
     }
     Ok(())
 }

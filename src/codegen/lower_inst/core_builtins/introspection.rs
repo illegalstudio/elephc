@@ -171,6 +171,7 @@ fn emit_defined_functions_hash(
     insert_string_array_hash_value(ctx, "internal");
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     crate::codegen::lower_inst::builtins::types::emit_string_array(ctx, user)?;
+    crate::codegen::lower_inst::builtins::append_eval_inventory(ctx, false)?;
     insert_string_array_hash_value(ctx, "user");
     Ok(())
 }

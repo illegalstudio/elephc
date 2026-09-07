@@ -33,6 +33,11 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Uses the same filtered and ownership-safe inventory as native get_resources().
+    fn runtime_resource_inventory(&mut self, selector: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_resource_inventory(selector) }).map(Some)
+    }
+
     /// Dispatches a shareable builtin through the versioned generated-runtime C ABI.
     fn runtime_builtin_call(
         &mut self,

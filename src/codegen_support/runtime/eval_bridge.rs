@@ -33,6 +33,7 @@ pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
         Arch::X86_64 => emit_x86_64_wrappers(emitter),
     }
     emit_gc_lifecycle_wrappers(emitter);
+    resources::emit_resource_inventory_wrapper(emitter);
 }
 
 
@@ -59,6 +60,7 @@ mod aarch64_clone;
 mod x86_64_clone;
 mod clone_rejections;
 mod runtime_builtin_dispatch;
+mod resources;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;

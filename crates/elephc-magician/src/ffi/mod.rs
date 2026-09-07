@@ -29,6 +29,7 @@ pub mod scope;
 #[cfg(not(test))]
 pub mod static_members;
 pub mod symbols;
+pub mod inventories;
 pub(crate) mod util;
 
 #[cfg(not(test))]
@@ -49,6 +50,7 @@ pub use scope::*;
 #[cfg(not(test))]
 pub use static_members::*;
 pub use symbols::*;
+pub use inventories::*;
 
 #[cfg(test)]
 mod tests;

@@ -258,6 +258,7 @@ mod calls;
 mod scope_access;
 mod dynamic_calls;
 mod introspection;
+mod inventories;
 mod symbol_queries;
 mod argument_results;
 mod context_registration;
@@ -286,6 +287,7 @@ use scope_access::*;
 use dynamic_calls::*;
 #[allow(unused_imports)]
 use introspection::*;
+pub(super) use inventories::append_eval_inventory;
 #[allow(unused_imports)]
 use symbol_queries::*;
 #[allow(unused_imports)]

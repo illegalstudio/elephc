@@ -17,6 +17,8 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Returns an owned boxed snapshot of the shared native resource inventory.
+    pub(super) fn __elephc_eval_resource_inventory(selector: i64) -> *mut RuntimeCell;
     /// Gets or replaces the native PHP error-reporting mask.
     pub(super) fn __elephc_eval_error_reporting(replacement: i64, replace: u64) -> i64;
     /// Installs an eval callback into the native user-error-handler stack.

@@ -577,6 +577,17 @@ fn eval_get_resources(
         );
     }
     let entries = context.stream_resources().resource_entries();
+    let selector = match filter.as_deref() {
+        None => -1,
+        Some("stream") => 0,
+        Some("stream-context") => 1,
+        Some("stream filter") => 2,
+        Some("Unknown") => 3,
+        _ => return Err(EvalStatus::RuntimeFatal),
+    };
+    if let Some(inventory) = values.runtime_resource_inventory(selector)? {
+        return Ok(inventory);
+    }
     let include_context = !entries.is_empty();
     let mut visible = vec![(0_i64, "stream"), (1, "stream"), (2, "stream")];
     if include_context {

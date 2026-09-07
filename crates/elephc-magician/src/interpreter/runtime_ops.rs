@@ -20,6 +20,11 @@ use crate::value::RuntimeCellHandle;
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Returns the process resource inventory when a shared native runtime is available.
+    fn runtime_resource_inventory(&mut self, _selector: i64) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Calls a typed boxed-cell runtime builtin when this implementation supports it.
     ///
     /// Test and embedding implementations inherit this adapter over the existing

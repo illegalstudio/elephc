@@ -93,6 +93,20 @@ impl ElephcEvalContext {
         entries
     }
 
+    /// Borrows one dynamic constant in stable name order for a native inventory snapshot.
+    pub(crate) fn constant_inventory_entry(&self, index: usize) -> Option<(&str, RuntimeCellHandle)> {
+        let mut entries = self.constants.iter().collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(right.0));
+        entries.get(index).map(|(name, cell)| (name.as_str(), **cell))
+    }
+
+    /// Borrows one eval-only function name, excluding native registrations and closures.
+    pub(crate) fn function_inventory_entry(&self, index: usize) -> Option<&str> {
+        let mut names = self.functions.keys().collect::<Vec<_>>();
+        names.sort();
+        names.get(index).map(|name| name.as_str())
+    }
+
     /// Returns eval and generated native user-function names in stable order.
     pub(crate) fn defined_user_function_names(&self) -> Vec<String> {
         let mut names = self.functions.keys().cloned().collect::<Vec<_>>();
