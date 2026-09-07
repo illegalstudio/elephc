@@ -10,6 +10,49 @@
 
 use crate::support::*;
 
+/// Compares deep cleanup after repeated eval results, without allocating loop-control temporaries.
+fn assert_core_eval_collection_cleanup(setup: &str, body: &str) {
+    let outstanding = |iterations| {
+        let repeated = body.repeat(iterations);
+        let source = format!(r#"<?php
+$source = '{setup} {repeated} return 42;' . ' // ' . $argc;
+echo eval($source);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "42");
+        let (allocations, frees) = parse_gc_stats(&output.stderr);
+        (allocations, allocations as i128 - frees as i128)
+    };
+    let (once_allocated, once_live) = outstanding(1);
+    let (repeated_allocated, repeated_live) = outstanding(5);
+    assert!(repeated_allocated > once_allocated);
+    assert_eq!(repeated_live, once_live, "eval collection retained per-call storage: {body}");
+}
+
+/// Both nested constant categories and their boxed operands are released with the outer result.
+#[test]
+fn test_core_eval_categorized_constants_release_nested_results() {
+    assert_core_eval_collection_cleanup(
+        "define(\"GC_USER_PAYLOAD\", [1, 2, 3]); $categorized = true;",
+        "$result = get_defined_constants($categorized); unset($result);",
+    );
+}
+
+/// Declaration inventories, frame inventories, and GC status free their nested temporary cells.
+#[test]
+fn test_core_eval_metadata_collections_release_each_result() {
+    assert_core_eval_collection_cleanup(
+        "$core = \"core\";",
+        "$result = get_defined_functions(); unset($result);
+         $result = get_extension_funcs($core); unset($result);
+         $result = get_included_files(); unset($result);
+         $result = get_defined_vars(); unset($result);
+         $result = gc_status(); unset($result);
+         $result = debug_backtrace(); unset($result);",
+    );
+}
+
 /// Repeating opaque eval constant inventories leaves no extra live allocations after cleanup.
 #[test]
 fn test_core_eval_flat_constant_inventory_releases_each_result() {

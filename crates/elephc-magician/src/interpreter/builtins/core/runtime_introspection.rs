@@ -10,6 +10,7 @@
 
 use super::super::super::*;
 use super::backtrace_runtime::{eval_debug_backtrace, eval_debug_print_backtrace};
+use super::super::collection_builder::EvalArrayBuilder;
 use crate::context::EvalErrorHandlerState;
 use std::collections::HashSet;
 
@@ -360,21 +361,18 @@ fn eval_get_defined_constants(
         None => false,
     };
     let entries = context.defined_constant_entries();
-    let core = core_constant_array(context, values)?;
     if !categorize {
-        let mut result = core;
+        let core = core_constant_array(context, values)?;
+        let mut result = EvalArrayBuilder::from_owned(values, core);
         for (name, value) in entries {
-            let key = values.string(&name)?;
-            let value = values.retain(value)?;
-            result = values.array_set(result, key, value)?;
+            result.string(&name, |values| values.retain(value))?;
         }
-        return Ok(result);
+        return Ok(result.finish());
     }
-    let user = assoc_from_entries(&entries, values)?;
-    let mut result = values.assoc_new(2)?;
-    result = set_assoc_cell(result, "Core", core, values)?;
-    result = set_assoc_cell(result, "user", user, values)?;
-    Ok(result)
+    let mut result = EvalArrayBuilder::assoc(values, 2)?;
+    result.string("Core", |values| core_constant_array(context, values))?;
+    result.string("user", |values| assoc_from_entries(&entries, values))?;
+    Ok(result.finish())
 }
 
 /// Builds the eval-visible non-user constant category exposed under PHP's `Core` key.
@@ -387,13 +385,11 @@ fn core_constant_array(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let registered = context.native_global_constant_entries();
     if !registered.is_empty() {
-        let mut result = values.assoc_new(registered.len())?;
+        let mut result = EvalArrayBuilder::assoc(values, registered.len())?;
         for (name, value) in registered {
-            let key = values.string(&name)?;
-            let value = eval_native_global_constant(&value, values)?;
-            result = values.array_set(result, key, value)?;
+            result.string(&name, |values| eval_native_global_constant(&value, values))?;
         }
-        return Ok(result);
+        return Ok(result.finish());
     }
     let supported = constants()
         .iter()
@@ -404,14 +400,13 @@ fn core_constant_array(
             )
         })
         .collect::<Vec<_>>();
-    let mut result = values.assoc_new(supported.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, supported.len())?;
     for constant in supported {
-        let key = values.string(constant.name)?;
-        let value = eval_predefined_constant(constant.name, values)?
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        result = values.array_set(result, key, value)?;
+        result.string(constant.name, |values| {
+            eval_predefined_constant(constant.name, values)?.ok_or(EvalStatus::RuntimeFatal)
+        })?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns internal registry names and user-declared eval function names.
@@ -427,13 +422,11 @@ fn eval_get_defined_functions(
         let _ = values.truthy(exclude_disabled)?;
     }
     let internal_names = eval_php_visible_builtin_function_names();
-    let internal = string_array_from_iter(internal_names.iter().copied(), values)?;
     let user_names = context.defined_user_function_names();
-    let user = string_array_from_iter(user_names.iter().map(String::as_str), values)?;
-    let mut result = values.assoc_new(2)?;
-    result = set_assoc_cell(result, "internal", internal, values)?;
-    result = set_assoc_cell(result, "user", user, values)?;
-    Ok(result)
+    let mut result = EvalArrayBuilder::assoc(values, 2)?;
+    result.string("internal", |values| string_array_from_iter(internal_names.iter().copied(), values))?;
+    result.string("user", |values| string_array_from_iter(user_names.iter().map(String::as_str), values))?;
+    Ok(result.finish())
 }
 
 /// Returns variables visible in the direct caller scope.
@@ -509,7 +502,7 @@ fn eval_get_mangled_object_vars(
         return eval_get_object_vars_result(args, context, values);
     };
     let initial_capacity = values.object_property_len(*object)?;
-    let mut result = values.assoc_new(initial_capacity)?;
+    let mut result = EvalArrayBuilder::assoc(values, initial_capacity)?;
     let mut storage_names = HashSet::new();
     for class in context.class_chain(&class_name) {
         for property in class.properties() {
@@ -518,7 +511,7 @@ fn eval_get_mangled_object_vars(
             }
             let storage = eval_instance_property_storage_name(class.name(), property);
             storage_names.insert(storage.clone());
-            if !values.property_is_initialized(*object, &storage)? {
+            if !result.values().property_is_initialized(*object, &storage)? {
                 continue;
             }
             let key_name = match property.visibility() {
@@ -530,25 +523,21 @@ fn eval_get_mangled_object_vars(
                     property.name()
                 ),
             };
-            let key = values.string(&key_name)?;
-            let value = values.property_get(*object, &storage)?;
-            result = values.array_set(result, key, value)?;
+            result.string(&key_name, |values| values.property_get(*object, &storage))?;
         }
     }
-    let property_count = values.object_property_len(*object)?;
+    let property_count = result.values().object_property_len(*object)?;
     for position in 0..property_count {
-        let key = values.object_property_iter_key(*object, position)?;
-        let key_bytes = values.string_bytes(key)?;
-        values.release(key)?;
-        let key_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let key = result.values().object_property_iter_key(*object, position)?;
+        let key_bytes = result.values().string_bytes(key);
+        result.values().release(key)?;
+        let key_name = String::from_utf8(key_bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
         if storage_names.contains(&key_name) {
             continue;
         }
-        let key = values.string(&key_name)?;
-        let value = values.property_get(*object, &key_name)?;
-        result = values.array_set(result, key, value)?;
+        result.string(&key_name, |values| values.property_get(*object, &key_name))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Returns all live eval resources, optionally restricted to one type name.
@@ -597,16 +586,14 @@ fn eval_get_resources(
         ));
     }
     visible.extend(entries);
-    let mut result = values.assoc_new(visible.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, visible.len())?;
     for (payload, resource_type) in visible {
         if filter.as_deref().is_some_and(|filter| filter != resource_type) {
             continue;
         }
-        let resource = values.resource(payload)?;
-        let key = values.cast_int(resource)?;
-        result = values.array_set(result, key, resource)?;
+        result.entry(|values| values.resource(payload), |values, resource| values.cast_int(resource))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Reads an optional integer argument, applying the PHP default when absent.
@@ -623,13 +610,11 @@ fn assoc_from_entries(
     entries: &[(String, RuntimeCellHandle)],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(entries.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, entries.len())?;
     for (name, value) in entries {
-        let key = values.string(name)?;
-        let value = values.retain(*value)?;
-        result = values.array_set(result, key, value)?;
+        result.string(name, |values| values.retain(*value))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds an indexed string array from a stable name iterator.
@@ -638,22 +623,9 @@ fn string_array_from_iter<'a>(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let names = names.into_iter().collect::<Vec<_>>();
-    let mut result = values.array_new(names.len())?;
+    let mut result = EvalArrayBuilder::indexed(values, names.len())?;
     for (position, name) in names.into_iter().enumerate() {
-        let key = values.int(position as i64)?;
-        let value = values.string(name)?;
-        result = values.array_set(result, key, value)?;
+        result.index(position, |values| values.string(name))?;
     }
-    Ok(result)
-}
-
-/// Inserts one materialized value under a string key.
-fn set_assoc_cell(
-    result: RuntimeCellHandle,
-    key: &str,
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    values.array_set(result, key, value)
+    Ok(result.finish())
 }

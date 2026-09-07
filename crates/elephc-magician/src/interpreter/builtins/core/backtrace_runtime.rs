@@ -10,6 +10,7 @@
 
 use super::super::super::*;
 use super::func_args::eval_current_function_arg;
+use super::super::collection_builder::EvalArrayBuilder;
 use crate::context::{EvalBacktraceFrame, EvalFunctionArgsFrame};
 
 const DEBUG_BACKTRACE_PROVIDE_OBJECT: i64 = 1;
@@ -28,22 +29,17 @@ pub(super) fn eval_debug_backtrace(
     let limit = optional_int_arg(args.get(1).copied(), 0, values)?;
     let frames = context.backtrace_frames();
     let frame_limit = backtrace_frame_limit(limit, frames.len());
-    let mut result = values.array_new(frame_limit)?;
-    for frame in frames.into_iter().take(frame_limit) {
-        let frame = build_backtrace_frame(&frame, options, values)?;
-        let position = values.array_len(result)? as i64;
-        let key = values.int(position)?;
-        result = values.array_set(result, key, frame)?;
+    let mut result = EvalArrayBuilder::indexed(values, frame_limit)?;
+    for (position, frame) in frames.into_iter().take(frame_limit).enumerate() {
+        result.index(position, |values| build_backtrace_frame(&frame, options, values))?;
     }
     let mut native_index = 0;
-    while limit >= 0 && (limit == 0 || values.array_len(result)? < limit as usize) {
-        let Some(frame) = values.runtime_backtrace_entry(native_index, options)? else { break };
-        let position = values.array_len(result)? as i64;
-        let key = values.int(position)?;
-        result = values.array_set(result, key, frame)?;
+    while limit >= 0 && (limit == 0 || frame_limit + native_index < limit as usize) {
+        let Some(frame) = result.values().runtime_backtrace_entry(native_index, options)? else { break };
+        result.index(frame_limit + native_index, |_| Ok(frame))?;
         native_index += 1;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Prints every selected active frame in PHP's compact numbered form.
@@ -150,26 +146,25 @@ fn build_backtrace_frame(
     options: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(7)?;
-    result = set_assoc_string(result, "file", frame.file(), values)?;
-    result = set_assoc_int(result, "line", frame.line(), values)?;
-    result = set_assoc_string(result, "function", frame.function(), values)?;
+    let mut result = EvalArrayBuilder::assoc(values, 7)?;
+    result.string("file", |values| values.string(frame.file()))?;
+    result.string("line", |values| values.int(frame.line()))?;
+    result.string("function", |values| values.string(frame.function()))?;
     if let Some(class_name) = frame.class_name() {
-        result = set_assoc_string(result, "class", class_name, values)?;
+        result.string("class", |values| values.string(class_name))?;
     }
     if let Some(call_type) = frame.call_type() {
-        result = set_assoc_string(result, "type", call_type, values)?;
+        result.string("type", |values| values.string(call_type))?;
     }
     if options & DEBUG_BACKTRACE_PROVIDE_OBJECT != 0 {
         if let Some(object) = frame.object() {
-            result = set_assoc_cell(result, "object", values.retain(object)?, values)?;
+            result.string("object", |values| values.retain(object))?;
         }
     }
     if options & DEBUG_BACKTRACE_IGNORE_ARGS == 0 && frame.function() != "eval" {
-        let arguments = build_backtrace_args(frame.arguments(), values)?;
-        result = set_assoc_cell(result, "args", arguments, values)?;
+        result.string("args", |values| build_backtrace_args(frame.arguments(), values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Retains all PHP-visible arguments from one active frame into an indexed array.
@@ -177,16 +172,14 @@ fn build_backtrace_args(
     frame: &EvalFunctionArgsFrame,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(frame.actual_count())?;
+    let mut result = EvalArrayBuilder::indexed(values, frame.actual_count())?;
     let Some(scope) = frame.scope() else {
-        return Ok(result);
+        return Ok(result.finish());
     };
     for position in 0..frame.actual_count() {
-        let value = eval_current_function_arg(position, frame, scope, values)?;
-        let key = values.int(position as i64)?;
-        result = values.array_set(result, key, value)?;
+        result.index(position, |values| eval_current_function_arg(position, frame, scope, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Formats one selected frame using the compact form emitted by php-src.
@@ -307,37 +300,4 @@ fn optional_int_arg(
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
     value.map_or(Ok(default), |value| eval_int_value(value, values))
-}
-
-/// Inserts one string value under a string key.
-fn set_assoc_string(
-    result: RuntimeCellHandle,
-    key: &str,
-    value: &str,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = values.string(value)?;
-    set_assoc_cell(result, key, value, values)
-}
-
-/// Inserts one integer value under a string key.
-fn set_assoc_int(
-    result: RuntimeCellHandle,
-    key: &str,
-    value: i64,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let value = values.int(value)?;
-    set_assoc_cell(result, key, value, values)
-}
-
-/// Inserts one materialized value under a string key.
-fn set_assoc_cell(
-    result: RuntimeCellHandle,
-    key: &str,
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    values.array_set(result, key, value)
 }

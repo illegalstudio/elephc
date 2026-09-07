@@ -16,6 +16,7 @@ eval_builtin! {
 }
 
 use super::super::super::*;
+use super::super::collection_builder::EvalArrayBuilder;
 use super::super::{
     eval_class_relation_name_exists, eval_resolved_class_metadata_name,
     eval_runtime_property_access_metadata, eval_runtime_string_array_to_vec,
@@ -86,15 +87,13 @@ fn eval_dynamic_class_vars_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(0)?;
+    let mut result = EvalArrayBuilder::assoc(values, 0)?;
     let mut emitted_keys = HashSet::new();
     if let Some(enum_decl) = context.enum_decl(class_name) {
-        let name_value = values.null()?;
-        result = eval_add_class_var_entry(result, "name", name_value, values)?;
+        result.string("name", |values| values.null())?;
         emitted_keys.insert(String::from("name"));
         if enum_decl.backing_type().is_some() {
-            let value_value = values.null()?;
-            result = eval_add_class_var_entry(result, "value", value_value, values)?;
+            result.string("value", |values| values.null())?;
             emitted_keys.insert(String::from("value"));
         }
     }
@@ -106,13 +105,13 @@ fn eval_dynamic_class_vars_result(
             {
                 continue;
             }
-            let value =
-                eval_class_vars_property_default_value(class.name(), property, context, values)?;
-            result = eval_add_class_var_entry(result, property.name(), value, values)?;
+            result.string(property.name(), |values| {
+                eval_class_vars_property_default_value(class.name(), property, context, values)
+            })?;
             emitted_keys.insert(property.name().to_string());
         }
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds `get_class_vars()` for an eval-declared trait.
@@ -126,7 +125,7 @@ fn eval_dynamic_trait_vars_result(
     };
     let trait_name = trait_decl.name().to_string();
     let properties = trait_decl.properties().to_vec();
-    let mut result = values.assoc_new(properties.len())?;
+    let mut result = EvalArrayBuilder::assoc(values, properties.len())?;
     let mut emitted_keys = HashSet::new();
     for property in properties {
         if emitted_keys.contains(property.name())
@@ -134,11 +133,12 @@ fn eval_dynamic_trait_vars_result(
         {
             continue;
         }
-        let value = eval_class_vars_property_default_value(&trait_name, &property, context, values)?;
-        result = eval_add_class_var_entry(result, property.name(), value, values)?;
+        result.string(property.name(), |values| {
+            eval_class_vars_property_default_value(&trait_name, &property, context, values)
+        })?;
         emitted_keys.insert(property.name().to_string());
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Builds `get_class_vars()` data for generated/AOT class metadata.
@@ -148,33 +148,31 @@ fn eval_runtime_class_vars_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let property_names = values.reflection_property_names(class_name)?;
-    let declared_names = eval_runtime_string_array_to_vec(property_names, values)?;
+    let declared_names = eval_runtime_string_array_to_vec(property_names, values);
     values.release(property_names)?;
-    let mut result = values.assoc_new(declared_names.len())?;
+    let declared_names = declared_names?;
+    let mut result = EvalArrayBuilder::assoc(values, declared_names.len())?;
     let mut emitted_keys = HashSet::new();
     for property_name in declared_names {
         if emitted_keys.contains(&property_name) {
             continue;
         }
         let Some((declaring_class, visibility, _is_static)) =
-            eval_runtime_property_access_metadata(class_name, &property_name, values)?
+            eval_runtime_property_access_metadata(class_name, &property_name, result.values())?
         else {
             continue;
         };
         if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
             continue;
         }
-        let value = eval_runtime_class_var_default_value(
-            class_name,
-            &declaring_class,
-            &property_name,
-            context,
-            values,
-        )?;
-        result = eval_add_class_var_entry(result, &property_name, value, values)?;
+        result.string(&property_name, |values| {
+            eval_runtime_class_var_default_value(
+                class_name, &declaring_class, &property_name, context, values,
+            )
+        })?;
         emitted_keys.insert(property_name);
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Materializes one eval-declared property default for `get_class_vars()`.
@@ -212,15 +210,4 @@ fn eval_runtime_class_var_default_value(
         return materialize_native_callable_default(&default, context, values);
     }
     values.null()
-}
-
-/// Adds one string-keyed class variable value to an associative result array.
-fn eval_add_class_var_entry(
-    result: RuntimeCellHandle,
-    property_name: &str,
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(property_name)?;
-    values.array_set(result, key, value)
 }

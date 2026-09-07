@@ -9,6 +9,7 @@
 //! - Unsupported collector-buffer fields retain documented literal values.
 
 use super::super::super::*;
+use super::super::collection_builder::EvalArrayBuilder;
 
 const GC_STATUS_RUNNING: u64 = 5;
 const GC_STATUS_PROTECTED: u64 = 6;
@@ -53,48 +54,33 @@ pub(in crate::interpreter) fn eval_gc_status_values_result(
 fn eval_gc_status_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(12)?;
-    let running = values.gc_status_metric(GC_STATUS_RUNNING)? != 0;
-    let value = values.bool_value(running)?;
-    result = set_status_entry(result, "running", value, values)?;
-    let protected = values.gc_status_metric(GC_STATUS_PROTECTED)? != 0;
-    let value = values.bool_value(protected)?;
-    result = set_status_entry(result, "protected", value, values)?;
-    let value = values.bool_value(false)?;
-    result = set_status_entry(result, "full", value, values)?;
-    let runs = values.gc_status_metric(GC_STATUS_RUNS)?;
-    let value = values.int(runs)?;
-    result = set_status_entry(result, "runs", value, values)?;
-    let collected = values.gc_status_metric(GC_STATUS_COLLECTED)?;
-    let value = values.int(collected)?;
-    result = set_status_entry(result, "collected", value, values)?;
-    let value = values.int(0)?;
-    result = set_status_entry(result, "threshold", value, values)?;
-    let value = values.int(0)?;
-    result = set_status_entry(result, "buffer_size", value, values)?;
-    let roots = values.gc_status_metric(GC_STATUS_ROOTS)?;
-    let value = values.int(roots)?;
-    result = set_status_entry(result, "roots", value, values)?;
+    let mut result = EvalArrayBuilder::assoc(values, 12)?;
+    for (key, metric) in [("running", GC_STATUS_RUNNING), ("protected", GC_STATUS_PROTECTED)] {
+        result.string(key, |values| {
+            let value = values.gc_status_metric(metric)? != 0;
+            values.bool_value(value)
+        })?;
+    }
+    result.string("full", |values| values.bool_value(false))?;
+    for (key, metric) in [
+        ("runs", Some(GC_STATUS_RUNS)), ("collected", Some(GC_STATUS_COLLECTED)),
+        ("threshold", None), ("buffer_size", None), ("roots", Some(GC_STATUS_ROOTS)),
+    ] {
+        result.string(key, |values| {
+            let value = match metric { Some(metric) => values.gc_status_metric(metric)?, None => 0 };
+            values.int(value)
+        })?;
+    }
     for (key, metric) in [
         ("application_time", GC_STATUS_APPLICATION_TIME),
         ("collector_time", GC_STATUS_COLLECTOR_TIME),
         ("destructor_time", GC_STATUS_DESTRUCTOR_TIME),
         ("free_time", GC_STATUS_FREE_TIME),
     ] {
-        let seconds = values.gc_status_time(metric)?;
-        let value = values.float(seconds)?;
-        result = set_status_entry(result, key, value, values)?;
+        result.string(key, |values| {
+            let seconds = values.gc_status_time(metric)?;
+            values.float(seconds)
+        })?;
     }
-    Ok(result)
-}
-
-/// Inserts one already boxed metric under a string key.
-fn set_status_entry(
-    result: RuntimeCellHandle,
-    key: &str,
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let key = values.string(key)?;
-    values.array_set(result, key, value)
+    Ok(result.finish())
 }

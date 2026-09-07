@@ -9,6 +9,7 @@
 
 use super::func_args::{eval_current_function_arg, eval_throw_func_get_global_scope};
 use super::super::super::*;
+use super::super::collection_builder::EvalArrayBuilder;
 use crate::context::EvalFunctionArgsFrame;
 
 eval_builtin! {
@@ -59,11 +60,9 @@ fn eval_func_get_args_result(
     let Some(frame) = context.current_function_args().cloned() else {
         return eval_throw_func_get_global_scope("func_get_args", context, values);
     };
-    let mut result = values.array_new(frame.actual_count())?;
+    let mut result = EvalArrayBuilder::indexed(values, frame.actual_count())?;
     for position in 0..frame.actual_count() {
-        let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        let value = eval_current_function_arg(position, &frame, scope, values)?;
-        result = values.array_set(result, key, value)?;
+        result.index(position, |values| eval_current_function_arg(position, &frame, scope, values))?;
     }
-    Ok(result)
+    Ok(result.finish())
 }

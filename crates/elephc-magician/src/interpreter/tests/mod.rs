@@ -22,6 +22,7 @@ mod builtins_debug_output;
 mod builtins_func_args;
 mod builtins_gc;
 mod builtins_core_introspection;
+mod builtins_collection_ownership;
 mod builtins_directory_streams;
 mod builtins_output_buffering;
 mod builtins_file_streams;

@@ -198,6 +198,8 @@ pub trait RuntimeValueOps {
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Writes one element to a runtime array-like Mixed cell and returns the target cell.
+    /// Borrows the receiver, key, and value. Storage retains the value; callers must
+    /// release temporary key/value owners separately. The returned receiver adds no owner.
     fn array_set(
         &mut self,
         array: RuntimeCellHandle,
