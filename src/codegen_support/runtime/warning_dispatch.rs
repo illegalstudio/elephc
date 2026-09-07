@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Fragments are joined before dispatch, and detached before a reentrant warning.
+//! - Producers explicitly finish a diagnostic; newlines inside data never delimit it.
 //! - Volatile registers are preserved because legacy producers used a leaf writer.
 //! - An unwind activation releases owned message and argument storage on throws.
 
@@ -22,6 +23,7 @@ const ARRAY: usize = 736;
 const ARGS: usize = 744;
 const RESULT: usize = 752;
 const HANDLED: usize = 760;
+const COMPLETE: usize = 768;
 const ACTIVATION: usize = 800;
 
 /// Selects one instruction while keeping all control-flow and ownership steps shared.
@@ -64,7 +66,26 @@ fn volatile_registers(e: &mut Emitter, restore: bool) {
     }
 }
 
-/// Joins legacy warning fragments and dispatches each completed line exactly once.
+/// Saves producer registers before publishing whether this call finishes the diagnostic.
+fn emit_entry(e: &mut Emitter, complete: bool) {
+    e.label_global(if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
+    if e.target.arch == Arch::AArch64 {
+        // A generic large-frame prologue borrows x9 for its distant footer.
+        // Preserve every producer register by using directly addressable single stores.
+        e.instruction("sub sp, sp, #1024");                                     // reserve the complete warning frame without scratch registers
+        e.instruction("str x29, [sp, #1008]");                                  // preserve caller linkage without borrowing a volatile register
+        e.instruction("str x30, [sp, #1016]");                                  // preserve the return address at the fixed frame footer
+        e.instruction("add x29, sp, #1008");                                    // establish the standard frame pointer for unwind cleanup
+    } else {
+        abi::emit_frame_prologue(e, FRAME);
+    }
+    volatile_registers(e, false);
+    abi::emit_load_int_immediate(e, abi::int_result_reg(e), i64::from(complete));
+    save(e, COMPLETE);
+    abi::emit_jump(e, "__rt_warning_append");
+}
+
+/// Joins explicit fragments and dispatches each completed diagnostic exactly once.
 pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     let arm = e.target.arch == Arch::AArch64;
     let result = abi::int_result_reg(e);
@@ -73,9 +94,9 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     let scratch = if arm { "x10" } else { "r10" };
     let input_ptr = if arm { 8 } else { 32 };
     let input_len = if arm { 16 } else { 24 };
-    e.label_global("__rt_diag_warning");
-    abi::emit_frame_prologue(e, FRAME);
-    volatile_registers(e, false);
+    emit_entry(e, false);
+    emit_entry(e, true);
+    e.label_global("__rt_warning_append");
     arg(e, 0, input_len);
     abi::emit_reg_move(e, result, a0);
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_done");
@@ -99,10 +120,8 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     arg(e, 1, LENGTH);
     abi::emit_store_reg_to_symbol(e, a0, "_rt_diag_pending_ptr", 0);
     abi::emit_store_reg_to_symbol(e, a1, "_rt_diag_pending_len", 0);
-    ins(e, "add x10, x0, x1", "lea r10, [rdi + rsi]");
-    ins(e, "ldrb w10, [x10, #-1]", "movzx r10d, BYTE PTR [r10 - 1]");
-    ins(e, "cmp w10, #10", "cmp r10d, 10");
-    ins(e, "b.ne __rt_warning_done", "jne __rt_warning_done");
+    abi::emit_load_temporary_stack_slot(e, result, COMPLETE);
+    abi::emit_branch_if_int_result_zero(e, "__rt_warning_done");
     abi::emit_store_zero_to_symbol(e, "_rt_diag_pending_ptr", 0);
     abi::emit_store_zero_to_symbol(e, "_rt_diag_pending_len", 0);
     for offset in [ARGS, RESULT, HANDLED, PREFIX] {
@@ -178,7 +197,13 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_call_label(e, "__rt_warning_cleanup");
     e.label("__rt_warning_done");
     volatile_registers(e, true);
-    abi::emit_frame_restore(e, FRAME);
+    if arm {
+        e.instruction("ldr x30, [sp, #1016]");                                  // restore linkage without clobbering the producer's saved x9
+        e.instruction("ldr x29, [sp, #1008]");                                  // reload the caller frame pointer from the fixed footer
+        e.instruction("add sp, sp, #1024");                                     // release the frame while preserving every volatile register
+    } else {
+        abi::emit_frame_restore(e, FRAME);
+    }
     e.instruction("ret");                                                       // preserve the legacy warning producer's live registers
     // Conditional branches stay inside this helper's Mach-O atom. Only the
     // unconditional jump crosses to the allocator's shared recovery entry.
@@ -212,7 +237,16 @@ fn emit_arguments(e: &mut Emitter) {
                 abi::emit_load_temporary_stack_slot(e, scratch, PREFIX);
                 ins(e, "add x1, x1, x10", "add rax, r10");
                 ins(e, "sub x2, x2, x10", "sub rdx, r10");
+                ins(e, "cbz x2, __rt_warning_message_ready", "test rdx, rdx");
+                if !arm {
+                    e.instruction("jz __rt_warning_message_ready");             // an empty message has no terminal byte to strip
+                }
+                ins(e, "add x10, x1, x2", "lea r10, [rax + rdx]");
+                ins(e, "ldrb w10, [x10, #-1]", "movzx r10d, BYTE PTR [r10 - 1]");
+                ins(e, "cmp w10, #10", "cmp r10d, 10");
+                ins(e, "b.ne __rt_warning_message_ready", "jne __rt_warning_message_ready");
                 ins(e, "sub x2, x2, #1", "sub rdx, 1");
+                e.label("__rt_warning_message_ready");
                 emit_box_current_value_as_mixed(e, &PhpType::Str);
             }
             2 => {
@@ -301,7 +335,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_warning_dispatch(&mut emitter);
             let asm = emitter.output();
-            for symbol in ["__rt_diag_warning:", "__rt_warning_cleanup:", "__rt_diag_reset:", "__rt_error_handler_invoke"] {
+            for symbol in ["__rt_diag_warning:", "__rt_diag_warning_fragment:", "__rt_warning_append:", "__rt_warning_cleanup:", "__rt_diag_reset:", "__rt_error_handler_invoke"] {
                 assert!(asm.contains(symbol), "{target:?}: {symbol}");
             }
             assert!(asm.contains(&target.extern_symbol("realloc")), "{target:?}");

@@ -443,7 +443,7 @@ fn emit_signal_string_to_int(ctx: &mut FunctionContext<'_>, name: &str, argument
             ctx.emitter.instruction(&format!("jnz {fully_numeric}"));           // fully numeric strings skip the warning
         }
     }
-    emit_static_signal_diagnostic(ctx, "Warning: A non-numeric value encountered\n");
+    emit_static_signal_diagnostic(ctx, "Warning: A non-numeric value encountered\n", true);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&fully_numeric);
     reload_signal_string_result(ctx);
@@ -482,7 +482,7 @@ fn emit_signal_float_string_precision_check(ctx: &mut FunctionContext<'_>, done:
 
 /// Emits PHP's exact float-string precision-loss deprecation with the original value quoted.
 fn emit_signal_float_string_deprecation(ctx: &mut FunctionContext<'_>) {
-    emit_static_signal_diagnostic(ctx, "Deprecated: Implicit conversion from float-string \"");
+    emit_static_signal_diagnostic(ctx, "Deprecated: Implicit conversion from float-string \"", false);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", STRING_COERCE_PTR_OFFSET);
@@ -493,12 +493,12 @@ fn emit_signal_float_string_deprecation(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", STRING_COERCE_LEN_OFFSET);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
-    emit_static_signal_diagnostic(ctx, "\" to int loses precision\n");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
+    emit_static_signal_diagnostic(ctx, "\" to int loses precision\n", true);
 }
 
 /// Emits one suppressible static PCNTL coercion diagnostic fragment.
-fn emit_static_signal_diagnostic(ctx: &mut FunctionContext<'_>, message: &str) {
+fn emit_static_signal_diagnostic(ctx: &mut FunctionContext<'_>, message: &str, complete: bool) {
     let (label, len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -510,7 +510,7 @@ fn emit_static_signal_diagnostic(ctx: &mut FunctionContext<'_>, message: &str) {
             abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+    abi::emit_call_label(ctx.emitter, if complete { "__rt_diag_warning" } else { "__rt_diag_warning_fragment" });
 }
 
 /// Records whether the currently returned signal array must be released after its bridge call.

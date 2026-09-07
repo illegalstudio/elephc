@@ -17,6 +17,7 @@ mod constants_and_system;
 mod core_reflection;
 mod core_spread_regressions;
 mod core_error_regressions;
+mod core_warning_fragments;
 mod core_reflection_regressions;
 mod core_inventory_regressions;
 mod core_backtrace_regressions;
