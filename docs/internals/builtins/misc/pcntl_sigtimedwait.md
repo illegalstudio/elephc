@@ -1,11 +1,11 @@
 ---
-title: "pcntl_sigtimedwait() — internals"
+title: "pcntl_sigtimedwait() - internals"
 description: "Compiler internals for pcntl_sigtimedwait(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 639
+  order: 659
 ---
 
-## `pcntl_sigtimedwait()` — internals
+## `pcntl_sigtimedwait()` - internals
 
 ## Where it lives
 

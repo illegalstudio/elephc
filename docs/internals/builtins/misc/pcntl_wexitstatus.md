@@ -1,11 +1,11 @@
 ---
-title: "pcntl_wexitstatus() — internals"
+title: "pcntl_wexitstatus() - internals"
 description: "Compiler internals for pcntl_wexitstatus(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 646
+  order: 666
 ---
 
-## `pcntl_wexitstatus()` — internals
+## `pcntl_wexitstatus()` - internals
 
 ## Where it lives
 

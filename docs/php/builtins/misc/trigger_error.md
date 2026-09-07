@@ -2,7 +2,7 @@
 title: "trigger_error()"
 description: "Generates a user-level PHP error."
 sidebar:
-  order: 649
+  order: 684
 ---
 
 ## trigger_error()

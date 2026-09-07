@@ -1,11 +1,11 @@
 ---
-title: "pcntl_setqos_class() — internals"
+title: "pcntl_setqos_class() - internals"
 description: "Compiler internals for pcntl_setqos_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 634
+  order: 654
 ---
 
-## `pcntl_setqos_class()` — internals
+## `pcntl_setqos_class()` - internals
 
 ## Where it lives
 

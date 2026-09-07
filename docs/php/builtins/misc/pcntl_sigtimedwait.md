@@ -2,7 +2,7 @@
 title: "pcntl_sigtimedwait()"
 description: "Waits up to a timeout for one selected Linux signal and returns its number or false."
 sidebar:
-  order: 639
+  order: 659
 ---
 
 ## pcntl_sigtimedwait()
@@ -24,9 +24,9 @@ Waits up to a timeout for one selected Linux signal and returns its number or fa
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_sigtimedwait.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_sigtimedwait.rs)).
+- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_sigtimedwait.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/pcntl/pcntl_sigtimedwait.rs)).
 
-_No examples yet — check `examples/` and `showcases/` for usage patterns._
+_No examples yet. Check `examples/` and `showcases/` for usage patterns._
 
 ## Internals
 

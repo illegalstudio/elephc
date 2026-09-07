@@ -23,7 +23,7 @@ The 59/59 Core inventory claim refers to elephc's own contract inventory, return
 | [`bcmath`](./bcmath.md#functions) | 14 / 14 · 100% | 0 / 1 · 0% | — |
 | `bz2` | 0 / 10 · 0% | — | — |
 | [`calendar`](./calendar.md#functions) | 18 / 18 · 100% | — | 21 / 21 · 100% |
-| `core` | 29 / 62 · 47% | 21 / 40 · 52% | 34 / 89 · 38% |
+| `core` | 57 / 62 · 92% | 21 / 40 · 52% | 37 / 89 · 42% |
 | `ctype` | 4 / 11 · 36% | — | — |
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
@@ -89,8 +89,7 @@ The 59/59 Core inventory claim refers to elephc's own contract inventory, return
 
 The counts above are what a compiled program has. Code run through `eval()` sees a different set in these modules (compiled / eval()):
 
-- `core` functions: 29 / 28
-- `core` constants: 34 / 31
+- `core` constants: 37 / 34
 - `exif` functions: 4 / 0
 - `exif` constants: 1 / 0
 - `gd` functions: 83 / 0

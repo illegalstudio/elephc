@@ -1,11 +1,11 @@
 ---
-title: "pcntl_sigprocmask() — internals"
+title: "pcntl_sigprocmask() - internals"
 description: "Compiler internals for pcntl_sigprocmask(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 638
+  order: 658
 ---
 
-## `pcntl_sigprocmask()` — internals
+## `pcntl_sigprocmask()` - internals
 
 ## Where it lives
 

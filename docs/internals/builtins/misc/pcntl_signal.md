@@ -1,11 +1,11 @@
 ---
-title: "pcntl_signal() — internals"
+title: "pcntl_signal() - internals"
 description: "Compiler internals for pcntl_signal(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 635
+  order: 655
 ---
 
-## `pcntl_signal()` — internals
+## `pcntl_signal()` - internals
 
 ## Where it lives
 

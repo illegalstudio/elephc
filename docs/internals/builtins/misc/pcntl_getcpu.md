@@ -1,11 +1,11 @@
 ---
-title: "pcntl_getcpu() — internals"
+title: "pcntl_getcpu() - internals"
 description: "Compiler internals for pcntl_getcpu(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 627
+  order: 647
 ---
 
-## `pcntl_getcpu()` — internals
+## `pcntl_getcpu()` - internals
 
 ## Where it lives
 

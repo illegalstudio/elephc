@@ -1,11 +1,11 @@
 ---
-title: "pcntl_async_signals() — internals"
+title: "pcntl_async_signals() - internals"
 description: "Compiler internals for pcntl_async_signals(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 621
+  order: 641
 ---
 
-## `pcntl_async_signals()` — internals
+## `pcntl_async_signals()` - internals
 
 ## Where it lives
 

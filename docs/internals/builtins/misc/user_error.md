@@ -2,7 +2,7 @@
 title: "user_error() - internals"
 description: "Compiler internals for user_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 652
+  order: 687
 ---
 
 ## `user_error()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/user_error.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/user_error.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:645](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L645) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

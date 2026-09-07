@@ -1,11 +1,11 @@
 ---
-title: "pcntl_getpriority() — internals"
+title: "pcntl_getpriority() - internals"
 description: "Compiler internals for pcntl_getpriority(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 629
+  order: 649
 ---
 
-## `pcntl_getpriority()` — internals
+## `pcntl_getpriority()` - internals
 
 ## Where it lives
 

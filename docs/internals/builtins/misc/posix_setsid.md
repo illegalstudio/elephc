@@ -1,11 +1,11 @@
 ---
-title: "posix_setsid() — internals"
+title: "posix_setsid() - internals"
 description: "Compiler internals for posix_setsid(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 657
+  order: 677
 ---
 
-## `posix_setsid()` — internals
+## `posix_setsid()` - internals
 
 ## Where it lives
 

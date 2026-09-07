@@ -1,11 +1,11 @@
 ---
-title: "pcntl_wtermsig() — internals"
+title: "pcntl_wtermsig() - internals"
 description: "Compiler internals for pcntl_wtermsig(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 652
+  order: 672
 ---
 
-## `pcntl_wtermsig()` — internals
+## `pcntl_wtermsig()` - internals
 
 ## Where it lives
 

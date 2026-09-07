@@ -2,7 +2,7 @@
 title: "restore_error_handler() - internals"
 description: "Compiler internals for restore_error_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 644
+  order: 679
 ---
 
 ## `restore_error_handler()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/restore_error_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/restore_error_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:588](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L588) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:645](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L645) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

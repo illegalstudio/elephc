@@ -1,11 +1,11 @@
 ---
-title: "pcntl_setns() — internals"
+title: "pcntl_setns() - internals"
 description: "Compiler internals for pcntl_setns(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 632
+  order: 652
 ---
 
-## `pcntl_setns()` — internals
+## `pcntl_setns()` - internals
 
 ## Where it lives
 

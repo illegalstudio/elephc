@@ -1,11 +1,11 @@
 ---
-title: "pcntl_alarm() — internals"
+title: "pcntl_alarm() - internals"
 description: "Compiler internals for pcntl_alarm(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 620
+  order: 640
 ---
 
-## `pcntl_alarm()` — internals
+## `pcntl_alarm()` - internals
 
 ## Where it lives
 

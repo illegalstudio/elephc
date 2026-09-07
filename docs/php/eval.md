@@ -1033,6 +1033,14 @@ labels, and eval property references when alias metadata is available.
 
 ## Current limitations
 
+Runtime introspection does not imply one process-global declaration registry.
+Native `get_defined_constants()` and `get_defined_functions()` append declarations
+from the current function's eval context, not from unrelated eval contexts.
+`get_resources()` shares the native inventory, including resource type and close
+updates, but eval `fclose()` still closes only eval-managed streams. Native locals
+synchronized into eval remain retained until the next synchronization or context
+release, which can delay last-owner resource retirement.
+
 Dynamic fragments and literal fragments outside the current AOT eligibility
 rules execute through the `elephc_magician` interpreter bridge. Eligible
 literal fragments instead use the normal AST -> EIR -> native codegen pipeline,

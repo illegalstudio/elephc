@@ -1,11 +1,11 @@
 ---
-title: "pcntl_get_last_error() — internals"
+title: "pcntl_get_last_error() - internals"
 description: "Compiler internals for pcntl_get_last_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 626
+  order: 646
 ---
 
-## `pcntl_get_last_error()` — internals
+## `pcntl_get_last_error()` - internals
 
 ## Where it lives
 
