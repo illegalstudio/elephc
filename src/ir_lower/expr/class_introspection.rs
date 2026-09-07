@@ -50,6 +50,11 @@ fn lower_class_introspection_value(
     expr: &Expr,
 ) -> LoweredValue {
     let argument_type = ctx.builder.value_php_type(argument.value).codegen_repr();
+    let object_bound = match &argument_type {
+        PhpType::Object(class) if kind == ClassIntrospectionKind::Methods
+            && ctx.classes.contains_key(class) => Some(class.clone()),
+        _ => None,
+    };
     let name = if kind == ClassIntrospectionKind::Methods
         && matches!(argument_type, PhpType::Object(_))
     {
@@ -83,7 +88,7 @@ fn lower_class_introspection_value(
     } else {
         argument
     };
-    lower_dynamic_class_introspection(ctx, kind, name, expr)
+    lower_dynamic_class_introspection(ctx, kind, name, object_bound.as_deref(), expr)
 }
 
 /// Identifies the metadata projection produced by one supported introspection builtin.
@@ -138,6 +143,7 @@ fn lower_dynamic_class_introspection(
     ctx: &mut LoweringContext<'_, '_>,
     kind: ClassIntrospectionKind,
     name: LoweredValue,
+    object_bound: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
     // Dispatch reads the candidate name once per known class. A one-shot OwnedTemp would make
@@ -153,6 +159,11 @@ fn lower_dynamic_class_introspection(
         .create_named_block("class.introspection.merge", Vec::new());
 
     for class_name in class_introspection_candidates(ctx) {
+        // Keep runtime subclass dispatch, but do not duplicate unrelated class inventories
+        // at every typed-object call site. Strings and generic objects remain unrestricted.
+        if object_bound.is_some_and(|bound| !class_extends_class(ctx, &class_name, bound)) {
+            continue;
+        }
         let match_block = ctx
             .builder
             .create_named_block("class.introspection.match", Vec::new());
@@ -250,10 +261,17 @@ fn materialize_class_vars(
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
-    for (property, default) in entries {
-        let key = lower_string_literal(ctx, &property, expr);
-        let value = match default {
-            Some(default) => lower_expr(ctx, &default),
+    for entry in entries {
+        let key = lower_string_literal(ctx, &entry.name, expr);
+        let value = match entry.default {
+            Some(default) => {
+                // Visibility was filtered in the caller's scope. Relative constants in a
+                // default instead belong to the property declaration, including inherited slots.
+                let caller_class = ctx.current_class.replace(entry.declaring_class);
+                let value = lower_expr(ctx, &default);
+                ctx.current_class = caller_class;
+                value
+            }
             None => lower_null(ctx, expr),
         };
         let value = box_value_as_mixed(ctx, value, expr.span);
@@ -480,24 +498,33 @@ fn lower_invalid_class_introspection_throw(
     });
 }
 
+/// Preserves the lexical owner of a visible property default through metadata projection.
+struct ClassDefaultEntry {
+    name: String,
+    declaring_class: String,
+    default: Option<Expr>,
+}
+
 /// Collects visible instance and static property defaults in physical declaration order.
 fn visible_class_default_entries(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
-) -> Vec<(String, Option<Expr>)> {
+) -> Vec<ClassDefaultEntry> {
     if ctx.interfaces.contains_key(class_name) {
         return Vec::new();
     }
     if ctx.enums.contains_key(class_name) && !ctx.classes.contains_key(class_name) {
-        let mut entries = vec![("name".to_string(), None)];
+        let mut names = vec!["name"];
         if ctx
             .enums
             .get(class_name)
             .is_some_and(|info| info.backing_type.is_some())
         {
-            entries.push(("value".to_string(), None));
+            names.push("value");
         }
-        return entries;
+        return names.into_iter().map(|name| ClassDefaultEntry {
+            name: name.to_string(), declaring_class: class_name.to_string(), default: None,
+        }).collect();
     }
     let Some(info) = ctx.classes.get(class_name) else {
         return ctx.declared_trait_properties.get(class_name).into_iter()
@@ -506,7 +533,10 @@ fn visible_class_default_entries(
                     .chain(properties.iter().filter(|property| property.is_static))
             })
             .filter(|property| property_visible(ctx, class_name, &property.visibility))
-            .map(|property| (property.name.clone(), property.default.clone()))
+            .map(|property| ClassDefaultEntry {
+                name: property.name.clone(), declaring_class: class_name.to_string(),
+                default: property.default.clone(),
+            })
             .collect();
     };
     let mut entries = Vec::new();
@@ -516,17 +546,24 @@ fn visible_class_default_entries(
         {
             continue;
         }
-        entries.push((property.clone(), info.defaults.get(index).cloned().flatten()));
+        entries.push(ClassDefaultEntry {
+            name: property.clone(),
+            declaring_class: info.property_declaring_classes.get(property)
+                .cloned().unwrap_or_else(|| class_name.to_string()),
+            default: info.defaults.get(index).cloned().flatten(),
+        });
     }
     for (index, (property, _)) in info.static_properties.iter().enumerate() {
         if !seen.insert(property.clone()) || !static_property_visible(ctx, class_name, info, property)
         {
             continue;
         }
-        entries.push((
-            property.clone(),
-            info.static_defaults.get(index).cloned().flatten(),
-        ));
+        entries.push(ClassDefaultEntry {
+            name: property.clone(),
+            declaring_class: info.static_property_declaring_classes.get(property)
+                .cloned().unwrap_or_else(|| class_name.to_string()),
+            default: info.static_defaults.get(index).cloned().flatten(),
+        });
     }
     entries
 }

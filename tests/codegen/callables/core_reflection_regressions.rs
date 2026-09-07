@@ -9,6 +9,46 @@
 
 use crate::support::*;
 
+/// Default expressions use their declaration scope while visibility and following code use the caller.
+#[test]
+fn test_core_class_vars_defaults_preserve_declaring_scope() {
+    let out = compile_and_run(r#"<?php
+class DefaultParent {
+    public string $owner = self::class;
+    public static array $nested = [self::class];
+    protected string $hidden = self::class;
+}
+class DefaultChild extends DefaultParent {
+    public string $parentName = parent::class;
+}
+class DefaultCaller {
+    public static function inspect(): void {
+        $vars = get_class_vars(DefaultChild::class);
+        echo $vars['owner'], ':', $vars['nested'][0], ':', $vars['parentName'], ':';
+        echo isset($vars['hidden']) ? 'bad' : 'private', ':', self::class;
+    }
+}
+echo get_class_vars(DefaultParent::class)['owner'], '|';
+DefaultCaller::inspect();
+"#);
+    assert_eq!(out, "DefaultParent|DefaultParent:DefaultParent:DefaultParent:private:DefaultCaller");
+}
+
+/// CUF and FCC materialize class and standalone-trait defaults in their lexical declaration scope.
+#[test]
+fn test_core_class_vars_callable_defaults_preserve_declaring_scope() {
+    let out = compile_and_run(r#"<?php
+trait DefaultTrait { public string $owner = self::class; }
+class DefaultConsumer { use DefaultTrait; }
+$vars = call_user_func('get_class_vars', DefaultConsumer::class);
+echo $vars['owner'], ':';
+$callback = get_class_vars(...);
+$traitVars = $callback(DefaultTrait::class);
+echo $traitVars['owner'];
+"#);
+    assert_eq!(out, "DefaultConsumer:DefaultTrait");
+}
+
 /// Parent and child scopes can see each other's protected declarations, but outsiders cannot.
 #[test]
 fn test_core_reflection_regression_protected_visibility_is_bidirectional() {

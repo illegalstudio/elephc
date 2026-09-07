@@ -272,6 +272,21 @@ fn test_core_get_class_methods_aot_callable_forms() {
     assert_eq!(out.stderr, "");
 }
 
+/// Typed base-class parameters must retain runtime subclass discovery after candidate pruning.
+#[test]
+fn test_core_get_class_methods_typed_object_keeps_subclass_dispatch() {
+    let out = compile_and_run(r#"<?php
+class BoundMethodsBase { public function baseMethod(): void {} }
+class BoundMethodsChild extends BoundMethodsBase { public function childMethod(): void {} }
+class BoundMethodsOther { public function unrelated(): void {} }
+function boundMethods(BoundMethodsBase $value): string {
+    return implode(',', get_class_methods($value));
+}
+echo boundMethods(new BoundMethodsBase()), '|', boundMethods(new BoundMethodsChild());
+"#);
+    assert_eq!(out, "baseMethod|childMethod,baseMethod");
+}
+
 /// Verifies literal array-map inputs keep classes reached only through introspection callbacks.
 #[test]
 fn test_core_class_introspection_aot_array_map_reachability() {
