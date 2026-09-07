@@ -305,6 +305,8 @@ pub(super) fn emit_literal_compress_wrapper_fopen(
             ctx.emitter.instruction(&format!("js {}", false_label));            // box PHP false when the source could not be opened
         }
     }
+    // A fresh open may reuse a descriptor still named by a closed canonical cell.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_mint");
     match kind {
         CompressWrapper::Zlib => emit_zlib_inflate_attach_in_place(ctx),
         CompressWrapper::Bzip2 => emit_bzip2_decompress_attach_in_place(ctx),
@@ -457,4 +459,3 @@ pub(crate) fn lower_stream_filter_remove(
     }
     store_if_result(ctx, inst)
 }
-
