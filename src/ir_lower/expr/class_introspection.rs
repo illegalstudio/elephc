@@ -542,7 +542,9 @@ fn visible_class_default_entries(
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
     for (index, (property, _)) in info.properties.iter().enumerate() {
-        if !seen.insert(property.clone()) || !instance_property_visible(ctx, class_name, info, property)
+        if info.visible_property_index(property) != Some(index)
+            || !seen.insert(property.clone())
+            || !instance_property_visible(ctx, class_name, info, property)
         {
             continue;
         }

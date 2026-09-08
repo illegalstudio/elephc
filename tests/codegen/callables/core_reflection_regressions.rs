@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// Private parent slots cannot supply defaults for the same-named visible child property.
+#[test]
+fn test_core_class_vars_private_parent_shadow_uses_visible_default() {
+    let source = r#"<?php
+class ShadowDefaultParent { private int $value = 1; }
+class ShadowDefaultChild extends ShadowDefaultParent { public int $value = 2; }
+class ShadowDefaultGrandchild extends ShadowDefaultChild {}
+echo get_class_vars(ShadowDefaultChild::class)['value'], '|';
+$name = $argc > 0 ? 'ShadowDefaultChild' : 'ShadowDefaultGrandchild';
+echo call_user_func('get_class_vars', $name)['value'], '|';
+$callback = get_class_vars(...);
+echo $callback(ShadowDefaultGrandchild::class)['value'];
+"#;
+    assert_eq!(compile_and_run(source), "2|2|2");
+}
+
 /// Default expressions use their declaration scope while visibility and following code use the caller.
 #[test]
 fn test_core_class_vars_defaults_preserve_declaring_scope() {
