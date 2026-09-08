@@ -290,7 +290,4 @@ pub(super) fn emit_x86_64_output(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_warning_raw");
     emitter.instruction("jmp __rt_diag_write");                                 // do not redispatch already-filtered trigger_error output
 
-    label_c_global(emitter, "__elephc_eval_value_release");
-    emitter.instruction("mov rax, rdi");                                        // move the C boxed Mixed argument into the internal release register
-    emitter.instruction("jmp __rt_decref_mixed");                               // release one eval-owned boxed Mixed cell
 }

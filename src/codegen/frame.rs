@@ -950,8 +950,9 @@ fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
             .instruction(&format!("mov {}, {}", arg_reg, result_reg)); // pass the persistent eval scope handle to the free helper
     }
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_free");
-    abi::emit_call_label(ctx.emitter, &symbol);
+    // The Rust scope is gone before a contained destructor exception can reenter frame cleanup.
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    abi::emit_call_label(ctx.emitter, &symbol);
     ctx.emitter.label(&done);
 }
 
@@ -1029,6 +1030,7 @@ pub(super) fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: us
     let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, ptr_reg, offset);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -1045,7 +1047,7 @@ pub(super) fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: us
     }
 }
 
-/// Releases a refcounted local when the slot contains a non-null heap pointer.
+/// Clears and releases a non-null refcounted local so destructor throws cannot release it twice.
 pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     let done = ctx.next_label("main_refcounted_cleanup_done");
@@ -1061,6 +1063,7 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
             ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
         }
     }
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     abi::emit_decref_if_refcounted(ctx.emitter, ty);
     ctx.emitter.label(&done);
 }

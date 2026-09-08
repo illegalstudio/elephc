@@ -262,6 +262,4 @@ pub(super) fn emit_aarch64_output(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // adapt the already-filtered warning pointer to the writer ABI
     emitter.instruction("b __rt_diag_write");                                   // do not redispatch trigger_error default output
 
-    label_c_global(emitter, "__elephc_eval_value_release");
-    emitter.instruction("b __rt_decref_mixed");                                 // release one eval-owned boxed Mixed cell
 }

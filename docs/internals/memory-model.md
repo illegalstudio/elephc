@@ -326,6 +326,10 @@ release boundary with an owned Throwable accumulator. Releasing a group finishes
 every element and preserves earlier destructor exceptions in the resulting chain.
 The eval object-edge callback returns that owned exception box to native code;
 it never propagates by jumping out of the Rust registry iteration.
+Scope replacement, unset, and free similarly return exceptions through versioned
+Rust entries. Native adapters propagate them only after the scope mutation or
+complete scope retirement has finished; cleared native cleanup slots prevent
+reentrant unwinding from consuming a retired scope or local owner twice.
 
 The runtime routine `__rt_heap_alloc`:
 

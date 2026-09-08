@@ -10,6 +10,26 @@
 
 use crate::support::*;
 
+/// Scope retirement finishes all Rust-held owners before an escaping destructor throw reaches PHP.
+#[test]
+fn test_core_eval_scope_teardown_finishes_all_throwing_children_before_escape() {
+    let source = r#"<?php
+class NativeScopeThrowChild {
+    public static int $calls = 0;
+    public function __destruct() { self::$calls++; throw new RuntimeException("scope"); }
+}
+function leaveOwnedEvalScope(string $source): void { eval($source); }
+$source = '$first = new NativeScopeThrowChild(); $second = new NativeScopeThrowChild(); // ' . $argc;
+try { leaveOwnedEvalScope($source); }
+catch (RuntimeException $error) {
+    $previous = $error->getPrevious();
+    echo $previous !== null && $previous->getMessage() === "scope" ? "chain:" : "lost:";
+    echo NativeScopeThrowChild::$calls;
+}
+"#;
+    assert_eq!(compile_and_run(source), "chain:2");
+}
+
 /// Releasing eval arrays contains native child destructor throws before returning through Rust.
 #[test]
 fn test_core_eval_array_release_contains_native_destructor_exceptions() {

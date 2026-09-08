@@ -34,6 +34,7 @@ pub(crate) fn emit_eval_bridge_runtime(emitter: &mut Emitter) {
     }
     emit_gc_lifecycle_wrappers(emitter);
     release_boundary::emit(emitter);
+    scope_release::emit(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
     backtrace::emit_backtrace_entry_wrapper(emitter);
 }
@@ -66,6 +67,7 @@ mod resources;
 mod backtrace;
 mod gc_boundary;
 mod release_boundary;
+mod scope_release;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;
