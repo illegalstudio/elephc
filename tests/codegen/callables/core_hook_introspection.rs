@@ -107,3 +107,46 @@ echo count(get_class_methods(PlainHookChild::class)), ':', get_class_vars(PlainH
 "#;
     assert_eq!(compile_and_run(source), "0:4");
 }
+
+/// Inherited eval accessors reach backing storage without reentering themselves or becoming readonly.
+#[test]
+fn test_core_hook_inherited_accessors_read_and_write_backing_storage() {
+    let source = r#"<?php
+$source = 'class InheritedHookParent {
+    public int $value { get => $this->value; set { $this->value = $value + 1; } }
+    public int $plainWrite { get => $this->plainWrite; }
+}
+class InheritedHookChild extends InheritedHookParent {
+    public int $value = 2;
+    public int $plainWrite = 5;
+}
+$child = new InheritedHookChild();
+echo $child->value, ":";
+$child->value = 3;
+echo $child->value, "|", $child->plainWrite, ":";
+$child->plainWrite = 6;
+echo $child->plainWrite, "|", count(get_class_vars(InheritedHookChild::class));' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "2:4|5:6|2");
+}
+
+/// Parent-private accessor dispatch cannot select a child's same-named public hook.
+#[test]
+fn test_core_hook_private_parent_accessors_keep_their_owner() {
+    let source = r#"<?php
+$source = 'class PrivateHookOwner {
+    private int $value { get => $this->value; set { $this->value = $value; } }
+    public function write(int $value): void { $this->value = $value; }
+    public function read(): int { return $this->value; }
+}
+class PublicHookShadow extends PrivateHookOwner {
+    public int $value { get => 42; }
+}
+$child = new PublicHookShadow();
+$child->write(7);
+echo $child->read(), ":", $child->value;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "7:42");
+}

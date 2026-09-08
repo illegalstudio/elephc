@@ -68,7 +68,7 @@ pub(in crate::interpreter) fn eval_property_get_result(
         {
             let (hook_class, hook_method) = context
                 .class_method(
-                    &object_class_name,
+                    &declaring_class,
                     &property_hook_get_method(property.name()),
                 )
                 .ok_or(EvalStatus::RuntimeFatal)?;
@@ -234,7 +234,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
             ) {
                 let (hook_class, hook_method) = context
                     .class_method(
-                        &object_class_name,
+                        &declaring_class,
                         &property_hook_set_method(property.name()),
                     )
                     .ok_or(EvalStatus::RuntimeFatal)?;
@@ -254,7 +254,7 @@ pub(in crate::interpreter) fn eval_property_set_result(
                 values.release(hook_result)?;
                 return Ok(());
             }
-        } else if property.has_get_hook() {
+        } else if property.has_get_hook() && property.is_virtual() {
             return eval_throw_property_hook_readonly_error(
                 &declaring_class,
                 property.name(),
@@ -809,16 +809,20 @@ pub(in crate::interpreter) fn current_eval_property_hook_is(
     let Some(current_class) = context.current_class_scope() else {
         return false;
     };
-    if !same_eval_class_name(current_class, declaring_class) {
-        return false;
-    }
     let Some((_, method)) = context
         .current_function()
         .and_then(|function| function.rsplit_once("::"))
     else {
         return false;
     };
-    method.eq_ignore_ascii_case(hook_method)
+    let same_property_hook = method.eq_ignore_ascii_case(hook_method)
         || method.eq_ignore_ascii_case(&property_hook_get_method(property_name))
-        || method.eq_ignore_ascii_case(&property_hook_set_method(property_name))
+        || method.eq_ignore_ascii_case(&property_hook_set_method(property_name));
+    if !same_property_hook {
+        return false;
+    }
+    // A redeclared child property may inherit either concrete accessor independently.
+    // Its backing access belongs to that accessor's lexical owner, not to the child.
+    context.class_method(declaring_class, method)
+        .is_some_and(|(owner, _)| same_eval_class_name(current_class, &owner))
 }
