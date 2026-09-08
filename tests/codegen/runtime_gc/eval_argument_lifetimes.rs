@@ -28,21 +28,21 @@ $source = 'function replaceArgument() {
 }
 $sink = new NativeArgumentLifetime("setup", 0);
 $argument = str_repeat("old", 2);
-echo native_argument_first($argument, replaceArgument()), "|";
+echo native_argument_first($argument, replaceArgument()), ":", strlen($argument), "|";
 $argument = str_repeat("old", 2);
-echo $sink->first($argument, replaceArgument()), "|";
+echo $sink->first($argument, replaceArgument()), ":", strlen($argument), "|";
 $argument = str_repeat("old", 2);
-echo NativeArgumentLifetime::firstStatic($argument, replaceArgument()), "|";
+echo NativeArgumentLifetime::firstStatic($argument, replaceArgument()), ":", strlen($argument), "|";
 $argument = str_repeat("old", 2);
 $created = new NativeArgumentLifetime($argument, replaceArgument());
-echo $created->saved, "|";
+echo $created->saved, ":", strlen($argument), "|";
 $class = "NativeArgumentLifetime";
 $argument = str_repeat("old", 2);
 $created = new $class($argument, replaceArgument());
-echo $created->saved;' . ' // ' . $argc;
+echo $created->saved, ":", strlen($argument);' . ' // ' . $argc;
 eval($source);
 "#;
-    assert_eq!(compile_and_run(source), "oldold|oldold|oldold|oldold|oldold");
+    assert_eq!(compile_and_run(source), "oldold:88|oldold:88|oldold:88|oldold:88|oldold:88");
 }
 
 /// Eval functions and callable expressions retain source values and callback receivers until dispatch.
@@ -61,23 +61,23 @@ class EvalArgumentLifetime {
 }
 function replaceCallback() { global $callback; $callback = null; return 0; }
 $argument = str_repeat("old", 2);
-echo firstArgument($argument, replaceArgument()), "|";
+echo firstArgument($argument, replaceArgument()), ":", strlen($argument), "|";
 $name = "firstArgument";
 $argument = str_repeat("old", 2);
-echo $name($argument, replaceArgument()), "|";
+echo $name($argument, replaceArgument()), ":", strlen($argument), "|";
 $firstClass = firstArgument(...);
 $argument = str_repeat("old", 2);
-echo $firstClass($argument, replaceArgument()), "|";
+echo $firstClass($argument, replaceArgument()), ":", strlen($argument), "|";
 $object = new EvalArgumentLifetime();
 $argument = str_repeat("old", 2);
-echo $object->first(first: $argument, ignored: replaceArgument()), "|";
+echo $object->first(first: $argument, ignored: replaceArgument()), ":", strlen($argument), "|";
 $argument = str_repeat("old", 2);
-echo $object->first(...[$argument], ignored: replaceArgument()), "|";
+echo $object->first(...[$argument], ignored: replaceArgument()), ":", strlen($argument), "|";
 $callback = new EvalArgumentLifetime();
-echo $callback("alive", replaceCallback());' . ' // ' . $argc;
+echo $callback("alive", replaceCallback()), ":", is_null($callback);' . ' // ' . $argc;
 eval($source);
 "#;
-    assert_eq!(compile_and_run(source), "oldold|oldold|oldold|oldold|oldold|alive");
+    assert_eq!(compile_and_run(source), "oldold:88|oldold:88|oldold:88|oldold:88|oldold:88|alive:1");
 }
 
 /// Argument leases and descriptor-array keys leave no per-call native heap owners behind.
@@ -150,13 +150,13 @@ fn test_core_eval_builtin_arguments_survive_later_source_replacement() {
     let source = r#"<?php
 $source = 'function replaceCallable() { global $callback; $callback = null; return false; }
 $callback = str_repeat("strlen", 1);
-echo is_callable($callback, replaceCallable(), $name), ":", $name, "|";
+echo is_callable($callback, replaceCallable(), $name), ":", $name, ":", is_null($callback), "|";
 function replaceText() { global $text; $text = "new"; return 2; }
 $text = str_repeat("old", 2);
-echo str_repeat(string: $text, times: replaceText());' . ' // ' . $argc;
+echo str_repeat(string: $text, times: replaceText()), ":", $text;' . ' // ' . $argc;
 eval($source);
 "#;
-    assert_eq!(compile_and_run(source), "1:strlen|oldoldoldold");
+    assert_eq!(compile_and_run(source), "1:strlen:1|oldoldoldold:new");
 }
 
 /// Named date-alias fallback reuses evaluated arguments instead of executing their side effects twice.
@@ -170,4 +170,37 @@ echo gmmktime(hour: hourOnce(), minute: 0, second: 0, month: 1, day: 1, year: 20
 eval($source);
 "#;
     assert_eq!(compile_and_run(source), "946684800:1");
+}
+
+/// Main eval variables and function globals share storage across successive opaque evaluations.
+#[test]
+fn test_core_eval_main_globals_share_persistent_scope() {
+    let source = r#"<?php
+$source = '$counter = 10;
+function updateEvalCounter() { global $counter; $counter = $counter + 1; }
+updateEvalCounter(); echo $counter;' . ' // ' . $argc;
+eval($source);
+$source = 'updateEvalCounter(); echo ":", $counter;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "11:12");
+}
+
+/// Function-local eval variables stay distinct from globals synchronized with native functions.
+#[test]
+fn test_core_eval_function_locals_remain_separate_from_globals() {
+    let source = r#"<?php
+$counter = 10;
+function nativeEvalCounter(): int { global $counter; return $counter; }
+function runEvalWithLocalCounter(string $source): void {
+    $counter = 40;
+    eval($source);
+    echo ":", $counter;
+}
+$source = 'function updateEvalGlobalCounter() { global $counter; $counter = $counter + 1; }
+updateEvalGlobalCounter(); echo $counter;' . ' // ' . $argc;
+runEvalWithLocalCounter($source);
+echo "|", nativeEvalCounter();
+"#;
+    assert_eq!(compile_and_run(source), "40:40|11");
 }

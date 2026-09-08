@@ -50,8 +50,16 @@ pub(super) fn ensure_eval_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Ensures a persistent eval global-scope exists and stores its handle in scratch.
+/// Uses the main eval scope as global storage, or allocates a distinct function-global scope.
 pub(super) fn ensure_eval_global_scope(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    if ctx.is_main {
+        // Top-level eval declarations and `global` inside eval functions share storage.
+        // Only EvalScope owns this handle; leave EvalGlobalScope null to avoid double-free.
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_SCOPE_HANDLE_OFFSET);
+        abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_GLOBAL_SCOPE_HANDLE_OFFSET);
+        return Ok(());
+    }
     let slot = eval_global_scope_slot(ctx)?;
     let offset = ctx.local_offset(slot)?;
     let ready = ctx.next_label("eval_global_scope_ready");
