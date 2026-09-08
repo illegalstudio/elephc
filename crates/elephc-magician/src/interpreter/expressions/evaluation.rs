@@ -30,11 +30,7 @@ pub(in crate::interpreter) fn eval_binary_result(
         | EvalBinOp::BitXor
         | EvalBinOp::ShiftLeft
         | EvalBinOp::ShiftRight => values.bitwise(op, left, right),
-        EvalBinOp::Concat => {
-            let left = eval_string_context_value(left, context, values)?;
-            let right = eval_string_context_value(right, context, values)?;
-            values.concat(left, right)
-        }
+        EvalBinOp::Concat => eval_concat_result(left, right, context, values),
         EvalBinOp::LogicalXor => {
             let left_truthy = values.truthy(left)?;
             let right_truthy = values.truthy(right)?;
@@ -50,6 +46,40 @@ pub(in crate::interpreter) fn eval_binary_result(
         | EvalBinOp::GtEq => values.compare(op, left, right),
         EvalBinOp::Spaceship => values.spaceship(left, right),
         EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => Err(EvalStatus::UnsupportedConstruct),
+    }
+}
+
+/// Concatenates borrowed operands and releases any separate cells returned by object string hooks.
+fn eval_concat_result(
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let left_string = eval_string_context_value(left, context, values)?;
+    let right_string = match eval_string_context_value(right, context, values) {
+        Ok(value) => value,
+        Err(status) => {
+            if left_string != left {
+                let _ = release_expr_result(left_string, context, values);
+            }
+            return Err(status);
+        }
+    };
+    let result = values.concat(left_string, right_string);
+    let left_released = if left_string != left {
+        release_expr_result(left_string, context, values)
+    } else { Ok(()) };
+    let right_released = if right_string != right {
+        release_expr_result(right_string, context, values)
+    } else { Ok(()) };
+    match (result, left_released.and(right_released)) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
     }
 }
 

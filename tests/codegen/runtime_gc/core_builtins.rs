@@ -58,6 +58,44 @@ fn test_core_eval_concat_releases_string_cast_copies() {
     );
 }
 
+/// Object concatenation releases string-hook results in either operand and after a later throw.
+#[test]
+fn test_core_eval_concat_releases_tostring_result_cells() {
+    assert_core_eval_collection_cleanup(
+        "class ConcatValue { public function __toString(): string { return \"value\"; } }
+         class ConcatFailure { public function __toString(): string { throw new Exception(\"stop\"); } }
+         $object = new ConcatValue(); $failure = new ConcatFailure();",
+        "$joined = $object . \"right\"; unset($joined);
+         $joined = \"left\" . $object; unset($joined);
+         $joined = $object . $object; unset($joined);
+         try { $joined = $object . $failure; } catch (Exception $caught) { unset($caught); }",
+    );
+}
+
+/// Native and eval string hooks preserve conversion order, operands, and exceptions.
+#[test]
+fn test_core_eval_concat_native_and_dynamic_string_hooks() {
+    let source = r#"<?php
+class NativeConcatValue {
+    public function __toString(): string { echo "N"; return "native"; }
+}
+$source = 'class EvalConcatValue {
+    public function __toString(): string { echo "E"; return "eval"; }
+}
+class EvalConcatFailure {
+    public function __toString(): string { echo "T"; throw new Exception("stop"); }
+}
+$native = new NativeConcatValue(); $dynamic = new EvalConcatValue();
+$joined = $native . $dynamic;
+echo ":", $joined, "|";
+try { $joined = $dynamic . new EvalConcatFailure(); }
+catch (Exception $caught) { echo ":caught|"; }
+echo $native . $dynamic;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "NE:nativeeval|ET:caught|NEnativeeval");
+}
+
 /// Concatenation keeps scalar cast scratch separate from owned string copies.
 #[test]
 fn test_core_eval_concat_preserves_borrowed_scalar_cast_results() {
