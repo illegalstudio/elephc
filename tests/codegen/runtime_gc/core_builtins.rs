@@ -159,6 +159,27 @@ fn test_core_eval_native_default_arguments_release_objects() {
     );
 }
 
+/// Unchanged nullable references release native slot owners for constructors and both method kinds.
+#[test]
+fn test_core_eval_native_unchanged_mixed_references_release_activation_leases() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeUnchangedReferenceSink {
+            public function __construct(?string &$value) {}
+            public function instance(?string &$value): void {}
+            public static function unchanged(?string &$value): void {}
+         }",
+        "",
+        "$value = \"kept\";
+         $object = new NativeUnchangedReferenceSink($value);
+         $object->instance($value);
+         NativeUnchangedReferenceSink::unchanged($value);
+         $value = null;
+         $object->instance($value);
+         NativeUnchangedReferenceSink::unchanged($value);
+         unset($object, $value);",
+    );
+}
+
 /// Native reference coercions leave caller variables usable after the activation releases its lease.
 #[test]
 fn test_core_eval_native_reference_coercion_retains_caller_value() {

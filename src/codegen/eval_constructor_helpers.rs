@@ -32,7 +32,7 @@ use crate::types::{ClassInfo, FunctionSig, PhpType};
 use super::eval_ref_arg_helpers::{
     EvalRefArgSlot, eval_abi_param_types_for_refs, eval_arg_temp_slot_size,
     eval_normalized_ref_params, eval_ref_arg_slots, eval_signature_ref_params_supported,
-    emit_aarch64_write_back_ref_args, emit_x86_64_write_back_ref_args,
+    emit_aarch64_write_back_ref_args, emit_acquire_mixed_ref_args, emit_x86_64_write_back_ref_args,
 };
 use super::eval_callable_helpers::EvalCallableDescriptorSupport;
 
@@ -333,9 +333,9 @@ fn emit_constructor_aarch64(
     let success_label = "__elephc_eval_value_construct_success";
     let fail_label = "__elephc_eval_value_construct_fail";
     let done_label = "__elephc_eval_value_construct_done";
-    emitter.instruction(
+    emitter.instruction(                                                        //reserve helper frame plus a boundary exception handler
         &format!("sub sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
-    );                                                                          //reserve helper frame plus a boundary exception handler
+    );
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the Rust caller frame across runtime calls
     emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
     emitter.instruction("str x2, [sp, #0]");                                    // save the active eval class-scope pointer
@@ -373,9 +373,9 @@ fn emit_constructor_aarch64(
     emitter.instruction("mov x0, #1");                                          // report successful construction or no-op
     emitter.label(done_label);
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the Rust caller frame
-    emitter.instruction(
+    emitter.instruction(                                                        //release the constructor helper frame and boundary handler
         &format!("add sp, sp, #{}", CONSTRUCTOR_HELPER_FRAME_SIZE)
-    );                                                                          //release the constructor helper frame and boundary handler
+    );
     emitter.instruction("ret");                                                 // return the constructor status flag to Rust
 }
 
@@ -444,16 +444,16 @@ fn emit_aarch64_constructor_exception_boundary_push(emitter: &mut Emitter, escap
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across constructor unwinding
     abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
         "str x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    ));
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "add x0, x29, #{}",
         handler_offset + TRY_HANDLER_JMP_BUF_OFFSET
-    ));                                                                         // pass the boundary jmp_buf to setjmp
+    ));
     emitter.bl_c("setjmp");                                                     // snapshot the bridge stack before entering native constructors
     emitter.instruction(&format!("cbnz x0, {}", escape_label));                 // non-zero setjmp result means a constructor Throwable escaped
 }
@@ -464,10 +464,10 @@ fn emit_aarch64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     emitter.comment("pop eval constructor exception boundary");
     emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
         "ldr x10, [x29, #{}]",
         handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
+    ));
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
 }
 
@@ -476,24 +476,24 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("push eval constructor exception boundary");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(
+    emitter.instruction(                                                        //save the previous native exception-handler head
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base)
-    );                                                                          //save the previous native exception-handler head
+    );
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
-    emitter.instruction(
+    emitter.instruction(                                                        //preserve the caller activation frame across constructor unwinding
         &format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)
-    );                                                                          //preserve the caller activation frame across constructor unwinding
+    );
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // save diagnostic suppression depth for restoration
         "mov QWORD PTR [rbp - {}], r10",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // save diagnostic suppression depth for restoration
+    ));
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // pass the boundary jmp_buf to setjmp
         "lea rdi, [rbp - {}]",
         handler_base - TRY_HANDLER_JMP_BUF_OFFSET
-    ));                                                                         // pass the boundary jmp_buf to setjmp
+    ));
     emitter.bl_c("setjmp");                                                      // snapshot the bridge stack before entering native constructors
     emitter.instruction("test eax, eax");                                       // did control arrive through longjmp?
     emitter.instruction(&format!("jne {}", escape_label));                      // non-zero setjmp result means a constructor Throwable escaped
@@ -503,14 +503,14 @@ fn emit_x86_64_constructor_exception_boundary_push(emitter: &mut Emitter, escape
 fn emit_x86_64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     let handler_base = CONSTRUCTOR_HELPER_FRAME_SIZE;
     emitter.comment("pop eval constructor exception boundary");
-    emitter.instruction(
+    emitter.instruction(                                                        //reload the previous native exception-handler head
         &format!("mov r10, QWORD PTR [rbp - {}]", handler_base)
-    );                                                                          //reload the previous native exception-handler head
+    );
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
+    emitter.instruction(&format!(                                               // reload the saved diagnostic suppression depth
         "mov r10, QWORD PTR [rbp - {}]",
         handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                         // reload the saved diagnostic suppression depth
+    ));
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
 }
 
@@ -880,6 +880,7 @@ fn emit_aarch64_constructor_body(
             &prep_fail_label,
             callable_support,
         );
+    emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
     let escape_label = format!("{}_escape", body_label);
     emit_aarch64_constructor_exception_boundary_push(emitter, &escape_label);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
@@ -945,6 +946,7 @@ fn emit_x86_64_constructor_body(
             &prep_fail_label,
             callable_support,
         );
+    emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
     let escape_label = format!("{}_escape_x", body_label);
     emit_x86_64_constructor_exception_boundary_push(emitter, &escape_label);
     let receiver_ty = PhpType::Object(slot.class_name.clone());
