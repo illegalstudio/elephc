@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - AOT accepts an object or a runtime class-name string.
+//! - Mixed arguments are validated against their runtime tag before metadata lookup.
 //! - Direct, spread, and statically resolved callable paths use the AOT metadata specializer.
 
 use crate::builtins::semantics::{
@@ -44,7 +45,7 @@ builtin! {
     },
 }
 
-/// Accepts an object or string class name and returns an indexed string array.
+/// Accepts static or boxed object/string arguments and returns an indexed string array.
 fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
     let argument = match &cx.args[0].kind {
         ExprKind::NamedArg { name, value }
@@ -55,7 +56,7 @@ fn check(cx: &mut BuiltinCheckCtx<'_>) -> Result<PhpType, CompileError> {
         _ => &cx.args[0],
     };
     let ty = cx.checker.infer_type(argument, cx.env)?;
-    if !matches!(ty.codegen_repr(), PhpType::Object(_) | PhpType::Str) {
+    if !matches!(ty.codegen_repr(), PhpType::Object(_) | PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
         return Err(CompileError::new(
             cx.span,
             "get_class_methods() argument must be an object or string in AOT mode",

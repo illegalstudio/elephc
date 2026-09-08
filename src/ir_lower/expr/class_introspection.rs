@@ -50,6 +50,12 @@ fn lower_class_introspection_value(
     expr: &Expr,
 ) -> LoweredValue {
     let argument_type = ctx.builder.value_php_type(argument.value).codegen_repr();
+    if kind == ClassIntrospectionKind::Methods
+        && matches!(argument_type, PhpType::Mixed | PhpType::Union(_))
+    {
+        let name = super::class_introspection_mixed::lower_mixed_methods_class_name(ctx, argument, expr);
+        return lower_dynamic_class_introspection(ctx, kind, name, None, expr);
+    }
     let object_bound = match &argument_type {
         PhpType::Object(class) if kind == ClassIntrospectionKind::Methods
             && ctx.classes.contains_key(class) => Some(class.clone()),

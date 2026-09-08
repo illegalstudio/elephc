@@ -83,6 +83,7 @@ mod reflection_filters;
 mod reflection_constructors;
 mod reflection_static_properties;
 mod class_introspection;
+mod class_introspection_mixed;
 mod core_introspection;
 mod reflection_new_instance;
 mod nullable_method_calls;

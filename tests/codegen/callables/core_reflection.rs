@@ -109,6 +109,49 @@ fn test_core_class_vars_mixed_extract_preserves_methods_object_type() {
     assert_eq!(out, "1:m|7:m|1:m");
 }
 
+/// Boxed objects and strings work through direct, CUF, FCC, and spread class-method calls.
+#[test]
+fn test_core_get_class_methods_accepts_boxed_arguments() {
+    let source = r#"<?php
+class BoxedMethodsTarget { public function method(): void {} }
+$source = 'return new BoxedMethodsTarget();' . ' // ' . $argc;
+$object = eval($source);
+echo implode(',', get_class_methods($object)), '|';
+echo implode(',', call_user_func('get_class_methods', $object)), '|';
+$callback = get_class_methods(...);
+echo implode(',', $callback($object)), '|';
+$source = 'return "BoxedMethodsTarget";' . ' // ' . $argc;
+$name = eval($source);
+echo implode(',', get_class_methods(...[$name])), '|', get_class($object);
+"#;
+    assert_eq!(compile_and_run(source), "method|method|method|method|BoxedMethodsTarget");
+}
+
+/// Boxed non-object/non-string values throw catchable TypeErrors without scalar coercion.
+#[test]
+fn test_core_get_class_methods_rejects_invalid_boxed_arguments() {
+    let source = r#"<?php
+function inspectBoxedMethods(string $source): void {
+    $value = eval($source);
+    try {
+        get_class_methods($value);
+        echo "bad";
+    } catch (TypeError $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+inspectBoxedMethods('return 7;');
+inspectBoxedMethods('return true;');
+inspectBoxedMethods('return 1.5;');
+inspectBoxedMethods('return null;');
+inspectBoxedMethods('return [];');
+"#;
+    let prefix = "get_class_methods(): Argument #1 ($object_or_class) must be an object or a valid class name, ";
+    let expected = ["int", "bool", "float", "null", "array"].into_iter()
+        .map(|kind| format!("{prefix}{kind} given\n")).collect::<String>();
+    assert_eq!(compile_and_run(source), expected);
+}
+
 /// Verifies runtime class-name strings and concrete object subclasses select AOT metadata.
 #[test]
 fn test_core_class_introspection_aot_dynamic_inputs() {

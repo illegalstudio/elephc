@@ -22,3 +22,8 @@ class DisplaySettings {
 
 echo 'Stored defaults: ', implode(', ', array_keys(get_class_vars(DisplaySettings::class))), "\n";
 echo 'Public methods: ', implode(', ', get_class_methods(DisplaySettings::class)), "\n";
+
+// Introspection also accepts an object returned through the boxed eval boundary.
+$source = 'return new DisplaySettings();' . ' // ' . $argc;
+$settings = eval($source);
+echo 'Runtime object methods: ', implode(', ', get_class_methods($settings)), "\n";
