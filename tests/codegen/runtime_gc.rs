@@ -40,6 +40,7 @@ mod core_builtins;
 #[path = "runtime_gc/dynamic_property_cycles.rs"]
 mod dynamic_property_cycles;
 mod gc_exception_recovery;
+mod destructor_cleanup;
 mod callback_argument_cleanup;
 mod eval_sparse_arrays;
 mod mixed_parameters;

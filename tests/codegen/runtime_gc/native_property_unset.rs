@@ -10,6 +10,56 @@
 
 use crate::support::*;
 
+/// A destructor thrown during native-slot unset is caught inside eval without losing outer native state.
+#[test]
+fn test_core_eval_native_unset_contains_destructor_exceptions_and_restores_scope() {
+    let source = r#"<?php
+class NativeUnsetThrowChild {
+    public string $buffer;
+    public function __construct() { $this->buffer = str_repeat("x", 48); }
+    public function __destruct() { throw new RuntimeException("inner"); }
+}
+class NativeUnsetThrowHolder { public NativeUnsetThrowChild $child; }
+function exerciseNativeUnsetThrow(string $source): void {
+    $holder = new NativeUnsetThrowHolder();
+    try { throw new Exception("outer"); }
+    catch (Exception $outer) {
+        eval($source);
+        echo $outer->getMessage(), "|";
+        echo eval('return "again";');
+    }
+}
+$source = '$count = 0;
+for ($i = 0; $i < 3; $i++) {
+    $holder->child = new NativeUnsetThrowChild();
+    try { unset($holder->child); }
+    catch (RuntimeException $error) {
+        if ($error->getMessage() === "inner" && !isset($holder->child)) { $count++; }
+        unset($error);
+    }
+}
+echo $count, ":";' . ' // ' . $argc;
+exerciseNativeUnsetThrow($source);
+"#;
+    assert_eq!(compile_and_run(source), "3:outer|again");
+}
+
+/// Repeated destructor throws free native children and temporary exception boxes after eval catches them.
+#[test]
+fn test_core_eval_native_unset_destructor_exceptions_do_not_accumulate_owners() {
+    super::core_builtins::assert_core_eval_collection_cleanup_with_native(
+        "class NativeUnsetThrowOwner {
+            public string $buffer;
+            public function __construct() { $this->buffer = str_repeat(\"x\", 48); }
+            public function __destruct() { throw new RuntimeException(\"stop\"); }
+         }
+         class NativeUnsetThrowBox { public NativeUnsetThrowOwner $child; }",
+        "$holder = new NativeUnsetThrowBox();",
+        "$holder->child = new NativeUnsetThrowOwner();
+         try { unset($holder->child); } catch (RuntimeException $error) { unset($error); }",
+    );
+}
+
 /// Magic native unsetters remain callable for inaccessible and absent properties without recursive reentry.
 #[test]
 fn test_core_eval_native_unset_magic_fallback_and_exception_guard() {

@@ -153,6 +153,7 @@ mod heap_free;
 mod in_array_mixed_int;
 mod min_max_container;
 mod natsort;
+pub(super) mod deep_cleanup;
 mod object_free_deep;
 mod range;
 mod incref;

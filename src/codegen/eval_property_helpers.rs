@@ -29,6 +29,7 @@ mod dynamic_properties;
 mod private_shadow;
 mod replacement;
 mod unset;
+mod unset_boundary;
 use replacement::emit_owned_slot_replacement;
 use dynamic_properties::{
     emit_dynamic_property_get_fallback, emit_dynamic_property_set_fallback,

@@ -148,11 +148,22 @@ macro_rules! impl_collection_call_ops {
         property: &str,
     ) -> Result<bool, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        Ok(unsafe {
+        let mut throwable = std::ptr::null_mut();
+        let unset = unsafe {
             __elephc_eval_value_typed_property_unset(
                 object.as_ptr(), property.as_ptr(), property.len() as u64, scope_ptr, scope_len,
+                &mut throwable,
             )
-        } != 0)
+        };
+        if throwable.is_null() {
+            return Ok(unset != 0);
+        }
+        let throwable = RuntimeCellHandle::from_raw(throwable);
+        if let Err(status) = self.schedule_pending_throw(throwable) {
+            self.release(throwable)?;
+            return Err(status);
+        }
+        Err(EvalStatus::UncaughtThrowable)
     }
 
     /// Reads an AOT static property through the generated user helper.

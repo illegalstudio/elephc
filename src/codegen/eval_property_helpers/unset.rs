@@ -18,11 +18,12 @@ pub(super) fn emit_property_unset_helper(
     data: &mut DataSection,
     slots: &[EvalPropertySlot],
 ) {
+    super::unset_boundary::emit(module, emitter);
     let slots = slots.iter().filter(|slot| slot.is_declared).cloned().collect::<Vec<_>>();
     let fail = "__elephc_eval_value_typed_property_unset_miss";
     let done = "__elephc_eval_value_typed_property_unset_done";
     emitter.blank();
-    label_c_global(module, emitter, "__elephc_eval_value_typed_property_unset");
+    emitter.label_global("__rt_eval_typed_property_unset");
     match module.target.arch {
         Arch::AArch64 => {
             emitter.instruction("sub sp, sp, #80");                             // reserve the shared getter-layout frame
@@ -124,7 +125,7 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_property_unset_helper(&module, &mut emitter, &mut DataSection::new(), &slots);
             let asm = emitter.output();
-            assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_typed_property_unset")), "{name}");
+            assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_typed_property_unset_v2")), "{name}");
             let release = asm.find("__rt_decref_object").unwrap();
             let store = if target.arch == Arch::AArch64 { "str x10, [x9, #16]" } else { "mov QWORD PTR [r11 + 16], r10" };
             assert!(asm.find(store).is_some_and(|marker| marker < release), "{name}");

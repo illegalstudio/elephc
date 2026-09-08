@@ -49,10 +49,9 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_callable_descriptor_release_done");          // other owners still keep the descriptor alive
 
     // -- set up cleanup frame --
-    emitter.instruction("sub sp, sp, #48");                                     // reserve descriptor cleanup spill slots
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across nested releases
-    emitter.instruction("add x29, sp, #32");                                    // establish a frame pointer for the helper
+    crate::codegen_support::abi::emit_frame_prologue(emitter, 64);
     emitter.instruction("str x0, [sp, #0]");                                    // save descriptor pointer for capture release and final free
+    super::super::arrays::deep_cleanup::begin(emitter);
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize capture index to zero
 
     // -- load environment metadata --
@@ -104,11 +103,11 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.instruction("b __rt_callable_descriptor_release_next");             // continue with the next capture slot
 
     emitter.label("__rt_callable_descriptor_release_any");
-    emitter.instruction("bl __rt_decref_any");                                  // release heap-backed capture payload by runtime heap kind
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
     emitter.instruction("b __rt_callable_descriptor_release_next");             // continue with the next capture slot
 
     emitter.label("__rt_callable_descriptor_release_callable");
-    emitter.instruction("bl __rt_callable_descriptor_release");                 // release nested dynamic callable descriptor captures recursively
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_callable_descriptor_release", "x0");
 
     emitter.label("__rt_callable_descriptor_release_next");
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload current capture index after any nested release
@@ -120,8 +119,7 @@ pub(crate) fn emit_callable_descriptor_release(emitter: &mut Emitter) {
     emitter.label("__rt_callable_descriptor_release_free");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload descriptor pointer for final heap free
     emitter.instruction("bl __rt_heap_free");                                   // return the runtime descriptor block to the heap allocator
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // tear down descriptor cleanup frame
+    super::super::arrays::deep_cleanup::finish(emitter, "__rt_callable_descriptor_release_return");
 
     emitter.label("__rt_callable_descriptor_release_done");
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
@@ -154,10 +152,9 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented descriptor refcount
     emitter.instruction("jnz __rt_callable_descriptor_release_done");           // other owners still keep the descriptor alive
 
-    emitter.instruction("push rbp");                                            // preserve caller frame pointer before descriptor cleanup
-    emitter.instruction("mov rbp, rsp");                                        // establish a frame pointer for descriptor cleanup spills
-    emitter.instruction("sub rsp, 32");                                         // reserve descriptor pointer, count, table, and index slots
+    crate::codegen_support::abi::emit_frame_prologue(emitter, 64);
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save descriptor pointer for capture release and final free
+    super::super::arrays::deep_cleanup::begin(emitter);
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize capture index to zero
 
     emitter.instruction("mov r10, QWORD PTR [rax + 40]");                       // r10 = descriptor environment record pointer
@@ -209,11 +206,11 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_callable_descriptor_release_next");           // continue with the next capture slot
 
     emitter.label("__rt_callable_descriptor_release_any");
-    emitter.instruction("call __rt_decref_any");                                // release heap-backed capture payload by runtime heap kind
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_decref_any", "rax");
     emitter.instruction("jmp __rt_callable_descriptor_release_next");           // continue with the next capture slot
 
     emitter.label("__rt_callable_descriptor_release_callable");
-    emitter.instruction("call __rt_callable_descriptor_release");               // release nested dynamic callable descriptor captures recursively
+    super::super::arrays::deep_cleanup::invoke(emitter, "__rt_callable_descriptor_release", "rax");
 
     emitter.label("__rt_callable_descriptor_release_next");
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance to the next capture slot
@@ -222,8 +219,7 @@ fn emit_callable_descriptor_release_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_callable_descriptor_release_free");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload descriptor pointer for final heap free
     emitter.instruction("call __rt_heap_free");                                 // return the runtime descriptor block to the heap allocator
-    emitter.instruction("add rsp, 32");                                         // release descriptor cleanup spill slots
-    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    super::super::arrays::deep_cleanup::finish(emitter, "__rt_callable_descriptor_release_return");
 
     emitter.label("__rt_callable_descriptor_release_done");
     emitter.instruction("ret");                                                 // return after releasing or ignoring the descriptor
