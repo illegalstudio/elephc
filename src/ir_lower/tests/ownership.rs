@@ -10,6 +10,45 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Physical defaults use the property's hash representation, including empty Reflection defaults.
+#[test]
+fn property_initializers_contextualize_array_defaults_on_all_targets() {
+    let source = r#"<?php
+        class HashDefaults {
+            public array $empty = [];
+            public array $seeded = [1];
+            public function fill(): void {
+                $this->empty["key"] = "value";
+                $this->seeded["key"] = "value";
+            }
+        }
+        $object = new HashDefaults();
+        $object->fill();
+        echo count($object->empty), count($object->seeded);
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let class = &module.class_infos["HashDefaults"];
+        let init = module.functions.iter().find(|function| {
+            function.name == format!("_class_propinit_{}", class.class_id)
+        }).unwrap();
+        for (index, (_, ty)) in class.properties.iter().enumerate() {
+            assert!(matches!(ty.codegen_repr(), crate::types::PhpType::AssocArray { .. }), "{target}");
+            let store = init.instructions.iter().find(|inst| {
+                inst.op == Op::PropSet && inst.immediate == Some(crate::ir::Immediate::PropertyRef {
+                    class: class.class_id as u32, property: index as u32,
+                })
+            }).unwrap();
+            assert_eq!(init.value(store.operands[1]).unwrap().php_type.codegen_repr(), ty.codegen_repr(), "{target}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// By-name initializers preserve private shadow slots and default-less typed markers on every target.
 #[test]
 fn property_initializers_address_physical_slots_on_all_targets() {

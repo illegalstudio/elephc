@@ -82,6 +82,7 @@ use static_property_helpers::*;
 
 pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error_expr};
 pub(super) use typed_foreach::coerce_typed_assign_value;
+pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,

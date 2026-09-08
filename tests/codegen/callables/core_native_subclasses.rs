@@ -9,6 +9,30 @@
 
 use crate::support::*;
 
+/// Opaque by-name construction contextualizes indexed defaults and keeps separately created hashes independent.
+#[test]
+fn test_core_eval_by_name_array_defaults_use_native_property_layout() {
+    let source = r#"<?php
+class NativeHashDefaults {
+    public array $empty = [];
+    public array $seeded = [7];
+    public function fill(): void {
+        $this->empty["key"] = "value";
+        $this->seeded["key"] = "value";
+    }
+    public function describe(): string {
+        return count($this->empty) . ":" . count($this->seeded) . ":" . $this->seeded[0];
+    }
+}
+$source = '$first = new NativeHashDefaults(); $second = new NativeHashDefaults();
+echo $first->describe(), "|";
+$first->fill();
+echo $first->describe(), "|", $second->describe();' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "0:1:7|1:2:7|0:1:7");
+}
+
 /// Opaque eval allocation initializes private shadows, skips hooks, and preserves typed-only markers.
 #[test]
 fn test_core_eval_by_name_property_initialization_uses_physical_slots() {

@@ -9,9 +9,9 @@
 //! - Defaults bypass hooks; declared slots without defaults receive the uninitialized marker.
 
 use crate::ir::{Effects, Immediate, Op};
-use crate::parser::ast::ExprKind;
-use crate::types::ClassInfo;
-use super::context::LoweringContext;
+use crate::parser::ast::{Expr, ExprKind};
+use crate::types::{ClassInfo, PhpType};
+use super::context::{LoweredValue, LoweringContext};
 
 /// Returns whether allocation must initialize defaults or typed-property markers.
 pub(super) fn needs_initializer(class: &ClassInfo) -> bool {
@@ -46,7 +46,7 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, class: &ClassInfo) {
         if matches!(default.kind, ExprKind::Null) && !ty.null_property_default_required() {
             continue;
         }
-        let value = super::expr::lower_expr(ctx, default);
+        let value = lower_default_value(ctx, default, ty);
         let value = super::stmt::coerce_typed_assign_value(ctx, value, ty, default.span);
         ctx.emit_void(
             Op::PropSet, vec![object.value, value.value], Some(slot),
@@ -54,4 +54,23 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, class: &ClassInfo) {
         );
         super::stmt::release_property_assignment_source_after_retaining_store(ctx, ty, value, default.span);
     }
+}
+
+/// Builds defaults in the physical slot's representation without resolving private slots by name.
+fn lower_default_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    default: &Expr,
+    ty: &PhpType,
+) -> LoweredValue {
+    let target = ty.codegen_repr();
+    if matches!(target, PhpType::AssocArray { .. })
+        && matches!(&default.kind, ExprKind::ArrayLiteral(items) if items.is_empty())
+    {
+        return ctx.emit_value(
+            Op::HashNew, Vec::new(), Some(Immediate::Capacity(0)), target,
+            Op::HashNew.default_effects(), Some(default.span),
+        );
+    }
+    let value = super::expr::lower_expr(ctx, default);
+    super::stmt::contextualize_property_array_value(ctx, value, default, ty, default.span)
 }
