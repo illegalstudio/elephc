@@ -101,6 +101,8 @@ consumers, the second serves tools that want the richer JSON schema.
 PHP function ranges exclude native exception-cleanup callbacks. Generator source
 locations describe the coroutine body; its allocation constructor and entry
 wrapper are compiler-generated helpers, not additional PHP debug subprograms.
+Inline eval registration helpers preserve the enclosing PHP function's text
+section, including when emitting native callable invokers on Linux.
 
 ## Compile-time diagnostics
 

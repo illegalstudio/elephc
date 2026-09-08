@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Visibility and descriptor-invoker compatibility remain explicit gates.
+//! - Inline invokers restore the caller's ELF section before registration resumes.
 
 use super::*;
 
@@ -175,12 +176,14 @@ pub(super) fn emit_eval_native_function_invoker_inline(
         sig,
         captures: &captures,
     };
+    let enclosing = ctx.emitter.current_text_section();
     abi::emit_jump(ctx.emitter, &done_label);
     crate::codegen::runtime_callable_invoker::emit_runtime_callable_invoker_with_exception_boundary(
         ctx.emitter,
         ctx.data,
         &invoker,
     );
+    ctx.emitter.reopen_text_section(enclosing);
     ctx.emitter.label(&done_label);
     label
 }

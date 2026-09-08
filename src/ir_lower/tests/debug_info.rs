@@ -8,12 +8,13 @@
 //! - Linux DWARF range subtraction requires both labels to occupy the same ELF section.
 //! - Generator source ranges describe the body, not its constructor or coroutine wrapper.
 
-/// Functions, methods, and generator bodies delimit their debug ranges before cleanup sections.
+/// Functions, methods, generators, and eval registrations keep debug endpoints in their entry section.
 #[test]
 fn native_debug_ranges_stay_in_their_function_sections_on_all_targets() {
     let source = r#"<?php
         function debug_value(int $value): int { return $value + 1; }
         function debug_items(int $value): Generator { yield $value; }
+        function debug_eval(string $source): void { eval($source); }
         class DebugRangeValue {
             public function read(int $value): int { return $value + 2; }
             public function items(int $value): Generator { yield $value + 3; }
@@ -22,6 +23,7 @@ fn native_debug_ranges_stay_in_their_function_sections_on_all_targets() {
         echo debug_value($argc), $object->read($argc);
         foreach (debug_items($argc) as $value) { echo $value; }
         foreach ($object->items($argc) as $value) { echo $value; }
+        debug_eval('echo debug_value(2); // ' . $argc);
     "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = crate::codegen::platform::Target::parse(name).unwrap();

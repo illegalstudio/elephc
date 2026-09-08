@@ -1571,6 +1571,28 @@ foreach ($object->items($argc) as $value) { echo $value; }
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Opaque eval registers native invokers without moving the enclosing PHP debug range to another section.
+#[test]
+fn test_cli_debug_info_preserves_sections_around_eval_invokers() {
+    let dir = make_cli_test_dir("elephc_debug_eval_invoker_ranges");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, r#"<?php
+function debugEvalValue(int $value): int { return $value + 1; }
+function debugEvalDispatch(string $source): void { eval($source); }
+class DebugEvalConsumer {
+    public function apply(callable $callback): int { return $callback(4); }
+}
+$source = 'echo debugEvalValue(2), ":", (new DebugEvalConsumer())->apply("debugEvalValue"); // ' . $argc;
+debugEvalDispatch($source);
+"#).unwrap();
+    let output = elephc_cli_command(&dir).arg("--debug-info").arg(&php_path).output().unwrap();
+    assert!(output.status.success(), "debug eval compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+    let run = Command::new(dir.join("main")).output().unwrap();
+    assert!(run.status.success(), "debug eval binary failed: {}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "3:5");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Lists the symbol names `nm` reports from a linked binary's symbol table.
 /// A fully stripped executable yields an empty list: `nm` either prints
 /// nothing, reports "no symbols", or exits non-zero depending on the platform,
