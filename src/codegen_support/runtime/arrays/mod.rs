@@ -76,6 +76,7 @@ mod array_reduce_str;
 mod array_replace;
 mod array_replace_recursive;
 mod array_reverse;
+mod array_reverse_boxed;
 mod array_reverse_refcounted;
 mod array_search;
 mod array_shift;
@@ -327,6 +328,8 @@ pub use array_replace::emit_array_replace;
 pub use array_replace_recursive::emit_array_replace_recursive;
 /// Emit recursive array replace helper.
 pub use array_reverse::emit_array_reverse;
+/// Emit reversal for a borrowed boxed PHP array with runtime key preservation.
+pub use array_reverse_boxed::emit_array_reverse_boxed;
 /// Emit array reverse helper.
 pub use array_reverse_refcounted::emit_array_reverse_refcounted;
 /// Emit refcounted array reverse helper.
