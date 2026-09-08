@@ -23,7 +23,11 @@ fn string_repeat_releases_operands_on_success_and_failure() {
             EvalExpr::Const(EvalConst::Int(count)),
         ];
         let result = eval_builtin_str_repeat(&args, &mut context, &mut scope, &mut values);
-        assert_eq!(values.releases.len(), 2);
+        // Integer coercion owns one extra cell in addition to the two source operands.
+        assert_eq!(values.releases.len(), 3);
+        assert_eq!(values.get(values.releases[0]), FakeValue::Int(count));
+        assert_eq!(values.get(values.releases[1]), FakeValue::String("x".into()));
+        assert_eq!(values.get(values.releases[2]), FakeValue::Int(count));
         for input in &values.releases {
             assert_eq!(values.cell_owners[&(input.as_ptr() as usize)], 0);
         }
