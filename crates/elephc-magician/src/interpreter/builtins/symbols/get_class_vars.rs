@@ -88,31 +88,74 @@ fn eval_dynamic_class_vars_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = EvalArrayBuilder::assoc(values, 0)?;
-    let mut emitted_keys = HashSet::new();
-    if let Some(enum_decl) = context.enum_decl(class_name) {
-        result.string("name", |values| values.null())?;
-        emitted_keys.insert(String::from("name"));
-        if enum_decl.backing_type().is_some() {
-            result.string("value", |values| values.null())?;
-            emitted_keys.insert(String::from("value"));
-        }
-    }
-    for class in context.class_chain(class_name).into_iter().rev() {
+    let mut entries = match context.class_native_parent_name(class_name) {
+        Some(parent) => eval_runtime_class_var_entries(&parent, context, values)?,
+        None => Vec::new(),
+    };
+    for class in context.class_chain(class_name) {
         for property in class.properties() {
-            if property.is_virtual() || emitted_keys.contains(property.name())
-                || validate_eval_member_access(class.name(), property.visibility(), context)
-                    .is_err()
+            if property.is_virtual()
+                || validate_eval_member_access(class.name(), property.visibility(), context).is_err()
             {
                 continue;
             }
-            result.string(property.name(), |values| {
-                eval_class_vars_property_default_value(class.name(), property, context, values)
-            })?;
-            emitted_keys.insert(property.name().to_string());
+            let entry = ClassVarEntry {
+                name: property.name().to_string(),
+                is_static: property.is_static(),
+                default: ClassVarDefault::Eval(class.name().to_string(), property.clone()),
+            };
+            if let Some(slot) = entries.iter_mut().find(|slot| slot.name == entry.name) {
+                *slot = entry;
+            } else {
+                entries.push(entry);
+            }
         }
     }
+    let mut result = EvalArrayBuilder::assoc(values, 0)?;
+    if let Some(enum_decl) = context.enum_decl(class_name) {
+        result.string("name", |values| values.null())?;
+        if enum_decl.backing_type().is_some() {
+            result.string("value", |values| values.null())?;
+        }
+    }
+    append_class_var_entries(&mut result, entries, context)?;
     Ok(result.finish())
+}
+
+/// Stores one visible property and its default's lexical owner before result allocation.
+struct ClassVarEntry {
+    name: String,
+    is_static: bool,
+    default: ClassVarDefault,
+}
+
+/// Keeps native defaults distinct from eval expressions until their declaration scope is entered.
+enum ClassVarDefault {
+    Eval(String, EvalClassProperty),
+    Native { runtime_class: String, declaring_class: String },
+}
+
+/// Emits instance defaults before static defaults, retaining inherited declaration order.
+fn append_class_var_entries<V: RuntimeValueOps>(
+    result: &mut EvalArrayBuilder<'_, V>,
+    entries: Vec<ClassVarEntry>,
+    context: &mut ElephcEvalContext,
+) -> Result<(), EvalStatus> {
+    for entry in entries.iter().filter(|entry| !entry.is_static)
+        .chain(entries.iter().filter(|entry| entry.is_static))
+    {
+        result.string(&entry.name, |values| match &entry.default {
+            ClassVarDefault::Eval(owner, property) => {
+                eval_class_vars_property_default_value(owner, property, context, values)
+            }
+            ClassVarDefault::Native { runtime_class, declaring_class } => {
+                eval_runtime_class_var_default_value(
+                    runtime_class, declaring_class, &entry.name, context, values,
+                )
+            }
+        })?;
+    }
+    Ok(())
 }
 
 /// Builds `get_class_vars()` for an eval-declared trait.
@@ -148,37 +191,48 @@ fn eval_runtime_class_vars_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let entries = eval_runtime_class_var_entries(class_name, context, values)?;
+    let mut result = EvalArrayBuilder::assoc(values, entries.len())?;
+    append_class_var_entries(&mut result, entries, context)?;
+    Ok(result.finish())
+}
+
+/// Collects native property metadata for direct introspection or an eval subclass's inherited slots.
+fn eval_runtime_class_var_entries(
+    class_name: &str,
+    context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<ClassVarEntry>, EvalStatus> {
     let property_names = values.reflection_property_names(class_name)?;
     let declared_names = eval_runtime_string_array_to_vec(property_names, values);
     values.release(property_names)?;
     let declared_names = declared_names?;
-    let mut result = EvalArrayBuilder::assoc(values, declared_names.len())?;
+    let mut entries = Vec::new();
     let mut emitted_keys = HashSet::new();
     for property_name in declared_names {
         if emitted_keys.contains(&property_name) {
             continue;
         }
-        let Some((declaring_class, visibility, _is_static)) =
-            eval_runtime_property_access_metadata(class_name, &property_name, result.values())?
+        let Some((declaring_class, visibility, is_static)) =
+            eval_runtime_property_access_metadata(class_name, &property_name, values)?
         else {
             continue;
         };
         if validate_eval_member_access(&declaring_class, visibility, context).is_err() {
             continue;
         }
-        if result.values().reflection_property_flags(class_name, &property_name)?
+        if values.reflection_property_flags(class_name, &property_name)?
             .is_some_and(|flags| flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL != 0)
         {
             continue;
         }
-        result.string(&property_name, |values| {
-            eval_runtime_class_var_default_value(
-                class_name, &declaring_class, &property_name, context, values,
-            )
-        })?;
+        entries.push(ClassVarEntry {
+            name: property_name.clone(), is_static,
+            default: ClassVarDefault::Native { runtime_class: class_name.to_string(), declaring_class },
+        });
         emitted_keys.insert(property_name);
     }
-    Ok(result.finish())
+    Ok(entries)
 }
 
 /// Materializes one eval-declared property default for `get_class_vars()`.

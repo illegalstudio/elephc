@@ -9,6 +9,54 @@
 
 use crate::support::*;
 
+/// Eval subclasses retain native defaults, child overrides, visibility, and instance/static order.
+#[test]
+fn test_core_class_vars_eval_subclass_includes_native_parent_defaults() {
+    let source = r#"<?php
+class NativeVarsAncestor {
+    public int $base = 1;
+    public int $shared = 2;
+    protected int $guard = 3;
+    private int $hidden = 4;
+    public static int $s = 5;
+}
+$source = 'class EvalVarsMiddle extends NativeVarsAncestor {
+    public int $shared = 20;
+    public int $child = 6;
+    public static int $extra = 7;
+}
+class EvalVarsLeaf extends EvalVarsMiddle {
+    public int $tail = 8;
+    public function inspect(): void {
+        $vars = get_class_vars(self::class);
+        echo count($vars), ":", $vars["guard"], ":", isset($vars["hidden"]) ? "bad" : "private";
+    }
+}
+$vars = get_class_vars(EvalVarsLeaf::class);
+echo implode(",", array_keys($vars)), "|", implode(",", $vars), "|";
+$callback = get_class_vars(...);
+echo $callback(EvalVarsLeaf::class) === $vars ? "F" : "bad";
+echo call_user_func("get_class_vars", EvalVarsLeaf::class) === $vars ? "C|" : "bad";
+(new EvalVarsLeaf())->inspect();' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "base,shared,child,tail,s,extra|1,20,6,8,5,7|FC|7:3:private");
+}
+
+/// Pure eval inheritance uses the same declaration order as AOT without sorting away differences.
+#[test]
+fn test_core_class_vars_eval_defaults_preserve_inheritance_order() {
+    let body = r#"
+class OrderedVarsParent { public static int $s = 9; public int $first = 1; public int $shared = 2; }
+class OrderedVarsChild extends OrderedVarsParent { public int $shared = 3; public int $last = 4; }
+$vars = get_class_vars(OrderedVarsChild::class);
+echo implode(",", array_keys($vars)), ":", implode(",", $vars);
+"#;
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php $source = '{quoted}' . ' // ' . $argc; eval($source);");
+    assert_eq!(compile_and_run(&source), "first,shared,last,s:1,3,4,9");
+}
+
 /// Private parent slots cannot supply defaults for the same-named visible child property.
 #[test]
 fn test_core_class_vars_private_parent_shadow_uses_visible_default() {
