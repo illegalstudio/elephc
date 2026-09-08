@@ -3,6 +3,13 @@
 final class CycleNode
 {
     public $next = null;
+    public string $label = "cycle";
+
+    public function __destruct()
+    {
+        // The peer's properties stay readable while the cycle is being collected.
+        echo "Releasing ", $this->next->label, "\n";
+    }
 }
 
 gc_disable();

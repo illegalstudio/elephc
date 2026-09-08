@@ -65,7 +65,7 @@ pub(super) extern "C" fn release_object_children(identity: u64) {
         let children = object_owners().lock().ok()
             .and_then(|mut owners| owners.remove(&identity));
         if let Some(children) = children { release_children(children); }
-        crate::ffi::dynamic_destructors::forget_released_closure(identity);
+        crate::ffi::dynamic_destructors::forget_released_object(identity);
     });
 }
 

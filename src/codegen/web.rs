@@ -156,6 +156,7 @@ fn emit_core_handler_reset(emitter: &mut Emitter) {
 /// Restores request-local cycle-collector controls and counters to process-start defaults.
 fn emit_gc_state_reset(emitter: &mut Emitter) {
     emitter.comment("reset cycle collector controls and counters for the next request");
+    abi::emit_call_label(emitter, "__rt_gc_drop_pins");
     abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
     abi::emit_store_reg_to_symbol(
         emitter,
@@ -165,6 +166,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
     );
     for symbol in [
         "_gc_collecting",
+        "_gc_freeing_unreachable",
         "_gc_release_suppressed",
         "_gc_runs",
         "_gc_collected",

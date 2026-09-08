@@ -15,7 +15,8 @@ use crate::codegen_support::emit::Emitter;
 /// This is a three-pass mark-sweep collector tailored to PHP array/hash/object storage on the managed heap:
 /// - **Pass 1 (clear):** clears the transient reachable bit on every live heap block while preserving kind, value_type, and heap marker bits.
 /// - **Pass 2 (root scan):** finds externally rooted nodes by recounting incoming heap edges for each candidate; nodes whose refcount exceeds incoming edges are marked reachable via `__rt_gc_mark_reachable`.
-/// - **Pass 3 (free):** frees every still-unreachable live refcounted node by dispatching to `__rt_array_free_deep`, `__rt_hash_free_deep`, `__rt_mixed_free_deep`, or `__rt_object_free_deep`.
+/// - **Destructor phase:** pins candidate nodes, runs destructors, and repeats root analysis before reclaiming data.
+/// - **Final sweep:** frees still-unreachable nodes through the array, hash, Mixed, and object deep-free helpers.
 ///
 /// Re-entry is guarded by the `_gc_collecting` flag — nested collection attempts are silently skipped.
 ///
@@ -47,7 +48,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 64");                                         // reserve aligned collector locals, including the result counter
     emitter.instruction("call __rt_gc_collector_begin");                        // start timing this complete collector pass
 
-    // -- capture heap bounds once for the current collection pass --
+    // -- refresh heap bounds after destructor callbacks have mutated the graph --
+    emitter.label("__rt_gc_collect_cycles_recount");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
     emitter.instruction("mov QWORD PTR [rbp - 8], r8");                         // save the heap base so every collector pass can restart from the same managed heap window
     crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
@@ -67,7 +69,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10d, r10d");                                     // is this heap block currently live?
     emitter.instruction("jz __rt_gc_collect_cycles_clear_next");                // free-list blocks already keep transient GC metadata cleared
     emitter.instruction("mov r11, QWORD PTR [r8 + 8]");                         // load the full kind word with any stale x86_64 reachable metadata
-    emitter.instruction("mov rcx, 0xffffffff0000ffff");                         // preserve the high-word heap marker and low 16 bits while clearing the transient x86_64 mark range
+    emitter.instruction("mov rcx, 0xffffffff0006ffff");                         // preserve heap marker, storage, completed destructors, and pins while clearing marks
     emitter.instruction("and r11, rcx");                                        // clear the x86_64 transient reachable metadata while preserving kind and value_type bits
     emitter.instruction("mov QWORD PTR [r8 + 8], r11");                         // persist the cleared x86_64 kind word back into the heap header
     emitter.label("__rt_gc_collect_cycles_clear_next");
@@ -266,6 +268,10 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_root_compare");
     emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the current candidate heap header after the nested incoming-edge rescan clobbered caller-saved registers
     emitter.instruction("mov r10d, DWORD PTR [r8 + 4]");                        // reload the candidate refcount after the nested full-heap incoming-edge recount
+    emitter.instruction("mov rcx, QWORD PTR [r8 + 8]");                         // inspect the candidate's artificial snapshot owner
+    emitter.instruction("shr rcx, 18");                                         // move the snapshot-pin bit into the low bit
+    emitter.instruction("and ecx, 1");                                          // isolate the one temporary collector owner
+    emitter.instruction("sub r10, rcx");                                        // snapshot pins are not external PHP roots
     emitter.instruction("cmp r10, QWORD PTR [rbp - 48]");                       // does this candidate still have an external reference beyond heap-internal edges?
     emitter.instruction("jbe __rt_gc_collect_cycles_root_next");                // no — refcount less than or equal to incoming edges means the node is only heap-rooted
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the candidate user pointer before marking it reachable from an external root
@@ -279,8 +285,14 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // persist the next candidate heap header for the outer root scan
     emitter.instruction("jmp __rt_gc_collect_cycles_root_loop");                // continue looking for externally rooted graph nodes
 
-    // -- pass 3: free every still-unreachable live refcounted node --
+    // -- run protected destructors and recount, then sweep the final unreachable graph --
     emitter.label("__rt_gc_collect_cycles_free_init");
+    emitter.instruction("call __rt_gc_destructors");                            // run destructors only after pinning all of their candidate data
+    emitter.instruction("test rax, rax");                                       // did user code mutate the graph during a destructor pass?
+    emitter.instruction("jnz __rt_gc_collect_cycles_recount");                  // re-evaluate real roots before sweeping any candidate
+    emitter.instruction("call __rt_gc_unpin_reachable");                        // surviving nodes retain only their actual PHP owners
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_freeing_unreachable");
+    emitter.instruction("mov QWORD PTR [r8], 1");                               // suppress child decrements only while sweeping doomed nodes
     emitter.instruction("call __rt_gc_free_begin");                             // start timing graph reclamation separately
     emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the heap base before starting the unreachable-node free scan
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // restart the outer scan pointer at the heap base for the free pass
@@ -339,6 +351,8 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_gc_collect_cycles_free_loop");                // continue scanning the initial heap window for unreachable graph nodes
 
     emitter.label("__rt_gc_collect_cycles_finish");
+    emitter.instruction("call __rt_gc_drop_pins");                              // release snapshot chunks without reading reclaimed PHP headers
+    crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_gc_freeing_unreachable", 0);
     emitter.instruction("call __rt_gc_collector_end");                          // accumulate collector and graph-free phase durations
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the number of unreachable graph nodes reclaimed
     emitter.instruction("test rax, rax");                                       // did this pass reclaim any graph nodes?

@@ -9,6 +9,7 @@
 //! - `__rt_object_free_deep` calls `__rt_call_object_destructor` at the top of the
 //!   deep-free path, so a destructor runs exactly once when refcount hits zero,
 //!   before any property payloads are released.
+//! - The collector calls it while graph snapshots keep cyclic peers alive, before sweeping.
 //!
 //! Key details:
 //! - `$this` is passed in the first integer argument register and is borrowed by
@@ -20,9 +21,10 @@
 //! - Re-entrancy guard: before calling the destructor, bit 31 of the 32-bit
 //!   refcount is set. A balanced `$tmp = $this;`/scope-exit inside the body then
 //!   decrements from `0x8000_0001` back to `0x8000_0000` instead of reaching zero,
-//!   so it cannot re-enter the free path and double-free the object. Resurrecting
-//!   `$this` (storing it to outlive the destructor) is unsupported: the object is
-//!   still freed.
+//!   so it cannot re-enter the free path and double-free the object. Ordinary
+//!   last-owner resurrection remains unsupported. Collector snapshots instead
+//!   clear the temporary guard after the callback, recount real owners, and keep
+//!   completed destructors marked separately in heap-kind bit 17.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -47,6 +49,8 @@ fn emit_call_object_destructor_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_call_object_destructor");
 
     emitter.instruction("cbz x0, __rt_call_object_destructor_ret");             // null receiver → nothing to destruct
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // inspect persistent cycle-collector destructor completion
+    emitter.instruction("tbnz x9, #17, __rt_call_object_destructor_ret");       // later sweeps and final releases must not rerun completed PHP code
     emitter.instruction("ldr w9, [x0, #-12]");                                  // w9 = object refcount (header offset -12)
     emitter.instruction("tbnz w9, #31, __rt_call_object_destructor_ret");       // destruction already in progress → never run twice
     abi::emit_symbol_address(emitter, "x10", "_elephc_eval_dynamic_object_destruct_fn");
@@ -99,6 +103,8 @@ fn emit_call_object_destructor_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rdi, rdi");                                       // null receiver → nothing to destruct
     emitter.instruction("jz __rt_call_object_destructor_ret");                  // skip the lookup for a null object
+    emitter.instruction("test QWORD PTR [rdi - 8], 0x20000");                   // inspect persistent cycle-collector destructor completion
+    emitter.instruction("jnz __rt_call_object_destructor_ret");                 // later sweeps and last-owner releases never rerun completed PHP code
     emitter.instruction("mov eax, DWORD PTR [rdi - 12]");                       // eax = object refcount (header offset -12)
     emitter.instruction("test eax, 0x80000000");                                // is destruction already in progress?
     emitter.instruction("jnz __rt_call_object_destructor_ret");                 // never run a destructor twice

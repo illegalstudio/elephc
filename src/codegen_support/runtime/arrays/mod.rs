@@ -110,6 +110,7 @@ mod eval_array_references;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
+mod gc_destructors;
 mod gc_eval_object_children;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
@@ -391,6 +392,8 @@ pub use hash_clone_shallow::emit_hash_clone_shallow;
 pub use gc_collect_cycles::emit_gc_collect_cycles;
 /// Emit garbage collection cycle collector.
 pub use gc_control::emit_gc_control;
+/// Emits pinned destructor snapshots for both cycle collectors.
+pub use gc_destructors::emit_gc_destructors;
 /// Emits eval-owned object GC edges and final-release dispatch.
 pub use gc_eval_object_children::emit_gc_eval_object_children;
 /// Emit garbage collection control and status helpers.

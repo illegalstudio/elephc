@@ -8,7 +8,7 @@
 //!
 //! Key details:
 //! - The runtime owns object storage and calls this hook while the object is still
-//!   intact but already in the final-release path.
+//!   intact, either in a pinned collector pass or in the final-release path.
 //! - Registry values are stored as integer addresses so the global mutex remains
 //!   `Sync`; every use revalidates null pointers and ABI version.
 
@@ -96,13 +96,13 @@ pub(crate) fn dynamic_object_owner_context(identity: u64) -> Option<*mut ElephcE
     Some(context as *mut ElephcEvalContext)
 }
 
-/// Drops closure metadata after receiver release, preserving foreign context leases through destructors.
+/// Drops final object metadata after receiver release, preserving it during collector destructors.
 #[cfg(not(test))]
-pub(crate) fn forget_released_closure(identity: u64) {
+pub(crate) fn forget_released_object(identity: u64) {
     let Some(context) = dynamic_object_owner_context(identity) else { return; };
     // Context teardown unregisters its identities before freeing the context.
     let Some(context) = (unsafe { context.as_mut() }) else { return; };
-    if context.abi_version() == ABI_VERSION && context.closure_object_target(identity).is_some() {
+    if context.abi_version() == ABI_VERSION {
         context.forget_dynamic_object(identity);
     }
 }
@@ -156,14 +156,14 @@ unsafe fn dynamic_object_destruct_inner(object: *mut RuntimeCell) -> u64 {
     let object_cell = match ElephcRuntimeOps::object_from_raw(object) {
         Ok(object_cell) => object_cell,
         Err(_) => {
-            context.forget_dynamic_object(identity);
             return 1;
         }
     };
     let destruct_result =
         eval_dynamic_destructor_for_object_cell(identity, object_cell, context, &mut values);
     let release_result = values.release(object_cell);
-    context.forget_dynamic_object(identity);
+    // The collector can still retain or resurrect the receiver. Final runtime
+    // release, not destructor execution, retires its class and property metadata.
     match (destruct_result, release_result) {
         (Ok(true), Ok(())) => 1,
         (Ok(false), Ok(())) => 0,

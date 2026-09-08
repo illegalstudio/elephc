@@ -45,6 +45,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("ldr x10, [x9]");                                       // load the current collector-active flag
     emitter.instruction("cbnz x10, __rt_gc_collect_cycles_done");               // nested collection attempts are ignored
+    emitter.instruction("mov x10, #1");                                         // suppress nested collection throughout destructor callbacks
+    emitter.instruction("str x10, [x9]");                                       // distinguish collection activity from the later sweep phase
 
     // -- set up a stack frame for the collector state --
     // Stack layout:
@@ -64,7 +66,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #64");                                    // set up the collector frame pointer
     emitter.instruction("bl __rt_gc_collector_begin");                          // start timing this complete collector pass
 
-    // -- capture heap bounds once for the initial passes --
+    // -- refresh heap bounds after destructor callbacks have mutated the graph --
+    emitter.label("__rt_gc_collect_cycles_recount");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("str x9, [sp, #16]");                                   // save the heap base for later scans
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
@@ -84,7 +87,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_clear_next");          // free-list blocks keep kind=0 and need no reset
     emitter.instruction("ldr x13, [x9, #8]");                                   // load the full kind word with any stale GC metadata
-    emitter.instruction("mov x14, #0xffff");                                    // preserve the low 16 bits (kind + array value_type)
+    emitter.instruction("mov x14, #0xffff");                                    // preserve kind and indexed element storage
+    emitter.instruction("movk x14, #6, lsl #16");                               // preserve destructor completion and snapshot pins while clearing marks
     emitter.instruction("and x13, x13, x14");                                   // clear the transient incoming-count and reachable bits
     emitter.instruction("str x13, [x9, #8]");                                   // persist the reset kind word
     emitter.label("__rt_gc_collect_cycles_clear_next");
@@ -297,6 +301,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #7");                                         // is this an array of mixed boxes?
     emitter.instruction("b.ne __rt_gc_collect_cycles_root_next");               // scalar/string arrays are never cycle-collector candidates
     emitter.label("__rt_gc_collect_cycles_root_refcounted");
+    emitter.instruction("ubfx x15, x13, #18, #1");                              // inspect the artificial snapshot owner marker
+    emitter.instruction("sub w12, w12, w15");                                   // pins are not external PHP roots
     emitter.instruction("uxtw x12, w12");                                       // widen the 32-bit refcount for comparison
     emitter.instruction("lsr x13, x13, #32");                                   // move the incoming heap-edge count into the low bits
     emitter.instruction("cmp x12, x13");                                        // does this block keep at least one external reference?
@@ -313,12 +319,15 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #0]");                                    // save the next heap header scan pointer
     emitter.instruction("b __rt_gc_collect_cycles_root_loop");                  // continue looking for externally-rooted nodes
 
-    // -- pass 4: free every live refcounted block that was never marked reachable --
+    // -- run protected destructors and recount, then sweep the final unreachable graph --
     emitter.label("__rt_gc_collect_cycles_free_init");
+    emitter.instruction("bl __rt_gc_destructors");                              // protect candidate data and run destructors before reclamation
+    emitter.instruction("cbnz x0, __rt_gc_collect_cycles_recount");             // observe mutations and resurrection before choosing doomed nodes
+    emitter.instruction("bl __rt_gc_unpin_reachable");                          // surviving nodes keep only their real PHP owners
     emitter.instruction("bl __rt_gc_free_begin");                               // start timing graph reclamation separately
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
-    emitter.instruction("mov x10, #1");                                         // mark the collector as active while reclaiming blocks
-    emitter.instruction("str x10, [x9]");                                       // store collector-active = 1
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_freeing_unreachable");
+    emitter.instruction("mov x10, #1");                                         // suppress nested decrements of doomed graph children during sweep
+    emitter.instruction("str x10, [x9]");                                       // keep sweep-only suppression separate from collector reentry
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the heap base
     emitter.instruction("str x9, [sp, #0]");                                    // restart the free scan at the heap base
     emitter.label("__rt_gc_collect_cycles_free_loop");
@@ -386,6 +395,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning for unreachable graph nodes
 
     emitter.label("__rt_gc_collect_cycles_finish");
+    emitter.instruction("bl __rt_gc_drop_pins");                                // dispose snapshots without touching already reclaimed PHP nodes
+    crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_gc_freeing_unreachable", 0);
     emitter.instruction("bl __rt_gc_collector_end");                            // accumulate collector and graph-free phase durations
     emitter.instruction("ldr x0, [sp, #80]");                                   // return the number of unreachable graph nodes reclaimed
     emitter.instruction("cbz x0, __rt_gc_collect_cycles_stats_done");           // empty passes do not count as productive collector runs

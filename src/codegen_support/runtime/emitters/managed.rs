@@ -168,6 +168,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_gc_eval_object_children(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_control(emitter);
+    arrays::emit_gc_destructors(emitter);
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);

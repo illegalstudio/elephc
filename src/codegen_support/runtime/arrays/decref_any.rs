@@ -45,10 +45,10 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     // -- inspect the full kind word so collector-only flags stay visible --
     emitter.instruction("ldr x11, [x0, #-8]");                                  // load the full 64-bit kind word from the heap header
 
-    // -- during cycle collection, skip unreachable refcounted children because they will be freed directly --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_gc_collecting");
-    emitter.instruction("ldr x12, [x12]");                                      // load the collector-active flag
-    emitter.instruction("cbz x12, __rt_decref_any_dispatch");                   // ordinary release path when no collection is running
+    // -- only the final sweep skips graph children that it reclaims directly --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_gc_freeing_unreachable");
+    emitter.instruction("ldr x12, [x12]");                                      // load sweep-only child-release suppression
+    emitter.instruction("cbz x12, __rt_decref_any_dispatch");                   // destructor callbacks still balance real graph owners
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
@@ -121,6 +121,18 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r11, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
     emitter.instruction(&format!("cmp r11d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that the payload belongs to the x86_64 heap wrapper before dispatching a release helper
     emitter.instruction("jne __rt_decref_any_done");                            // foreign/static pointers must be ignored by the uniform x86_64 release dispatcher
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_gc_freeing_unreachable");
+    emitter.instruction("cmp QWORD PTR [r11], 0");                              // destructor callbacks use ordinary balanced reference counts
+    emitter.instruction("je __rt_decref_any_dispatch");                         // skip collector suppression outside the final sweep
+    emitter.instruction("test r10, 0x10000");                                   // surviving graph children still need ordinary decrements
+    emitter.instruction("jnz __rt_decref_any_dispatch");                        // preserve normal cleanup for reachable children
+    emitter.instruction("mov r11, r10");                                        // keep the full kind word until dispatch
+    emitter.instruction("and r11d, 0xff");                                      // inspect the concrete heap kind
+    emitter.instruction("cmp r11d, 2");                                         // strings and raw allocations are not swept graph nodes
+    emitter.instruction("jb __rt_decref_any_dispatch");                         // release non-graph children through their ordinary helper
+    emitter.instruction("cmp r11d, 5");                                         // the collector directly reclaims array, hash, object, and Mixed nodes
+    emitter.instruction("jbe __rt_decref_any_done");                            // never decrement already reclaimed or independently pinned doomed nodes
+    emitter.label("__rt_decref_any_dispatch");
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for the concrete release dispatch
     emitter.instruction("cmp r10, 1");                                          // does this heap-backed payload own a persisted string buffer?
     emitter.instruction("je __rt_decref_any_string");                           // strings release through heap_free_safe on x86_64
