@@ -491,7 +491,7 @@ eval($source);
 }
 
 /// Measures repeated eval cleanup with native declarations kept outside the opaque source.
-fn assert_core_eval_collection_cleanup_with_native(native: &str, setup: &str, body: &str) {
+pub(super) fn assert_core_eval_collection_cleanup_with_native(native: &str, setup: &str, body: &str) {
     let outstanding = |iterations| {
         let repeated = body.repeat(iterations);
         let source = format!(r#"<?php
