@@ -312,6 +312,20 @@ fn assert_core_eval_collection_cleanup(setup: &str, body: &str) {
     assert_core_eval_collection_cleanup_with_native("", setup, body);
 }
 
+/// Reflection adapters may return a fallback operand, which must outlive source argument cleanup.
+#[test]
+fn test_core_eval_reflection_default_result_survives_argument_cleanup() {
+    let source = r#"<?php
+class NativeMissingStaticValue {}
+$source = '$reflection = new ReflectionClass("NativeMissingStaticValue");
+$result = $reflection->getStaticPropertyValue("missing", "fallback");
+$reuse = "overwritten";
+echo $result;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "fallback");
+}
+
 /// Measures repeated eval cleanup with native declarations kept outside the opaque source.
 fn assert_core_eval_collection_cleanup_with_native(native: &str, setup: &str, body: &str) {
     let outstanding = |iterations| {

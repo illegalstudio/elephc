@@ -97,7 +97,11 @@ pub(in crate::interpreter) fn with_eval_method_arguments<V: RuntimeValueOps>(
     ) -> Result<RuntimeCellHandle, EvalStatus>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let arguments = eval_method_call_arg_values(args, context, scope, values)?;
-    let result = consume(arguments.clone(), context, scope, values);
+    let borrowed_arguments = arguments.iter().cloned().map(|mut argument| {
+        argument.value = argument.value.borrowed();
+        argument
+    }).collect();
+    let result = consume(borrowed_arguments, context, scope, values);
     let result = result.and_then(|value| {
         if value.is_borrowed() { values.retain(value) } else { Ok(value) }
     });

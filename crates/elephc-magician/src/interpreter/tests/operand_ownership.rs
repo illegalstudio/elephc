@@ -23,7 +23,7 @@ fn retained_object_lease_is_not_a_final_release() {
         Some(values.object_identity(object).unwrap()));
 }
 
-/// Caller cleanup acquires an independent borrowed return before releasing its temporary input.
+/// Adapters forwarding an argument receive a borrow that survives cleanup through a retained return.
 #[test]
 fn method_arguments_keep_borrowed_returns_alive() {
     let mut values = FakeOps::default();
@@ -32,7 +32,10 @@ fn method_arguments_keep_borrowed_returns_alive() {
     let args = [EvalCallArg::positional(EvalExpr::Const(EvalConst::Int(7)))];
     let result = with_eval_method_arguments(
         &args, &mut context, &mut scope, &mut values,
-        |arguments, _, _, _| Ok(arguments[0].value.borrowed()),
+        |arguments, _, _, _| {
+            assert!(arguments[0].value.is_borrowed());
+            Ok(arguments[0].value)
+        },
     ).unwrap();
     assert_eq!(values.retains, vec![result]);
     assert_eq!(values.releases, vec![result]);
