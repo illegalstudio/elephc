@@ -9,6 +9,36 @@
 
 use crate::support::*;
 
+/// Unset eval overrides invalidate the native slot, and later writes initialize both views again.
+#[test]
+fn test_core_eval_native_typed_property_unset_keeps_both_views_uninitialized() {
+    let source = r#"<?php
+class NativeTypedUnsetParent {
+    public int $value = 3;
+    protected string $label = "parent";
+    public function nativeValue(): int { return $this->value; }
+    public function nativeLabel(): string { return $this->label; }
+}
+$source = 'class EvalTypedUnsetChild extends NativeTypedUnsetParent {
+    public int $value = 9;
+    protected string $label = "child";
+    public function clearLabel(): void { unset($this->label); }
+}
+$child = new EvalTypedUnsetChild();
+echo $child->nativeValue(), ":", $child->nativeLabel(), "|";
+unset($child->value);
+unset($child->value);
+try { echo $child->value; } catch (Error $error) { echo "eval-unset|"; }
+try { echo $child->nativeValue(); } catch (Error $error) { echo "native-unset|"; }
+$child->clearLabel();
+try { echo $child->nativeLabel(); } catch (Error $error) { echo "label-unset|"; }
+$child->value = 15;
+echo $child->value, ":", $child->nativeValue();' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "9:child|eval-unset|native-unset|label-unset|15:15");
+}
+
 /// Same-named eval fields never overwrite private native parent fields or expose private access.
 #[test]
 fn test_core_eval_native_private_parent_property_has_distinct_child_storage() {

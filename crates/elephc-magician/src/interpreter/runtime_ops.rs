@@ -267,6 +267,16 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
+    /// Uninitializes an authorized typed native slot, returning false for eval-only storage.
+    /// The native owner is released after the slot receives its uninitialized marker.
+    fn unset_native_typed_property(
+        &mut self,
+        _object: RuntimeCellHandle,
+        _property: &str,
+    ) -> Result<bool, EvalStatus> {
+        Ok(false)
+    }
+
     /// Reads a generated/AOT static property through the generated bridge.
     fn static_property_get(
         &mut self,

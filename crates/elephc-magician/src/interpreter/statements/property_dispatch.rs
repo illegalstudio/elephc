@@ -375,15 +375,18 @@ pub(super) fn execute_property_stmt(
                 values,
             )?;
             Ok(EvalControl::None)
-        }        EvalStmt::UnsetProperty { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            eval_property_unset_result(object, property, context, values)?;
+        }
+        EvalStmt::UnsetProperty { object, property } => {
+            with_eval_void_operands(&[object], context, scope, values, |args, context, _, values| {
+                eval_property_unset_result(args[0], property, context, values)
+            })?;
             Ok(EvalControl::None)
         }
         EvalStmt::UnsetDynamicProperty { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            let property = eval_dynamic_member_name(property, context, scope, values)?;
-            eval_property_unset_result(object, &property, context, values)?;
+            with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                eval_property_unset_result(args[0], &property, context, values)
+            })?;
             Ok(EvalControl::None)
         }
         EvalStmt::UnsetStaticProperty {

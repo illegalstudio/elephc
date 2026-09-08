@@ -27,6 +27,7 @@ use crate::types::{ClassInfo, PhpType};
 
 mod dynamic_properties;
 mod private_shadow;
+mod unset;
 use dynamic_properties::{
     emit_dynamic_property_get_fallback, emit_dynamic_property_set_fallback,
     emit_property_hash_slot_helper,
@@ -60,6 +61,7 @@ pub(super) fn emit_eval_property_helpers(
     emit_property_get_helper(module, emitter, data, &slots);
     emit_property_is_initialized_helper(module, emitter, data, &slots);
     emit_property_set_helper(module, emitter, data, &slots);
+    unset::emit_property_unset_helper(module, emitter, data, &slots);
     emit_property_hash_slot_helper(module, emitter);
 }
 
@@ -711,18 +713,18 @@ fn emit_x86_64_property_scope_check(
 /// Returns ARM64 stack offsets for the class-scope pointer and length.
 fn aarch64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" => (32, 40),
+        "get" | "is_initialized" | "unset" => (32, 40),
         "set" => (40, 48),
-        _ => unreachable!("eval property helpers only use get/set/is_initialized modes"),
+        _ => unreachable!("unknown eval property bridge operation"),
     }
 }
 
 /// Returns x86_64 frame offsets for the class-scope pointer and length.
 fn x86_64_scope_offsets(mode: &str) -> (usize, usize) {
     match mode {
-        "get" | "is_initialized" => (40, 48),
+        "get" | "is_initialized" | "unset" => (40, 48),
         "set" => (48, 56),
-        _ => unreachable!("eval property helpers only use get/set/is_initialized modes"),
+        _ => unreachable!("unknown eval property bridge operation"),
     }
 }
 

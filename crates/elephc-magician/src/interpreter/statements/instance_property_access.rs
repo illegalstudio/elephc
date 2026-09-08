@@ -636,6 +636,12 @@ pub(in crate::interpreter) fn eval_property_unset_result(
                 eval_instance_property_storage_name(&declaring_class, &property);
             context.remove_dynamic_property_alias(identity, &storage_property_name);
             context.mark_dynamic_property_uninitialized(identity, &storage_property_name);
+            if eval_with_native_property_storage_scope(
+                &object_class_name, &storage_property_name, context, values,
+                |values| values.unset_native_typed_property(object, &storage_property_name),
+            )? {
+                return Ok(());
+            }
             let null = values.null()?;
             let written = eval_with_native_property_storage_scope(
                 &object_class_name, &storage_property_name, context, values,

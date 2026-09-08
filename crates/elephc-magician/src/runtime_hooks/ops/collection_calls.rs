@@ -141,6 +141,20 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Uninitializes a native typed slot without assigning a coerced PHP null value.
+    fn unset_native_typed_property(
+        &mut self,
+        object: RuntimeCellHandle,
+        property: &str,
+    ) -> Result<bool, EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        Ok(unsafe {
+            __elephc_eval_value_typed_property_unset(
+                object.as_ptr(), property.as_ptr(), property.len() as u64, scope_ptr, scope_len,
+            )
+        } != 0)
+    }
+
     /// Reads an AOT static property through the generated user helper.
     fn static_property_get(
         &mut self,

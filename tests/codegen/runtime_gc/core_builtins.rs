@@ -333,6 +333,17 @@ echo eval($source);
     assert_eq!(repeated_live, once_live, "eval collection retained per-call storage: {body}");
 }
 
+/// Repeated typed-property unset releases the old nested payload without releasing it twice.
+#[test]
+fn test_core_eval_native_typed_unset_releases_nested_property_payloads() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeUnsetPayload { public mixed $payload; }",
+        "class EvalUnsetPayload extends NativeUnsetPayload { public mixed $payload; }
+         $box = new EvalUnsetPayload();",
+        "$box->payload = [1, [2, 3]]; unset($box->payload); unset($box->payload);",
+    );
+}
+
 /// Both nested constant categories and their boxed operands are released with the outer result.
 #[test]
 fn test_core_eval_categorized_constants_release_nested_results() {
