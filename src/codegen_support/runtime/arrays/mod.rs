@@ -50,6 +50,7 @@ mod array_map;
 mod array_map_mixed;
 mod array_map_str;
 mod array_merge;
+mod array_merge_boxed;
 mod array_merge_into;
 mod array_merge_into_refcounted;
 mod array_merge_recursive;
@@ -277,6 +278,8 @@ pub use array_map_mixed::emit_array_map_mixed;
 pub use array_map_str::{emit_array_map_str, emit_array_map_str_owned};
 /// Emit array merge helper.
 pub use array_merge::emit_array_merge;
+/// Emits key-preserving merges of borrowed packed or associative PHP arrays.
+pub use array_merge_boxed::emit_array_merge_boxed;
 /// Emit array merge-into helper.
 pub use array_merge_into::emit_array_merge_into;
 pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;

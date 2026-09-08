@@ -84,6 +84,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_shift(emitter);
     arrays::emit_array_unshift(emitter);
     arrays::emit_array_merge(emitter);
+    arrays::emit_array_merge_boxed(emitter);
     arrays::emit_array_merge_refcounted(emitter);
     arrays::emit_array_slice(emitter);
     arrays::emit_array_slice_refcounted(emitter);
