@@ -82,12 +82,6 @@ const ALLOWED_MISALIGNED_CALLS: &[(&str, &str)] = &[
         "__rt_heap_alloc",
         "calls __rt_heap_debug_validate_free_list (--heap-debug builds only), integer-only",
     ),
-    (
-        "__rt_heap_free",
-        "calls __rt_object_handle_release and __rt_heap_debug_validate_free_list, both \
-         integer-only. NOTE this is one frame below __rt_mixed_free_deep, but it is reached \
-         AFTER the resource destructor has already run, never before it",
-    ),
     // -- PRIVATE SUBROUTINES sharing the exported helper's `rbp` frame: they take no frame of
     //    their own (they read the caller's `[rbp - N]` spills directly), so the `call` between
     //    two of them is always 8 bytes off. Only reachable through their own section's

@@ -10,6 +10,27 @@
 
 use crate::support::*;
 
+/// Recycled temporary arrays do not inherit PHP reference targets from previous allocations.
+#[test]
+fn test_core_eval_freed_array_reference_metadata_does_not_alias_new_values() {
+    let source = r#"<?php
+$source = '$value = 11;
+for ($i = 0; $i < 24; $i++) {
+    $references = [&$value];
+    $references[0] = 12;
+    unset($references);
+    $copy = [99];
+    echo $copy[0], ":", $value, "|";
+    unset($copy);
+    $value = 11;
+}' . ' // ' . $argc;
+eval($source);
+"#;
+    let output = compile_and_run_capture(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "99:12|".repeat(24), "{}", output.stderr);
+}
+
 /// Native functions, methods, and constructors consume the value captured before later arguments.
 #[test]
 fn test_core_eval_native_arguments_survive_later_source_replacement() {

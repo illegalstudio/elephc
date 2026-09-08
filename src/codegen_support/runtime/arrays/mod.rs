@@ -106,6 +106,7 @@ mod decref_array;
 mod decref_hash;
 mod decref_mixed;
 mod decref_object;
+mod eval_array_references;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_control;

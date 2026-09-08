@@ -104,7 +104,7 @@ impl ElephcRuntimeOps {
     }
 }
 
-/// Installs the eval dynamic object destructor callback into runtime data.
+/// Installs eval destruction, object-edge, and array-reference retirement callbacks.
 #[cfg(not(test))]
 pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
     unsafe {
@@ -112,6 +112,7 @@ pub(crate) unsafe fn install_dynamic_object_destructor_hook(callback: usize) {
         externs::__elephc_eval_install_object_owner_hooks(
             object_owners::object_gc_child as *const () as usize,
             object_owners::release_object_children as *const () as usize,
+            crate::ffi::array_references::retire_array_reference_cell_callback as *const () as usize,
         );
     }
 }

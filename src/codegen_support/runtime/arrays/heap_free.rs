@@ -69,6 +69,7 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address across the handle release
     emitter.instruction("bl __rt_object_handle_release");                       // hand this block's PHP object handle back to the LIFO pool
     emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address
+    super::eval_array_references::emit_eval_array_reference_retirement(emitter);
 
     // -- debug mode: validate the free list before mutating it --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
@@ -337,11 +338,11 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r11, [r10 + r11]");                                // compute the current live heap end from the base plus bump offset
     emitter.instruction("cmp rax, r11");                                        // does the candidate freed pointer lie at or beyond the live heap end?
     emitter.instruction("jae __rt_heap_free_debug_checked");                    // pointers outside the live heap window cannot participate in heap-debug double-free checks
-    emitter.instruction("sub rsp, 16");                                         // reserve one aligned stack slot to preserve the user pointer across the nested call
+    emitter.instruction("sub rsp, 24");                                         // preserve the pointer and align the nested call from frameless entry parity
     emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the user pointer across the free-list validator call
     emitter.instruction("call __rt_heap_debug_validate_free_list");             // verify the ordered free list and cached small bins before mutating them
     emitter.instruction("mov rax, QWORD PTR [rsp]");                            // restore the user pointer after the free-list validator call returns
-    emitter.instruction("add rsp, 16");                                         // release the temporary validator spill slot
+    emitter.instruction("add rsp, 24");                                         // release the validator spill and restore frameless entry parity
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the current heap kind word before deciding whether a zero refcount is stale or legitimately being freed
     emitter.instruction("mov r11, r10");                                        // preserve the full heap kind word while isolating the ownership marker for the stale-free check
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker from the packed kind metadata
@@ -361,8 +362,11 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
 
     // -- return this block's PHP object handle to the pool before the storage goes --
     // Single release chokepoint for object identity, matching the AArch64 path: the
-    // helper preserves every register including rax, so no spill is needed here.
+    // helper preserves every register including rax; only call alignment needs padding.
+    emitter.instruction("sub rsp, 8");                                          // align the nested handle-release call from frameless entry parity
     emitter.instruction("call __rt_object_handle_release");                     // hand this block's PHP object handle back to the LIFO pool
+    emitter.instruction("add rsp, 8");                                          // restore entry parity before the optional eval metadata callback
+    super::eval_array_references::emit_eval_array_reference_retirement(emitter);
 
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
@@ -536,7 +540,9 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag after mutating free-list or cached-bin state
     emitter.instruction("test r8, r8");                                         // should the x86_64 runtime validate the updated free state now?
     emitter.instruction("jz __rt_heap_free_count");                             // skip the post-mutation validator when heap-debug mode is disabled
+    emitter.instruction("sub rsp, 8");                                          // align the post-mutation validator call from frameless entry parity
     emitter.instruction("call __rt_heap_debug_validate_free_list");             // verify the ordered free list and cached bins after insertion, coalescing, and trimming
+    emitter.instruction("add rsp, 8");                                          // restore entry parity before allocator accounting and return
 
     // -- increment gc_frees counter --
     emitter.label("__rt_heap_free_count");

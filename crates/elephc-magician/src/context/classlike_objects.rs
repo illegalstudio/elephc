@@ -407,8 +407,15 @@ impl ElephcEvalContext {
         key: EvalArrayReferenceKey,
         target: EvalReferenceTarget,
     ) -> Option<EvalReferenceTarget> {
-        self.array_element_aliases
-            .insert((array.as_ptr() as usize, key), target)
+        self.prune_retired_array_aliases();
+        let address = array.as_ptr() as usize;
+        let aliases = self.array_element_aliases.entry(address).or_insert_with(|| {
+            let lifetime = crate::ffi::array_references::register_array_reference_cell(
+                address, &self.array_reference_retirements,
+            );
+            EvalArrayReferenceAliases { targets: HashMap::new(), lifetime }
+        });
+        aliases.targets.insert(key, target)
     }
 
     /// Returns the persistent reference target bound to one runtime array element slot.
@@ -418,7 +425,9 @@ impl ElephcEvalContext {
         key: &EvalArrayReferenceKey,
     ) -> Option<&EvalReferenceTarget> {
         self.array_element_aliases
-            .get(&(array.as_ptr() as usize, key.clone()))
+            .get(&(array.as_ptr() as usize))
+            .filter(|alias| alias.lifetime.is_live())
+            .and_then(|alias| alias.targets.get(key))
     }
 
     /// Copies element references into a fresh COW array, omitting an explicitly removed key.
@@ -428,14 +437,30 @@ impl ElephcEvalContext {
         destination: RuntimeCellHandle,
         removed: Option<&EvalArrayReferenceKey>,
     ) {
-        let aliases = self.array_element_aliases.iter()
-            .filter(|((array, key), _)| *array == source.as_ptr() as usize && Some(key) != removed)
-            .map(|((_, key), target)| (key.clone(), target.clone()))
-            .collect::<Vec<_>>();
+        self.prune_retired_array_aliases();
+        let targets = self.array_element_aliases.get(&(source.as_ptr() as usize))
+            .filter(|aliases| aliases.lifetime.is_live())
+            .map(|aliases| aliases.targets.iter()
+                .filter(|(key, _)| Some(*key) != removed)
+                .map(|(key, target)| (key.clone(), target.clone()))
+                .collect::<HashMap<_, _>>())
+            .unwrap_or_default();
         let destination = destination.as_ptr() as usize;
-        self.array_element_aliases.retain(|(array, _), _| *array != destination);
-        for (key, target) in aliases {
-            self.array_element_aliases.insert((destination, key), target);
+        self.array_element_aliases.remove(&destination);
+        if !targets.is_empty() {
+            let lifetime = crate::ffi::array_references::register_array_reference_cell(
+                destination, &self.array_reference_retirements,
+            );
+            self.array_element_aliases.insert(destination, EvalArrayReferenceAliases { targets, lifetime });
+        }
+    }
+
+    /// Drops only retired allocation records, preserving any newer allocation at the same address.
+    fn prune_retired_array_aliases(&mut self) {
+        for address in self.array_reference_retirements.take() {
+            if self.array_element_aliases.get(&address).is_some_and(|aliases| !aliases.lifetime.is_live()) {
+                self.array_element_aliases.remove(&address);
+            }
         }
     }
 

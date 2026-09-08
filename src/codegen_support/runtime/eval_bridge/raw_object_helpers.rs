@@ -57,7 +57,7 @@ pub(super) fn emit_x86_64_install_dynamic_object_destructor_hook(emitter: &mut E
     emit_install_object_owner_hooks(emitter);
 }
 
-/// Installs C callbacks for GC-visible closure receiver edges and final object release.
+/// Installs C callbacks for object edges, final object release, and array-reference retirement.
 fn emit_install_object_owner_hooks(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_install_object_owner_hooks");
     match emitter.target.arch {
@@ -66,22 +66,26 @@ fn emit_install_object_owner_hooks(emitter: &mut Emitter) {
             emitter.instruction("str x0, [x9]");                                // store the child enumeration callback
             abi::emit_symbol_address(emitter, "x9", "_elephc_eval_object_release_fn");
             emitter.instruction("str x1, [x9]");                                // store the final ownership release callback
+            abi::emit_symbol_address(emitter, "x9", "_elephc_eval_array_reference_retire_fn");
+            emitter.instruction("str x2, [x9]");                                // store the boxed array-reference retirement callback
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_gc_child_fn");
             emitter.instruction("mov QWORD PTR [r10], rdi");                    // store the child enumeration callback
             abi::emit_symbol_address(emitter, "r10", "_elephc_eval_object_release_fn");
             emitter.instruction("mov QWORD PTR [r10], rsi");                    // store the final ownership release callback
+            abi::emit_symbol_address(emitter, "r10", "_elephc_eval_array_reference_retire_fn");
+            emitter.instruction("mov QWORD PTR [r10], rdx");                    // store the boxed array-reference retirement callback
         }
     }
-    emitter.instruction("ret");                                                 // return after installing both optional callbacks
+    emitter.instruction("ret");                                                 // return after installing all optional ownership callbacks
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// C callback installers retain platform symbol mangling and both owner hooks on every target.
+    /// Callback installers retain platform symbol mangling and all three owner hooks on every target.
     #[test]
     fn eval_object_owner_installer_has_all_target_c_abi_symbols() {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -96,6 +100,12 @@ mod tests {
             assert_eq!(output.matches(&format!("{symbol}:")).count(), 1, "{name}");
             assert!(output.contains("_elephc_eval_object_gc_child_fn"), "{name}");
             assert!(output.contains("_elephc_eval_object_release_fn"), "{name}");
+            assert!(output.contains("_elephc_eval_array_reference_retire_fn"), "{name}");
+            let third_arg_store = match target.arch {
+                Arch::AArch64 => "str x2, [x9]",
+                Arch::X86_64 => "mov QWORD PTR [r10], rdx",
+            };
+            assert!(output.contains(third_arg_store), "{name}");
         }
     }
 }

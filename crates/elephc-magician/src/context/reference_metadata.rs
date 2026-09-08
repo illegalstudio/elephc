@@ -206,6 +206,13 @@ pub enum EvalArrayReferenceKey {
     String(Vec<u8>),
 }
 
+/// Reference metadata that is valid only while its original boxed array allocation is live.
+#[derive(Clone)]
+pub(crate) struct EvalArrayReferenceAliases {
+    pub(super) targets: HashMap<EvalArrayReferenceKey, EvalReferenceTarget>,
+    pub(super) lifetime: crate::ffi::array_references::ArrayReferenceCellLifetime,
+}
+
 /// PHP internal array pointer state tracked per runtime array cell.
 ///
 /// Runtime cells do not carry PHP's `zend_array` internal position, so eval
