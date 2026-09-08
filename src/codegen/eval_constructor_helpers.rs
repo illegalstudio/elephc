@@ -515,23 +515,18 @@ fn emit_x86_64_constructor_exception_boundary_pop(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
 }
 
-/// Emits a C helper that transfers `_exc_value` ownership to magician.
+/// Transfers the pending native exception as one owned box through the versioned eval ABI.
 fn emit_take_pending_throwable_helper(module: &Module, emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- eval bridge: take pending throwable ---");
-    label_c_global(module, emitter, "__elephc_eval_value_take_pending_throwable");
-    match module.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0);
-            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-            emitter.instruction("ret");                                         // return the pending Throwable pointer to magician
-        }
-        Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0);
-            abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
-            emitter.instruction("ret");                                         // return the pending Throwable pointer to magician
-        }
-    }
+    label_c_global(module, emitter, "__elephc_eval_value_take_pending_throwable_v2");
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_eval_no_pending_throwable");
+    abi::emit_jump(emitter, "__rt_throwable_box_owned");
+    emitter.label("__rt_eval_no_pending_throwable");
+    abi::emit_return(emitter);
 }
 
 /// Emits ARM64 dispatch for compact builtin Throwable constructors.
@@ -1774,6 +1769,22 @@ fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
 
 #[cfg(test)]
 mod catalog_tests {
+    /// Pending native exceptions transfer an owned box, while an empty slot remains a null result.
+    #[test]
+    fn pending_throwable_bridge_transfers_boxed_ownership_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let module = super::Module::new(target);
+            let mut emitter = super::Emitter::new(target);
+            super::emit_take_pending_throwable_helper(&module, &mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_take_pending_throwable_v2")), "{name}");
+            assert_eq!(asm.matches("__rt_throwable_box_owned").count(), 1, "{name}");
+            assert!(asm.find("_exc_value").unwrap() < asm.find("__rt_throwable_box_owned").unwrap(), "{name}");
+            assert!(asm.contains("__rt_eval_no_pending_throwable:"), "{name}");
+        }
+    }
+
     /// Eval construction selects the previous owner from the concrete layout on every target.
     #[test]
     fn throwable_previous_initialization_preserves_ordinary_boxed_storage() {

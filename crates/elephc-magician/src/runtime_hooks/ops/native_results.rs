@@ -27,13 +27,13 @@ impl ElephcRuntimeOps {
             })
     }
 
-    /// Takes a native Throwable that escaped through the generated constructor bridge.
+    /// Takes the owned Throwable box transferred by a generated native call boundary.
     pub(super) fn take_pending_native_throwable(&self) -> Option<RuntimeCellHandle> {
         let thrown = unsafe { __elephc_eval_value_take_pending_throwable() };
         if thrown.is_null() {
             None
         } else {
-            Self::object_from_raw(thrown).ok()
+            Some(RuntimeCellHandle::from_raw(thrown))
         }
     }
 

@@ -58,13 +58,12 @@ pub(super) fn emit_branch_if_eval_status(ctx: &mut FunctionContext<'_>, status: 
     }
 }
 
-/// Publishes an eval-thrown Throwable and enters the normal runtime unwinder.
+/// Transfers an eval-owned Throwable box into native exception ownership before unwinding.
 pub(super) fn emit_eval_throw_current(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_ERROR_OFFSET);
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    let object_reg = eval_mixed_unbox_low_payload_reg(ctx);
-    abi::emit_store_reg_to_symbol(ctx.emitter, object_reg, "_exc_value", 0);
+    abi::emit_call_label(ctx.emitter, "__rt_throwable_take_boxed");
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0);
     abi::emit_call_label(ctx.emitter, "__rt_throw_current");
 }
 

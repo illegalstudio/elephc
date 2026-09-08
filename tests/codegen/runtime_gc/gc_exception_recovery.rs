@@ -37,6 +37,31 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Native exceptions caught and rethrown by opaque eval balance both ownership transfers.
+#[test]
+fn test_core_throwable_native_eval_round_trip_releases_both_box_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function throwNativePreviousOwner(): void { throw new RuntimeException("inner", 13); }
+function checkNativeEvalPreviousOwner(string $source): void {
+    try { eval($source); }
+    catch (Exception $outer) {
+        $previous = $outer->getPrevious();
+        unset($outer);
+        if ($previous !== null) { echo $previous->getMessage(), ":", $previous->getCode(), "|"; }
+        else { echo "missing|"; }
+        unset($previous);
+    }
+}
+$source = 'try { throwNativePreviousOwner(); } catch (RuntimeException $inner) { throw new Exception("outer", 7, $inner); } // ' . $argc;
+checkNativeEvalPreviousOwner($source);
+checkNativeEvalPreviousOwner($source);
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "inner:13|inner:13|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 const DECLARATIONS: &str = r#"
 class GcThrowCycle {
     public mixed $self = null;
