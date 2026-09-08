@@ -18,6 +18,7 @@ mod destructor_throw;
 mod initialize;
 mod matches;
 mod rethrow_current;
+mod ref_cell_release;
 mod previous;
 mod throw_current;
 mod uncaught_report;
@@ -35,6 +36,7 @@ pub use matches::emit_exception_matches;
 // The fixed-data emitter defines the string this helper prints; both must agree on its bytes.
 pub(crate) use matches::{ABSENT_MESSAGE, ABSENT_MESSAGE_SYMBOL};
 pub use rethrow_current::emit_rethrow_current;
+pub use ref_cell_release::emit_local_ref_cell_release;
 pub use previous::emit_throwable_previous;
 pub use throw_current::emit_throw_current;
 pub use uncaught_report::emit_report_uncaught_exception;

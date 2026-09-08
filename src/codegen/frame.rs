@@ -867,22 +867,23 @@ fn emit_ref_cell_owner_epilogue_cleanup_for(
     }
 }
 
-/// Releases the owner slot's ref-cell pointer when it is non-null, then clears the owner.
+/// Detaches a non-null ref-cell owner before releasing its cell, including throwing payloads.
 fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
     let done = ctx.next_label("ref_cell_owner_cleanup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset, "x11");
             ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
-            abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
+            abi::emit_reg_move(ctx.emitter, "x0", "x9");
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            abi::emit_release_local_ref_cell(ctx.emitter, "x0", ty);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
             ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
             ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
-            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
         }
     }
     ctx.emitter.label(&done);

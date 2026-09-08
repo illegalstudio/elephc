@@ -173,7 +173,7 @@ pub(super) fn lower_release_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: 
     release_local_ref_cell_owner(ctx, owner_slot, &inst.result_php_type)
 }
 
-/// Releases the owned ref-cell pointer in an owner slot and clears that owner.
+/// Clears an owned ref-cell slot before retiring its cell so exception cleanup cannot retry it.
 pub(super) fn release_local_ref_cell_owner(
     ctx: &mut FunctionContext<'_>,
     owner_slot: LocalSlotId,
@@ -185,15 +185,16 @@ pub(super) fn release_local_ref_cell_owner(
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", owner_offset, "x11");
             ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip release when this variable no longer owns a fallback ref-cell
-            abi::emit_release_local_ref_cell(ctx.emitter, "x9", value_ty);
+            abi::emit_reg_move(ctx.emitter, "x0", "x9");
             abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
+            abi::emit_release_local_ref_cell(ctx.emitter, "x0", value_ty);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", owner_offset, "r10");
             ctx.emitter.instruction("test r11, r11");                           // check whether this variable owns a fallback ref-cell
             ctx.emitter.instruction(&format!("je {}", done));                   // skip release when the fallback owner is already clear
-            abi::emit_release_local_ref_cell(ctx.emitter, "r11", value_ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, owner_offset);
+            abi::emit_release_local_ref_cell(ctx.emitter, "r11", value_ty);
         }
     }
     ctx.emitter.label(&done);
@@ -477,4 +478,3 @@ pub(super) fn reject_multiword_ref_param_local(ty: &PhpType, action: &str) -> Re
     let _ = (ty, action);
     Ok(())
 }
-

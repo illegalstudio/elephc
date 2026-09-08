@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Refcounted values require balanced retain/release behavior around borrowed and owned temporaries.
+//! - Local reference-cell retirement must finish freeing the cell before a payload destructor escapes.
 
 use crate::codegen_support::callable_descriptor;
 use crate::codegen_support::emit::Emitter;
@@ -14,7 +15,7 @@ use crate::codegen_support::platform::Arch;
 use crate::types::PhpType;
 
 use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
-use super::frame::{emit_load_from_address, load_at_offset, store_at_offset};
+use super::frame::{load_at_offset, store_at_offset};
 use super::registers::{float_result_reg, int_result_reg, string_result_regs};
 use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 
@@ -99,55 +100,42 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 /// - `Callable` → `__rt_callable_descriptor_release`
 /// - Non-refcounted types → no-op
 pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
+    if let Some(entry) = refcount_release_helper(ty) {
+        emit_call_label(emitter, entry);
+    }
+}
+
+/// Selects the unary release helper for one concrete or boxed heap representation.
+fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
     match ty {
-        PhpType::Mixed | PhpType::Union(_) => {
-            emit_call_label(emitter, "__rt_decref_mixed"); // release mixed cell reference
-        }
-        PhpType::Array(_) => {
-            emit_call_label(emitter, "__rt_decref_array"); // release indexed array reference
-        }
-        PhpType::AssocArray { .. } => {
-            emit_call_label(emitter, "__rt_decref_hash"); // release associative array reference
-        }
-        PhpType::Object(_) => {
-            emit_call_label(emitter, "__rt_decref_object"); // release object reference
-        }
-        PhpType::Iterable => {
-            emit_call_label(emitter, "__rt_decref_any"); // release the erased iterable payload by inspecting its heap kind
-        }
-        PhpType::Callable => {
-            callable_descriptor::emit_release_current_descriptor(emitter);
-        }
-        _ => {}
+        PhpType::Mixed | PhpType::Union(_) => Some("__rt_decref_mixed"),
+        PhpType::Array(_) => Some("__rt_decref_array"),
+        PhpType::AssocArray { .. } => Some("__rt_decref_hash"),
+        PhpType::Object(_) => Some("__rt_decref_object"),
+        PhpType::Iterable => Some("__rt_decref_any"),
+        PhpType::Callable => Some("__rt_callable_descriptor_release"),
+        _ => None,
     }
 }
 
 /// Releases the payload of a local reference-counted cell and the cell itself.
 ///
-/// Pushes `cell_reg` as a temporary, then:
-/// - For `PhpType::Str`: loads the string payload and calls `__rt_heap_free_safe`.
-/// - For other refcounted types: loads the heap pointer and calls `emit_decref_if_refcounted`.
-/// Pops the preserved cell pointer and calls `__rt_heap_free` to release the cell.
-/// Used during function epilogue for local variables that held borrowed or owned refs.
+/// The runtime contains payload exceptions, frees the cell, then propagates the exception.
+/// Scalar payloads use a null release entry; strings and heap values use their typed helper.
 pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
-    emit_push_reg(emitter, cell_reg); // preserve the owned reference cell pointer while releasing its payload
-    match value_ty.codegen_repr() {
-        PhpType::Str => {
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            emit_call_label(emitter, "__rt_heap_free_safe"); // release the owned string payload stored inside the local reference cell
-        }
-        ty if ty.is_refcounted() => {
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            emit_decref_if_refcounted(emitter, &ty);
-        }
-        PhpType::Callable => {
-            emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
-            callable_descriptor::emit_release_current_descriptor(emitter);
-        }
-        _ => {}
+    let entry = match value_ty.codegen_repr() {
+        PhpType::Str => Some("__rt_heap_free_safe"),
+        ty => refcount_release_helper(&ty),
+    };
+    let arg0 = super::int_arg_reg_name(emitter.target, 0);
+    let arg1 = super::int_arg_reg_name(emitter.target, 1);
+    super::emit_reg_move(emitter, arg1, cell_reg);
+    if let Some(entry) = entry {
+        super::emit_symbol_address(emitter, arg0, entry);
+    } else {
+        emit_load_int_immediate(emitter, arg0, 0);
     }
-    emit_pop_reg(emitter, int_result_reg(emitter)); // restore the owned reference cell pointer for heap release
-    emit_call_label(emitter, "__rt_heap_free"); // release the local reference cell itself
+    emit_call_label(emitter, "__rt_local_ref_cell_release");
 }
 
 /// Loads a value of the given type from a stack frame offset into result registers.

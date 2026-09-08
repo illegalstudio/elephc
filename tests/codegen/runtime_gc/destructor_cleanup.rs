@@ -10,6 +10,31 @@
 
 use crate::support::*;
 
+/// A throwing last-owner destructor must not leak the promoted local reference cell.
+#[test]
+fn test_core_throwing_reference_payload_retires_its_local_cell() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReferenceCellThrowingValue {
+    public int $value = 7;
+    public static RuntimeException $error;
+    public function __destruct() { throw self::$error; }
+}
+function retireThrowingReferenceCell(): void {
+    $value = new ReferenceCellThrowingValue();
+    $alias =& $value;
+    echo $alias->value, ":";
+}
+ReferenceCellThrowingValue::$error = new RuntimeException("reference");
+for ($i = 0; $i < 3; $i++) {
+    try { retireThrowingReferenceCell(); }
+    catch (RuntimeException $error) { echo $error->getMessage(), "|"; unset($error); }
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "7:reference|7:reference|7:reference|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Every container finishes sibling cleanup and preserves both exceptions before freeing its storage.
 #[test]
 fn test_core_throwing_destructors_release_objects_arrays_hashes_and_callable_captures() {

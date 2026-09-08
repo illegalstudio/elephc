@@ -10,6 +10,30 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Object aliases allocate a fallback cell whose epilogue uses bounded retirement on every ABI.
+#[test]
+fn promoted_object_local_uses_exception_safe_cell_retirement_on_all_targets() {
+    let source = r#"<?php
+        class CellOwnerValue { public int $value = 7; }
+        function retire_cell_owner(): void {
+            $value = new CellOwnerValue();
+            $alias =& $value;
+            echo $alias->value;
+        }
+        retire_cell_owner();
+    "#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "retire_cell_owner").unwrap();
+        assert!(function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::RefCell), "{name}");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_local_ref_cell_release"), "{name}");
+    }
+}
+
 /// Nested Mixed writes detach local/reference roots and borrow separated property cells on every target.
 #[test]
 fn nested_mixed_write_roots_preserve_storage_ownership_on_all_targets() {

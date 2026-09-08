@@ -217,6 +217,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_throwable_initialize(emitter);
     exceptions::emit_exception_chain(emitter);
     exceptions::emit_cleanup_invoke(emitter);
+    exceptions::emit_local_ref_cell_release(emitter);
     exceptions::emit_throwable_boxed_owners(emitter);
     exceptions::emit_destructor_throw(emitter);
 
