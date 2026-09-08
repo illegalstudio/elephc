@@ -5,8 +5,8 @@
 //! - `crate::ir_lower::tests`.
 //!
 //! Key details:
-//! - Verifies the Phase 03 ownership surface emits explicit acquire/release
-//!   markers for refcounted local values before the future EIR backend exists.
+//! - Verifies explicit acquire/release markers and exception-safe frame cleanup
+//!   for refcounted locals across every supported native target.
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
@@ -58,7 +58,7 @@ fn executable_frames_publish_non_escaping_local_cleanup_on_all_targets() {
         let callback = "_fn_abort_owned_frame__cdylib_exception_cleanup";
         assert!(asm.matches(callback).count() >= 2, "{name}: publish and define the executable frame callback");
         let body = asm.split(&format!("{callback}:")).nth(1).unwrap();
-        let body = body.split("@endfn").next().unwrap();
+        let body = body.split("\n.globl ").next().unwrap();
         assert!(body.contains("__rt_cleanup_preserve_exception"), "{name}: destructor throws cannot skip later locals");
     }
 }

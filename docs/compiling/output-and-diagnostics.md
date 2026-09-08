@@ -98,6 +98,9 @@ lldb ./hello   # breakpoints and backtraces resolve to hello.php lines
 
 `--debug-info` and `--source-map` compose: the first serves standard DWARF
 consumers, the second serves tools that want the richer JSON schema.
+PHP function ranges exclude native exception-cleanup callbacks. Generator source
+locations describe the coroutine body; its allocation constructor and entry
+wrapper are compiler-generated helpers, not additional PHP debug subprograms.
 
 ## Compile-time diagnostics
 

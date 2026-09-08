@@ -16,6 +16,7 @@ use crate::ir::{print_module, Terminator};
 
 mod arrays;
 mod corpus;
+mod debug_info;
 mod effects;
 mod exhaustive;
 mod ownership;

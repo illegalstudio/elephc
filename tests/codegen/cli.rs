@@ -1547,6 +1547,30 @@ greet();
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Debug builds assemble and run methods and generator bodies with separate exceptional cleanup entries.
+#[test]
+fn test_cli_debug_info_delimits_method_and_generator_cleanup_sections() {
+    let dir = make_cli_test_dir("elephc_debug_cleanup_ranges");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, r#"<?php
+function debugItems(int $value): Generator { yield $value; }
+class DebugCleanupRange {
+    public function read(int $value): int { return $value + 1; }
+    public function items(int $value): Generator { yield $value + 2; }
+}
+$object = new DebugCleanupRange();
+echo $object->read($argc), ":";
+foreach (debugItems($argc) as $value) { echo $value, ":"; }
+foreach ($object->items($argc) as $value) { echo $value; }
+"#).unwrap();
+    let output = elephc_cli_command(&dir).arg("--debug-info").arg(&php_path).output().unwrap();
+    assert!(output.status.success(), "debug compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+    let run = Command::new(dir.join("main")).output().unwrap();
+    assert!(run.status.success(), "debug binary failed: {}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "2:1:3");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Lists the symbol names `nm` reports from a linked binary's symbol table.
 /// A fully stripped executable yields an empty list: `nm` either prints
 /// nothing, reports "no symbols", or exits non-zero depending on the platform,

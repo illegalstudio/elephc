@@ -1,13 +1,13 @@
 //! Purpose:
 //! Walks EIR basic blocks in function order and delegates instruction/terminator lowering.
-//! Owns function setup for the initial Phase 04 backend path.
+//! Owns native function, method, generator, and program-entry setup.
 //!
 //! Called from:
 //! - `crate::codegen::generate_user_asm_from_ir()`.
 //!
 //! Key details:
-//! - This first backend increment supports straight-line main blocks and reports
-//!   explicit unsupported-feature errors for control flow not lowered yet.
+//! - PHP source ranges end before separately emitted cleanup helpers; generator
+//!   constructors are synthetic, while their bodies carry PHP debug locations.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
 use std::fmt::Write as _;
@@ -225,7 +225,7 @@ fn emit_user_function(
 ) -> Result<()> {
     let entry_label = user_function_entry_symbol(function);
     let synthetic = function.flags.is_synthetic || is_property_init_thunk(function);
-    emit_fn_marker(emitter, &function.name, &entry_label, synthetic);
+    emit_fn_marker(emitter, &function.name, &entry_label, synthetic || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -236,7 +236,6 @@ fn emit_user_function(
             shared,
             regalloc_linear,
         )?;
-        emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
     let layout = frame::layout_for_function(
@@ -262,8 +261,8 @@ fn emit_user_function(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     emit_endfn_marker(ctx.emitter, &function.name);
+    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     Ok(())
 }
 
@@ -392,7 +391,7 @@ fn emit_class_method(
     regalloc_linear: bool,
 ) -> Result<()> {
     let entry_label = class_method_entry_symbol(function)?;
-    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic);
+    emit_fn_marker(emitter, &function.name, &entry_label, function.flags.is_synthetic || function.flags.is_generator);
     if function.flags.is_generator {
         emit_generator_function(
             module,
@@ -403,7 +402,6 @@ fn emit_class_method(
             shared,
             regalloc_linear,
         )?;
-        emit_endfn_marker(emitter, &function.name);
         return Ok(());
     }
     let layout = frame::layout_for_function(
@@ -429,8 +427,8 @@ fn emit_class_method(
     frame::emit_function_prologue_with_label(&mut ctx, &entry_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
-    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     emit_endfn_marker(ctx.emitter, &function.name);
+    frame::emit_exception_cleanup_callback(&mut ctx, &entry_label);
     Ok(())
 }
 
@@ -473,6 +471,7 @@ fn emit_generator_function(
         )));
     }
     emit_generator_constructor(emitter, entry_label, &callback_label, &param_types);
+    emit_endfn_marker(emitter, &function.name);
     emit_generator_body(
         module,
         function,
@@ -700,6 +699,8 @@ fn emit_generator_body(
     shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
+    // PHP source locations belong to the body, not to the synthetic coroutine constructor.
+    emit_fn_marker(emitter, &function.name, body_label, function.flags.is_synthetic);
     let layout = frame::layout_for_function(
         function,
         emitter.target,
@@ -723,6 +724,7 @@ fn emit_generator_body(
     frame::emit_function_prologue_with_label(&mut ctx, body_label)?;
     emit_blocks(&mut ctx)?;
     frame::emit_function_epilogue(&mut ctx);
+    emit_endfn_marker(ctx.emitter, &function.name);
     frame::emit_exception_cleanup_callback(&mut ctx, body_label);
     Ok(())
 }
