@@ -102,6 +102,48 @@ echo eval($source);
     assert_eq!(live(5), live(1), "source argument leases or descriptor keys leaked");
 }
 
+/// Eval CUFA arguments release their lease without consuming a native Mixed return.
+#[test]
+fn test_core_eval_named_invoker_arguments_release_after_return() {
+    let live = |iterations| {
+        let calls = "$result = call_user_func_array(\"native_argument_identity\", [\"value\" => str_repeat(\"v\", 2)]); unset($result);"
+            .repeat(iterations);
+        let source = format!(r#"<?php
+function native_argument_identity(mixed $value): mixed {{ return $value; }}
+$source = '{calls} return 42;' . ' // ' . $argc;
+echo eval($source);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "42", "{}", output.stderr);
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        allocated as i128 - freed as i128
+    };
+    assert_eq!(live(5), live(1), "named invoker argument or result owners leaked");
+}
+
+/// Runtime-selected AOT descriptors balance associative argument and omitted-default owners.
+#[test]
+fn test_core_aot_named_invoker_arguments_release_after_return() {
+    let live = |iterations| {
+        let calls = "$result = call_user_func_array($callback, [\"value\" => str_repeat(\"v\", 2)]); echo $result; unset($result);"
+            .repeat(iterations);
+        let source = format!(r#"<?php
+function core_invoker_identity(mixed $value, mixed $unused = null): mixed {{ return $value; }}
+function core_invoker_other(mixed $value, mixed $unused = null): mixed {{ return $value; }}
+$callback = $argc > 1 ? core_invoker_identity(...) : core_invoker_other(...);
+{calls}
+unset($callback);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "vv".repeat(iterations), "{}", output.stderr);
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        allocated as i128 - freed as i128
+    };
+    assert_eq!(live(5), live(1), "associative descriptor argument or default owners leaked");
+}
+
 /// Ref-aware and named builtin adapters keep earlier values alive through later global replacement.
 #[test]
 fn test_core_eval_builtin_arguments_survive_later_source_replacement() {

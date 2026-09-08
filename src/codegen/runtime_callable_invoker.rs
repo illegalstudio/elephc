@@ -15,6 +15,9 @@
 //! - Exception-boundary slots use ABI frame helpers because the expanded save area pushes ARM64
 //!   offsets beyond the signed 9-bit `ldur`/`stur` immediate range.
 
+mod argument_owners;
+
+use argument_owners::InvokerArgumentOwners;
 use crate::codegen::callable_descriptor;
 use crate::codegen::callable_invoker_args::{
     emit_branch_if_mixed_arg_tag, emit_call_user_func_array_invalid_mixed_args_abort,
@@ -89,14 +92,16 @@ pub(super) struct RuntimeCallableInvoker<'a> {
 struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
+    argument_owners: InvokerArgumentOwners,
 }
 
 impl InvokerEmitContext {
     /// Creates a fresh label context for one generated invoker body.
-    fn new(invoker_label: &str) -> Self {
+    fn new(invoker_label: &str, argument_owners: InvokerArgumentOwners) -> Self {
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
+            argument_owners,
         }
     }
 
@@ -147,14 +152,16 @@ fn emit_runtime_callable_invoker_impl(
     invoker: &RuntimeCallableInvoker<'_>,
     catch_native_throws: bool,
 ) {
-    let mut ctx = InvokerEmitContext::new(invoker.label);
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
-    let frame_size = if catch_native_throws {
+    let base_frame_size = if catch_native_throws {
         INVOKER_BOUNDARY_FRAME_SIZE
     } else {
         INVOKER_FRAME_SIZE
     };
+    let argument_owners = InvokerArgumentOwners::new(base_frame_size, invoker.sig.params.len());
+    let frame_size = argument_owners.frame_size();
+    let mut ctx = InvokerEmitContext::new(invoker.label, argument_owners);
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -170,6 +177,7 @@ fn emit_runtime_callable_invoker_impl(
         abi::int_arg_reg_name(emitter.target, 0),
         INVOKER_DESCRIPTOR_OFFSET,
     );
+    ctx.argument_owners.initialize(emitter);
     if catch_native_throws {
         abi::store_at_offset(
             emitter,
@@ -202,6 +210,7 @@ fn emit_runtime_callable_invoker_impl(
         data,
     );
     emit_boxed_invoker_return(emitter, &ret_ty);
+    ctx.argument_owners.finish_return(emitter);
     if catch_native_throws {
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     }
@@ -213,6 +222,7 @@ fn emit_runtime_callable_invoker_impl(
     if catch_native_throws {
         emitter.label(&escape_label);
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+        ctx.argument_owners.release_all(emitter);
         emit_null_invoker_result(emitter);
         emit_invoker_callee_saved_restores(emitter);
         abi::emit_frame_restore(emitter, frame_size);
@@ -607,6 +617,7 @@ fn emit_loaded_indexed_array_callback_call(
             load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
             push_loaded_indexed_array_value_arg(&elem_ty, target_ty, emitter, ctx, data);
         }
+        ctx.argument_owners.record_pushed(index, &pushed_ty, emitter);
         arg_types.push(pushed_ty);
     }
 
@@ -684,6 +695,7 @@ fn emit_loaded_indexed_array_callback_call(
             wrap_pushed_value_in_ref_cell(emitter, &variadic_ty);
             arg_types.push(PhpType::Int);
         } else {
+            ctx.argument_owners.record_pushed(regular_param_count, &variadic_ty, emitter);
             arg_types.push(variadic_ty);
         }
     }
@@ -778,6 +790,7 @@ fn emit_loaded_assoc_array_callback_call(
             emitter.label(&done);
             loaded_ty
         };
+        ctx.argument_owners.record_pushed(index, &pushed_ty, emitter);
         arg_types.push(pushed_ty);
     }
 
@@ -796,6 +809,7 @@ fn emit_loaded_assoc_array_callback_call(
             wrap_pushed_value_in_ref_cell(emitter, &variadic_ty);
             arg_types.push(PhpType::Int);
         } else {
+            ctx.argument_owners.record_pushed(regular_param_count, &variadic_ty, emitter);
             arg_types.push(variadic_ty);
         }
     }
@@ -1142,20 +1156,7 @@ fn push_loaded_invoker_ref_cell_value_arg(
     data: &mut DataSection,
 ) -> PhpType {
     emit_box_loaded_invoker_ref_cell_value_as_mixed(emitter, ctx);
-    let release_mixed_after_coerce = target_ty.is_some_and(|target_ty| {
-        !matches!(target_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-            && can_coerce_result_to_type(&PhpType::Mixed, target_ty)
-    });
-    if release_mixed_after_coerce {
-        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-    }
-    let (pushed_ty, _boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
-    if release_mixed_after_coerce {
-        release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
-    }
-    abi::emit_push_result_value(emitter, &pushed_ty);
-    pushed_ty
+    push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data)
 }
 
 /// Boxes the value referenced by an invoker marker into an owned Mixed cell.
@@ -1629,6 +1630,13 @@ fn push_materialized_mixed_hash_value_arg(
     }
     let (pushed_ty, _boxed_to_mixed) =
         coerce_current_value_to_target(emitter, ctx, data, &PhpType::Mixed, target_ty);
+    // A borrowed hash cell and an unboxed container need their own invoker lease.
+    // Newly boxed Mixed results already carry that owner.
+    if FunctionSig::parameter_needs_owned_shadow(&pushed_ty, false)
+        && (!release_source_mixed_after_coerce || pushed_ty.codegen_repr() != PhpType::Mixed)
+    {
+        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
+    }
     if release_mixed_after_coerce {
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
     }
@@ -1738,11 +1746,16 @@ fn push_default_value_arg(
     data: &mut DataSection,
 ) -> PhpType {
     let source_ty = emit_default_to_result(default, target_ty, emitter, ctx, data);
-    let (pushed_ty, boxed_to_mixed) =
-        coerce_current_value_to_target(emitter, ctx, data, &source_ty, target_ty);
-    if !boxed_to_mixed {
-        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
-    }
+    let pushed_ty = if source_ty.is_refcounted()
+        && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
+        && source_ty.codegen_repr() != PhpType::Mixed
+    {
+        emit_box_current_owned_value_as_mixed(emitter, &source_ty);
+        PhpType::Mixed
+    } else {
+        // Heap defaults are newly allocated, not borrowed from the argument container.
+        coerce_current_value_to_target(emitter, ctx, data, &source_ty, target_ty).0
+    };
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
 }
