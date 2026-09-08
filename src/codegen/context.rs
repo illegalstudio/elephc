@@ -63,6 +63,8 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
     pub(super) exception_cleanup_activation: bool,
+    /// Exceptional callbacks accumulate destructor throws instead of abandoning sibling cleanup.
+    pub(super) unwinding_cleanup: bool,
     pub(super) backtrace_activation: bool,
     pub(super) backtrace_enabled: bool,
     pub(super) epilogue_emitted: bool,
@@ -135,6 +137,7 @@ impl<'a> FunctionContext<'a> {
             concat_base_offset: layout.concat_base_offset,
             exception_activation_offset: layout.exception_activation_offset,
             exception_cleanup_activation: layout.exception_cleanup_activation,
+            unwinding_cleanup: false,
             backtrace_activation: layout.backtrace_activation,
             backtrace_enabled: super::frame::module_uses_backtrace(module),
             epilogue_emitted: false,

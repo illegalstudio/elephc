@@ -243,7 +243,7 @@ fn emit_user_function(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
         frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = user_function_epilogue_symbol(function);
@@ -281,7 +281,7 @@ pub(super) fn emit_synthetic_function_with_label(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
         false,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
@@ -410,7 +410,7 @@ fn emit_class_method(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
         frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = format!("{}_epilogue", entry_label);
@@ -704,7 +704,7 @@ fn emit_generator_body(
         function,
         emitter.target,
         regalloc_linear,
-        emitter.cdylib_boundary,
+        true,
         frame::module_uses_backtrace(module) && !function.flags.is_synthetic,
     );
     let epilogue_label = format!("{}_epilogue", body_label);

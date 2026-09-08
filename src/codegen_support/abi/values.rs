@@ -105,6 +105,22 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     }
 }
 
+/// Releases a typed owner during frame unwinding without letting a destructor skip other locals.
+pub fn emit_decref_preserving_exception(emitter: &mut Emitter, ty: &PhpType) {
+    if let Some(entry) = refcount_release_helper(ty) {
+        emit_unary_cleanup_preserving_exception(emitter, entry, int_result_reg(emitter));
+    }
+}
+
+/// Calls a unary cleanup entry with an owned payload, accumulating any exception in native state.
+pub fn emit_unary_cleanup_preserving_exception(emitter: &mut Emitter, entry: &str, payload: &str) {
+    let arg0 = super::int_arg_reg_name(emitter.target, 0);
+    let arg1 = super::int_arg_reg_name(emitter.target, 1);
+    super::emit_reg_move(emitter, arg1, payload);
+    super::emit_symbol_address(emitter, arg0, entry);
+    emit_call_label(emitter, "__rt_cleanup_preserve_exception");
+}
+
 /// Selects the unary release helper for one concrete or boxed heap representation.
 fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
     match ty {
@@ -123,6 +139,20 @@ fn refcount_release_helper(ty: &PhpType) -> Option<&'static str> {
 /// The runtime contains payload exceptions, frees the cell, then propagates the exception.
 /// Scalar payloads use a null release entry; strings and heap values use their typed helper.
 pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
+    emit_local_ref_cell_cleanup(emitter, cell_reg, value_ty, false);
+}
+
+/// Retires a local reference cell during unwinding and leaves destructor exceptions pending.
+pub fn emit_release_local_ref_cell_preserving_exception(
+    emitter: &mut Emitter,
+    cell_reg: &str,
+    value_ty: &PhpType,
+) {
+    emit_local_ref_cell_cleanup(emitter, cell_reg, value_ty, true);
+}
+
+/// Stages the release entry, cell owner and propagation mode for one bounded cell retirement.
+fn emit_local_ref_cell_cleanup(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType, defer_throw: bool) {
     let entry = match value_ty.codegen_repr() {
         PhpType::Str => Some("__rt_heap_free_safe"),
         ty => refcount_release_helper(&ty),
@@ -130,6 +160,7 @@ pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_
     let arg0 = super::int_arg_reg_name(emitter.target, 0);
     let arg1 = super::int_arg_reg_name(emitter.target, 1);
     super::emit_reg_move(emitter, arg1, cell_reg);
+    emit_load_int_immediate(emitter, super::int_arg_reg_name(emitter.target, 2), i64::from(defer_throw));
     if let Some(entry) = entry {
         super::emit_symbol_address(emitter, arg0, entry);
     } else {

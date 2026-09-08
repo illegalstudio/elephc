@@ -10,6 +10,32 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// Executable PHP frames publish callbacks that contain destructor throws on every supported ABI.
+#[test]
+fn executable_frames_publish_non_escaping_local_cleanup_on_all_targets() {
+    let source = r#"<?php
+        class UnwindOwner { public int $value = 7; }
+        function abort_owned_frame(Exception $error): void {
+            $value = new UnwindOwner();
+            echo $value->value;
+            throw $error;
+        }
+        try { abort_owned_frame(new Exception("stop")); } catch (Exception $error) {}
+    "#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let callback = "_fn_abort_owned_frame__cdylib_exception_cleanup";
+        assert!(asm.matches(callback).count() >= 2, "{name}: publish and define the executable frame callback");
+        let body = asm.split(&format!("{callback}:")).nth(1).unwrap();
+        let body = body.split("@endfn").next().unwrap();
+        assert!(body.contains("__rt_cleanup_preserve_exception"), "{name}: destructor throws cannot skip later locals");
+    }
+}
+
 /// Object aliases allocate a fallback cell whose epilogue uses bounded retirement on every ABI.
 #[test]
 fn promoted_object_local_uses_exception_safe_cell_retirement_on_all_targets() {

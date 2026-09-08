@@ -10,6 +10,62 @@
 
 use crate::support::*;
 
+/// A throw to the caller releases every owned local in an ordinary native executable frame.
+#[test]
+fn test_core_native_unwind_releases_owned_frame_locals() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NativeUnwindOwner {
+    public static int $destroyed = 0;
+    public int $value = 7;
+    public function __destruct() { self::$destroyed++; }
+}
+function abortOwnedNativeFrame(Exception $exception): void {
+    $first = new NativeUnwindOwner();
+    $second = new NativeUnwindOwner();
+    echo $first->value + $second->value, ":";
+    throw $exception;
+}
+$exception = new Exception("original");
+for ($i = 0; $i < 3; $i++) {
+    try { abortOwnedNativeFrame($exception); }
+    catch (Exception $caught) { echo $caught->getMessage(), "|"; unset($caught); }
+}
+unset($exception);
+echo NativeUnwindOwner::$destroyed;
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "14:original|14:original|14:original|6", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Destructor throws during unwinding preserve the original exception and finish sibling owners.
+#[test]
+fn test_core_native_unwind_finishes_throwing_sibling_locals() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NativeUnwindFirst {
+    public function __destruct() { echo "first|"; throw new RuntimeException("first"); }
+}
+class NativeUnwindSecond {
+    public function __destruct() { echo "second|"; throw new RuntimeException("second"); }
+}
+function abortThrowingNativeFrame(): void {
+    $first = new NativeUnwindFirst();
+    $second = new NativeUnwindSecond();
+    echo get_class($first), ":", get_class($second), "|";
+    throw new Exception("original");
+}
+try { abortThrowingNativeFrame(); }
+catch (Throwable $caught) {
+    echo $caught->getMessage(), ":", $caught->getPrevious()->getMessage(), ":";
+    echo $caught->getPrevious()->getPrevious()->getMessage();
+    unset($caught);
+}
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "NativeUnwindFirst:NativeUnwindSecond|first|second|second:first:original", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A throwing last-owner destructor must not leak the promoted local reference cell.
 #[test]
 fn test_core_throwing_reference_payload_retires_its_local_cell() {

@@ -10,8 +10,8 @@
 //! - Main currently exits through the process syscall used by normal executable output.
 //! - Each frame stores the inherited concat-buffer offset so statement resets do not clobber
 //!   `_concat_buf` slices that were passed in by the caller.
-//! - Cdylib user frames publish cleanup activations so boundary-caught exceptions release
-//!   owned locals before control returns to the native host.
+//! - Executable and library PHP frames publish cleanup activations so escaping exceptions
+//!   release owned locals before control reaches the surviving catch or native host.
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,6 +34,8 @@ use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
 const FRAME_FOOTER_BYTES: usize = 16;
+// Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
+const EXCEPTION_ACTIVATION_BYTES: usize = 40;
 
 /// Symbol name for the C-callable `--web` top-level handler.
 ///
@@ -134,7 +136,7 @@ pub(super) fn layout_for_function(
     offset += 8;
     let concat_base_offset = offset;
     let exception_activation_offset = if exception_activations || backtrace_activations {
-        offset += if backtrace_activations { 40 } else { 24 };
+        offset += EXCEPTION_ACTIVATION_BYTES;
         Some(offset)
     } else {
         None
@@ -407,12 +409,12 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         Arch::X86_64 => "rbp",
     };
     abi::store_at_offset(ctx.emitter, frame_pointer, offset - 16);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    abi::store_at_offset(ctx.emitter, scratch, offset - 24);
     if ctx.backtrace_activation {
-        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
-        abi::store_at_offset(ctx.emitter, scratch, offset - 24);
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
-        abi::store_at_offset(ctx.emitter, scratch, offset - 32);
     }
+    abi::store_at_offset(ctx.emitter, scratch, offset - 32);
     abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
@@ -430,7 +432,7 @@ fn emit_exception_activation_pop(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
 
-/// Emits the cleanup callback referenced by a cdylib PHP activation record.
+/// Emits a non-escaping cleanup callback for one abandoned PHP activation.
 pub(super) fn emit_exception_cleanup_callback(
     ctx: &mut FunctionContext<'_>,
     entry_label: &str,
@@ -440,8 +442,9 @@ pub(super) fn emit_exception_cleanup_callback(
     }
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
-    ctx.emitter.comment("cdylib exceptional frame cleanup callback");
+    ctx.emitter.comment("exceptional PHP frame cleanup callback");
     ctx.emitter.label_global(&callback);
+    ctx.unwinding_cleanup = true;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve an aligned callback frame
@@ -471,6 +474,7 @@ pub(super) fn emit_exception_cleanup_callback(
             ctx.emitter.instruction("ret");                                     // return to the exception frame walker
         }
     }
+    ctx.unwinding_cleanup = false;
 }
 
 /// Retains a mutable by-value parameter so its frame slot has one callee-owned reference.
@@ -876,17 +880,26 @@ fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty:
             ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
             abi::emit_reg_move(ctx.emitter, "x0", "x9");
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-            abi::emit_release_local_ref_cell(ctx.emitter, "x0", ty);
+            emit_ref_cell_cleanup_call(ctx, "x0", ty);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
             ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
             ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
+            emit_ref_cell_cleanup_call(ctx, "r11", ty);
         }
     }
     ctx.emitter.label(&done);
+}
+
+/// Selects propagating or exception-preserving retirement for the owned reference cell.
+fn emit_ref_cell_cleanup_call(ctx: &mut FunctionContext<'_>, cell_reg: &str, ty: &PhpType) {
+    if ctx.unwinding_cleanup {
+        abi::emit_release_local_ref_cell_preserving_exception(ctx.emitter, cell_reg, ty);
+    } else {
+        abi::emit_release_local_ref_cell(ctx.emitter, cell_reg, ty);
+    }
 }
 
 /// Returns hidden owner locals that track promoted fallback ref-cells.
@@ -945,15 +958,10 @@ fn emit_eval_scope_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("eval_scope_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    if arg_reg != result_reg {
-        ctx.emitter
-            .instruction(&format!("mov {}, {}", arg_reg, result_reg)); // pass the persistent eval scope handle to the free helper
-    }
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_free");
     // The Rust scope is gone before a contained destructor exception can reenter frame cleanup.
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_handle_cleanup_call(ctx, &symbol, result_reg);
     ctx.emitter.label(&done);
 }
 
@@ -963,14 +971,20 @@ fn emit_eval_context_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
     let done = ctx.next_label("eval_context_cleanup_done");
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
-    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    if arg_reg != result_reg {
-        ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));   // pass the persistent eval context handle to the free helper
-    }
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_free");
-    abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    emit_eval_handle_cleanup_call(ctx, &symbol, result_reg);
     ctx.emitter.label(&done);
+}
+
+/// Releases a detached eval handle without allowing exceptional frame cleanup to escape early.
+fn emit_eval_handle_cleanup_call(ctx: &mut FunctionContext<'_>, symbol: &str, handle_reg: &str) {
+    if ctx.unwinding_cleanup {
+        abi::emit_unary_cleanup_preserving_exception(ctx.emitter, symbol, handle_reg);
+    } else {
+        abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), handle_reg);
+        abi::emit_call_label(ctx.emitter, symbol);
+    }
 }
 
 /// Returns hidden eval scope slots and their frame offsets.
@@ -1065,7 +1079,11 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
         }
     }
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-    abi::emit_decref_if_refcounted(ctx.emitter, ty);
+    if ctx.unwinding_cleanup {
+        abi::emit_decref_preserving_exception(ctx.emitter, ty);
+    } else {
+        abi::emit_decref_if_refcounted(ctx.emitter, ty);
+    }
     ctx.emitter.label(&done);
 }
 
