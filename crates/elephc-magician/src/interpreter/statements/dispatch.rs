@@ -51,9 +51,7 @@ pub(in crate::interpreter) fn execute_stmt(
             execute_do_while_stmt(body, condition, context, scope, values)
         }
         EvalStmt::Echo(expr) => {
-            let value = eval_expr(expr, context, scope, values)?;
-            let value = eval_string_context_value(value, context, values)?;
-            values.echo(value)?;
+            eval_echo_expr(expr, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::For {

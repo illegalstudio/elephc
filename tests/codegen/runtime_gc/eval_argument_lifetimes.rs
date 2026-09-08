@@ -331,6 +331,65 @@ echo eval($source);
     allocated as i128 - freed as i128
 }
 
+/// Repeated eval echo statements release literal and computed string cells after printing.
+#[test]
+fn test_core_eval_echo_temporary_owners_release_after_output() {
+    let live = |iterations| {
+        let operations = r#"echo "caught"; echo str_repeat("x", 2);"#.repeat(iterations);
+        let source = format!(r#"<?php
+$source = '{operations} return 42;' . ' // ' . $argc;
+echo eval($source);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, format!("{}42", "caughtxx".repeat(iterations)));
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        allocated as i128 - freed as i128
+    };
+    assert_eq!(live(5), live(1), "Echo retained temporary output cells");
+}
+
+/// Echo releases a separate __toString result while preserving the borrowed receiver's owner.
+#[test]
+fn test_core_eval_echo_tostring_result_and_receiver_owners() {
+    let live = |iterations| {
+        let operations = "echo $value;".repeat(iterations);
+        let source = format!(r#"<?php
+$source = 'class EchoOwner {{
+    public function __toString(): string {{ return str_repeat("x", 2); }}
+    public function __destruct() {{ echo "drop"; }}
+}}
+$value = new EchoOwner();
+{operations}
+echo "before:"; unset($value); return 42;' . ' // ' . $argc;
+echo eval($source);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, format!("{}before:drop42", "xx".repeat(iterations)));
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        allocated as i128 - freed as i128
+    };
+    assert_eq!(live(5), live(1), "Echo retained converted strings or receiver leases");
+}
+
+/// A failed string conversion releases the temporary receiver before propagating its exception.
+#[test]
+fn test_core_eval_echo_throwing_tostring_releases_temporary_receiver() {
+    let source = r#"<?php
+$source = 'class ThrowingEchoOwner {
+    public function __toString(): string { throw new RuntimeException("no output"); }
+    public function __destruct() { echo "drop:"; }
+}
+try { echo new ThrowingEchoOwner(); }
+catch (RuntimeException $error) { echo "caught"; unset($error); }' . ' // ' . $argc;
+eval($source);
+"#;
+    let output = compile_and_run_capture(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "drop:caught", "{}", output.stderr);
+}
+
 /// Throwable construction and destruction balance owners even when no exception is thrown.
 #[test]
 fn test_core_eval_throwable_constructor_owners_release_without_throw() {

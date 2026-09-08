@@ -11,6 +11,30 @@
 use super::super::*;
 use super::support::*;
 
+/// Echo consumes an expression temporary but preserves a variable's independent storage owner.
+#[test]
+fn echo_balances_temporary_and_borrowed_operands() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    eval_echo_expr(
+        &EvalExpr::Const(EvalConst::String("temporary".into())),
+        &mut context, &mut scope, &mut values,
+    ).unwrap();
+    assert_eq!(values.releases.len(), 1);
+    let temporary = values.releases[0];
+    assert_eq!(values.cell_owners[&(temporary.as_ptr() as usize)], 0);
+
+    let stored = values.string("stored").unwrap();
+    scope.set("value", stored, ScopeCellOwnership::Owned);
+    eval_echo_expr(
+        &EvalExpr::LoadVar("value".into()), &mut context, &mut scope, &mut values,
+    ).unwrap();
+    assert_eq!(values.cell_owners[&(stored.as_ptr() as usize)], 1);
+    assert_eq!(values.retains, vec![stored]);
+    assert_eq!(values.releases, vec![temporary, stored]);
+}
+
 /// String repetition consumes temporary inputs even when a negative count rejects the call.
 #[test]
 fn string_repeat_releases_operands_on_success_and_failure() {

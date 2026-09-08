@@ -10,6 +10,23 @@
 
 use super::*;
 
+/// Prints a borrowed operand and releases its temporary owner and any separate string conversion.
+pub(in crate::interpreter) fn eval_echo_expr(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    with_eval_void_operands(&[expr], context, scope, values, |args, context, _, values| {
+        let value = eval_string_context_value(args[0].borrowed(), context, values)?;
+        if value == args[0] {
+            values.echo(value)
+        } else {
+            with_eval_value_lease(value, context, values, |value, _, values| values.echo(value))
+        }
+    })
+}
+
 /// Applies a unary operation while consuming its source and any synthetic zero operand.
 pub(in crate::interpreter) fn eval_unary_expr(
     op: EvalUnaryOp,
