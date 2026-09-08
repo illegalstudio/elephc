@@ -504,7 +504,7 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
                 values,
             )
         } else {
-            eval_reflection_aot_instance_property_get_value(
+            eval_reflection_aot_instance_property_get_raw_value(
                 &declaring_class,
                 &property_name,
                 object,
@@ -539,7 +539,7 @@ pub(in crate::interpreter) fn eval_reflection_property_raw_value_result(
                 values,
             )?;
         } else {
-            eval_reflection_aot_instance_property_set_value(
+            eval_reflection_aot_instance_property_set_raw_value(
                 &declaring_class,
                 &property_name,
                 object,

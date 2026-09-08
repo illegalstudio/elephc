@@ -10,6 +10,83 @@
 
 use crate::support::*;
 
+/// Native, native-child, and eval-child receivers execute actual hooks but not similarly named user methods.
+#[test]
+fn test_core_eval_native_property_hooks_dispatch_on_every_receiver_kind() {
+    let source = r#"<?php
+class NativeHookAccess {
+    private int $base = 40;
+    public int $value = 2 {
+        get { echo "g"; return $this->value + 1; }
+        set { echo "s"; $this->value = $value * 2; }
+    }
+    public int $virtual { get => $this->base + 2; }
+    public int $sink { set { echo "v", $value; } }
+    public int $plain = 1;
+    public function __propget_plain(): int { echo "bad"; return 99; }
+}
+class NativeHookAccessChild extends NativeHookAccess {}
+$source = 'class EvalHookAccessChild extends NativeHookAccess {}
+foreach ([new NativeHookAccess(), new NativeHookAccessChild(), new EvalHookAccessChild()] as $object) {
+    echo $object->value, ":";
+    $object->value = 4;
+    echo $object->value, ":", $object->virtual, ":";
+    $object->sink = 8;
+    echo ":", $object->plain, "|";
+}' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "g3:sg9:42:v8:1|g3:sg9:42:v8:1|g3:sg9:42:v8:1|");
+}
+
+/// Ordinary native ReflectionProperty value calls execute hooks while raw value calls bypass them.
+#[test]
+fn test_core_eval_native_reflection_distinguishes_hooks_from_raw_storage() {
+    let source = r#"<?php
+class NativeReflectedHook {
+    public int $value = 2 {
+        get => $this->value + 10;
+        set { echo "s"; $this->value = $value * 3; }
+    }
+}
+$source = '$object = new NativeReflectedHook();
+$property = new ReflectionProperty("NativeReflectedHook", "value");
+echo $property->getValue($object), ":";
+$property->setRawValue($object, 4);
+echo $property->getRawValue($object), ":", $property->getValue($object), ":";
+$property->setValue($object, 5);
+echo $property->getRawValue($object), ":", $property->getValue($object);' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "12:4:14:s15:25");
+}
+
+/// Failed native hooks propagate catchable exceptions, restore visibility, and preserve old backing values.
+#[test]
+fn test_core_eval_native_property_hook_failures_restore_caller_scope() {
+    let source = r#"<?php
+class NativeFailingHook {
+    private int $secret = 9;
+    public int $value = 2 {
+        get => $this->value;
+        set { if ($value < 0) { throw new Exception("negative"); } $this->value = $value; }
+    }
+    public int $readOnly { get => 8; }
+    public int $writeOnly { set {} }
+}
+$source = '$object = new NativeFailingHook();
+try { $object->value = -1; } catch (Exception $error) { echo "caught:"; }
+echo $object->value, ":";
+try { echo $object->secret; } catch (Error $error) { echo "private:"; }
+try { $object->readOnly = 1; } catch (Error $error) { echo "read-only:"; }
+try { echo $object->writeOnly; } catch (Error $error) { echo "write-only:"; }
+$object->value = 7;
+echo $object->value;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "caught:2:private:read-only:write-only:7");
+}
+
 /// AOT, opaque eval, and native-by-name defaults populate backing storage without calling setters.
 #[test]
 fn test_core_hook_defaults_initialize_backing_storage_without_setter() {

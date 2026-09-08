@@ -122,9 +122,7 @@ pub(super) fn eval_reflection_aot_instance_property_get_value(
         context,
         values,
     )?;
-    eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
-        values.property_get(object, property_name)
-    })
+    eval_native_property_get_authorized(object, declaring_class, property_name, context, values)
 }
 
 /// Writes one generated/AOT instance property through ReflectionProperty semantics.
@@ -142,6 +140,33 @@ pub(super) fn eval_reflection_aot_instance_property_set_value(
         context,
         values,
     )?;
+    eval_native_property_set_authorized(object, declaring_class, property_name, value, context, values)
+}
+
+/// Reads native backing storage without invoking a property hook for ReflectionProperty raw APIs.
+pub(super) fn eval_reflection_aot_instance_property_get_raw_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_reflection_aot_instance_property_validate_object(declaring_class, object, context, values)?;
+    eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
+        values.property_get(object, property_name)
+    })
+}
+
+/// Writes native backing storage without invoking a property hook for ReflectionProperty raw APIs.
+pub(super) fn eval_reflection_aot_instance_property_set_raw_value(
+    declaring_class: &str,
+    property_name: &str,
+    object: RuntimeCellHandle,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    eval_reflection_aot_instance_property_validate_object(declaring_class, object, context, values)?;
     eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
         values.property_set(object, property_name, value)
     })

@@ -33,6 +33,11 @@ pub(in crate::interpreter) fn eval_property_get_result(
                     values,
                 );
             }
+            if !is_static {
+                return eval_native_property_get_authorized(
+                    object, &declaring_class, property_name, context, values,
+                );
+            }
         }
         return values.property_get(object, property_name);
     };
@@ -93,11 +98,6 @@ pub(in crate::interpreter) fn eval_property_get_result(
             );
         }
     }
-    if !declared_property_found
-        && eval_object_public_property_exists(object, property_name, values)?
-    {
-        return values.property_get(object, property_name);
-    }
     if !declared_property_found {
         if let Some((declaring_class, visibility, _, is_static)) =
             eval_dynamic_class_native_property_metadata(
@@ -126,11 +126,16 @@ pub(in crate::interpreter) fn eval_property_get_result(
                         values,
                     );
                 }
-                return eval_with_native_bridge_scope(&declaring_class, context, || {
-                    values.property_get(object, property_name)
-                });
+                return eval_native_property_get_authorized(
+                    object, &declaring_class, property_name, context, values,
+                );
             }
         }
+    }
+    if !declared_property_found
+        && eval_object_public_property_exists(object, property_name, values)?
+    {
+        return values.property_get(object, property_name);
     }
     if !declared_property_found {
         if let Some(result) =
@@ -176,6 +181,11 @@ pub(in crate::interpreter) fn eval_property_set_result(
                     write_visibility,
                     context,
                     values,
+                );
+            }
+            if !is_static {
+                return eval_native_property_set_authorized(
+                    object, &declaring_class, property_name, value, context, values,
                 );
             }
         }
@@ -297,9 +307,9 @@ pub(in crate::interpreter) fn eval_property_set_result(
                         values,
                     );
                 }
-                return eval_with_native_bridge_scope(&declaring_class, context, || {
-                    values.property_set(object, property_name, value)
-                });
+                return eval_native_property_set_authorized(
+                    object, &declaring_class, property_name, value, context, values,
+                );
             }
         }
     }
