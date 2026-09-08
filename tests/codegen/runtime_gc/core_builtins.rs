@@ -270,6 +270,32 @@ fn test_core_eval_native_exception_construction_releases_arguments() {
     );
 }
 
+/// Empty defaults and explicit previous-exception chains release all construction owners.
+#[test]
+fn test_core_eval_native_exception_defaults_and_previous_release() {
+    assert_core_eval_collection_cleanup(
+        "",
+        "try { throw new Exception(); } catch (Exception $caught) { unset($caught); }
+         try { throw new Exception(\"outer\", 7, new Exception(\"cause\")); }
+         catch (Exception $caught) { unset($caught); }",
+    );
+}
+
+/// Native string, Mixed, array, and object properties release previous owners including self-assignment.
+#[test]
+fn test_core_eval_native_property_replacements_release_displaced_values() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeOwnedSlots { public string $text = \"seed\"; public mixed $value = null;
+            public array $items = []; public object $child; }
+         class NativeOwnedChild {}",
+        "$box = new NativeOwnedSlots();",
+        "$box->text = str_repeat(\"x\", 24); $box->text = $box->text;
+         $box->value = [\"nested\" => [1, 2]]; $box->value = $box->value;
+         $box->items = [3, 4]; $box->items = $box->items;
+         $box->child = new NativeOwnedChild(); $box->child = $box->child;",
+    );
+}
+
 /// Native and eval string hooks preserve conversion order, operands, and exceptions.
 #[test]
 fn test_core_eval_concat_native_and_dynamic_string_hooks() {

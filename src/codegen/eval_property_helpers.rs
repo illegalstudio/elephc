@@ -27,7 +27,9 @@ use crate::types::{ClassInfo, PhpType};
 
 mod dynamic_properties;
 mod private_shadow;
+mod replacement;
 mod unset;
+use replacement::emit_owned_slot_replacement;
 use dynamic_properties::{
     emit_dynamic_property_get_fallback, emit_dynamic_property_set_fallback,
     emit_property_hash_slot_helper,
@@ -1039,9 +1041,7 @@ fn emit_aarch64_store_property_slot(
         PhpType::Str => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value for string coercion
             emitter.instruction("bl __rt_mixed_cast_string");                   // coerce the eval value to a PHP string pair
-            emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
-            emitter.instruction(&format!("str x1, [x9, #{}]", slot.offset));    // store the coerced string pointer into the property slot
-            emitter.instruction(&format!("str x2, [x9, #{}]", slot.offset + 8));// store the coerced string length into the property slot
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::TaggedScalar => emit_aarch64_store_tagged_scalar_property(emitter, slot),
         PhpType::Array(_) => emit_aarch64_store_heap_property_slot(emitter, slot, 4, fail_label),
@@ -1061,11 +1061,7 @@ fn emit_aarch64_store_property_slot(
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value being assigned
             emitter.instruction("bl __rt_incref");                              // retain the Mixed cell for property ownership
-            emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
-            emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));    // store the retained Mixed cell into the property slot
-            emitter.instruction(                                                // clear the unused property high word
-                &format!("str xzr, [x9, #{}]", slot.offset + 8)
-            );
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::Void => {
             emitter.instruction(&format!("b {}", fail_label));                  // Void slots have no value storage; report the eval write as unsupported
@@ -1099,13 +1095,7 @@ fn emit_x86_64_store_property_slot(
         PhpType::Str => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for string coercion
             emitter.instruction("call __rt_mixed_cast_string");                 // coerce the eval value to a PHP string pair
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(                                                // store the coerced string pointer into the property slot
-                &format!("mov QWORD PTR [r11 + {}], rax", slot.offset)
-            );
-            emitter.instruction(                                                // store the coerced string length into the property slot
-                &format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)
-            );
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::TaggedScalar => emit_x86_64_store_tagged_scalar_property(emitter, slot),
         PhpType::Array(_) => emit_x86_64_store_heap_property_slot(emitter, slot, 4, fail_label),
@@ -1125,13 +1115,7 @@ fn emit_x86_64_store_property_slot(
         PhpType::Mixed | PhpType::Union(_) => {
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value being assigned
             emitter.instruction("call __rt_incref");                            // retain the Mixed cell for property ownership
-            emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
-            emitter.instruction(                                                // store the retained Mixed cell into the property slot
-                &format!("mov QWORD PTR [r11 + {}], rax", slot.offset)
-            );
-            emitter.instruction(                                                // clear the unused property high word
-                &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-            );
+            emit_owned_slot_replacement(emitter, slot);
         }
         PhpType::Void => {
             emitter.instruction(&format!("jmp {}", fail_label));                // Void slots have no value storage; report the eval write as unsupported
@@ -1226,9 +1210,7 @@ fn emit_aarch64_store_heap_property_slot(
     emitter.instruction(&format!("b.ne {}", fail_label));                       // reject heap values with an incompatible ABI shape
     emitter.instruction("mov x0, x1");                                          // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
-    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the heap store
-    emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));            // store the retained heap pointer into the property slot
-    emitter.instruction(&format!("str xzr, [x9, #{}]", slot.offset + 8));       // clear the typed-property initialization marker
+    emit_owned_slot_replacement(emitter, slot);
 }
 
 /// Validates and stores a boxed ARM64 eval object into an object property slot.
@@ -1267,11 +1249,7 @@ fn emit_x86_64_store_heap_property_slot(
     emitter.instruction(&format!("jne {}", fail_label));                        // reject heap values with an incompatible ABI shape
     emitter.instruction("mov rax, rdi");                                        // move the unboxed heap pointer into the retained-result register
     abi::emit_incref_if_refcounted(emitter, &slot.ty.codegen_repr());
-    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the heap store
-    emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset));//store the retained heap pointer into the property slot
-    emitter.instruction(                                                        // clear the typed-property initialization marker
-        &format!("mov QWORD PTR [r11 + {}], 0", slot.offset + 8)
-    );
+    emit_owned_slot_replacement(emitter, slot);
 }
 
 /// Validates and stores a boxed x86_64 eval object into an object property slot.

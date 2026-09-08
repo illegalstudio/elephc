@@ -770,6 +770,7 @@ fn emit_x86_64_validate_builtin_throwable_arg_count(
 
 /// Writes ARM64 empty-message, zero-code, and null-previous Throwable defaults.
 fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
+    emit_release_builtin_throwable_defaults(emitter);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the compact Throwable object for default initialization
     emitter.instruction("str xzr, [x9, #8]");                                   // default the message pointer to an empty string payload
     emitter.instruction("str xzr, [x9, #16]");                                  // default the message length to zero
@@ -779,11 +780,32 @@ fn emit_aarch64_default_builtin_throwable_fields(emitter: &mut Emitter) {
 
 /// Writes x86_64 empty-message, zero-code, and null-previous Throwable defaults.
 fn emit_x86_64_default_builtin_throwable_fields(emitter: &mut Emitter) {
+    emit_release_builtin_throwable_defaults(emitter);
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the compact Throwable object for default initialization
     emitter.instruction("mov QWORD PTR [r11 + 8], 0");                          // default the message pointer to an empty string payload
     emitter.instruction("mov QWORD PTR [r11 + 16], 0");                         // default the message length to zero
     emitter.instruction("mov QWORD PTR [r11 + 24], 0");                         // default the exception code to zero
     emitter.instruction("mov QWORD PTR [r11 + 40], 0");                         // default the previous Throwable pointer to null
+}
+
+/// Releases the default owners installed by by-name allocation before compact Throwable setup.
+fn emit_release_builtin_throwable_defaults(emitter: &mut Emitter) {
+    let object_frame_offset = match emitter.target.arch {
+        Arch::AArch64 => 32,
+        Arch::X86_64 => 24,
+    };
+    let object = abi::symbol_scratch_reg(emitter);
+    let value = abi::int_result_reg(emitter);
+    for (offset, release) in [(8, "__rt_heap_free_safe"), (40, "__rt_decref_any")] {
+        abi::load_at_offset(emitter, object, object_frame_offset);
+        abi::emit_load_from_address(emitter, value, object, offset);
+        // Detach before release, since a previous exception may run a user destructor.
+        abi::emit_store_zero_to_address(emitter, object, offset);
+        if offset == 8 {
+            abi::emit_store_zero_to_address(emitter, object, 16);
+        }
+        abi::emit_call_label(emitter, release);
+    }
 }
 
 /// Emits ARM64 class-id dispatch for supported constructor bodies.
@@ -1742,6 +1764,27 @@ fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {
 
 #[cfg(test)]
 mod catalog_tests {
+    /// Both native ABIs release default message and previous owners before overwriting the slots.
+    #[test]
+    fn throwable_default_initialization_releases_displaced_owners_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let mut emitter = super::Emitter::new(target);
+            match target.arch {
+                super::Arch::AArch64 => super::emit_aarch64_default_builtin_throwable_fields(&mut emitter),
+                super::Arch::X86_64 => super::emit_x86_64_default_builtin_throwable_fields(&mut emitter),
+            }
+            let asm = emitter.output();
+            assert_eq!(asm.matches("__rt_heap_free_safe").count(), 1, "{name}");
+            assert_eq!(asm.matches("__rt_decref_any").count(), 1, "{name}");
+            let cleared_previous = match target.arch {
+                super::Arch::AArch64 => "str xzr, [x9, #40]",
+                super::Arch::X86_64 => "mov QWORD PTR [r11 + 40], 0",
+            };
+            assert!(asm.find(cleared_previous).unwrap() < asm.find("__rt_decref_any").unwrap(), "{name}");
+        }
+    }
+
     /// Every throwable this helper can materialize is a catalogued builtin class.
     #[test]
     fn throwable_list_is_a_subset_of_the_class_catalog() {
