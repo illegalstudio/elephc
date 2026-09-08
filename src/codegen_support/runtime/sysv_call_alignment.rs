@@ -176,10 +176,6 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
         "shares a tail between the framed body and a frameless early-out",
     ),
     (
-        "__rt_gc_collect_cycles_explicit",
-        "shares a tail between the framed body and a frameless early-out",
-    ),
-    (
         "__rt_mb_strlen",
         "shares a tail between the framed body and a frameless early-out",
     ),
