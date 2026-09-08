@@ -29,12 +29,22 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
             let mut emitter = Emitter::new(target);
+            emitter.dead_strip = true;
             emit_stdclass_new(&mut emitter);
             emit_stdclass_get(&mut emitter);
             emit_stdclass_set(&mut emitter);
             let asm = emitter.output();
             for entry in ["__rt_stdclass_get:", "__rt_stdclass_set:", "__rt_property_hash_get:", "__rt_property_hash_set:"] {
                 assert!(asm.contains(entry), "{name}: {entry}");
+            }
+            for operation in ["get", "set"] {
+                let entry = format!("__rt_stdclass_{operation}:\n");
+                let helper = format!("__rt_property_hash_{operation}");
+                let wrapper = asm.split_once(&entry).unwrap().1
+                    .split_once(&format!("{helper}:")).unwrap().0;
+                let branch = if target.arch == Arch::X86_64 { "jmp" } else { "b" };
+                assert!(wrapper.contains(&format!("    {branch} {helper}\n")),
+                    "{name}: {operation} must keep its separate helper alive through a relocation");
             }
             if target.arch == Arch::X86_64 {
                 assert_eq!(asm.matches("mov rdi, 8").count(), 2);
@@ -263,6 +273,7 @@ fn emit_stdclass_get_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stdclass_get ---");
     emitter.label_global("__rt_stdclass_get");
     emitter.instruction("add x0, x0, #8");                                      // locate the standard object's property-hash slot
+    emitter.instruction("b __rt_property_hash_get");                            // retain and enter the separate helper under linker dead stripping
     emitter.label_global("__rt_property_hash_get");
 
     emitter.instruction("sub sp, sp, #48");                                     // frame: obj + name_ptr + name_len + saved fp/lr + slack
@@ -307,6 +318,7 @@ fn emit_stdclass_set_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stdclass_set ---");
     emitter.label_global("__rt_stdclass_set");
     emitter.instruction("add x0, x0, #8");                                      // locate the standard object's property-hash slot
+    emitter.instruction("b __rt_property_hash_set");                            // retain and enter the separate helper under linker dead stripping
     emitter.label_global("__rt_property_hash_set");
 
     // Stack:
@@ -558,6 +570,7 @@ fn emit_stdclass_get_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stdclass_get ---");
     emitter.label_global("__rt_stdclass_get");
     emitter.instruction("add rdi, 8");                                          // locate the standard object's property-hash slot
+    emitter.instruction("jmp __rt_property_hash_get");                          // retain and enter the separate ELF text section
     emitter.label_global("__rt_property_hash_get");
 
     // Inputs (SysV): rdi=obj, rsi=name_ptr, rdx=name_len. Output: rax=Mixed*.
@@ -702,6 +715,7 @@ fn emit_stdclass_set_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stdclass_set ---");
     emitter.label_global("__rt_stdclass_set");
     emitter.instruction("add rdi, 8");                                          // locate the standard object's property-hash slot
+    emitter.instruction("jmp __rt_property_hash_set");                          // retain and enter the separate ELF text section
     emitter.label_global("__rt_property_hash_set");
 
     // Inputs (SysV): rdi=obj, rsi=name_ptr, rdx=name_len, rcx=mixed_ptr.
