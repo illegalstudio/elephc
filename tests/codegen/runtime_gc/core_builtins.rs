@@ -92,6 +92,46 @@ fn test_core_eval_native_argument_packing_releases_indexes() {
     );
 }
 
+/// Native static calls free nested default arrays and their materialization operands.
+#[test]
+fn test_core_eval_native_default_arguments_release_nested_arrays() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeDefaultSink { public static function accept(array $items = [1, 2]): void {} }",
+        "",
+        "NativeDefaultSink::accept();",
+    );
+}
+
+/// Object-valued defaults release both their constructor operands and the completed temporary object.
+#[test]
+fn test_core_eval_native_default_arguments_release_objects() {
+    assert_core_eval_collection_cleanup_with_native(
+        "class NativeDefaultPayload {
+            public string $text;
+            public function __construct(string $text) { $this->text = $text; }
+         }
+         class NativeObjectDefaultSink {
+            public static function accept(NativeDefaultPayload $value = new NativeDefaultPayload(\"value\")): void {}
+         }",
+        "",
+        "NativeObjectDefaultSink::accept();",
+    );
+}
+
+/// Native reference coercions leave caller variables usable after the activation releases its lease.
+#[test]
+fn test_core_eval_native_reference_coercion_retains_caller_value() {
+    let source = r#"<?php
+class NativeReferenceSink {
+    public function change(string &$value): void { $value = $value . "!"; }
+}
+$source = '$object = new NativeReferenceSink(); $value = 7;
+$object->change($value); unset($object); echo $value; unset($value);' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "7!");
+}
+
 /// Native exception construction releases argument defaults independently of string-hook execution.
 #[test]
 fn test_core_eval_native_exception_construction_releases_arguments() {

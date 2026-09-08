@@ -188,9 +188,15 @@ pub(super) fn eval_new_object_result(
     // it walks a `CURLOPT_POSTFIELDS` array. The interception existed only because that
     // walk did not, which made a constructible `CURLFile` a value nothing could use.
     let object = values.new_object(class_name)?;
-    if let Err(err) =
-        eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)
-    {
+    let result = eval_native_constructor_with_evaluated_args(
+        class_name, object, args.clone(), context, values,
+    );
+    let mut released = Ok(());
+    for arg in args {
+        let cleanup = release_expr_result(arg.value, context, values);
+        if released.is_ok() { released = cleanup; }
+    }
+    if let Err(err) = result.and(released) {
         let _ = values.release(object);
         return Err(err);
     }

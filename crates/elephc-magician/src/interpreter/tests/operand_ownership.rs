@@ -11,6 +11,44 @@
 use super::super::*;
 use super::support::*;
 
+/// Native activation cleanup releases defaults while leaving borrowed caller operands intact.
+#[test]
+fn native_bound_argument_cleanup_preserves_borrowed_inputs() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let borrowed = values.int(7).unwrap();
+    let default = values.string("default").unwrap();
+    let args = [borrowed.borrowed(), default].into_iter().map(|value| BoundMethodArg {
+        value, ref_target: None, variadic_ref_targets: Vec::new(),
+    }).collect::<Vec<_>>();
+    release_native_bound_args(&args, &mut context, &mut values).unwrap();
+    assert_eq!(values.releases, vec![default]);
+}
+
+/// Reference writeback acquires caller ownership before a native coercion temporary is released.
+#[test]
+fn native_reference_writeback_retains_replacement_storage() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let original = values.int(7).unwrap();
+    let converted = values.string("7").unwrap();
+    scope.set("value", original, ScopeCellOwnership::Owned);
+    let args = vec![BoundMethodArg {
+        value: converted,
+        ref_target: Some(EvalReferenceTarget::Variable {
+            scope: &mut scope, name: "value".into(),
+        }),
+        variadic_ref_targets: Vec::new(),
+    }];
+    write_back_native_callable_ref_args(&args, &mut context, &mut values).unwrap();
+    release_native_bound_args(&args, &mut context, &mut values).unwrap();
+    assert_eq!(scope.visible_cell("value"), Some(converted));
+    assert_eq!(scope.entry("value").unwrap().flags().ownership, ScopeCellOwnership::Owned);
+    assert_eq!(values.retains, vec![converted]);
+    assert_eq!(values.releases, vec![original, converted]);
+}
+
 /// A zero-argument activation does not allocate a synthetic variadic array or PHP variable.
 #[test]
 fn empty_activation_has_no_synthetic_argument_cells() {

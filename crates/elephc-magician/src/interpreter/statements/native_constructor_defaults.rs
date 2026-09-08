@@ -80,10 +80,8 @@ pub(super) fn eval_native_constructor_with_evaluated_args_and_ref_mode(
         values.construct_object(object, native_bound_arg_values(&bound_args))
     };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
-        (Ok(()), Ok(())) => Ok(()),
-    }
+    let released = release_native_bound_args(&bound_args, context, values);
+    result.and(writeback).and(released)
 }
 
 /// Returns the generated/AOT constructor scope that the runtime bridge can recognize.
@@ -195,30 +193,31 @@ pub(super) fn materialize_native_callable_array_default(
         )
     });
     let mut array = if has_string_key {
-        values.assoc_new(elements.len())?
+        builtins::collection_builder::EvalArrayBuilder::assoc(values, elements.len())?
     } else {
-        values.array_new(elements.len())?
+        builtins::collection_builder::EvalArrayBuilder::indexed(values, elements.len())?
     };
     let mut next_auto_key = 0;
     for element in elements {
-        let key = match &element.key {
-            Some(NativeCallableArrayDefaultKey::Int(value)) => {
-                if *value >= next_auto_key {
-                    next_auto_key = value.saturating_add(1);
+        array.entry(
+            |values| materialize_native_callable_default(&element.value, context, values),
+            |values, _| match &element.key {
+                Some(NativeCallableArrayDefaultKey::Int(value)) => {
+                    if *value >= next_auto_key {
+                        next_auto_key = value.saturating_add(1);
+                    }
+                    values.int(*value)
                 }
-                values.int(*value)?
-            }
-            Some(NativeCallableArrayDefaultKey::String(value)) => values.string(value)?,
-            None => {
-                let key = values.int(next_auto_key)?;
-                next_auto_key = next_auto_key.saturating_add(1);
-                key
-            }
-        };
-        let value = materialize_native_callable_default(&element.value, context, values)?;
-        array = values.array_set(array, key, value)?;
+                Some(NativeCallableArrayDefaultKey::String(value)) => values.string(value),
+                None => {
+                    let key = values.int(next_auto_key)?;
+                    next_auto_key = next_auto_key.saturating_add(1);
+                    Ok(key)
+                }
+            },
+        )?;
     }
-    Ok(array)
+    Ok(array.finish())
 }
 
 /// Allocates and constructs one object-valued native AOT parameter default.
@@ -230,20 +229,24 @@ pub(super) fn materialize_native_callable_object_default(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let object = values.new_object(class_name)?;
     let mut constructor_args = Vec::with_capacity(args.len());
-    for arg in args {
-        constructor_args.push(EvaluatedCallArg {
-            name: arg.name.clone(),
-            value: materialize_native_callable_default(&arg.value, context, values)?,
-            ref_target: None,
-        });
+    let constructed = (|| {
+        for arg in args {
+            constructor_args.push(EvaluatedCallArg {
+                name: arg.name.clone(),
+                value: materialize_native_callable_default(&arg.value, context, values)?,
+                ref_target: None,
+            });
+        }
+        eval_native_constructor_with_evaluated_args(
+            class_name, object, constructor_args.clone(), context, values,
+        )
+    })();
+    let mut released = Ok(());
+    for arg in constructor_args {
+        let cleanup = release_expr_result(arg.value, context, values);
+        if released.is_ok() { released = cleanup; }
     }
-    if let Err(err) = eval_native_constructor_with_evaluated_args(
-        class_name,
-        object,
-        constructor_args,
-        context,
-        values,
-    ) {
+    if let Err(err) = constructed.and(released) {
         let _ = values.release(object);
         return Err(err);
     }

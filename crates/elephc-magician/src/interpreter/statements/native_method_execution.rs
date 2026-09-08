@@ -214,8 +214,12 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
         values.method_call(object, method_name, native_bound_arg_values(&bound_args))
     };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
+    let result = match (result, writeback) {
+        (Ok(result), Err(status)) => {
+            let _ = release_expr_result(result, context, values);
+            Err(status)
+        }
+        (Err(status), _) => Err(status),
         (Ok(result), Ok(())) => eval_declared_native_return_value(
             return_type.as_ref(),
             Some(signature_owner),
@@ -224,7 +228,8 @@ pub(super) fn eval_native_method_with_evaluated_args_unchecked_bridge_scope_with
             context,
             values,
         ),
-    }
+    };
+    finish_native_bound_call(result, &bound_args, context, values)
 }
 
 /// Calls one generated/AOT static method after native signature binding.
@@ -401,8 +406,12 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
         values.static_method_call(class_name, method_name, native_bound_arg_values(&bound_args))
     };
     let writeback = write_back_native_callable_ref_args(&bound_args, context, values);
-    match (result, writeback) {
-        (Err(status), _) | (_, Err(status)) => Err(status),
+    let result = match (result, writeback) {
+        (Ok(result), Err(status)) => {
+            let _ = release_expr_result(result, context, values);
+            Err(status)
+        }
+        (Err(status), _) => Err(status),
         (Ok(result), Ok(())) => eval_declared_native_return_value(
             return_type.as_ref(),
             Some(signature_owner),
@@ -411,7 +420,8 @@ pub(super) fn eval_native_static_method_with_evaluated_args_unchecked_bridge_sco
             context,
             values,
         ),
-    }
+    };
+    finish_native_bound_call(result, &bound_args, context, values)
 }
 
 /// Returns whether a generated/AOT class has an instance `__call()` fallback.
