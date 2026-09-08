@@ -60,7 +60,7 @@ fn emit_aarch64_descriptor_callback_wrapper(
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
-    emit_cast_descriptor_mixed_result_for_callback(emitter, return_ty);
+    emit_cast_descriptor_mixed_result_for_callback(emitter, return_ty, &wrapper.label);
 
     emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); // restore runtime-loop callee-saved registers after descriptor invocation
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_descriptor_offset)); // restore descriptor-wrapper callee-saved registers
@@ -100,7 +100,7 @@ fn emit_x86_64_descriptor_callback_wrapper(
     emit_build_descriptor_invoker_arg_array(emitter, wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "r12");
-    emit_cast_descriptor_mixed_result_for_callback(emitter, return_ty);
+    emit_cast_descriptor_mixed_result_for_callback(emitter, return_ty, &wrapper.label);
 
     abi::load_at_offset(emitter, "r15", saved_runtime_count_offset);
     abi::load_at_offset(emitter, "r14", saved_runtime_index_offset);
@@ -150,7 +150,7 @@ fn emit_aarch64_extern_callback_trampoline(
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "x20");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "x19");
-    emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type);
+    emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type, &trampoline.label);
 
     emitter.instruction(&format!("ldp x21, x22, [sp, #{}]", saved_runtime_offset)); // restore runtime-loop registers after descriptor invocation
     emitter.instruction(&format!("ldp x19, x20, [sp, #{}]", saved_descriptor_offset)); // restore descriptor trampoline registers
@@ -190,7 +190,7 @@ fn emit_x86_64_extern_callback_trampoline(
     emit_build_descriptor_invoker_arg_array(emitter, &wrapper, frame_size, "r13");
     emit_box_descriptor_arg_array_as_mixed(emitter, frame_size, visible_count);
     emit_call_descriptor_invoker_from_wrapper(emitter, "r12");
-    emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type);
+    emit_cast_descriptor_mixed_result_for_callback(emitter, &trampoline.return_type, &trampoline.label);
 
     abi::load_at_offset(emitter, "r15", saved_runtime_count_offset);
     abi::load_at_offset(emitter, "r14", saved_runtime_index_offset);
@@ -385,7 +385,11 @@ fn emit_call_descriptor_invoker_from_wrapper(emitter: &mut Emitter, descriptor_r
 }
 
 /// Converts the descriptor invoker's boxed-Mixed result to the callback runtime return type.
-fn emit_cast_descriptor_mixed_result_for_callback(emitter: &mut Emitter, return_ty: &PhpType) {
+fn emit_cast_descriptor_mixed_result_for_callback(
+    emitter: &mut Emitter,
+    return_ty: &PhpType,
+    label_prefix: &str,
+) {
     match return_ty.codegen_repr() {
         PhpType::Bool => {
             abi::emit_push_reg(emitter, abi::int_result_reg(emitter)); // preserve the owned Mixed callback result while casting to bool
@@ -403,9 +407,7 @@ fn emit_cast_descriptor_mixed_result_for_callback(emitter: &mut Emitter, return_
             emit_release_preserved_mixed_result_after_cast(emitter, &PhpType::Float);
         }
         PhpType::Str => {
-            abi::emit_push_reg(emitter, abi::int_result_reg(emitter)); // preserve the owned Mixed callback result while casting to string
-            abi::emit_call_label(emitter, "__rt_mixed_cast_string"); // convert the boxed callback result to a string payload
-            emit_release_preserved_mixed_result_after_cast(emitter, &PhpType::Str);
+            emit_owned_descriptor_string_result(emitter, label_prefix);
         }
         PhpType::Void | PhpType::Never => {
             abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
@@ -414,19 +416,37 @@ fn emit_cast_descriptor_mixed_result_for_callback(emitter: &mut Emitter, return_
     }
 }
 
-/// Releases the preserved boxed-Mixed result after a scalar cast and restores the cast value.
-fn emit_release_preserved_mixed_result_after_cast(emitter: &mut Emitter, cast_ty: &PhpType) {
-    if matches!(cast_ty.codegen_repr(), PhpType::Str) {
-        let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
-        abi::emit_call_label(emitter, "__rt_str_persist"); // detach the string result from the boxed Mixed owner before release
-        abi::emit_push_reg_pair(emitter, ptr_reg, len_reg); // preserve the detached string while releasing the boxed Mixed result
-        abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
-        abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
-        abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
-        abi::emit_release_temporary_stack(emitter, 16);
-        return;
+/// Copies a borrowed string payload or scalar formatting result exactly once before releasing its box.
+fn emit_owned_descriptor_string_result(emitter: &mut Emitter, label_prefix: &str) {
+    let persist = format!("{label_prefix}_persist_string_result");
+    let result = abi::int_result_reg(emitter);
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_push_reg(emitter, result);
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #1");                                  // existing strings borrow the payload held by the saved Mixed owner
+            emitter.instruction(&format!("b.eq {persist}"));                    // avoid the string cast's extra owned copy
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 1");                                  // identify an existing string before replacing the tag register
+            emitter.instruction("mov rax, rdi");                                // adapt the borrowed string payload to the string-result ABI
+            emitter.instruction(&format!("je {persist}"));                      // avoid allocating a string copy that persistence would duplicate
+        }
     }
+    abi::emit_load_temporary_stack_slot(emitter, result, 0);
+    abi::emit_call_label(emitter, "__rt_mixed_cast_string");
+    emitter.label(&persist);
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    abi::emit_push_reg_pair(emitter, ptr_reg, len_reg);
+    abi::emit_load_temporary_stack_slot(emitter, result, 16);
+    abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
+    abi::emit_pop_reg_pair(emitter, ptr_reg, len_reg);
+    abi::emit_release_temporary_stack(emitter, 16);
+}
 
+/// Releases the preserved boxed-Mixed result after a numeric cast and restores the cast value.
+fn emit_release_preserved_mixed_result_after_cast(emitter: &mut Emitter, cast_ty: &PhpType) {
     abi::emit_push_result_value(emitter, cast_ty);
     abi::emit_load_temporary_stack_slot(emitter, abi::int_result_reg(emitter), 16);
     abi::emit_decref_if_refcounted(emitter, &PhpType::Mixed);
@@ -461,6 +481,28 @@ fn descriptor_array_frame_offset(
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Existing string results bypass the allocating cast while scalar results still gain an owner.
+    #[test]
+    fn descriptor_string_results_only_persist_one_copy_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_owned_descriptor_string_result(&mut emitter, "test_callback");
+            let asm = emitter.output();
+            let branch = match target.arch {
+                Arch::AArch64 => "b.eq test_callback_persist_string_result",
+                Arch::X86_64 => "je test_callback_persist_string_result",
+            };
+            let unbox = asm.find("__rt_mixed_unbox").unwrap();
+            let branch = asm.find(branch).unwrap();
+            let cast = asm.find("__rt_mixed_cast_string").unwrap();
+            let persist = asm.find("test_callback_persist_string_result:").unwrap();
+            let release = asm.find("__rt_decref_mixed").unwrap();
+            assert!(unbox < branch && branch < cast && cast < persist && persist < release, "{name}: {asm}");
+            assert_eq!(asm.matches("__rt_str_persist").count(), 1, "{name}: {asm}");
+        }
+    }
 
     /// Callback and extern adapters transfer arguments to the protected helper on every target.
     #[test]

@@ -86,3 +86,22 @@ mapOwnedCallback(returnOwnedCallback(...));
     assert_eq!(out.stdout, "24:24|", "stderr: {}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Empty and allocated callback strings keep exactly one detached result owner until map cleanup.
+#[test]
+fn test_core_descriptor_callback_empty_and_heap_string_results_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function detachedCallbackString(string $value): string { return $value; }
+function mappedCallbackStrings(callable $callback): void {
+    $source = ["", str_repeat("x", 48)];
+    $result = array_map($callback, $source);
+    unset($source);
+    echo strlen($result[0]), ":", strlen($result[1]);
+    unset($result);
+}
+mappedCallbackStrings(detachedCallbackString(...));
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0:48", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
