@@ -284,7 +284,15 @@ fn execute_program_preserves_borrowed_array_ownership() {
 
     assert_eq!(entry.cell(), array);
     assert_eq!(entry.flags().ownership, ScopeCellOwnership::Borrowed);
-    assert!(values.releases.is_empty());
+    assert_eq!(values.retains.iter().filter(|cell| **cell == array).count(), 1);
+    assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), 1);
+    assert_eq!(values.cell_owners[&(array.as_ptr() as usize)], 1);
+    // The temporary array lease, normalized key, and RHS are released, not the caller's owner.
+    assert!(values.releases.iter().any(|cell| values.get(*cell) == FakeValue::Int(0)));
+    assert!(values.releases.iter().any(|cell| values.get(*cell) == FakeValue::String("b".into())));
+    for released in values.releases.iter().filter(|cell| **cell != array) {
+        assert_eq!(values.cell_owners[&(released.as_ptr() as usize)], 0);
+    }
 }
 /// Verifies replacing an eval-owned scope value releases the old cell.
 #[test]
