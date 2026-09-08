@@ -210,6 +210,12 @@ fn test_core_eval_reflection_static_replacements_release_displaced_values() {
     );
 }
 
+/// The string-producing operand used by reflection GC fixtures leaves no per-call argument cells.
+#[test]
+fn test_core_eval_str_repeat_releases_operand_cells() {
+    assert_core_eval_collection_cleanup("", "$text = str_repeat(\"x\", 24); unset($text);");
+}
+
 /// Object-valued defaults release both their constructor operands and the completed temporary object.
 #[test]
 fn test_core_eval_native_default_arguments_release_objects() {

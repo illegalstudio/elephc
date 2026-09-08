@@ -11,6 +11,52 @@
 use super::super::*;
 use super::support::*;
 
+/// String repetition consumes temporary inputs even when a negative count rejects the call.
+#[test]
+fn string_repeat_releases_operands_on_success_and_failure() {
+    for count in [3, -1] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let args = [
+            EvalExpr::Const(EvalConst::String("x".into())),
+            EvalExpr::Const(EvalConst::Int(count)),
+        ];
+        let result = eval_builtin_str_repeat(&args, &mut context, &mut scope, &mut values);
+        assert_eq!(values.releases.len(), 2);
+        for input in &values.releases {
+            assert_eq!(values.cell_owners[&(input.as_ptr() as usize)], 0);
+        }
+        if count < 0 {
+            assert_eq!(result, Err(EvalStatus::RuntimeFatal));
+        } else {
+            let result = result.unwrap();
+            assert_eq!(values.string_bytes(result).unwrap(), b"xxx");
+            assert_eq!(values.cell_owners[&(result.as_ptr() as usize)], 1);
+            values.release(result).unwrap();
+        }
+    }
+}
+
+/// Borrowed string inputs keep their scope owner after the repetition operand lease is released.
+#[test]
+fn string_repeat_preserves_borrowed_scope_input() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let source = values.string("x").unwrap();
+    scope.set("source", source, ScopeCellOwnership::Owned);
+    let args = [
+        EvalExpr::LoadVar("source".into()),
+        EvalExpr::Const(EvalConst::Int(2)),
+    ];
+    let result = eval_builtin_str_repeat(&args, &mut context, &mut scope, &mut values).unwrap();
+    assert_eq!(values.retains, vec![source]);
+    assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+    assert_eq!(values.string_bytes(result).unwrap(), b"xx");
+    values.release(result).unwrap();
+}
+
 /// Reflection storage retains a borrowed argument and balances replacements and identical writes.
 #[test]
 fn static_property_storage_owns_reflection_arguments() {
