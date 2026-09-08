@@ -143,6 +143,22 @@ fn test_core_eval_native_default_arguments_release_nested_arrays() {
     );
 }
 
+/// Repeated reflection writes release displaced strings and arrays without leaking same-cell writes.
+#[test]
+fn test_core_eval_reflection_static_replacements_release_displaced_values() {
+    assert_core_eval_collection_cleanup(
+        "class RetainedStaticSlots { public static $value = null; }
+         $class = new ReflectionClass(\"RetainedStaticSlots\");
+         $property = new ReflectionProperty(\"RetainedStaticSlots\", \"value\");",
+        "$class->setStaticPropertyValue(\"value\", str_repeat(\"x\", 24));
+         $property->setValue(null, [\"payload\" => [7, 8]]);
+         $same = RetainedStaticSlots::$value;
+         $class->setStaticPropertyValue(\"value\", $same);
+         unset($same);
+         $property->setValue(null, null);",
+    );
+}
+
 /// Object-valued defaults release both their constructor operands and the completed temporary object.
 #[test]
 fn test_core_eval_native_default_arguments_release_objects() {

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Pins PHP's metadata ordering, trait defaults, and protected introspection visibility.
+//! Pins metadata ordering, trait defaults, introspection visibility, and reflection value ownership.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests test_core_reflection_regression_`.
@@ -8,6 +8,27 @@
 //! - Fixtures keep class-name and callable dispatch independent of reflection metadata order.
 
 use crate::support::*;
+
+/// Both reflection setters retain fresh values beyond source-argument cleanup and same-cell writes.
+#[test]
+fn test_core_eval_reflection_static_setters_keep_assigned_values_alive() {
+    let source = r#"<?php
+$source = 'class RetainedReflectionStatic { public static $value = null; }
+$class = new ReflectionClass("RetainedReflectionStatic");
+$property = new ReflectionProperty("RetainedReflectionStatic", "value");
+$class->setStaticPropertyValue("value", str_repeat("x", 24));
+echo strlen(RetainedReflectionStatic::$value), ":";
+$property->setValue(null, ["payload" => [7, 8]]);
+$same = RetainedReflectionStatic::$value;
+$class->setStaticPropertyValue("value", $same);
+unset($same);
+echo RetainedReflectionStatic::$value["payload"][1], ":";
+$property->setValue(null, 5);
+echo RetainedReflectionStatic::$value;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "24:8:5");
+}
 
 /// Standalone traits emit instance defaults before static defaults on direct and callable paths.
 #[test]
