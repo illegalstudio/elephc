@@ -123,7 +123,9 @@ fn call_array_arguments_balance_extracted_owners_on_return_and_error() {
         let source = values.string("original").unwrap();
         let array = values.array_set(array, key, source).unwrap();
         values.release(key).unwrap();
-        values.release(source).unwrap();
+        // FakeOps returns the stored handle instead of creating the runtime's extracted cell.
+        // Its source owner therefore supplies the single extraction consumed by this test.
+        // Native collection ownership is covered by the codegen argument-lifetime regressions.
         let mut extracted = None;
         let result = with_eval_array_call_arguments(
             array, &mut context, &mut values,
