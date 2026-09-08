@@ -17,9 +17,10 @@ pub(in crate::interpreter) fn eval_native_function(
     caller_scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let evaluated_args =
-        eval_native_function_call_args(&function, args, context, caller_scope, values)?;
-    eval_native_function_with_values(function, evaluated_args, context, values)
+    with_eval_call_arguments(args, context, caller_scope, values, |arguments, context, _, values| {
+        let bound = bind_evaluated_native_function_args(&function, arguments, context, values)?;
+        eval_native_function_with_values(function, bound, context, values)
+    })
 }
 
 /// Invokes a registered AOT function after its arguments have been bound and staged.
@@ -77,7 +78,9 @@ fn build_native_function_arg_array(
                 return Err(status);
             }
         };
-        if let Err(status) = values.array_set(arg_array, index, value) {
+        let inserted = values.array_set(arg_array, index, value);
+        let released = values.release(index);
+        if let Err(status) = inserted.and(released) {
             values.release(arg_array)?;
             return Err(status);
         }

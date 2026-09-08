@@ -129,8 +129,42 @@ fn failed_method_dispatch_releases_temporary_arguments() {
         |_, _, _, _| Err(EvalStatus::RuntimeFatal),
     );
     assert_eq!(result, Err(EvalStatus::RuntimeFatal));
-    assert_eq!(values.releases.len(), 1);
-    assert_ne!(values.releases[0], borrowed);
+    assert_eq!(values.retains, vec![borrowed]);
+    assert_eq!(values.releases.len(), 2);
+    assert_eq!(values.releases[0], borrowed);
+    assert_eq!(values.cell_owners[&(borrowed.as_ptr() as usize)], 1);
+}
+
+/// A later argument may replace the first argument's variable without destroying its value lease.
+#[test]
+fn call_arguments_retain_source_before_later_global_replacement() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let source = values.string("original").unwrap();
+    scope.set("source", source, ScopeCellOwnership::Owned);
+    context.set_global_scope(&mut scope);
+    let declaration = parse_fragment(
+        b"function replaceArgument() { global $source; $source = 9; return 0; }",
+    ).unwrap();
+    execute_program_outcome_with_context(&mut context, &declaration, &mut scope, &mut values).unwrap();
+    let args = [
+        EvalCallArg::positional(EvalExpr::LoadVar("source".into())),
+        EvalCallArg::positional(EvalExpr::Call { name: "replaceargument".into(), args: vec![] }),
+    ];
+    let result = with_eval_call_arguments(
+        &args, &mut context, &mut scope, &mut values,
+        |arguments, _, scope, values| {
+            assert_ne!(scope.visible_cell("source"), Some(source));
+            assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+            assert_eq!(arguments[0].value, source);
+            Ok(arguments[0].value)
+        },
+    ).unwrap();
+    assert_eq!(result, source);
+    assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+    values.release(result).unwrap();
+    assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 0);
 }
 
 /// A malformed later spread releases itself and any previously evaluated source arguments.

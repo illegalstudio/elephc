@@ -92,10 +92,12 @@ pub(in crate::interpreter) fn eval_expr(
             })
         }
         EvalExpr::DynamicNewObject { class_name, args } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
-            let args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_new_object_result(&class_name, args, context, scope, values)
+            with_eval_operands(&[class_name], context, scope, values, |receiver, context, scope, values| {
+                let class_name = eval_dynamic_class_name(receiver[0], context, values)?;
+                with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+                    eval_new_object_result(&class_name, arguments, context, scope, values)
+                })
+            })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
@@ -189,18 +191,17 @@ pub(in crate::interpreter) fn eval_expr(
             fallback_name,
         } => eval_namespaced_const_fetch(name, fallback_name, context, values),
         EvalExpr::NewObject { class_name, args } => {
-            let args = eval_method_call_arg_values(args, context, scope, values)?;
-            let class_name = eval_new_object_class_name(class_name, context)?;
-            eval_new_object_result(&class_name, args, context, scope, values)
+            with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+                let class_name = eval_new_object_class_name(class_name, context)?;
+                eval_new_object_result(&class_name, arguments, context, scope, values)
+            })
         }
         EvalExpr::NewAnonymousClass { class, args } => {
             ensure_eval_anonymous_class_decl(class, context, scope, values)?;
-            let evaluated_args = eval_method_call_arg_values(args, context, scope, values)?;
-            let class = context
-                .class(class.name())
-                .cloned()
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            eval_dynamic_class_new_object(&class, evaluated_args, context, scope, values)
+            with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+                let class = context.class(class.name()).cloned().ok_or(EvalStatus::RuntimeFatal)?;
+                eval_dynamic_class_new_object(&class, arguments, context, scope, values)
+            })
         }
         EvalExpr::StaticMethodCall {
             class_name,

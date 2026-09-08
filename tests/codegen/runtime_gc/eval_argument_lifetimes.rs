@@ -1,0 +1,103 @@
+//! Purpose:
+//! Exercises eval argument and callable lifetimes across source-order side effects.
+//!
+//! Called from:
+//! - The codegen integration harness through `runtime_gc`.
+//!
+//! Key details:
+//! - Opaque eval prevents compile-time folding from bypassing runtime argument evaluation.
+//! - Replacing a global argument source must not invalidate an earlier borrowed value.
+
+use crate::support::*;
+
+/// Native functions, methods, and constructors consume the value captured before later arguments.
+#[test]
+fn test_core_eval_native_arguments_survive_later_source_replacement() {
+    let source = r#"<?php
+function native_argument_first(mixed $first, mixed $ignored): mixed { return $first; }
+class NativeArgumentLifetime {
+    public mixed $saved;
+    public function __construct(mixed $first, mixed $ignored) { $this->saved = $first; }
+    public function first(mixed $first, mixed $ignored): mixed { return $first; }
+    public static function firstStatic(mixed $first, mixed $ignored): mixed { return $first; }
+}
+$source = 'function replaceArgument() {
+    global $argument;
+    $argument = str_repeat("replacement", 8);
+    return 0;
+}
+$sink = new NativeArgumentLifetime("setup", 0);
+$argument = str_repeat("old", 2);
+echo native_argument_first($argument, replaceArgument()), "|";
+$argument = str_repeat("old", 2);
+echo $sink->first($argument, replaceArgument()), "|";
+$argument = str_repeat("old", 2);
+echo NativeArgumentLifetime::firstStatic($argument, replaceArgument()), "|";
+$argument = str_repeat("old", 2);
+$created = new NativeArgumentLifetime($argument, replaceArgument());
+echo $created->saved, "|";
+$class = "NativeArgumentLifetime";
+$argument = str_repeat("old", 2);
+$created = new $class($argument, replaceArgument());
+echo $created->saved;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "oldold|oldold|oldold|oldold|oldold");
+}
+
+/// Eval functions and callable expressions retain source values and callback receivers until dispatch.
+#[test]
+fn test_core_eval_declared_arguments_and_callback_survive_replacement() {
+    let source = r#"<?php
+$source = 'function replaceArgument() {
+    global $argument;
+    $argument = str_repeat("replacement", 8);
+    return 0;
+}
+function firstArgument($first, $ignored) { return $first; }
+class EvalArgumentLifetime {
+    public function first($first, $ignored) { return $first; }
+    public function __invoke($first, $ignored) { return $first; }
+}
+function replaceCallback() { global $callback; $callback = null; return 0; }
+$argument = str_repeat("old", 2);
+echo firstArgument($argument, replaceArgument()), "|";
+$name = "firstArgument";
+$argument = str_repeat("old", 2);
+echo $name($argument, replaceArgument()), "|";
+$firstClass = firstArgument(...);
+$argument = str_repeat("old", 2);
+echo $firstClass($argument, replaceArgument()), "|";
+$object = new EvalArgumentLifetime();
+$argument = str_repeat("old", 2);
+echo $object->first(first: $argument, ignored: replaceArgument()), "|";
+$argument = str_repeat("old", 2);
+echo $object->first(...[$argument], ignored: replaceArgument()), "|";
+$callback = new EvalArgumentLifetime();
+echo $callback("alive", replaceCallback());' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "oldold|oldold|oldold|oldold|oldold|alive");
+}
+
+/// Argument leases and descriptor-array keys leave no per-call native heap owners behind.
+#[test]
+fn test_core_eval_argument_leases_release_after_native_dispatch() {
+    let live = |iterations| {
+        let calls = "$argument = str_repeat(\"old\", 2); native_argument_ignore($argument, replaceArgument());"
+            .repeat(iterations);
+        let source = format!(r#"<?php
+function native_argument_ignore(mixed $first, mixed $ignored): void {{}}
+$source = 'function replaceArgument() {{ global $argument; $argument = "replacement"; return 0; }}
+{calls}
+unset($argument); return 42;' . ' // ' . $argc;
+echo eval($source);
+"#);
+        let output = compile_and_run_with_gc_stats(&source);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "42", "{}", output.stderr);
+        let (allocated, freed) = parse_gc_stats(&output.stderr);
+        allocated as i128 - freed as i128
+    };
+    assert_eq!(live(5), live(1), "source argument leases or descriptor keys leaked");
+}
