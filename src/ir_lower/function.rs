@@ -65,6 +65,7 @@ pub(crate) fn lower_main(
     let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         program,
         top_level_env.clone(),
@@ -190,6 +191,7 @@ pub(crate) fn lower_user_function(
     attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env_from_signature(&eir_signature, web),
@@ -299,6 +301,7 @@ pub(crate) fn lower_class_method(
     attach_generator_source_if_needed(&mut function, body, body_params.len());
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env,
@@ -398,6 +401,7 @@ pub(crate) fn lower_eval_aot_function(
     let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         TypeEnv::new(),
@@ -512,6 +516,7 @@ pub(crate) fn lower_eval_aot_scope_function(
     let (bind_kill_sites, retype_sites, mixed_storage_store_sites) = eval_aot_decision_maps();
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         body,
         env,
@@ -583,11 +588,10 @@ pub(crate) fn lower_property_init_thunk(
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
-    if !class_info.defaults.iter().any(|default| default.is_some()) {
+    if !super::property_initializers::needs_initializer(class_info) {
         return;
     }
     let web = module.web;
-    let body = property_init_body(class_info);
     let function_name = format!("_class_propinit_{}", class_info.class_id);
     let this_type = PhpType::Object(class_name.to_string());
     let mut function = Function::new(function_name.clone(), IrType::Void, PhpType::Void);
@@ -619,8 +623,9 @@ pub(crate) fn lower_property_init_thunk(
     let params = vec![("this".to_string(), this_type)];
     let closures = lower_body_into_function(
         &mut function,
+        Some(class_info),
         &mut module.data,
-        &body,
+        &[],
         env,
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
@@ -977,6 +982,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     let web = module.web;
     let closures = lower_body_into_function(
         &mut function,
+        None,
         &mut module.data,
         &body,
         env,
@@ -1021,47 +1027,6 @@ pub(crate) fn lower_dynamic_constructor_thunk(
 /// The symbol a dynamic-new candidate calls when it has to pad the constructor with defaults.
 pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize) -> String {
     format!("_class_ctor_{}_{}", class_id, provided_args)
-}
-
-/// Builds `$this->property = <default>;` statements for property-default initialization.
-///
-/// A null default whose slot type cannot represent null (a scalar slot rebound by
-/// constructor-argument propagation) is skipped: those slots are always overwritten
-/// before an observable read, and the store would be unrepresentable.
-fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
-    let span = Span::dummy();
-    class_info
-        .defaults
-        .iter()
-        .enumerate()
-        .filter_map(|(index, default)| {
-            let default = default.as_ref()?;
-            let (name, php_type) = class_info.properties.get(index)?;
-            if matches!(default.kind, ExprKind::Null) && !php_type.null_property_default_required() {
-                return None;
-            }
-            let property = name.clone();
-            Some(Stmt::new(
-                StmtKind::ExprStmt(Expr::new(
-                    ExprKind::Assignment {
-                        target: Box::new(Expr::new(
-                            ExprKind::PropertyAccess {
-                                object: Box::new(Expr::new(ExprKind::This, span)),
-                                property,
-                            },
-                            span,
-                        )),
-                        value: Box::new(default.clone()),
-                        result_target: None,
-                        prelude: Vec::new(),
-                        conditional_value_temp: None,
-                    },
-                    span,
-                )),
-                span,
-            ))
-        })
-        .collect()
 }
 
 /// Lowers one closure literal into an EIR function plus any nested closure functions.
@@ -1188,6 +1153,7 @@ fn lower_closure_function_with_signature(
     });
     let closures = lower_body_into_function(
         &mut function,
+        None,
         parent.data,
         body,
         env,
@@ -1232,6 +1198,7 @@ fn lower_closure_function_with_signature(
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
     function: &mut Function,
+    property_initializers: Option<&ClassInfo>,
     data: &mut crate::ir::DataPool,
     body: &[Stmt],
     env: TypeEnv,
@@ -1363,8 +1330,12 @@ fn lower_body_into_function(
         ctx.privatize_container_param(name, php_type, None);
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
-    for stmt in body {
-        crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+    if let Some(class) = property_initializers {
+        super::property_initializers::lower(&mut ctx, class);
+    } else {
+        for stmt in body {
+            crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+        }
     }
     terminate_open_block(&mut ctx);
     // Final storage types are now known: erase deferred loop-store releases that

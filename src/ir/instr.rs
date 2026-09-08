@@ -139,6 +139,7 @@ pub enum Immediate {
         class: u32,
         method: u32,
     },
+    /// A physical class-id/property-index pair used by synthetic allocation initializers.
     PropertyRef {
         class: u32,
         property: u32,
@@ -682,11 +683,13 @@ pub enum Op {
     PropGet,
     PropGetForWrite,
     PropInitialized,
+    /// Stores through a property name, or a physical PropertyRef inside its allocation initializer.
     PropSet,
     /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
     /// refcounted payload the slot owned and stamps the uninitialized-typed-property
     /// marker, so the property stops being reported by `isset()` and by the
     /// descriptor walkers. Operand: object; immediate: property name data id.
+    /// An initializer may instead supply PropertyRef to mark a freshly zeroed physical slot.
     PropUnset,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return

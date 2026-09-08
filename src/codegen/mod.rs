@@ -412,6 +412,10 @@ fn finalize_user_asm(
             heap_debug,
         );
     }
+    let property_initializer_ids = module.functions.iter()
+        .filter(|function| function.flags.is_synthetic)
+        .filter_map(|function| function.name.strip_prefix("_class_propinit_")?.parse::<u64>().ok())
+        .collect();
     let user_data = runtime::emit_runtime_data_user(
         &empty_globals,
         &empty_static_vars,
@@ -424,6 +428,7 @@ fn finalize_user_asm(
         &module.declared_trait_source_lines,
         &runtime_classes,
         &module.enum_infos,
+        &property_initializer_ids,
         Some(&allowed_class_names),
         emit_eval_reflection_metadata,
         // The source path now feeds `Throwable::getFile()` and the ` in <file>:<line>`

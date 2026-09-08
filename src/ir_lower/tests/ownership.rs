@@ -10,6 +10,43 @@
 
 use crate::ir::{print_module, Op, Ownership, ValueDef};
 
+/// By-name initializers preserve private shadow slots and default-less typed markers on every target.
+#[test]
+fn property_initializers_address_physical_slots_on_all_targets() {
+    let source = r#"<?php
+        class InitRoot { private int $value = 3; public int $pending; }
+        class InitChild extends InitRoot { private int $value = 5; }
+        class InitOnlyTyped { public string $pending; }
+        $child = new InitChild();
+        $onlyTyped = new InitOnlyTyped();
+    "#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["InitChild", "InitOnlyTyped"] {
+            let class = &module.class_infos[name];
+            let init = module.functions.iter().find(|function| {
+                function.name == format!("_class_propinit_{}", class.class_id)
+            }).expect("default-less typed classes also need an initializer");
+            for (index, (property, _)) in class.properties.iter().enumerate() {
+                let operation = if class.defaults.get(index).is_some_and(Option::is_some) {
+                    Op::PropSet
+                } else {
+                    assert!(class.property_slot_is_declared(index, property));
+                    Op::PropUnset
+                };
+                assert_eq!(init.instructions.iter().filter(|inst| {
+                    inst.op == operation && inst.immediate == Some(crate::ir::Immediate::PropertyRef {
+                        class: class.class_id as u32, property: index as u32,
+                    })
+                }).count(), 1, "{target}: {name}::{property} at slot {index}");
+            }
+        }
+    }
+}
+
 /// Directory-only wrappers retain the raw runtime ABI on every target without changing ordinary methods.
 #[test]
 fn directory_wrapper_parameters_keep_the_runtime_abi_on_all_targets() {

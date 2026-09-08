@@ -64,6 +64,7 @@ pub(crate) fn emit_runtime_data_user(
     declared_trait_source_lines: &HashMap<String, u32>,
     classes: &HashMap<String, ClassInfo>,
     enums: &HashMap<String, EnumInfo>,
+    property_initializer_ids: &HashSet<u64>,
     allowed_class_names: Option<&HashSet<String>>,
     emit_eval_reflection_metadata: bool,
     source_path: Option<&str>,
@@ -563,16 +564,13 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
-    // _class_propinit_ptrs: dense class_id-indexed table of property-default
-    // init thunks. Entry = _class_propinit_<id> when the class has any property
-    // default, else 0 (null = nothing to init). __rt_new_by_name indexes this
-    // by class_id and calls the thunk (when non-zero) after zeroing the object.
-    // The has-default predicate MUST match EIR property-init thunk generation.
+    // Only emitted EIR initializers have entries. A class with no defaults can
+    // still need a thunk to mark typed slots uninitialized after zeroing.
     out.push_str(".globl _class_propinit_ptrs\n_class_propinit_ptrs:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
             match class_info_by_id.get(&class_id) {
-                Some(class_info) if class_info.defaults.iter().any(|d| d.is_some()) => {
+                Some(_) if property_initializer_ids.contains(&class_id) => {
                     out.push_str(&format!("    .quad _class_propinit_{}\n", class_id));
                 }
                 _ => out.push_str("    .quad 0\n"),
@@ -3204,7 +3202,7 @@ mod tests {
             let asm = emit_runtime_data_user(
                 &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
                 &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
-                &classes, &HashMap::new(), None, true, None, target,
+                &classes, &HashMap::new(), &HashSet::new(), None, true, None, target,
             );
             let properties = asm.split("_eval_reflection_properties:\n").nth(1).unwrap();
             let flags = properties.lines().take(21).collect::<Vec<_>>();
@@ -3216,6 +3214,24 @@ mod tests {
             assert_eq!(flags[4].trim(), ".quad 32770", "{name}: backed getter row");
             assert_eq!(flags[11].trim(), ".quad 2", "{name}: prefix-like user method");
             assert_eq!(flags[18].trim(), ".quad 32770", "{name}: virtual getter row");
+        }
+    }
+
+    /// The initializer pointer table follows emitted EIR symbols even for default-less typed slots.
+    #[test]
+    fn property_initializer_table_uses_emitted_symbols_on_all_targets() {
+        let classes = HashMap::from([("TypedOnly".to_string(), empty_class_info(1, "run"))]);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for emitted in [HashSet::new(), HashSet::from([1])] {
+                let asm = emit_runtime_data_user(
+                    &HashSet::new(), &HashMap::new(), &HashMap::new(), &HashSet::new(),
+                    &HashMap::new(), &[], &[], &HashMap::new(), &HashMap::new(),
+                    &classes, &HashMap::new(), &emitted, None, false, None, Target::parse(name).unwrap(),
+                );
+                let expected = if emitted.is_empty() { ".quad 0" } else { ".quad _class_propinit_1" };
+                let table = asm.split("_class_propinit_ptrs:\n").nth(1).unwrap();
+                assert_eq!(table.lines().nth(1).unwrap().trim(), expected, "{name}");
+            }
         }
     }
 
@@ -3326,6 +3342,7 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             Some(&allowed_class_names),
             false,
             None,
@@ -3364,6 +3381,7 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             None,
             false,
             None,
@@ -3403,6 +3421,7 @@ mod tests {
             &HashMap::new(),
             &classes,
             &HashMap::new(),
+            &HashSet::new(),
             None,
             false,
             None,

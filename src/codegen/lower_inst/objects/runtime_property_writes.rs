@@ -13,6 +13,15 @@ use super::*;
 pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    if let Some(Immediate::PropertyRef { class, property }) = inst.immediate {
+        let slot = resolve_initializer_property_slot(ctx, object, class, property, inst)?;
+        let value_ty = ctx.value_php_type(value)?;
+        ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, base_reg)?;
+        initialize_owned_property_reference(ctx, &slot, base_reg);
+        return emit_property_store(ctx, value, &slot, base_reg);
+    }
     let property = property_name_immediate(ctx, inst)?.to_string();
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_set(ctx, inst, object, value, &class_name, &property);
@@ -445,6 +454,19 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name(
 /// themselves instead.
 pub(in crate::codegen::lower_inst) fn lower_prop_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
+    if let Some(Immediate::PropertyRef { class, property }) = inst.immediate {
+        let slot = resolve_initializer_property_slot(ctx, object, class, property, inst)?;
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        ctx.load_value_to_reg(object, base_reg)?;
+        // Match direct allocation's object-owned reference cells before exposing the object.
+        if !initialize_owned_property_reference(ctx, &slot, base_reg) {
+            if !slot.is_declared {
+                return Err(CodegenIrError::invalid_module("uninitialized marker on an untyped property"));
+            }
+            emit_property_uninitialized_marker(ctx, &slot, base_reg);
+        }
+        return Ok(());
+    }
     let property = property_name_immediate(ctx, inst)?.to_string();
     if let Some(hash_offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
         return lower_dynamic_prop_unset(ctx, object, &property, hash_offset);

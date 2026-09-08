@@ -57,7 +57,7 @@ pub(super) fn lower_typed_assign(
 }
 
 /// Coerces a typed local assignment into the storage shape required by the declared type.
-pub(super) fn coerce_typed_assign_value(
+pub(in crate::ir_lower) fn coerce_typed_assign_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     php_type: &PhpType,

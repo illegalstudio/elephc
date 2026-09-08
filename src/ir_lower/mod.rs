@@ -22,6 +22,7 @@ mod function;
 pub(crate) use function::dynamic_constructor_thunk_name;
 mod ownership;
 mod program;
+mod property_initializers;
 mod reflection;
 mod stmt;
 

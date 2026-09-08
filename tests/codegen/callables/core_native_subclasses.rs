@@ -9,6 +9,45 @@
 
 use crate::support::*;
 
+/// Opaque eval allocation initializes private shadows, skips hooks, and preserves typed-only markers.
+#[test]
+fn test_core_eval_by_name_property_initialization_uses_physical_slots() {
+    let source = r#"<?php
+class PhysicalInitRoot {
+    private string $secret = "root";
+    public function rootSecret(): string { return $this->secret; }
+}
+class PhysicalInitChild extends PhysicalInitRoot {
+    private string $secret = "child";
+    public int $hooked = 7 { set { echo "hook"; $this->hooked = $value; } }
+    public function childSecret(): string { return $this->secret; }
+}
+class PhysicalInitOnlyTyped {
+    public int $number;
+    public string $text;
+    public array $items;
+}
+class PhysicalInitReference {
+    private int $value = 13;
+    public function &reference(): int { return $this->value; }
+    public function read(): int { return $this->value; }
+}
+$source = '$child = new PhysicalInitChild();
+echo $child->rootSecret(), ":", $child->childSecret(), ":", $child->hooked, "|";
+$class = new ReflectionClass("PhysicalInitOnlyTyped");
+$empty = $class->newInstanceWithoutConstructor();
+echo count(get_mangled_object_vars($empty)), ":";
+$property = new ReflectionProperty("PhysicalInitOnlyTyped", "number");
+echo $property->isInitialized($empty) ? "bad" : "uninitialized";
+$empty->number = 9;
+echo ":", $empty->number, ":", count(get_mangled_object_vars($empty));
+$reference = new PhysicalInitReference();
+echo ":", $reference->read();' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "root:child:7|0:uninitialized:9:1:13");
+}
+
 /// Mangled inventories include private native ancestors and raw eval slots without invoking hooks.
 #[test]
 fn test_core_eval_mangled_inventory_combines_native_and_dynamic_storage() {

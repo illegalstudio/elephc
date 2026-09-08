@@ -321,6 +321,9 @@ fn validate_instruction_immediate(
         EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
             matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
         }),
+        PropSet | PropUnset => require_immediate(inst_id, inst, "property name or physical slot", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
+        }),
         LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell
         | ReleaseLocalSlot | BindRefCellPtr
@@ -624,7 +627,6 @@ fn validate_opcode_rules(
         | PropGet
         | PropGetForWrite
         | PropInitialized
-        | PropSet
         | LoadPropRefCell
         | DynamicPropGet
         | DynamicPropSet
@@ -636,6 +638,8 @@ fn validate_opcode_rules(
         | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
+        PropSet => check_count(inst_id, inst, 2, "2"),
+        PropUnset => check_count(inst_id, inst, 1, "1"),
         CallablePtr
         | NormalizeCallable
         | PdoAdapterAddr

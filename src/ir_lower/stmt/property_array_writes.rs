@@ -211,7 +211,7 @@ pub(super) fn lower_property_array_assign(
 }
 
 /// Releases a temporary assigned into an object property after `PropSet` retains or boxes it.
-pub(super) fn release_property_assignment_source_after_retaining_store(
+pub(in crate::ir_lower) fn release_property_assignment_source_after_retaining_store(
     ctx: &mut LoweringContext<'_, '_>,
     property_ty: &PhpType,
     value: LoweredValue,
@@ -283,4 +283,3 @@ pub(super) fn indexed_property_array_element_type(property_ty: &PhpType) -> Opti
         _ => None,
     }
 }
-
