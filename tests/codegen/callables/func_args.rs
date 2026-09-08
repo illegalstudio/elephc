@@ -16,6 +16,38 @@
 
 use crate::support::*;
 
+/// Eval argument frames stay outside PHP variables, including formerly colliding parameter names.
+#[test]
+fn test_eval_func_args_metadata_does_not_shadow_php_variables() {
+    let out = compile_and_run(r#"<?php
+$source = 'function emptyScope() { return count(get_defined_vars()); }
+function namedScope($__elephc_eval_func_args) {
+    echo $__elephc_eval_func_args . ":";
+    echo implode(",", array_keys(call_user_func("get_defined_vars"))) . ":";
+    echo func_get_arg(1) . ":" . func_num_args() . "|";
+}
+function typedTail(int ...$tail) {
+    echo gettype(func_get_arg(0)) . ":" . func_get_arg(0) . "|";
+}
+class FrameNames {
+    public function instanceScope() {
+        echo array_key_exists("__elephc_eval_func_args", get_defined_vars()) ? "bad" : "method";
+    }
+    public static function staticScope() { echo count(get_defined_vars()); }
+}
+echo emptyScope() . "|";
+namedScope(7, "extra");
+typedTail("8");
+$__elephc_eval_func_args = 9;
+$closure = function () use ($__elephc_eval_func_args) { return $__elephc_eval_func_args; };
+echo $closure() . "|";
+(new FrameNames())->instanceScope();
+FrameNames::staticScope();';
+eval($source . " // " . $argc);
+"#);
+    assert_eq!(out, "0|7:__elephc_eval_func_args:extra:2|integer:8|9|method0");
+}
+
 /// Verifies the motivating case: a function that declares no parameters reports how many
 /// arguments the caller actually passed, for zero, one and several arguments.
 #[test]

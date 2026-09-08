@@ -44,6 +44,11 @@ pub(crate) struct EvalBacktraceFrame {
 }
 
 impl EvalBacktraceFrame {
+    /// Transfers the activation's retained surplus cells to its exit cleanup.
+    pub(super) fn into_argument_cells(self) -> Vec<RuntimeCellHandle> {
+        self.arguments.surplus
+    }
+
     /// Creates an active frame with its entry-site and callable-kind metadata.
     pub(crate) fn new(
         function: String,

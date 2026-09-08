@@ -149,7 +149,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
         &method_scope,
         values,
     );
-    context.pop_function_args();
+    let return_result = release_function_args(return_result, context, values);
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();
@@ -291,7 +291,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
         &method_scope,
         values,
     );
-    context.pop_function_args();
+    let return_result = release_function_args(return_result, context, values);
     context.pop_magic_scope();
     context.pop_called_class_scope();
     context.pop_class_scope();

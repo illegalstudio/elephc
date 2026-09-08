@@ -138,7 +138,7 @@ pub(in crate::interpreter) fn eval_dynamic_function_with_evaluated_args_and_ref_
         &function_scope,
         values,
     );
-    context.pop_function_args();
+    let return_result = release_function_args(return_result, context, values);
     context.pop_function();
     return_result
 }
@@ -478,7 +478,7 @@ fn eval_closure_with_optional_binding(
         context.pop_called_class_scope();
         context.pop_class_scope();
     }
-    context.pop_function_args();
+    let return_result = release_function_args(return_result, context, values);
     context.pop_function();
     return_result
 }

@@ -11,8 +11,6 @@
 use super::*;
 use crate::context::EvalFunctionArgsFrame;
 
-const EVAL_FUNC_ARGS_TAIL: &str = "__elephc_eval_func_args";
-
 /// Bound arguments plus the activation metadata needed by PHP's `func_*` family.
 pub(in crate::interpreter) struct BoundEvalFunctionArgs {
     pub(in crate::interpreter) params: Vec<String>,
@@ -44,50 +42,82 @@ pub(in crate::interpreter) fn bind_evaluated_function_args_with_ref_mode(
         &evaluated_args,
     )?;
 
-    let mut binding_params = params.to_vec();
-    let mut binding_types = parameter_types.to_vec();
-    let mut binding_defaults = parameter_defaults.to_vec();
-    let mut binding_by_ref = parameter_is_by_ref.to_vec();
-    let mut binding_variadic = parameter_is_variadic.to_vec();
-    let variadic_index = if let Some(index) = source_variadic_index {
-        index
-    } else {
-        let index = binding_params.len();
-        binding_params.push(EVAL_FUNC_ARGS_TAIL.to_string());
-        binding_types.push(None);
-        binding_defaults.push(None);
-        binding_by_ref.push(false);
-        binding_variadic.push(true);
-        index
-    };
-
-    let args = bind_evaluated_method_args_with_ref_mode(
-        &binding_params,
-        &binding_types,
-        &binding_defaults,
-        &binding_by_ref,
-        &binding_variadic,
+    // Surplus arguments are activation metadata, never synthetic PHP parameters.
+    // Retain their snapshot before binding can coerce or alias the source arguments.
+    let mut surplus = Vec::with_capacity(positional_surplus_count);
+    for arg in evaluated_args.iter().filter(|arg| source_variadic_index.is_none() && arg.name.is_none()).skip(regular_count) {
+        match values.retain(arg.value) {
+            Ok(value) => surplus.push(value),
+            Err(status) => {
+                for cell in surplus { let _ = eval_release_value(context, values, cell); }
+                return Err(status);
+            }
+        }
+    }
+    let args = match bind_evaluated_method_args_with_ref_mode(
+        params,
+        parameter_types,
+        parameter_defaults,
+        parameter_is_by_ref,
+        parameter_is_variadic,
         evaluated_args,
         by_ref_mode,
         context,
         values,
-    )?;
-    let surplus_array = args
-        .get(variadic_index)
-        .map(|arg| arg.value)
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    let mut surplus = Vec::with_capacity(positional_surplus_count);
-    for position in 0..positional_surplus_count {
-        let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        surplus.push(values.array_get(surplus_array, key)?);
+    ) {
+        Ok(args) => args,
+        Err(status) => {
+            for cell in surplus { let _ = eval_release_value(context, values, cell); }
+            return Err(status);
+        }
+    };
+    if let Some(index) = source_variadic_index {
+        let snapshot = (|| {
+            for position in 0..positional_surplus_count {
+                let key = values.int(i64::try_from(position).map_err(|_| EvalStatus::RuntimeFatal)?)?;
+                let value = values.array_get(args[index].value, key);
+                let released = values.release(key);
+                // Keep any successfully read owner in the cleanup list before propagating errors.
+                if let Ok(value) = value { surplus.push(value); }
+                value?;
+                released?;
+            }
+            Ok(())
+        })();
+        if let Err(status) = snapshot {
+            for cell in surplus { let _ = eval_release_value(context, values, cell); }
+            return Err(status);
+        }
     }
 
     Ok(BoundEvalFunctionArgs {
-        params: binding_params,
-        parameter_is_by_ref: binding_by_ref,
+        params: params.to_vec(),
+        parameter_is_by_ref: parameter_is_by_ref.to_vec(),
         args,
         frame: EvalFunctionArgsFrame::new(regular_params, actual_count, surplus),
     })
+}
+
+/// Releases the detached argument snapshot after preserving the callable's return owner.
+pub(in crate::interpreter) fn release_function_args(
+    result: Result<RuntimeCellHandle, EvalStatus>,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let cells = context.pop_function_args();
+    let mut released = Ok(());
+    for cell in cells {
+        let cleanup = eval_release_value(context, values, cell);
+        if released.is_ok() { released = cleanup; }
+    }
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = eval_release_value(context, values, value);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
 /// Computes PHP's `func_num_args()` count and positional surplus length before binding.

@@ -345,9 +345,10 @@ impl ElephcEvalContext {
         ));
     }
 
-    /// Pops PHP argument-introspection metadata after a callable activation completes.
-    pub(crate) fn pop_function_args(&mut self) {
-        self.function_args_stack.pop();
+    /// Pops activation metadata and transfers its retained snapshot cells for release.
+    pub(crate) fn pop_function_args(&mut self) -> Vec<RuntimeCellHandle> {
+        self.function_args_stack.pop()
+            .map(EvalBacktraceFrame::into_argument_cells).unwrap_or_default()
     }
 
     /// Returns PHP argument-introspection metadata for the active callable.

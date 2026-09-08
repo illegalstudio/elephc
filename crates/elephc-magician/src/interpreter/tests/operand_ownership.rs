@@ -11,6 +11,43 @@
 use super::super::*;
 use super::support::*;
 
+/// A zero-argument activation does not allocate a synthetic variadic array or PHP variable.
+#[test]
+fn empty_activation_has_no_synthetic_argument_cells() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let binding = bind_evaluated_function_args_with_ref_mode(
+        &[], &[], &[], &[], &[], Vec::new(), EvalByRefBindingMode::RequireTarget,
+        &mut context, &mut values,
+    ).unwrap();
+    assert!(binding.params.is_empty());
+    assert!(binding.args.is_empty());
+    assert_eq!(binding.frame.actual_count(), 0);
+    assert!(values.retains.is_empty());
+    assert!(values.releases.is_empty());
+}
+
+/// Surplus argument snapshots are owned by the activation and released without consuming caller cells.
+#[test]
+fn activation_surplus_snapshot_releases_its_own_lease() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let value = values.string("extra").unwrap();
+    let result = values.int(42).unwrap();
+    let binding = bind_evaluated_function_args_with_ref_mode(
+        &[], &[], &[], &[], &[], positional_args(vec![value.borrowed()]),
+        EvalByRefBindingMode::RequireTarget, &mut context, &mut values,
+    ).unwrap();
+    assert!(binding.params.is_empty());
+    assert!(binding.args.is_empty());
+    assert_eq!(binding.frame.surplus_arg(0), Some(value));
+    context.push_function_args(binding.frame);
+    assert_eq!(release_function_args(Ok(result), &mut context, &mut values).unwrap(), result);
+    assert_eq!(values.retains, vec![value]);
+    assert_eq!(values.releases, vec![value]);
+    assert!(context.current_function_args().is_none());
+}
+
 /// Borrowed reads acquire a temporary lease while freshly allocated scalar operands are consumed.
 #[test]
 fn scalar_operand_cleanup_preserves_borrowed_scope_owners() {
