@@ -10,6 +10,32 @@
 
 use crate::ir::print_module;
 
+/// Class-method inventories use constant-size result construction EIR on all supported targets.
+#[test]
+fn class_method_inventory_does_not_expand_one_push_per_name() {
+    use crate::codegen::platform::Target;
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    use std::path::Path;
+
+    let methods = (0..40).map(|index| format!("public function method{index}(): void {{}}"))
+        .collect::<Vec<_>>().join("\n");
+    let source = format!("<?php class CompactMethods {{ {methods} }} echo count(get_class_methods(CompactMethods::class));");
+    let expected = (0..40).map(|index| format!("method{index}"))
+        .collect::<Vec<_>>().join("\0");
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            &source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+        assert!(!main.instructions.iter().any(|inst| inst.op == Op::ArrayPush), "{name}");
+        assert_eq!(main.instructions.iter().filter(|inst| matches!(
+            inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Explode)))
+        )).count(), 1, "{name}");
+        assert!(module.data.strings.contains(&expected), "{name}");
+    }
+}
+
 /// Verifies indexed array access preserves string and float element metadata.
 /// The indices are runtime-unknown (`$argc`) so the accesses survive AST-level
 /// array-fact propagation, which folds constant-index reads of literal-backed

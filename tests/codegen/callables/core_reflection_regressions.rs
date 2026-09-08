@@ -9,6 +9,31 @@
 
 use crate::support::*;
 
+/// Compact method-name data preserves spelling/order and returns independently writable arrays.
+#[test]
+fn test_core_class_methods_compact_results_have_independent_storage() {
+    let output = compile_and_run(r#"<?php
+class CompactMethodNames {
+    public function zFirst(): void {}
+    protected function hidden(): void {}
+    public static function ASecond(): void {}
+    public function last(): void {}
+}
+class NoMethodNames {}
+class OneMethodName { public function only(): void {} }
+$first = get_class_methods(CompactMethodNames::class);
+$second = call_user_func("get_class_methods", CompactMethodNames::class);
+$callback = get_class_methods(...);
+$third = $callback(CompactMethodNames::class);
+$first[0] = "changed";
+unset($second[1]);
+echo implode(",", $third), "|", implode(",", $first), "|",
+    count(get_class_methods(NoMethodNames::class)), "|",
+    implode(",", get_class_methods(OneMethodName::class));
+"#);
+    assert_eq!(output, "zFirst,ASecond,last|changed,ASecond,last|0|only");
+}
+
 /// Both reflection setters retain fresh values beyond source-argument cleanup and same-cell writes.
 #[test]
 fn test_core_eval_reflection_static_setters_keep_assigned_values_alive() {

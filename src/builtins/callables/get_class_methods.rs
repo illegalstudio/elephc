@@ -8,6 +8,8 @@
 //! - AOT accepts an object or a runtime class-name string.
 //! - Mixed arguments are validated against their runtime tag before metadata lookup.
 //! - Direct, spread, and statically resolved callable paths use the AOT metadata specializer.
+//! - The specializer composes GetClass and Explode with their own logical signatures.
+//!   Neither runtime ID aliases this builtin's one-argument signature in the registry.
 
 use crate::builtins::semantics::{
     BuiltinArgumentLowering, BuiltinCallablePolicy, BuiltinEffects, BuiltinLowering,

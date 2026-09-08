@@ -292,13 +292,34 @@ fn materialize_class_vars(
     hash
 }
 
-/// Materializes a fresh indexed array of visible method names.
+/// Materializes visible method names from compact data instead of per-method EIR push sequences.
 fn materialize_class_methods(
     ctx: &mut LoweringContext<'_, '_>,
     class_name: &str,
     expr: &Expr,
 ) -> LoweredValue {
-    let items = visible_class_method_names(ctx, class_name)
+    let names = visible_class_method_names(ctx, class_name);
+    if names.len() > 1 {
+        // PHP identifiers cannot contain NUL. Keep declaration order and spelling in one
+        // literal, then use the typed splitter to create independently owned string slots.
+        // Dynamic dispatch can contain hundreds of classes at each source call site, so
+        // expanding every method into ArrayPush instructions makes the EIR graph needlessly large.
+        let separator = lower_string_literal(ctx, "\0", expr);
+        let encoded = lower_string_literal(ctx, &names.join("\0"), expr);
+        let limit = lower_int_literal(ctx, i64::MAX, expr);
+        let target = crate::ir::RuntimeFnId::Explode;
+        return ctx.emit_value(
+            Op::RuntimeCall,
+            vec![separator.value, encoded.value, limit.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+            PhpType::Array(Box::new(PhpType::Str)),
+            target.effects(),
+            Some(expr.span),
+        );
+    }
+    // Empty metadata must produce [], not explode's [""]. A singleton is cheaper to
+    // materialize directly than to enter the general splitter.
+    let items = names
         .into_iter()
         .map(|method| Expr::new(ExprKind::StringLiteral(method), expr.span))
         .collect::<Vec<_>>();
