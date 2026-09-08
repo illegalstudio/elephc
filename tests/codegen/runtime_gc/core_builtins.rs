@@ -76,6 +76,37 @@ echo ":", eval($source);
     assert_eq!(compile_and_run(source), ":RNV:5|RN:642");
 }
 
+/// Indexed, appended, compound, and unset property writes release keys, clones, and read cells.
+#[test]
+fn test_core_eval_property_array_mutations_release_temporary_cells() {
+    assert_core_eval_collection_cleanup(
+        "$box = new stdClass(); $box->items = [1]; $name = \"items\"; $key = \"0\";",
+        "$box->items[] = \"a\"; $box->{$name}[$key] = 3;
+         $box->items[\"label\"] = \"b\"; $box->{$name}[\"label\"] .= \"c\";
+         unset($box->items[1]); unset($box->{$name}[\"label\"]);",
+    );
+}
+
+/// Property array writes preserve borrowed source arrays and evaluate receiver, key, then RHS.
+#[test]
+fn test_core_eval_property_array_mutations_preserve_cow_and_order() {
+    let source = r#"<?php
+$source = 'function receiver($box) { echo "R"; return $box; }
+function member() { echo "N"; return "items"; }
+function itemKey() { echo "K"; return "0"; }
+function replacement() { echo "V"; return 2; }
+$items = [1]; $box = new stdClass(); $box->items = $items;
+$copy = $box->items;
+receiver($box)->{member()}[itemKey()] = replacement();
+echo ":", $items[0], $copy[0], $box->items[0], "|";
+$box->items["label"] = 3;
+unset($box->items[0]);
+echo count($box->items), ":", $box->items["label"], ":", count($copy);' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "RNKV:112|1:3:1");
+}
+
 /// A variable aliased to a property keeps its own owner after writing and destroying the object.
 #[test]
 fn test_core_eval_property_reference_survives_receiver_release() {

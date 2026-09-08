@@ -139,6 +139,38 @@ fn failed_compound_property_rhs_releases_prior_operands() {
     assert_eq!(scope.visible_cell("box"), Some(object));
 }
 
+/// A failed indexed-property RHS releases the copied array, original read, key, and receiver.
+#[test]
+fn failed_property_array_rhs_releases_prior_operands() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let array = values.array_new(0).unwrap();
+    let object = values.alloc(FakeValue::Object(vec![("items".into(), array)]));
+    scope.set("box", object, ScopeCellOwnership::Owned);
+    let program = parse_fragment(b"$box->items[0] = missing_array_operand();").unwrap();
+    assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
+    assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), 1);
+    assert_eq!(values.releases.iter().filter(|cell| **cell == object).count(), 1);
+    assert_eq!(scope.visible_cell("box"), Some(object));
+}
+
+/// Shallow copies release iteration cells and abandon partial arrays if insertion fails.
+#[test]
+fn shallow_array_copy_releases_iteration_leases() {
+    for fail in [false, true] {
+        let mut values = FakeOps::default();
+        let cell = values.int(7).unwrap();
+        let array = values.alloc(FakeValue::Array(vec![cell]));
+        if fail { values.fail_array_set_call = Some(0); }
+        let result = values.array_clone_shallow(array);
+        assert_eq!(result.is_err(), fail);
+        assert_eq!(values.releases.iter().filter(|released| **released == cell).count(), 1);
+        assert!(!values.releases.contains(&array));
+        assert_eq!(values.releases.len(), if fail { 3 } else { 2 });
+    }
+}
+
 /// Class-constant defaults acquire a builder-owned lease instead of consuming the persistent cell.
 #[test]
 fn class_vars_default_cleanup_preserves_class_constants() {

@@ -213,17 +213,35 @@ pub trait RuntimeValueOps {
         array: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let len = self.array_len(array)?;
-        let mut result = match self.type_tag(array)? {
+        let result = match self.type_tag(array)? {
             EVAL_TAG_ARRAY => self.array_new(len)?,
             EVAL_TAG_ASSOC => self.assoc_new(len)?,
             _ => return Err(EvalStatus::RuntimeFatal),
         };
-        for position in 0..len {
-            let key = self.array_iter_key(array, position)?;
-            let value = self.array_get(array, key)?;
-            result = self.array_set(result, key, value)?;
+        let mut operands = Vec::new();
+        let mut copied = (|| {
+            for position in 0..len {
+                let key = self.array_iter_key(array, position)?;
+                operands.push(key);
+                let value = self.array_get(array, key)?;
+                operands.push(value);
+                self.array_set(result, key, value)?;
+            }
+            Ok(())
+        })();
+        for operand in operands {
+            if !operand.is_borrowed() {
+                let released = self.release(operand);
+                if copied.is_ok() { copied = released; }
+            }
         }
-        Ok(result)
+        match copied {
+            Ok(()) => Ok(result),
+            Err(status) => {
+                let _ = self.release(result);
+                Err(status)
+            }
+        }
     }
 
     /// Reads a named property from a runtime object held in a boxed Mixed cell.

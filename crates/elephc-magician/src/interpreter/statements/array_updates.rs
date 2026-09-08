@@ -167,25 +167,15 @@ pub(super) fn eval_array_unset_element_stmt(
             return Ok(());
         }
         EvalExpr::PropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            let array = eval_property_get_result(object, property, context, values)?;
-            if let Some(array) =
-                eval_array_unset_target_result(array, index, context, scope, values)?
-            {
-                eval_property_set_result(object, property, array, context, values)?;
-            }
-            return Ok(());
+            return with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
+                eval_property_array_unset_result(args[0], property, index, context, scope, values)
+            });
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
-            let object = eval_expr(object, context, scope, values)?;
-            let property = eval_dynamic_member_name(property, context, scope, values)?;
-            let array = eval_property_get_result(object, &property, context, values)?;
-            if let Some(array) =
-                eval_array_unset_target_result(array, index, context, scope, values)?
-            {
-                eval_property_set_result(object, &property, array, context, values)?;
-            }
-            return Ok(());
+            return with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
+                let property = eval_dynamic_member_name(property, context, scope, values)?;
+                eval_property_array_unset_result(args[0], &property, index, context, scope, values)
+            });
         }
         EvalExpr::StaticPropertyGet {
             class_name,
@@ -230,8 +220,29 @@ pub(super) fn eval_array_unset_element_stmt(
         }
         _ => {}
     }
-    let array = eval_expr(array, context, scope, values)?;
-    eval_array_access_unset_result(array, index, context, scope, values)
+    with_eval_void_operands(&[array], context, scope, values, |args, context, scope, values| {
+        eval_array_access_unset_result(args[0], index, context, scope, values)
+    })
+}
+
+/// Releases the old property read and the rebuilt array after an indexed unset writes back.
+fn eval_property_array_unset_result(
+    object: RuntimeCellHandle,
+    property: &str,
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_property_get_result(object, property, context, values)?;
+    with_eval_value_lease(array, context, values, |array, context, values| {
+        if let Some(replacement) = eval_array_unset_target_result(array, index, context, scope, values)? {
+            with_eval_value_lease(replacement, context, values, |replacement, context, values| {
+                eval_property_set_result(object, property, replacement, context, values)
+            })?;
+        }
+        Ok(())
+    })
 }
 
 /// Unsets one offset from an already-resolved array-like target and returns a replacement array.
@@ -250,8 +261,17 @@ pub(super) fn eval_array_unset_target_result(
     if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
         return Err(EvalStatus::UnsupportedConstruct);
     }
-    let index = eval_array_set_index(index, context, scope, values)?;
-    eval_array_without_key_result(array, index, values).map(Some)
+    let index = eval_owned_array_set_index(index, context, scope, values)?;
+    let result = eval_array_without_key_result(array, index, values);
+    let released = eval_release_value(context, values, index);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(result), Err(status)) => {
+            let _ = values.release(result);
+            Err(status)
+        }
+        (Ok(result), Ok(())) => Ok(Some(result)),
+    }
 }
 
 /// Executes `unset($object[$key])` through `ArrayAccess::offsetUnset()`.
@@ -262,16 +282,16 @@ pub(super) fn eval_array_access_unset_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let index = eval_expr(index, context, scope, values)?;
-    if values.type_tag(array)? != EVAL_TAG_OBJECT {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
-    if !eval_array_access_object_matches(array, context, values)? {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let result = eval_method_call_result(array, "offsetUnset", vec![index], context, values)?;
-    values.release(result)?;
-    Ok(())
+    with_eval_void_operands(&[index], context, scope, values, |args, context, _, values| {
+        if values.type_tag(array)? != EVAL_TAG_OBJECT {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        if !eval_array_access_object_matches(array, context, values)? {
+            return Err(EvalStatus::RuntimeFatal);
+        }
+        let result = eval_method_call_result(array, "offsetUnset", args.to_vec(), context, values)?;
+        eval_release_value(context, values, result)
+    })
 }
 
 /// Rebuilds an array without the strict-equal key requested by `unset($array[$key])`.
@@ -283,20 +303,28 @@ pub(super) fn eval_array_without_key_result(
     let len = values.array_len(array)?;
     let tag = values.type_tag(array)?;
     let mut result = if tag == EVAL_TAG_ASSOC {
-        values.assoc_new(len.saturating_sub(1))?
+        builtins::collection_builder::EvalArrayBuilder::assoc(values, len.saturating_sub(1))?
     } else {
-        values.array_new(len.saturating_sub(1))?
+        builtins::collection_builder::EvalArrayBuilder::indexed(values, len.saturating_sub(1))?
     };
     for position in 0..len {
-        let key = values.array_iter_key(array, position)?;
-        let equal = values.compare(EvalBinOp::StrictEq, key, index)?;
-        if values.truthy(equal)? {
-            continue;
-        }
-        let value = values.array_get(array, key)?;
-        result = values.array_set(result, key, value)?;
+        let key = result.values().array_iter_key(array, position)?;
+        let copied = (|| {
+            let equal = result.values().compare(EvalBinOp::StrictEq, key, index)?;
+            let matches = result.values().truthy(equal);
+            let released = result.values().release(equal);
+            let matches = matches?;
+            released?;
+            if !matches {
+                result.entry(|values| values.array_get(array, key), |values, _| values.retain(key))?;
+            }
+            Ok(())
+        })();
+        let released = result.values().release(key);
+        copied?;
+        released?;
     }
-    Ok(result)
+    Ok(result.finish())
 }
 
 /// Executes `$var[] = value` and dispatches object writes through `ArrayAccess::offsetSet()`.
@@ -426,75 +454,62 @@ pub(super) fn eval_non_object_array_set_var_stmt(
     Ok(())
 }
 
-/// Executes `$object->property[] = value`, dispatching ArrayAccess property values when needed.
-pub(super) fn eval_property_array_append_result(
+/// Writes an indexed property or appends to it while preserving COW and every operand's owner.
+pub(super) fn eval_property_array_write_result(
     object: RuntimeCellHandle,
     property: &str,
-    value: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let array = eval_property_get_result(object, property, context, values)?;
-    if values.type_tag(array)? == EVAL_TAG_OBJECT {
-        if !eval_array_access_object_matches(array, context, values)? {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let offset = values.null()?;
-        let value = eval_expr(value, context, scope, values)?;
-        let result =
-            eval_method_call_result(array, "offsetSet", vec![offset, value], context, values)?;
-        values.release(result)?;
-        return Ok(());
-    }
-    let array = if values.is_array_like(array)? {
-        let tag = values.type_tag(array)?;
-        if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-            return Err(EvalStatus::UnsupportedConstruct);
-        }
-        array
-    } else {
-        values.array_new(1)?
-    };
-    let index = eval_array_append_key(array, values)?;
-    let value = eval_expr(value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
-    eval_property_set_result(object, property, array, context, values)
-}
-
-/// Executes `$object->property[index] = value` and compound indexed property writes.
-pub(super) fn eval_property_array_set_result(
-    object: RuntimeCellHandle,
-    property: &str,
-    index: &EvalExpr,
+    index: Option<&EvalExpr>,
     op: Option<EvalBinOp>,
     value: &EvalExpr,
     context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let array = eval_property_get_result(object, property, context, values)?;
-    if values.type_tag(array)? == EVAL_TAG_OBJECT {
-        if !eval_array_access_object_matches(array, context, values)? {
-            return Err(EvalStatus::RuntimeFatal);
+    let mut operands = Vec::new();
+    let mut result = (|| {
+        let current = eval_property_get_result(object, property, context, values)?;
+        let current = if current.is_borrowed() { values.retain(current)? } else { current };
+        operands.push(current);
+        if values.type_tag(current)? == EVAL_TAG_OBJECT {
+            if !eval_array_access_object_matches(current, context, values)? {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let index = match index {
+                Some(index) => eval_owned_expr(index, context, scope, values)?,
+                None => values.null()?,
+            };
+            operands.push(index);
+            let value = eval_property_array_set_value(current, index, op, value, context, scope, values)?;
+            let value = if value.is_borrowed() { values.retain(value)? } else { value };
+            operands.push(value);
+            let returned = eval_method_call_result(current, "offsetSet", vec![index, value], context, values)?;
+            operands.push(returned);
+            return Ok(());
         }
-        let index = eval_expr(index, context, scope, values)?;
+        let index = match index {
+            Some(index) => eval_owned_array_set_index(index, context, scope, values)?,
+            None if values.is_array_like(current)? => eval_array_append_key(current, values)?,
+            None => values.int(0)?,
+        };
+        operands.push(index);
+        let array = if values.is_array_like(current)? {
+            values.array_clone_shallow(current)?
+        } else {
+            values.array_new(1)?
+        };
+        operands.push(array);
         let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
-        let result =
-            eval_method_call_result(array, "offsetSet", vec![index, value], context, values)?;
-        values.release(result)?;
-        return Ok(());
+        let value = if value.is_borrowed() { values.retain(value)? } else { value };
+        operands.push(value);
+        // Runtime setters mutate the receiver cell in place, retaining only the inserted value.
+        values.array_set(array, index, value)?;
+        eval_property_set_result(object, property, array, context, values)
+    })();
+    for operand in operands.into_iter().rev() {
+        let released = eval_release_value(context, values, operand);
+        if result.is_ok() { result = released; }
     }
-    let index = eval_array_set_index(index, context, scope, values)?;
-    let array = if values.is_array_like(array)? {
-        array
-    } else {
-        values.array_new(1)?
-    };
-    let array = eval_array_set_target_for_index(array, index, values)?;
-    let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
-    let array = values.array_set(array, index, value)?;
-    eval_property_set_result(object, property, array, context, values)
+    result
 }
 
 /// Computes the value written by a simple or compound property-array assignment.
@@ -511,8 +526,19 @@ pub(super) fn eval_property_array_set_value(
         return eval_expr(value, context, scope, values);
     };
     let current = eval_array_get_result(array, index, context, values)?;
-    let right = eval_expr(value, context, scope, values)?;
-    eval_binary_result(op, current, right, context, values)
+    let current = if current.is_borrowed() { values.retain(current)? } else { current };
+    let result = with_eval_operands(&[value], context, scope, values, |args, context, _, values| {
+        eval_binary_result(op, current, args[0], context, values)
+    });
+    let released = eval_release_value(context, values, current);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(result), Err(status)) => {
+            let _ = release_expr_result(result, context, values);
+            Err(status)
+        }
+        (Ok(result), Ok(())) => Ok(result),
+    }
 }
 
 /// Executes `Class::$property[] = value`, including ArrayAccess static-property values.
@@ -602,6 +628,25 @@ pub(super) fn eval_array_set_index(
         Some(key) => values.int(key),
         None => Ok(index),
     }
+}
+
+/// Normalizes a property mutation key into an owned cell, consuming temporary string inputs.
+fn eval_owned_array_set_index(
+    index: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    with_eval_operands(&[index], context, scope, values, |args, _, _, values| {
+        let index = args[0];
+        if values.type_tag(index)? == EVAL_TAG_STRING {
+            let bytes = values.string_bytes(index)?;
+            if let Some(key) = eval_numeric_string_array_key(&bytes) {
+                return values.int(key);
+            }
+        }
+        values.retain(index)
+    })
 }
 
 /// Converts indexed arrays to associative arrays before writing a non-numeric string key.
