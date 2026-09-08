@@ -166,6 +166,7 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
     );
     for symbol in [
         "_gc_collecting",
+        "_gc_pending_throw",
         "_gc_freeing_unreachable",
         "_gc_release_suppressed",
         "_gc_runs",

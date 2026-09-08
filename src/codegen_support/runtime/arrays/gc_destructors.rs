@@ -13,6 +13,7 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits destructor snapshots, reachable-node unpinning, and snapshot disposal for every target.
 pub fn emit_gc_destructors(emitter: &mut Emitter) {
+    super::gc_exceptions::emit_gc_exception_helpers(emitter);
     match emitter.target.arch {
         Arch::AArch64 => {
             emit_destructors_aarch64(emitter);
@@ -132,7 +133,7 @@ fn emit_destructors_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #32]");                                   // root the receiver identity across callbacks
     emitter.instruction("bl __rt_gc_destructor_begin");                         // measure the destructor phase independently of sweeping
     emitter.instruction("ldr x0, [sp, #32]");                                   // recover the raw object argument after timing
-    emitter.instruction("bl __rt_call_object_destructor");                      // run PHP code while every candidate still owns its properties
+    emitter.instruction("bl __rt_gc_protected_destructor");                     // capture throws while every candidate still owns its properties
     emitter.instruction("bl __rt_gc_destructor_end");                           // finish the measured destructor interval
     emitter.instruction("ldr x9, [sp, #32]");                                   // recover the pinned receiver after user code
     emitter.instruction("ldr x10, [x9, #-8]");                                  // preserve collector marks and the snapshot pin
@@ -299,7 +300,7 @@ fn emit_destructors_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // preserve the receiver identity across timing and user code
     emitter.instruction("call __rt_gc_destructor_begin");                       // measure destructors separately from heap sweeping
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // restore the raw object argument after timing
-    emitter.instruction("call __rt_call_object_destructor");                    // execute PHP while every candidate has a snapshot owner
+    emitter.instruction("call __rt_gc_protected_destructor");                   // capture throws while every candidate has a snapshot owner
     emitter.instruction("call __rt_gc_destructor_end");                         // finish the measured destructor interval
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the protected object after callback clobbers
     emitter.instruction("or QWORD PTR [rax - 8], 0x20000");                     // persist completion independently of live owner counts
@@ -373,8 +374,9 @@ mod tests {
             for symbol in ["__rt_gc_destructors", "__rt_gc_unpin_reachable", "__rt_gc_drop_pins"] {
                 assert!(assembly.contains(&format!("{symbol}:")), "{name}: {symbol}");
             }
-            assert!(assembly.find("__rt_gc_destructors_fill_done:").unwrap()
-                < assembly.find("__rt_call_object_destructor").unwrap(), "{name}");
+            let destructor_loop = assembly.split("__rt_gc_destructors:\n").nth(1).unwrap();
+            assert!(destructor_loop.find("__rt_gc_destructors_fill_done:").unwrap()
+                < destructor_loop.find("__rt_gc_protected_destructor").unwrap(), "{name}");
             assert!(assembly.contains(&target.extern_symbol("malloc")), "{name}");
             assert!(assembly.contains(&target.extern_symbol("free")), "{name}");
             assert!(assembly.contains("__rt_heap_allocation_failed"), "{name}");
@@ -391,6 +393,10 @@ mod tests {
             assert!(after_destroy.find("__rt_gc_unpin_reachable").unwrap()
                 < after_destroy.find("__rt_gc_collect_cycles_free_loop:").unwrap(), "{name}");
             assert!(assembly.contains("_gc_freeing_unreachable"), "{name}");
+            assert!(assembly.rfind("_gc_collecting").unwrap()
+                < assembly.find("__rt_gc_rethrow_pending").unwrap(), "{name}");
+            assert!(assembly.find("__rt_gc_drop_pins").unwrap()
+                < assembly.find("__rt_gc_rethrow_pending").unwrap(), "{name}");
         }
     }
 }

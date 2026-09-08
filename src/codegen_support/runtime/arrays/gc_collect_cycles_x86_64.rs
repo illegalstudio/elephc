@@ -365,6 +365,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");
     emitter.instruction("mov QWORD PTR [r8], 0");                               // clear the collector-active flag now that the x86_64 cycle pass is complete
     emitter.instruction("leave");                                               // tear down the x86_64 collector frame before returning to generated code
+    emitter.instruction("jmp __rt_gc_rethrow_pending");                         // propagate captured throws only after pins and collector flags are balanced
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return immediately when collection is skipped or after a full x86_64 cycle pass

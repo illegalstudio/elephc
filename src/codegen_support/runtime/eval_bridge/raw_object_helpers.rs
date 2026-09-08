@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Both supported architectures expose the same bridge callbacks.
+//! - The v2 destructor installer rejects archives using the legacy callback ABI at link time.
 
 use super::*;
 
@@ -26,7 +27,7 @@ pub(super) fn emit_aarch64_object_from_raw_wrapper(emitter: &mut Emitter) {
 
 /// Emits the ARM64 wrapper that installs the dynamic object destructor callback.
 pub(super) fn emit_aarch64_install_dynamic_object_destructor_hook(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_install_dynamic_object_destructor_hook");
+    label_c_global(emitter, "__elephc_eval_install_dynamic_object_destructor_hook_v2");
     abi::emit_symbol_address(emitter, "x9", "_elephc_eval_dynamic_object_destruct_fn");
     emitter.instruction("str x0, [x9]");                                        // store the Rust callback pointer for object destruction
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
@@ -50,7 +51,7 @@ pub(super) fn emit_x86_64_object_from_raw_wrapper(emitter: &mut Emitter) {
 
 /// Emits the x86_64 wrapper that installs the dynamic object destructor callback.
 pub(super) fn emit_x86_64_install_dynamic_object_destructor_hook(emitter: &mut Emitter) {
-    label_c_global(emitter, "__elephc_eval_install_dynamic_object_destructor_hook");
+    label_c_global(emitter, "__elephc_eval_install_dynamic_object_destructor_hook_v2");
     abi::emit_symbol_address(emitter, "r10", "_elephc_eval_dynamic_object_destruct_fn");
     emitter.instruction("mov QWORD PTR [r10], rdi");                            // store the Rust callback pointer for object destruction
     emitter.instruction("ret");                                                 // return after installing the optional eval hook
@@ -96,6 +97,10 @@ mod tests {
                 Arch::X86_64 => emit_x86_64_install_dynamic_object_destructor_hook(&mut emitter),
             }
             let output = emitter.output();
+            let destructor = target.extern_symbol("__elephc_eval_install_dynamic_object_destructor_hook_v2");
+            assert_eq!(output.matches(&format!("{destructor}:")).count(), 1, "{name}");
+            let legacy = target.extern_symbol("__elephc_eval_install_dynamic_object_destructor_hook");
+            assert!(!output.contains(&format!("{legacy}:")), "{name}");
             let symbol = target.extern_symbol("__elephc_eval_install_object_owner_hooks");
             assert_eq!(output.matches(&format!("{symbol}:")).count(), 1, "{name}");
             assert!(output.contains("_elephc_eval_object_gc_child_fn"), "{name}");

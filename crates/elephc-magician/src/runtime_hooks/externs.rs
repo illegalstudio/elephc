@@ -59,7 +59,9 @@ unsafe extern "C" {
         context: *const c_void,
         result_out: *mut *mut RuntimeCell,
     ) -> i32;
-    pub(super) fn __elephc_eval_gc_collect_cycles() -> i64;
+    /// Collects native cycles and transfers an escaping Throwable as an owned boxed output.
+    #[link_name = "__elephc_eval_gc_collect_cycles_v2"]
+    pub(super) fn __elephc_eval_gc_collect_cycles(throwable_out: *mut *mut RuntimeCell) -> i64;
     pub(super) fn __elephc_eval_gc_disable() -> i64;
     pub(super) fn __elephc_eval_gc_enable() -> i64;
     pub(super) fn __elephc_eval_gc_enabled() -> i64;
@@ -485,7 +487,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Retains the original boxed handler value installed by compiled AOT code.
     pub(super) fn __elephc_eval_pcntl_aot_signal_handler(signal: i64) -> *mut RuntimeCell;
-    /// Installs the optional eval dynamic object destructor callback.
+    /// Installs a callback with the v2 owned-Throwable output and 0/1/2 status protocol.
+    #[link_name = "__elephc_eval_install_dynamic_object_destructor_hook_v2"]
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
     /// Installs eval object-edge, final-release, and boxed array-reference retirement callbacks.
     pub(super) fn __elephc_eval_install_object_owner_hooks(child: usize, release: usize, retire: usize);

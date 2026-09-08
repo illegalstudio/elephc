@@ -14,6 +14,7 @@ mod fixed;
 /// escape quoted directive operands the same way.
 pub(crate) mod instanceof;
 mod user;
+mod throwable_previous;
 
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).

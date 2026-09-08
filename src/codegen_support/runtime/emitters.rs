@@ -212,6 +212,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
+    exceptions::emit_throwable_previous(emitter);
+    exceptions::emit_exception_chain(emitter);
+    exceptions::emit_destructor_throw(emitter);
 
     // Generator runtime helpers for Iterator methods, send/throw, and return-value retrieval.
     generators::emit_generator_runtime(emitter);

@@ -744,6 +744,24 @@ fn test_nullable_throwable_get_message_via_previous() {
     assert_eq!(out, "inner");
 }
 
+/// Compact and ordinary Throwable subclasses expose the same nullable chain and retain returned links.
+#[test]
+fn test_exception_previous_uses_concrete_payload_layout() {
+    let out = compile_and_run(r#"<?php
+class OrdinaryPreviousException extends Exception { public int $marker = 7; }
+class OrdinaryPreviousError extends Error { public string $marker = "kept"; }
+function readPrevious(Throwable $error): ?Throwable { return $error->getPrevious(); }
+$inner = new Exception("inner");
+$ordinary = new OrdinaryPreviousException("ordinary", 0, $inner);
+$outer = new OrdinaryPreviousError("outer", 0, $ordinary);
+echo readPrevious(new OrdinaryPreviousException()) === null ? "null|" : "bad|";
+$saved = readPrevious($outer);
+unset($outer, $ordinary, $inner);
+echo get_class($saved), ":", $saved->getMessage(), ":", readPrevious($saved)->getMessage();
+"#);
+    assert_eq!(out, "null|OrdinaryPreviousException:ordinary:inner");
+}
+
 /// Verifies exception edges preserve register-allocated values that remain live
 /// into a catch block under enough pressure to require spills.
 #[test]

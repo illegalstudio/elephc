@@ -159,6 +159,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
     emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
     emit_name_lookup_data(
         &mut out,
         "_interface_names_count",

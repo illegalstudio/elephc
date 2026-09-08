@@ -464,6 +464,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_collecting", 8, target));
     out.push_str(&comm_directive("_gc_freeing_unreachable", 8, target));
     out.push_str(&comm_directive("_gc_pin_head", 8, target));
+    out.push_str(&comm_directive("_gc_pending_throw", 8, target));
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
     out.push_str(&comm_directive("_gc_runs", 8, target));
     out.push_str(&comm_directive("_gc_collected", 8, target));

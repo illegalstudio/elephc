@@ -111,6 +111,7 @@ mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
 mod gc_destructors;
+mod gc_exceptions;
 mod gc_eval_object_children;
 mod gc_mark_reachable;
 mod gc_note_child_ref;

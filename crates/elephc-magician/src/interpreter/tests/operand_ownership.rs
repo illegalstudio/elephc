@@ -11,6 +11,30 @@
 use super::super::*;
 use super::support::*;
 
+/// Escaping borrowed Throwables acquire an owner before argument cleanup; fresh throws transfer theirs.
+#[test]
+fn pending_throwables_own_their_cells_after_function_return_control() {
+    for borrowed in [false, true] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let source = values.new_object("Exception").unwrap();
+        let operand = if borrowed { source.borrowed() } else { source };
+        let result = eval_declared_return_control_value(
+            None, None, None, EvalControl::Throw(operand), &mut context, &mut values,
+        );
+        assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
+        let thrown = context.take_pending_throw().unwrap();
+        assert!(!thrown.is_borrowed());
+        assert_eq!(values.retains.len(), usize::from(borrowed));
+        if borrowed {
+            values.release(source).unwrap();
+        }
+        assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 1);
+        values.release(thrown).unwrap();
+        assert_eq!(values.cell_owners[&(source.as_ptr() as usize)], 0);
+    }
+}
+
 /// Static storage retains borrowed cells once, preserves same-cell writes, and releases replacements.
 #[test]
 fn static_property_assignments_acquire_independent_storage_owners() {

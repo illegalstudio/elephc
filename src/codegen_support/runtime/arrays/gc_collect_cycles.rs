@@ -415,6 +415,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x20, [sp, #56]");                                  // restore the callee-saved payload-size register after collection
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #96");                                     // tear down the collector stack frame
+    emitter.instruction("b __rt_gc_rethrow_pending");                           // propagate captured throws only after all collector state is balanced
 
     emitter.label("__rt_gc_collect_cycles_done");
     emitter.instruction("ret");                                                 // return to the caller

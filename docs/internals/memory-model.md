@@ -347,6 +347,14 @@ When one of these checks trips, the program exits with a fatal heap-debug error 
 - **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 17 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
 - **Process exit**: all memory is reclaimed by the OS
 
+Collector-triggered destructors run under individual native exception handlers.
+An escaping Throwable is retained as a collector root while the remaining
+destructors, reachability recounts, and sweep finish. Multiple exceptions preserve
+existing `previous` links and are chained without repeating an object identity.
+Only after snapshot disposal, timing completion, and restoration of the collector
+flags does the runtime rethrow to the caller. Eval uses an owned Throwable output
+across its C boundary, never a native unwind through live Rust frames.
+
 ### Configurable heap size
 
 The default heap is 8MB. For programs that need more (or less), use:

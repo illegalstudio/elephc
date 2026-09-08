@@ -48,9 +48,19 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(())
     }
 
-    /// Forces a generated-runtime cycle-collection pass.
+    /// Forces collection and schedules a bounded native Throwable for eval's catch machinery.
     fn gc_collect_cycles(&mut self) -> Result<i64, EvalStatus> {
-        Ok(unsafe { __elephc_eval_gc_collect_cycles() })
+        let mut throwable = std::ptr::null_mut();
+        let count = unsafe { __elephc_eval_gc_collect_cycles(&mut throwable) };
+        if throwable.is_null() {
+            return Ok(count);
+        }
+        let throwable = RuntimeCellHandle::from_raw(throwable);
+        if let Err(status) = self.schedule_pending_throw(throwable) {
+            self.release(throwable)?;
+            return Err(status);
+        }
+        Err(EvalStatus::UncaughtThrowable)
     }
 
     /// Disables generated-runtime automatic collection safe points.

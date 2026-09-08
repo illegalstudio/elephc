@@ -63,6 +63,7 @@ mod clone_rejections;
 mod runtime_builtin_dispatch;
 mod resources;
 mod backtrace;
+mod gc_boundary;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;
@@ -139,14 +140,14 @@ fn label_c_global(emitter: &mut Emitter, name: &str) {
     emitter.label_global(&symbol);
 }
 
-/// Exposes GC controls to Rust through platform-mangled C ABI tail wrappers.
+/// Exposes GC controls, bounding collection exceptions before returning to Rust.
 fn emit_gc_lifecycle_wrappers(emitter: &mut Emitter) {
+    gc_boundary::emit_gc_collection_boundary(emitter);
     let branch = match emitter.target.arch {
         Arch::AArch64 => "b",
         Arch::X86_64 => "jmp",
     };
     for (wrapper, target) in [
-        ("__elephc_eval_gc_collect_cycles", "__rt_gc_collect_cycles_explicit"),
         ("__elephc_eval_gc_disable", "__rt_gc_disable"),
         ("__elephc_eval_gc_enable", "__rt_gc_enable"),
         ("__elephc_eval_gc_enabled", "__rt_gc_enabled"),
@@ -154,7 +155,7 @@ fn emit_gc_lifecycle_wrappers(emitter: &mut Emitter) {
         ("__elephc_eval_gc_status_metric", "__rt_gc_status_metric"),
     ] {
         label_c_global(emitter, wrapper);
-        emitter.instruction(&format!("{branch} {target}"));
+        emitter.instruction(&format!("{branch} {target}"));                     // non-collecting controls return through their internal runtime helper
     }
 }
 
@@ -258,7 +259,6 @@ mod tests {
         ] {
             let asm = emit_for(target);
             for (wrapper, internal) in [
-                ("__elephc_eval_gc_collect_cycles", "__rt_gc_collect_cycles_explicit"),
                 ("__elephc_eval_gc_disable", "__rt_gc_disable"),
                 ("__elephc_eval_gc_enable", "__rt_gc_enable"),
                 ("__elephc_eval_gc_enabled", "__rt_gc_enabled"),
