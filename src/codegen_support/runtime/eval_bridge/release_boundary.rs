@@ -1,0 +1,61 @@
+//! Purpose:
+//! Contains destructor exceptions raised while Rust eval releases a native Mixed owner.
+//!
+//! Called from:
+//! - The shared eval bridge emitter on every supported target.
+//!
+//! Key details:
+//! - The versioned C ABI consumes one boxed value and writes an owned Throwable box on failure.
+//! - Cleanup installs its jump target below Rust and restores the enclosing native exception state.
+
+use super::{abi, label_c_global, Emitter};
+
+const FRAME: usize = 64;
+const VALUE: usize = 8;
+const OUTPUT: usize = 16;
+const THROWN: usize = 24;
+
+/// Emits bounded value release with a non-null caller-owned exception output slot.
+pub(super) fn emit(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_release_v2");
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    abi::emit_frame_prologue(emitter, FRAME);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), VALUE);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), OUTPUT);
+    abi::load_at_offset(emitter, scratch, OUTPUT);
+    abi::emit_store_zero_to_address(emitter, scratch, 0);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    abi::store_at_offset(emitter, result, THROWN);
+    abi::load_at_offset(emitter, result, VALUE);
+    super::super::exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_mixed", result, THROWN);
+    abi::load_at_offset(emitter, result, THROWN);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_eval_release_return");
+    abi::emit_call_label(emitter, "__rt_throwable_box_owned");
+    abi::load_at_offset(emitter, scratch, OUTPUT);
+    abi::emit_store_to_address(emitter, result, scratch, 0);
+    emitter.label("__rt_eval_release_return");
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_return(emitter);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every target contains the native release before exporting one boxed exception owner to Rust.
+    #[test]
+    fn eval_value_release_boundary_returns_throwables_without_native_escape() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains(&target.extern_symbol("__elephc_eval_value_release_v2")), "{name}");
+            assert!(asm.find("__rt_cleanup_invoke").unwrap() < asm.find("__rt_throwable_box_owned").unwrap(), "{name}");
+            assert_eq!(asm.matches("__rt_decref_mixed").count(), 1, "{name}");
+            assert!(!asm.contains("__rt_throw_current"), "{name}");
+        }
+    }
+}

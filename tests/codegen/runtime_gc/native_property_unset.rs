@@ -10,6 +10,41 @@
 
 use crate::support::*;
 
+/// Releasing eval arrays contains native child destructor throws before returning through Rust.
+#[test]
+fn test_core_eval_array_release_contains_native_destructor_exceptions() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class EvalReleaseNativeChild {
+    public string $buffer;
+    public function __construct() { $this->buffer = str_repeat("x", 48); }
+    public function __destruct() { throw new RuntimeException("child"); }
+}
+function exerciseEvalArrayRelease(string $source): void {
+    try { throw new Exception("outer"); }
+    catch (Exception $outer) {
+        eval($source);
+        echo $outer->getMessage(), "|";
+    }
+}
+$source = '$caught = 0;
+for ($i = 0; $i < 3; $i++) {
+    $children = [new EvalReleaseNativeChild(), new EvalReleaseNativeChild()];
+    try { unset($children); }
+    catch (RuntimeException $error) {
+        if ($error->getMessage() === "child" && $error->getPrevious() !== null) { $caught++; }
+        unset($error);
+    }
+}
+echo $caught, ":";' . ' // ' . $argc;
+exerciseEvalArrayRelease($source);
+unset($source);
+echo gc_status()["protected"] ? "protected" : "ready";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3:outer|ready", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A destructor thrown during native-slot unset is caught inside eval without losing outer native state.
 #[test]
 fn test_core_eval_native_unset_contains_destructor_exceptions_and_restores_scope() {
