@@ -223,12 +223,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count compile-time object property pointers
     emitter.instruction("cmp x10, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_object_next");       // scalar and string properties contribute no refcounted edges
-    emitter.instruction("add x10, x0, #8");                                     // compute the offset of the runtime metadata / length word
-    emitter.instruction("ldr x10, [x12, x10]");                                 // load the runtime tag for this mixed property slot
-    emitter.instruction("cmp x10, #4");                                         // does this mixed property currently hold a heap-backed child?
-    emitter.instruction("b.lo __rt_gc_collect_cycles_count_object_next");       // scalar/string/null mixed payloads contribute no graph edges
-    emitter.instruction("cmp x10, #7");                                         // do mixed runtime tags stay within the supported heap-backed range?
-    emitter.instruction("b.hi __rt_gc_collect_cycles_count_object_next");       // unknown mixed payloads are ignored by the collector
+    // Mixed properties own a boxed cell; its visitor inspects the runtime payload tag.
     emitter.label("__rt_gc_collect_cycles_count_object_child");
     emitter.instruction("ldr x0, [x12, x0]");                                   // load the nested child pointer from the property slot
     emitter.instruction("str x12, [sp, #32]");                                  // preserve the parent object pointer across the helper call

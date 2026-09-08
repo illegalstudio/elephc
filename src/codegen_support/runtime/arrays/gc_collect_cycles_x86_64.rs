@@ -238,11 +238,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gc_collect_cycles_count_object_child");        // yes — compare the direct property child pointer against the current candidate
     emitter.instruction("cmp rcx, 7");                                          // is this property statically typed as a mixed slot?
     emitter.instruction("jne __rt_gc_collect_cycles_count_object_next");        // scalar and string properties contribute no incoming heap edges
-    emitter.instruction("mov rcx, QWORD PTR [r9 + r8 + 8]");                    // load the runtime tag stored alongside the mixed property payload
-    emitter.instruction("cmp rcx, 4");                                          // does the mixed property currently hold a heap-backed child?
-    emitter.instruction("jb __rt_gc_collect_cycles_count_object_next");         // scalar, string, and null mixed payloads contribute no incoming edge
-    emitter.instruction("cmp rcx, 7");                                          // is the mixed runtime tag within the supported heap-backed range?
-    emitter.instruction("ja __rt_gc_collect_cycles_count_object_next");         // unknown mixed runtime tags are ignored by the collector
+    // Mixed properties own a boxed cell; its visitor inspects the runtime payload tag.
     emitter.label("__rt_gc_collect_cycles_count_object_child");
     emitter.instruction("cmp QWORD PTR [r9 + r8], rsi");                        // does the selected object property point at the current candidate node?
     emitter.instruction("jne __rt_gc_collect_cycles_count_object_next");        // no — this property does not contribute an incoming heap edge

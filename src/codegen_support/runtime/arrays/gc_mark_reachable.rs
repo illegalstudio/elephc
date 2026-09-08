@@ -215,12 +215,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_mark_reachable_object_child");            // recurse into compile-time object properties
     emitter.instruction("cmp x13, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.ne __rt_gc_mark_reachable_object_next");             // scalar and string properties contribute no refcounted edges
-    emitter.instruction("add x12, x11, #8");                                    // compute the offset of the runtime metadata / length word
-    emitter.instruction("ldr x13, [x10, x12]");                                 // load the runtime tag for this mixed property slot
-    emitter.instruction("cmp x13, #4");                                         // does the mixed property currently hold a heap-backed child?
-    emitter.instruction("b.lo __rt_gc_mark_reachable_object_next");             // scalar/string/null mixed payloads contribute no graph edges
-    emitter.instruction("cmp x13, #7");                                         // do the mixed runtime tags stay within the supported heap-backed range?
-    emitter.instruction("b.hi __rt_gc_mark_reachable_object_next");             // unknown mixed payloads are ignored by the collector
+    // Mixed properties own a boxed cell; its visitor inspects the runtime payload tag.
     emitter.label("__rt_gc_mark_reachable_object_child");
     emitter.instruction("ldr x0, [x10, x11]");                                  // load the nested child pointer from the property slot
     emitter.instruction("str x9, [sp, #24]");                                   // preserve the property index across recursion
@@ -432,11 +427,7 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gc_mark_reachable_object_child");              // yes — recurse into the nested object property payload
     emitter.instruction("cmp r9, 7");                                           // is this property statically typed as a mixed slot?
     emitter.instruction("jne __rt_gc_mark_reachable_object_next");              // scalar and string properties contribute no refcounted graph edges
-    emitter.instruction("mov r9, QWORD PTR [rdx + r8 + 8]");                    // load the runtime tag stored alongside the mixed property payload
-    emitter.instruction("cmp r9, 4");                                           // does the mixed property currently hold a heap-backed child?
-    emitter.instruction("jb __rt_gc_mark_reachable_object_next");               // scalar, string, and null mixed payloads contribute no graph edges
-    emitter.instruction("cmp r9, 7");                                           // is the mixed runtime tag within the supported heap-backed range?
-    emitter.instruction("ja __rt_gc_mark_reachable_object_next");               // unknown mixed payload tags are ignored by the collector
+    // Mixed properties own a boxed cell; its visitor inspects the runtime payload tag.
     emitter.label("__rt_gc_mark_reachable_object_child");
     emitter.instruction("mov rax, QWORD PTR [rdx + r8]");                       // load the nested child pointer stored in the selected object property slot
     emitter.instruction("call __rt_gc_mark_reachable");                         // recursively mark the nested object property child reachable
