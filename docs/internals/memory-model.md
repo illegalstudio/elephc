@@ -334,6 +334,10 @@ Descriptor invokers also bound native calls, not only eval callbacks. An escapin
 exception releases all acquired argument owners and any interrupted return value;
 further destructor exceptions are accumulated before native propagation or the
 eval ABI's null-result return.
+An eval-declared destructor's receiver lease is separate from the owner being
+released. Even when the destructor throws, that final owner must still be consumed;
+the runtime release preserves the pending exception and collects any further child
+destructor exceptions before returning to eval.
 
 The runtime routine `__rt_heap_alloc`:
 

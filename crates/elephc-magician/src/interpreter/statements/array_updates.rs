@@ -83,16 +83,22 @@ pub(super) fn eval_static_property_inc_dec_result(
     eval_static_property_set_result(class_name, property, value, context, values)
 }
 
-/// Releases one eval-owned value after running an eval-declared dynamic destructor if needed.
+/// Consumes an eval owner even when its dynamic destructor throws, preserving the pending exception.
 pub(in crate::interpreter) fn eval_release_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     value: RuntimeCellHandle,
 ) -> Result<(), EvalStatus> {
-    if let Some(identity) = values.final_object_identity_for_release(value)? {
-        eval_dynamic_destructor_for_release(identity, value, context, values)?;
-    }
-    values.release(value)
+    let destructor = values.final_object_identity_for_release(value).and_then(|identity| {
+        match identity {
+            Some(identity) => eval_dynamic_destructor_for_release(identity, value, context, values),
+            None => Ok(()),
+        }
+    });
+    // Native release collects any further child exceptions with the context's pending throw.
+    // Do not return early: the destructor consumes its receiver lease, not this final owner.
+    let released = values.release(value);
+    destructor.and(released)
 }
 
 /// Calls a dynamic eval `__destruct()` hook immediately before the runtime frees the object.

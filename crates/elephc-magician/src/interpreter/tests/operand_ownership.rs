@@ -165,6 +165,29 @@ fn retained_object_lease_is_not_a_final_release() {
         Some(values.object_identity(object).unwrap()));
 }
 
+/// A throwing eval destructor consumes the final object owner instead of leaking it on early return.
+#[test]
+fn throwing_eval_destructor_releases_its_final_owner() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let program = parse_fragment(br#"
+class ThrowingEvalLease {
+    public function __destruct() { echo "drop"; throw new Exception("release"); }
+}
+$value = new ThrowingEvalLease();
+"#).unwrap();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    values.release(result).unwrap();
+    let object = scope.unset("value").unwrap();
+    assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], 1);
+    assert_eq!(eval_release_value(&mut context, &mut values, object), Err(EvalStatus::UncaughtThrowable));
+    assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], 0);
+    assert_eq!(values.output, "drop");
+    let thrown = context.take_pending_throw().expect("destructor exception survives release");
+    values.release(thrown).unwrap();
+}
+
 /// Adapters forwarding an argument receive a borrow that survives cleanup through a retained return.
 #[test]
 fn method_arguments_keep_borrowed_returns_alive() {

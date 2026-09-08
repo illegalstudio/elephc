@@ -10,6 +10,31 @@
 
 use crate::support::*;
 
+/// Eval-declared throwing destructors release their object and fields before the catch resumes.
+#[test]
+fn test_core_eval_dynamic_destructor_throw_consumes_last_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function releaseDynamicEvalObjects(string $source): void { eval($source); }
+$source = 'class DynamicReleaseThrow {
+    public string $buffer;
+    public function __construct() { $this->buffer = str_repeat("x", 48); }
+    public function __destruct() { throw new RuntimeException("dynamic"); }
+}
+$caught = 0;
+for ($i = 0; $i < 3; $i++) {
+    $value = new DynamicReleaseThrow();
+    try { unset($value); }
+    catch (RuntimeException $error) { $caught++; unset($error); }
+}
+echo $caught;' . ' // ' . $argc;
+releaseDynamicEvalObjects($source);
+unset($source);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "3", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Scope retirement finishes all Rust-held owners before an escaping destructor throw reaches PHP.
 #[test]
 fn test_core_eval_scope_teardown_finishes_all_throwing_children_before_escape() {
