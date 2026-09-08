@@ -171,14 +171,16 @@ fn eval_dynamic_trait_vars_result(
     let properties = trait_decl.properties().to_vec();
     let mut result = EvalArrayBuilder::assoc(values, properties.len())?;
     let mut emitted_keys = HashSet::new();
-    for property in properties {
+    for property in properties.iter().filter(|property| !property.is_static())
+        .chain(properties.iter().filter(|property| property.is_static()))
+    {
         if property.is_virtual() || emitted_keys.contains(property.name())
             || validate_eval_member_access(&trait_name, property.visibility(), context).is_err()
         {
             continue;
         }
         result.string(property.name(), |values| {
-            eval_class_vars_property_default_value(&trait_name, &property, context, values)
+            eval_class_vars_property_default_value(&trait_name, property, context, values)
         })?;
         emitted_keys.insert(property.name().to_string());
     }

@@ -9,6 +9,31 @@
 
 use crate::support::*;
 
+/// Standalone traits emit instance defaults before static defaults on direct and callable paths.
+#[test]
+fn test_core_class_vars_trait_static_first_order_matches_eval() {
+    let body = r#"
+trait StaticFirstTrait {
+    public static int $s = 1;
+    public int $x = 2;
+    public static int $t = 3;
+    public int $y = 4;
+}
+$direct = get_class_vars(StaticFirstTrait::class);
+$callback = get_class_vars(...);
+echo implode(",", array_keys($direct)), ":", implode(",", $direct), "|";
+echo $callback(StaticFirstTrait::class) === $direct ? "F" : "bad";
+echo call_user_func("get_class_vars", StaticFirstTrait::class) === $direct ? "C" : "bad";
+"#;
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    for source in [
+        format!("<?php {body}"),
+        format!("<?php $source = '{quoted}' . ' // ' . $argc; eval($source);"),
+    ] {
+        assert_eq!(compile_and_run(&source), "x,y,s,t:2,4,1,3|FC");
+    }
+}
+
 /// Eval subclasses retain native defaults, child overrides, visibility, and instance/static order.
 #[test]
 fn test_core_class_vars_eval_subclass_includes_native_parent_defaults() {
