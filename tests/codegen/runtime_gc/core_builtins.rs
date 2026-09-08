@@ -10,6 +10,46 @@
 
 use crate::support::*;
 
+/// SPL mutators own inserted values and offset readers do not consume the eval caller's indexes.
+#[test]
+fn test_core_eval_spl_intrinsics_preserve_caller_cells_and_stored_values() {
+    let source = r#"<?php
+$source = '$list = new SplDoublyLinkedList();
+$value = str_repeat("v", 24); $index = 0;
+$list->push($value); unset($value);
+echo strlen($list->offsetGet($index)), ":", $index, "|";
+$list->offsetSet($index, "replacement");
+echo $list->offsetExists($index), ":", $list->offsetGet($index), "|";
+$list->unshift("front"); $list->add(1, "middle");
+echo $list->shift(), ":", $list->pop(), ":", $list->pop(), "|";
+$queue = new SplQueue(); $queue->enqueue("queued"); echo $queue->dequeue(), "|";
+$fixed = new SplFixedArray(1); $value = "fixed";
+$fixed->offsetSet($index, $value); unset($value);
+echo $fixed->offsetGet($index), ":", $index, "|";
+$fixed->offsetUnset($index); echo $fixed->offsetExists($index) ? "bad" : "empty";
+try { $fixed->offsetSet(2, "rejected"); } catch (OutOfBoundsException $error) { echo "|range"; }
+echo ":", $index;' . ' // ' . $argc;
+eval($source);
+"#;
+    assert_eq!(compile_and_run(source), "24:0|1:replacement|front:replacement:middle|queued|fixed:0|empty|range:0");
+}
+
+/// SPL insertion and offset operations release their transferred owners across repeated invocations.
+#[test]
+fn test_core_eval_spl_intrinsic_transfers_release_consumed_cells() {
+    assert_core_eval_collection_cleanup(
+        "",
+        "$list = new SplDoublyLinkedList(); $index = 0;
+         $list->push(\"first\"); $list->offsetSet($index, \"second\");
+         $value = $list->offsetGet($index); unset($value);
+         $present = $list->offsetExists($index); unset($present);
+         $list->offsetUnset($index); unset($list);
+         $fixed = new SplFixedArray(1); $fixed->offsetSet($index, \"fixed\");
+         $value = $fixed->offsetGet($index); unset($value);
+         $fixed->offsetUnset($index); unset($fixed); unset($index);",
+    );
+}
+
 /// Native property storage must retain borrowed variable cells independently of later assignments.
 #[test]
 fn test_core_eval_property_assignments_keep_independent_cell_owners() {

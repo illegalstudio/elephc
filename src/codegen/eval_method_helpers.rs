@@ -1295,6 +1295,10 @@ fn emit_aarch64_method_bodies(
             METHOD_HELPER_HANDLER_OFFSET - 48,
             &escape_label,
         );
+        if slot.runtime_helper.is_some() {
+            let intrinsic = IntrinsicCall::instance_method(&slot.class_name, &slot.method).unwrap();
+            super::eval_argument_helpers::emit_consumed_intrinsic_arguments(emitter, intrinsic, &slot.params);
+        }
         let receiver_ty = PhpType::Object(slot.class_name.clone());
         let overflow_bytes =
             materialize_method_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);
@@ -1351,6 +1355,10 @@ fn emit_x86_64_method_bodies(
         emit_acquire_mixed_ref_args(emitter, &ref_slots, arg_temp_bytes);
         let escape_label = format!("{}_escape_x", body_label);
         emit_x86_64_method_exception_boundary_push(emitter, METHOD_HELPER_FRAME_SIZE, &escape_label);
+        if slot.runtime_helper.is_some() {
+            let intrinsic = IntrinsicCall::instance_method(&slot.class_name, &slot.method).unwrap();
+            super::eval_argument_helpers::emit_consumed_intrinsic_arguments(emitter, intrinsic, &slot.params);
+        }
         let receiver_ty = PhpType::Object(slot.class_name.clone());
         let overflow_bytes =
             materialize_method_args(module, emitter, &receiver_ty, &slot.params, &slot.ref_params);

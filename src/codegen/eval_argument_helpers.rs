@@ -8,9 +8,35 @@
 //! - Magician owns a dense indexed array of Mixed cells throughout each native invocation.
 //! - Reads allocate nothing and retain nothing; the enclosing argument array roots every borrow.
 //! - Shape and bounds guards reject malformed bridge inputs before dereferencing an element.
+//! - Consuming intrinsic helpers acquire separate owners after argument staging succeeds.
 
 use crate::codegen::{abi, emit::Emitter, platform::Arch};
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
+use crate::intrinsics::IntrinsicCall;
+use crate::types::PhpType;
+
+/// Transfers independent owners for staged boxed arguments consumed by an intrinsic helper.
+/// Call after fallible preparation and boundary installation, before materializing ABI registers.
+pub(super) fn emit_consumed_intrinsic_arguments(
+    emitter: &mut Emitter,
+    intrinsic: IntrinsicCall,
+    parameters: &[PhpType],
+) {
+    for &index in intrinsic.consumed_mixed_parameters() {
+        assert_eq!(parameters[index].codegen_repr(), PhpType::Mixed);
+        let offset: usize = parameters[index + 1..].iter()
+            .map(super::eval_ref_arg_helpers::eval_arg_temp_slot_size).sum();
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("ldr x0, [sp, #{offset}]"));       // load the staged argument whose owner passes to the intrinsic
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("mov rax, QWORD PTR [rsp + {offset}]")); // load the staged argument whose owner passes to the intrinsic
+            }
+        }
+        abi::emit_call_label(emitter, "__rt_incref");
+    }
+}
 
 /// Loads a borrowed argument into the bridge's fixed frame spill without creating a key or owner.
 pub(super) fn emit_borrowed_argument(
@@ -67,6 +93,28 @@ pub(super) fn emit_borrowed_argument(
 mod tests {
     use super::*;
     use crate::codegen::platform::Target;
+
+    /// Every target retains consumed offsets and values without retaining borrowed array arguments.
+    #[test]
+    fn intrinsic_consumers_acquire_only_their_declared_boxed_arguments() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for class in ["SplDoublyLinkedList", "SplStack", "SplQueue", "SplFixedArray"] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                let intrinsic = IntrinsicCall::instance_method(class, "offsetSet").unwrap();
+                emit_consumed_intrinsic_arguments(&mut emitter, intrinsic, &[PhpType::Mixed, PhpType::Mixed]);
+                let offsets = if emitter.target.arch == Arch::AArch64 {
+                    ["[sp, #16]", "[sp, #0]"]
+                } else { ["[rsp + 16]", "[rsp + 0]"] };
+                let asm = emitter.output();
+                assert_eq!(asm.matches("__rt_incref").count(), 2, "{name}:{class}");
+                assert!(offsets.iter().all(|offset| asm.contains(offset)), "{name}:{class}");
+            }
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            let intrinsic = IntrinsicCall::instance_method("SplFixedArray", "__unserialize").unwrap();
+            emit_consumed_intrinsic_arguments(&mut emitter, intrinsic, &[PhpType::Array(Box::new(PhpType::Mixed))]);
+            assert!(!emitter.output().contains("__rt_incref"), "{name}");
+        }
+    }
 
     /// Every supported target checks argument storage and bounds without allocating or retaining.
     #[test]
